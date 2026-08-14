@@ -1,0 +1,47 @@
+{
+  "schema-version": 1,
+  "slug": "face_case5_config_c",
+  "label": "C / FACE Case 5",
+  "paper-case": "FACE Case 5 (500 mm^2 compute die, 4 HBM2E chiplets)",
+  "mesh": {
+    "rows": 9,
+    "columns": 6,
+    "topology-by-network-dimension": ["Line", "Line"]
+  },
+  "local-hbm": {
+    "bandwidth-gbps": 1640.0,
+    "latency-ns": 100,
+    "capacity-profiles": {
+      "paper-64gib": {
+        "bytes": 68719476736,
+        "label": "64 GiB paper configuration",
+        "note": "FACE Case 5 provides 64 GiB of local HBM per NPU in the paper configuration."
+      },
+      "validation-160gib": {
+        "bytes": 171798691840,
+        "label": "160 GiB validation extension",
+        "note": "Validation-only capacity extension for workloads that require 160 GiB of local HBM per NPU."
+      }
+    }
+  },
+  "d2d": {
+    "bandwidth-gbps": 4050.0,
+    "latency-ns": 5
+  },
+  "remote-memory": {
+    "memory-type": "NO_MEMORY_EXPANSION",
+    "bandwidth-gbps": 512.0
+  },
+  "compute": {
+    "peak-perf-tflops": 261.12
+  },
+  "notes": [
+    "The physical mesh is row-major with 9 rows and 6 columns.",
+    "The analytical network lists dimensions as columns then rows.",
+    "Peak compute is an explicit WSC-LLM comparison-group-C fallback because the FACE Case 5 peak is unpublished.",
+    "D2D latency is modeled as a per-hop adjacent-link latency.",
+    "Remote-memory expansion is disabled for this repository configuration.",
+    "The 512 GB/s remote-memory bandwidth is retained as the simulator hardware assumption.",
+    "The capacity profile describes local HBM placement per NPU."
+  ]
+}
