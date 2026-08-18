@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- sh_2.0 在线 GraphBatch 构图器（方案 §4 步骤 1-8 操作 4）。
 
-阶段 1 最关键的对齐点：复用离线写出逻辑的节点结构。离线 per-request 发射
-（write_face_trace 的逐请求主循环，generate_face_trace.py:2259-2830）由模块级
+阶段 1 最关键的对齐点：复用 generator 发射逻辑的节点结构。per-request 发射
+（generate_face_trace.py 模块级函数）由模块级
 助手函数组成（_emit_kv_transfer / _emit_tp_readiness_barrier /
 _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——本模块
 直接 import 它们（红线：只读 import），用 OnlineTraceBuilder（与 TraceBuilder
 同构的在线侧 builder）驱动，保证：
 
-  - 节点属性、插入顺序、rank ownership 与离线 .et 一致（B3 等价的前提）；
+  - 节点属性、插入顺序、rank ownership 跨 request 链结构一致（节点级审计口径）；
   - per-rank 节点 id 跨批次全局递增（与离线 per-rank .et id 序列一致）；
   - interval gate 的 after_node_id 指向上一 request 的 decode end barrier
     节点 id（completion 段账本，跨批次解析）。
@@ -27,9 +27,7 @@ _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——
     完成被 first-chunk-suffix 的 arm_dependency 依赖覆盖，合同④边界映射）；
     DECODE_COMPLETION = end barrier 前每 rank 的 decode 末节点
     （decode_last_node_by_rank，离线 doc sec.6.4 口径，含迁移 transfer 尾）；
-  - replay 模式（replay_clock=True）：prefill 段发射前清空 prefill 组各 rank
-    的跨 request previous_id（主控裁决 ③，LUT 时钟并发语义）；strategy 模式
-    保持物理跨 request 链。
+  - strategy 模式保持物理跨 request 链。
 """
 
 import os
@@ -337,11 +335,9 @@ class GraphBatchBuilder:
     边界发射 prefill 整段 / decode 整段 / completion 段，并维护
     pending_history 与 completion gate 账本（离线 writer 同构）。"""
 
-    def __init__(self, config, *, digest_sink=None, replay_clock: bool = False):
+    def __init__(self, config, *, digest_sink=None):
         self.config = config
-        # 主控裁决 ③（蓝本继承）：replay 模式下 prefill 链首不链跨 request
-        # previous_id（LUT 时钟并发语义）；strategy 模式保持物理跨 request 链。
-        self.replay_clock = replay_clock
+        # strategy 保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
                 rank, remote_operand_loads=config.remote_operand_loads)
@@ -359,7 +355,7 @@ class GraphBatchBuilder:
         # 离线 writer 的 per-request action_sequence 账本（generate_face_
         # trace.py:2259-2270：action 名含 _action{seq:03d}_，跨该 request
         # 的全部 transfer 递增）——在线三段发射共享同一计数器，保证节点
-        # 名与离线逐字节一致（B3 canonical key）。
+        # 名跨 request 逐字节稳定（canonical 命名 key）。
         self._action_sequence = {}
         self.batch = None
 
@@ -395,58 +391,21 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------- 相位计时校准 --
 
-    def _calibrate_phase(self, phase_duration_ns: int, marker: dict) -> None:
-        """把本次发射的 COMP 链校准到决策日志的 LUT 时钟（蓝本同款；按
-        "本次发射"作用域，marker 快照）。"""
-        if phase_duration_ns <= 0:
-            return
-        nodes = []
-        for rank, builder in self.builders.items():
-            node_mark, _ = marker[rank]
-            nodes.extend(builder.nodes[node_mark:])
-        if not nodes:
-            return
-        rank_ops = {}
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            ops = node["compute"]["num_ops"]
-            if ops > 0:
-                rank_ops[node["rank"]] = rank_ops.get(node["rank"], 0) + ops
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            total = rank_ops.get(node["rank"], 0)
-            ops = node["compute"]["num_ops"]
-            if total > 0 and ops > 0:
-                node["compute"]["runtime_ns"] = max(
-                    1, phase_duration_ns * ops // total)
-
-    # ------------------------------------------------------------- 发射 --
-
-    def emit_prefill_batch(self, request_plan: dict,
-                           *, phase_duration_ns: int = 0) -> dict:
+    def emit_prefill_batch(self, request_plan: dict) -> dict:
         """发射 request 的 prefill 整段（ARRIVAL 决策的图）。
+
+        strategy 恒走 roofline 物理时钟。
 
         返回 PREFILL_DRAIN watch 成员：{rank: 末个真实 prefill 节点 id}
         （离线 prefill_last_node_by_rank 口径，排除 end barrier）。
         """
         self._set_context(request_plan, "prefill", 0)
-        if self.replay_clock:
-            # 主控裁决 ③（replay 作用域）：清空 prefill 组各 rank 的
-            # previous_id，prefill 链首只依赖自身 arrival/interval gate。
-            prefill_group = self.group_by_index[
-                request_plan["prefill_instance_index"]]
-            for rank in prefill_group.ranks:
-                self.builders[rank].previous_id = None
         marker = self._mark()
         members = self._emit_prefill(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
-    def emit_decode_batch(self, request_plan: dict,
-                          *, phase_duration_ns: int = 0) -> dict:
+    def emit_decode_batch(self, request_plan: dict) -> dict:
         """发射 decode 整段（decode 逐出 + prefill→decode 迁移 + decode
         readiness barrier + decode 整段 + end barrier；PREFILL_DRAIN 决策）。
 
@@ -456,7 +415,6 @@ class GraphBatchBuilder:
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         members = self._emit_decode(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
@@ -496,8 +454,8 @@ class GraphBatchBuilder:
             # as "new_session" and never stored; turn>0 gates are popped at
             # arrival). When another request's completion eviction
             # (remote_store) targets this session, the old direct subscript
-            # raised KeyError (replay 20 @ delivery 3575 session_128_request_0
-            # / strategy 50 @ delivery 1553 session_205_request_0). Defer to
+            # raised KeyError (20/50 档 delivery 3575/1553 两起历史事故,
+            # sh_2.0 改造实录登记). Defer to
             # session completion instead -- mirroring the turn>0 no-entry
             # semantics above (offline planner equivalence: the eviction
             # applies to the session state; the next turn's
@@ -779,7 +737,7 @@ class GraphBatchBuilder:
             raise RuntimeError("Prefill completion node IDs were not generated")
         self._prefill_completion_nodes[request_plan["request_id"]] = (
             prefill_completion_nodes)
-        # [B3 修复，蓝本同款] 记录 per-rank prefill 块末 previous_id
+        # [previous_id 链修复，蓝本同款] 记录 per-rank prefill 块末 previous_id
         # （emitted-ranks-only 精确语义：decode 段发射前恢复；decode 组
         # rank 不在 prefill 组内即 None，与本 request 的 decode 决策无关，
         # 故此处无需 decode_instance_index——strategy 模式在 prefill 段
@@ -806,25 +764,15 @@ class GraphBatchBuilder:
         prefix = _prefix_of(request_plan)
         request = config.request_queue[request_plan["queue_index"]]
 
-        # [frontier 接续裁决，strategy 死锁修复 2026-08-16] replay 模式
-        # （replay_clock=True）保留蓝本的 emitted-ranks-only 块末恢复——
-        # LUT 时钟语义（B1/B2 exact 已验证，跨 request previous_id 边=0 为
-        # 合同⑦归因类别①）。strategy 模式（真实物理）**不恢复**：per-rank
-        # previous_id 保持接续到当前 frontier（= 离线 writer 的跨 request
-        # 物理链同构），使 per-rank 发行序 = 全局发射序——任意两个发射段
-        # 在所有共享 rank 上的相对次序一致，跨实例 P2P（noc_migrate
-        # send/recv/ack）与 collective 参与序不可能反转（死锁机理见实录：
-        # sdg1 waits-for 证据，rank0/rank6 槽位互持 + ack 反压成环）。
-        # decode 组 rank 首节点因此链到该 rank 当前 frontier（跨 request
-        # 边），与离线 .et 的跨 request previous_id 链一致（B3 归因类别②
-        # 的既有口径，非新增差异）。
-        if self.replay_clock:
-            block_ends = self._prefill_block_ends.get(
-                request_plan["request_id"])
-            if block_ends is not None:
-                for rank, end_id in block_ends.items():
-                    builders[rank].previous_id = end_id
-
+        # [frontier 接续裁决，strategy 死锁修复 2026-08-16]
+        # strategy 模式（真实物理）**不恢复**：per-rank previous_id 保持
+        # 接续到当前 frontier（= 离线 writer 的跨 request 物理链同构），
+        # 使 per-rank 发行序 = 全局发射序——任意两个发射段在所有共享
+        # rank 上的相对次序一致，跨实例 P2P（noc_migrate send/recv/ack）
+        # 与 collective 参与序不可能反转（死锁机理见实录：sdg1 waits-for
+        # 证据，rank0/rank6 槽位互持 + ack 反压成环）。decode 组 rank
+        # 首节点因此链到该 rank 当前 frontier（跨 request 边），与离线
+        # 跨 request previous_id 链一致（差分归因类别②的既有口径）。
         prefill_completion_nodes = self._prefill_completion_nodes[
             request_plan["request_id"]]
 

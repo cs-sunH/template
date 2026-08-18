@@ -790,3 +790,68 @@
   service.py）+ 脚本两件（run_online_wakeup_guard_fixture.sh /
   bridge_race_stress_repro.sh）+ CMake ServiceVacuumTest + 两 fixture
   runner glob 化 + 本实录同步段。
+
+---
+
+## 路径②清理实录（2026-08-18，步骤 1/2：删 replay 路线）
+
+依据：《路径功能代码对应说明.md》。
+
+**删除（②专有）**：`run_online_replay.sh`；`online/replay_source.py`、`online/sh10_replay_scheduler.py`；`online/verify/tier_b_compare.py`（②族 oracle 验收工具，全层依赖 --replay-run/decision_log）；generate_face_trace.py 的 `--replay-record`（词法保留显式拒绝）；graph_batch_builder.py 的 replay_clock/清链/块末恢复（`_restore_block_end`）与 LUT 校准；C++ replay_clock 全套（Workload.cc :249/:388 remote_mem 1ns/:615 comm 1ns/:942 sensing 账本门 `!replay_clock_` 恒真化）。
+
+**保留（红线）**：face_scheduler.py 全体被 import 符号；sh10_online_scheduler（含合同⑨冻结 LUT face_lut.csv 加载——该文件由①产出，①删除的替代产出见说明文档 §7 步骤 2）；idempotency/ledger_reconcile 等其余 verify 工具；turn0 探针测试。
+
+**顺带修复（预存基线缺陷，登记）**：`cli_online_test.cc` R11 断言期望 30e9 默认到达窗口，而 OnlineCli 经 2026-08-16 backport 已默认 0（无界）——tag 基线上该测试即失败；已对齐断言为 0 并在测试内注明。
+
+**验证（2026-08-18）**：重编 PASS（9 binaries）；pytest 57+7skip 全绿；③④冒烟（30s 全量 1177）双 PASS、交付 3531、no_decision=0、③④决策日志逐字节一致；fail-closed exit=1 实测。
+
+---
+
+## 路径①清理实录（2026-08-18，步骤 2/2：删离线静态全管线）
+
+依据与设计：《路径功能代码对应说明.md》（§4-b 替代产出/§7 步骤 2/裁决 A/裁决 i 附三条件）。执行纪律更新（用户 2026-08-18）：全部改动留工作树，不自主 commit/tag。
+
+**替代产出（新增 `plan_materializer.py`，③④唯一输入物化入口）**：
+- `load_*_trace_config()` 装载副产 runtime_config 四小件（路径零改动）；
+- manifest.json = 队列派生 9 字段（turn0 history=0；turn>0 = min(prefix, 上请求 final)（sidecar 变体）/上请求 final（recompute）；context = input_tokens_total（sidecar）/折入 prefill（recompute t0）/history+prefill（recompute t>0））——**对①产出的真实 manifest 逐字段验证 0 mismatch（1177/1177 或 270/270）**；
+- metrics_manifest.json（裁决 i）：schema_version=1 + requests[]，`manifest_source="synthetic-prerun"` 显式标记（条件 a）；prefill/decode instance 恒 0、ranks 恒 instance-0——**静态 rank 归因维度不可信；请求级指标（e2e/完成/sim_end/tput）可信**（条件 b）；对账工具不取本 manifest 决策事实——synthetic manifest 本身不含决策字段（条件 c，结构性满足）；
+- 输出目录 `<prefix>_54npus_plan_<cfg8>`（保留 54npus 前缀过 GEN_MATCH）；幂等重跑覆盖。
+
+**删除（①专有）**：
+- 入口链：`run_scripts/runall.sh`、`run_sh_test_aware.sh`、`generate_trace.sh`；
+- CMake：`AstraSim_Analytical_Congestion_Aware` 静态目标（link/include/properties 段）+ `congestion_aware/main.cc`（裁决 A；上游 examples/run_scripts/analytical/congestion_aware 三脚本随①失效，ET 数据文件保留——登记于本实录）；
+- generator ①专有符号（AST 全仓引用面分析驱动，被 import 符号全存活）：print_shell_config/_default_jobs/_parse_jobs/_replay_*_dict 族（write_face_trace 因 test_face_scheduler.py 直接 import 而**保留**——登记：①书写库在 sh_1.0 因测试依赖保留库形态，入口链已删不可达）；`main()` 改为 fail-closed 拒绝桩（"path-1 removed; use plan_materializer.py"）；
+- `generate_trace.py` 的 `main()` 委派段改同款拒绝桩（模块本体整文件保留——Chakra 常量/TraceBuilder/transformer_pass(_aggregated) 等为③④与 microbench 共享符号库）。
+
+**GEN_MATCH 改造**：（本仓 runner 原生 GEN_MATCH，无改造；新增注释指向 plan_materializer）
+
+**测试处置**：pytest 24+7skip+33 全绿
+
+**验证（2026-08-18，①删除后仅靠 plan_materializer 输入）**：
+- 替代产出等价性：合成 manifest vs ①真实 manifest 逐字段 **0 mismatch**；
+- 重编 PASS（Online+fixtures，静态目标已不存在）；幸存 pytest 全绿（见各仓数字）；
+- ③冒烟 PASS：10s 270 request 交付 810、no_decision=0；另 30s/1177 全量④（plan_materializer 输入）PASS；④冒烟 PASS 且 online_decision_log 与③**逐字节一致**；
+- 分层账本对账：**BALANCED**（30s/1177，ledger_reconcile_sh10 --run-dir --expected 1177；10s 窗口因不含 remote 转移动作 RF3d 不覆盖，属窗口覆盖面非机制问题）；
+- fail-closed 实测：generate_trace.py 拒绝桩 exit=1；plan_materializer 空队列 exit=1；runner 缺 request_csv exit=1；GEN_MATCH 零目录/双目录均 exit=1。
+
+**本步工作树改动文件清单（供审阅提交）**：新增 plan_materializer.py（含 face_lut.csv 产出——FaceLut.build 直构，与①产物 md5 逐字节一致）；删 runall.sh/run_sh_test_aware.sh/generate_trace.sh/run_online_replay.sh、congestion_aware/main.cc、online/replay_source.py、online/sh10_replay_scheduler.py、online/verify/tier_b_compare.py；
+改 CMakeLists.txt、main_online.cc、Sys.cc/hh、Workload.cc/hh、OnlineCli.cc/hh、cli_online_test.cc（含 R11 预存缺陷修正）、generate_face_trace.py、generate_trace.py、online/{online_service,graph_batch_builder,sh10_online_scheduler}.py、run_online_strategy.sh、run_online_wakeup_guard_fixture.sh、README_COMMANDS.md、本实录。
+
+---
+
+## 路径①②终清与重验实录（2026-08-18，残余清扫轮）
+
+**扫描口径**：同 face 仓（关键词族穷尽 grep + 逐条语义分类 + 删除必经③④零影响门复核）。
+
+**本仓改动（终清轮，全部为文字性清改，零代码行为改动）**：
+1. 【活文件陈旧注释-改写】generate_face_trace.py / generate_trace.py main 拒绝桩 docstring 标签中性化；online/graph_batch_builder.py（B3/B4 归因→中性口径、②清链注释、frontier 接续注释中的②叙事、「replay 模式跨 request 清链后…」注释）；online/online_service.py（模块 docstring ②删除说明、蓝本裁决 4③ 的②括注）；online/sh10_online_scheduler.py 冻结 LUT 缺失报错文案（generate_trace.py/path-2 → plan_materializer.py/合同⑨口径）；metrics_integration.py；run_scripts/run_metrics_postprocess.sh 头注释；run_online_strategy.sh / run_online_strategy_sensing.sh / run_online_idle_fixture.sh / run_online_wakeup_guard_fixture.sh / run_online_same_tick_milestone.sh 的 GEN_MATCH 注释与报错指引（generate_trace.sh → plan_materializer.py）；plan_materializer.py docstring；Workload.cc 注释；execution_driven/tests/ 六文件构建注释；
+2. 【活文档陈旧内容-改写】sh_test_mesh/README.md（Static Chakra ET adaptation 首段→在线执行口径；Run and validate→③④工作流）；run_scripts/README_COMMANDS.md 整表重写；
+3. 【边界-保留并登记】write_face_trace / build_face_plan：锚点裁决的库形态保留（test_face_scheduler.py 直接 import write_face_trace，:58/:399/:408；build_face_plan 被 :211 mock 与 write_face_trace 内部调用）——入口 main 已是 fail-closed 拒绝桩，符号仅为共享库+测试存活面，非①入口残留；online_contracts/、verify/tier_b_report_20.md、benchmark_20.md、PROVENANCE.md 历史记录不动；ETFeeder 共享边界保留（同 face）。
+
+**本仓重验数字**：③④冒烟 10s/270 双 PASS：completed=270、no_decision=0、single_node=0、delivery=810==digests 810、③④决策日志 cmp 零差异；④对账 ledger_reconcile_sh10.py --expected 270：除 RF3d（remote 转移族覆盖）外全 PASS——RF3d 为已登记的 10s 窗口覆盖问题（10s 窗口无 remote_store/remote_load 动作，kinds={noc_migrate:452, local_hit:59}），非机制缺陷；补 30s/1177 全量场：completed=1177、delivery=3531==digests 3531、③④字节一致、ledger_reconcile_sh10.py --expected 1177 = **BALANCED**；pytest 双根 24+7skip+33（基线一致，workload 根 = test_face_scheduler + online/test_turn0_eviction_probe_sh10）。
+
+**重验（2026-08-18 终清后全量）**：
+- clean 重建（rm -rf build_congestion_aware 后 cmake 重配 + 全目标）：exit=0，10 个 add_executable 目标（Unaware/_Online/8 fixtures）全部产出，0 error；
+- fail-closed 复测：generate_trace.py 拒绝桩 / 生成器 main 拒绝桩 / plan_materializer 空队列 / runner 缺 request_csv / GEN_MATCH 零目录 / GEN_MATCH 双目录 —— 全部 exit=1；
+- pytest 双根：workload 根 + sh_test_mesh/tests 根，与终清前基线逐项一致，零新增失败；
+- ③④ 冒烟：run_online_strategy.sh 与 run_online_strategy_sensing.sh 各一场，completed==物化数、no_decision_python_callback_count=0、single_node_bridge_count=0、delivery==graph_batch_digests 行数、③④ online_decision_log.jsonl 逐字节一致（cmp）、④ 分层账本对账 verdict=对平/BALANCED；发射前内存门控实测 ~11-12%（<70%）。

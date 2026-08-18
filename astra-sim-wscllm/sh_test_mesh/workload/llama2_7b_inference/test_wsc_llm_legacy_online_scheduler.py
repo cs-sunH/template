@@ -182,7 +182,7 @@ def _probe(config):
                 "selected_session_count": 0}
     return WscLlmLegacyOnlineScheduler(
         manifest=manifest, config=config,
-        graph=GraphBatchBuilder(config, replay_clock=False))
+        graph=GraphBatchBuilder(config))
 
 
 def _build_scheduler(records, config=None):
@@ -195,7 +195,7 @@ def _build_scheduler(records, config=None):
         "selected_session_count": len(
             {record["session_id"] for record in records}),
     }
-    graph = GraphBatchBuilder(config, replay_clock=False)
+    graph = GraphBatchBuilder(config)
     scheduler = WscLlmLegacyOnlineScheduler(
         manifest=manifest, config=config, graph=graph)
     return config, scheduler
@@ -253,7 +253,9 @@ def test_policy_dispatch_fail_closed():
     config = _load_fixture_config()
     manifest = {"requests": [], "selected_request_count": 0,
                 "selected_session_count": 0}
-    graph = GraphBatchBuilder(config, replay_clock=False)
+    graph = GraphBatchBuilder(config)
+    # mode 白名单断言——构造器对非 strategy 模式 fail-closed
+    # (词法层由 online_service --mode choices 拒绝,机制层由本断言拒绝)。
     with pytest.raises(ValueError):
         WscLlmLegacyOnlineScheduler(
             manifest=manifest, config=config, graph=graph, mode="replay")

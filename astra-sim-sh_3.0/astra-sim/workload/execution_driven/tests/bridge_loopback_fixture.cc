@@ -33,7 +33,7 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
      flight" (backpressure contract) instead of shifting the exchanges.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
-(build with bash sh_test_mesh/run_scripts/build_analytical_aware.sh).
+(build with cmake --build build/astra_analytical/build_congestion_aware -j).
 Run (from template/astra-sim-sh_3.0):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest \

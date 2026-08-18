@@ -261,15 +261,15 @@ The source owns the boundary-selection policy, latency, and logical-pool name:
 The concrete edge list is derived from the repository-local mesh and the
 bandwidth is derived from the repository-local hardware source.
 
-## Static Chakra ET adaptation
+## Online execution adaptation (Chakra node semantics)
 
-FACE is a live host scheduler, while ASTRA-sim consumes a static Chakra ET DAG.
-The planner therefore computes mappings, HBM state transitions, session
-locations, FIFO evictions, and routes at trace-generation time, then encodes
-those decisions as dependencies in 54 rank traces.
+FACE is a live host scheduler. The online strategy routes compute mappings, HBM
+state transitions, session locations, FIFO evictions, and routes at each
+decision boundary, then emit the resulting per-rank graph batches to the
+execution-driven engine (54 ranks).
 
-The ET expresses remote store as NoC transfer, edge `MEM_STORE`, and completion
-ACK. Remote restore is edge `MEM_LOAD`, NoC delivery, and target-HBM DMA. For a
+The emitted graph expresses remote store as NoC transfer, edge `MEM_STORE`, and
+completion ACK. Remote restore is edge `MEM_LOAD`, NoC delivery, and target-HBM DMA. For a
 partial session, dependency-chain checkpoint/restore creates parallel suffix
 load and prefix-compute branches that rejoin at the suffix boundary. The C++
 local-HBM fluid model dynamically enforces the per-NPU 50/50 sharing rule.
@@ -329,22 +329,38 @@ Generated runtime files (do not edit):
 
 ## Run and validate
 
-Run from the `astra-sim-sh` repository root:
+Run from the repository root. The online strategy routes are the supported
+pipeline (route 3 = strategy, route 4 = strategy + sensing). Inputs are
+materialized per `traces/PROVENANCE.md` (only allowed source:
+`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+produced by the materializer:
 
 ```bash
-python3 -m unittest sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py -v
-bash sh_test_mesh/run_scripts/generate_trace.sh
-bash sh_test_mesh/run_scripts/run_sh_test_aware.sh
-bash sh_test_mesh/run_scripts/run_sh_test_unaware.sh
+# 1. materialize the 30s request-queue input (rules: traces/PROVENANCE.md)
+cd sh_test_mesh/workload/llama2_7b_inference
+python3 traces/materialize_first_30s.py \
+  /home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv traces/
+# 2. materialize the plan directory + runtime_config four-piece set
+python3 plan_materializer.py
+cd ../../..
+# 3. online strategy (route 3) and sensing variant (route 4)
+bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <abs request_csv>
+bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <abs request_csv>
+# metrics post-processing of a run's cpp.log
+bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 ```
 
-Each generated directory contains 54 ET files, `manifest.json`, and
-`face_lut.csv`.
+Unit tests (workload layer + sh_test_mesh contracts):
+
+```bash
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd ../.. && python3 -m pytest tests/ -q
+```
+
+Each generated plan directory contains `manifest.json` (queue-derived 9
+fields; sidecar_restore variant) and `metrics_manifest.json` (synthetic-prerun; rank
+attribution is placeholder).
 
 Generated artifacts:
 
 `@sh_test_mesh/generated`
-
-Simulation logs:
-
-`@sh_test_mesh/results/run_logs`

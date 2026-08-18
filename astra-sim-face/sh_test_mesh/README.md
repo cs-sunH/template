@@ -43,8 +43,8 @@ neighbors, then the four corners. This preserves the same 3x3 tiling while
 avoiding a corner-first deterministic tie-break that can strand free HBM behind
 increased weighted-distance edges during long multi-session workloads.
 
-Equal instance sizes let the static ET adapter pair KV shards by relative rank
-when a request moves between instances.
+Equal instance sizes let the online graph emitter pair KV shards by relative
+rank when a request moves between instances.
 
 ## Default workload: all requests in the normalized first three minutes
 
@@ -67,8 +67,9 @@ later context. Prefill ranges from 1 to 161,734 tokens, Decode from 1 to
 
 ## FACE mapping implemented by the planner
 
-The pure Python planner performs a deterministic discrete-event pass before ET
-generation:
+The pure Python planner (`face_scheduler.py`, kept as the shared policy library
+and test oracle for the online schedulers) performs a deterministic
+discrete-event pass:
 
 1. `p_chunk` is the explicit configuration value 512 for both ordinary
    Prefill and history recompute chunks.
@@ -90,10 +91,6 @@ generation:
    before Prefill; a deleted history is recomputed from its window-local
    logical context. These cache decisions never change FACE mapping.
 
-The generated directory contains `kv_cache_events.csv`; deletion itself has no
-ET/NoC/memory node. Full generation streams ET nodes to a staging directory and
-publishes them only after every rank succeeds.
-
 The paper does not publish its numerical LUT or attention tile choices. The
 checked-in planner builds only the required scheduling-time LUT columns with a
 documented analytical Roofline estimate and exports the concrete rows used by
@@ -105,7 +102,7 @@ Pure planner and tests:
 
 `@astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py`
 
-FACE ET integration:
+FACE trace-configuration loader:
 
 `@astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py`
 
@@ -113,21 +110,22 @@ Default trace configuration:
 
 `@astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
 
-## Static ET adaptation
+## Online execution adaptation
 
-FACE is a live host scheduler, while ASTRA-sim consumes a static Chakra ET DAG.
-This implementation therefore makes FACE decisions at trace-generation time and
-then fixes those decisions in the generated ET files. The planner's LUT models
-Prefill/Decode overlap at the iteration level; Transformer nodes in one
-ASTRA-sim rank trace may serialize because they are static DAG operations.
+FACE is a live host scheduler. The online strategy routes make FACE decisions
+in-process at each decision boundary (arrival / prefill drain / decode
+completion) and emit the resulting per-rank graph batches to the ASTRA-sim
+execution-driven engine; decisions are not fixed ahead of time. The planner's
+LUT models Prefill/Decode overlap at the iteration level, so Transformer nodes
+in one ASTRA-sim rank's batch may serialize.
 
-The default `trace_granularity=request_aggregated` is required to keep the real
-420-request queue practical. For each request phase and rank it folds the real
-Prefill chunks or Decode steps, plus identical Transformer layers, into 17
-operator-category nodes. The aggregate FLOPs, tensor/HBM bytes, optional remote
-reads, and All-Reduce payload bytes equal the sums of the token-expanded trace.
-It intentionally compresses repeated collective invocation and startup latency,
-so it is a workload-volume-preserving approximation rather than a cycle-exact
+The default `trace_granularity=request_aggregated` keeps the real request queue
+practical. For each request phase and rank it folds the real Prefill chunks or
+Decode steps, plus identical Transformer layers, into 17 operator-category
+nodes. The aggregate FLOPs, tensor/HBM bytes, optional remote reads, and
+All-Reduce payload bytes equal the sums of the token-expanded trace. It
+intentionally compresses repeated collective invocation and startup latency, so
+it is a workload-volume-preserving approximation rather than a cycle-exact
 replacement for `token_expanded`. Small workloads can still select
 `token_expanded` in the trace config.
 
@@ -174,30 +172,41 @@ Generated runtime files (do not edit):
 
 ## Run and validate
 
-```bash
-cd astra-sim
-python3 -m unittest sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py
-bash sh_test_mesh/run_scripts/generate_trace.sh
-bash sh_test_mesh/run_scripts/run_sh_test_aware.sh
-```
-
-The congestion-unaware comparison uses:
+The online strategy routes are the supported pipeline (route 3 = strategy,
+route 4 = strategy + sensing). Inputs are materialized per
+`traces/PROVENANCE.md` (the only allowed source is
+`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+produced by the materializer:
 
 ```bash
-bash sh_test_mesh/run_scripts/run_sh_test_unaware.sh
+cd sh_test_mesh/workload/llama2_7b_inference
+# 1. materialize the request-queue input (rules: traces/PROVENANCE.md)
+# 2. materialize the plan directory + runtime_config four-piece set
+python3 plan_materializer.py
+cd ../../..
+# 3. run the online strategy (route 3) and the sensing variant (route 4)
+bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <abs request_csv>
+bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <abs request_csv>
+# legacy second variant (strategy mode + trace_config_legacy.csv)
+bash sh_test_mesh/run_scripts/run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
+# metrics post-processing of a run's cpp.log
+bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 ```
 
-Each generated directory contains 54 ET files plus:
+Unit tests (workload layer + sh_test_mesh contracts):
 
-- `manifest.json`: hardware, instances, every Prefill/Decode decision, candidate
-  distances, both LUT queries, per-die deltas, KV allocation, NPU transfer
-  routes, and planning iterations.
-- `face_lut.csv`: the concrete analytical scheduling LUT used for that run.
+```bash
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd ../.. && python3 -m pytest tests/ -q
+```
+
+Each generated plan directory contains:
+
+- `manifest.json`: queue-derived per-request facts (9 fields; existence
+  credential for the online runner's `--plan-dir`).
+- `metrics_manifest.json`: synthetic-prerun metrics manifest (rank-attribution
+  fields are placeholders; request-level metrics are trustworthy).
 
 Generated files are under:
 
 `@astra-sim-face/sh_test_mesh/generated`
-
-The latest congestion-aware validation log is under:
-
-`@astra-sim-face/sh_test_mesh/results/run_logs`

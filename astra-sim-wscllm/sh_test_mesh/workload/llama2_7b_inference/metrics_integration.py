@@ -17,7 +17,7 @@ WSC-LLM differences versus the FACE original:
 - The legacy WSC planner (Relevant(P,D) static Decode domain) keeps no
   ``final_edge_weights``; the legacy KV digest payload therefore uses the
   allocator's ``final_remaining_capacity_bytes`` instead.
-- Doc sec.9.2 (trace_config.csv:16 / run_sh_test_aware.sh:101): the scenario
+- Doc sec.9.2 (trace_config.csv:16 / online runner): the scenario
   banner is not a machine-readable KV policy source, so the manifest carries
   the real policy fields (``kv_policy``, ``kv_reserve_context_tokens``) read
   from the actual trace configuration.
@@ -270,7 +270,7 @@ def resolve_metrics_detail(
     cli_value: Optional[str], environ: Mapping[str, str]
 ) -> str:
     """Resolve the generator metrics switch: CLI > METRICS_DETAIL >
-    ENABLE_METRICS > default on/full (aligned with run_sh_test_aware.sh)."""
+    ENABLE_METRICS > default on/full (aligned with the online runner metrics switch)."""
 
     detail = cli_value if cli_value is not None else environ.get("METRICS_DETAIL")
     if detail is None:

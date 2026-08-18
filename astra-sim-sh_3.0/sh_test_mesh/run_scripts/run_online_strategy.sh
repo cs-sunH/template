@@ -3,7 +3,7 @@
 # Usage: bash run_online_strategy.sh <run_dir> <request_csv>
 # request-neutral(裸仓库):仓库不预置输入队列;request_csv 由调用方按方案文档
 # §3 步骤 0-1 物化后必填传入(缺失即 fail-closed)。
-# 流程同 run_online_replay.sh(C++ 先起建桥,Python 服务后起,等退出码,
+# 流程(C++ 先起建桥,Python 服务后起,等退出码,
 # 收日志,[METRIC] 行经 run_metrics_postprocess.sh 后处理)。
 set -euo pipefail
 

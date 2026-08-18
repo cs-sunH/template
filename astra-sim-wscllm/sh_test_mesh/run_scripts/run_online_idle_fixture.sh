@@ -23,7 +23,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/wscllm_idle_fixture}
 
-ET_PREFIX=${PROJECT}/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_face_case5_config_c_wsc_llm_pd_6p3d_9inst_tp6_112sess_1177req_pc512_p66-169395_d1-13812_grequest_aggregated_q23936bbc_c38c794e6/llama2_7b_wsc_llm_inference
+# ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
+# 见 traces/PROVENANCE.md 与《路径功能代码对应说明.md》)。
+GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
+if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
+  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  exit 1
+fi
+ET_DIR=${GEN_MATCH[0]}
+ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 FIXTURE_SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/lifecycle_fixture_service.py

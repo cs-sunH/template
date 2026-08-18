@@ -288,3 +288,67 @@ kv_actions/assignments（phase-7 §10.3 起消费即删），两侧恒读成空�
 
 - commit（pathspec 仅本仓：机制层 6 文件 + fixtures 5 件 + CMakeLists
   + 补记）+ tag `wscllm-defectfix2-done`。
+
+---
+
+## 路径②清理实录（2026-08-18，步骤 1/2：删 replay 路线）
+
+依据：《路径功能代码对应说明.md》。
+
+**删除（②专有）**：`run_online_replay.sh`；`online/replay_source.py`、`online/wsc_llm_replay_scheduler.py`；online_service.py 的 replay 分发与 consumed 校验；generate_wsc_llm_trace.py 的 `--replay-record`（词法保留显式拒绝）、record_planning_iterations 强制替换段、`_write_replay_decision_log`；graph_batch_builder.py 的 replay_clock/清链与 LUT 校准；C++ replay_clock 全套（Workload.cc :246 dep-free、:469 comm 1ns）。
+
+**保留（红线）**：wsc_llm_scheduler/generate_wsc_llm_trace 被 import 符号（含 `IDLE_SENTINEL_DURATION_NS`/`_add_idle_rank_sentinels`/`_validate_*`）；双变体 runner（strategy/sensing/legacy）与 trace_config_legacy.csv；test_wsc_llm_legacy_online_scheduler 的 `mode="replay"` ValueError 断言保留（机制层拒绝非 strategy 模式的 fail-closed 验证）。
+
+**验证（2026-08-18）**：重编 PASS（8 binaries）；pytest 35+33 全绿；③④冒烟（10s 窗口 29 session/270 request）双 PASS、交付 810=3×270、no_decision=0、③④决策日志逐字节一致；fail-closed exit=1 实测。
+
+---
+
+## 路径①清理实录（2026-08-18，步骤 2/2：删离线静态全管线）
+
+依据与设计：《路径功能代码对应说明.md》（§4-b 替代产出/§7 步骤 2/裁决 A/裁决 i 附三条件）。执行纪律更新（用户 2026-08-18）：全部改动留工作树，不自主 commit/tag。
+
+**替代产出（新增 `plan_materializer.py`，③④唯一输入物化入口）**：
+- `load_*_trace_config()` 装载副产 runtime_config 四小件（路径零改动）；
+- manifest.json = 队列派生 9 字段（turn0 history=0；turn>0 = min(prefix, 上请求 final)（sidecar 变体）/上请求 final（recompute）；context = input_tokens_total（sidecar）/折入 prefill（recompute t0）/history+prefill（recompute t>0））——**对①产出的真实 manifest 逐字段验证 0 mismatch（1177/1177 或 270/270）**；
+- metrics_manifest.json（裁决 i）：schema_version=1 + requests[]，`manifest_source="synthetic-prerun"` 显式标记（条件 a）；prefill/decode instance 恒 0、ranks 恒 instance-0——**静态 rank 归因维度不可信；请求级指标（e2e/完成/sim_end/tput）可信**（条件 b）；对账工具不取本 manifest 决策事实——synthetic manifest 本身不含决策字段（条件 c，结构性满足）；
+- 输出目录 `<prefix>_54npus_plan_<cfg8>`（保留 54npus 前缀过 GEN_MATCH）；幂等重跑覆盖。
+
+**删除（①专有）**：
+- 入口链：`run_scripts/runall.sh`、`run_sh_test_aware.sh`、`generate_trace.sh`；
+- CMake：`AstraSim_Analytical_Congestion_Aware` 静态目标（link/include/properties 段）+ `congestion_aware/main.cc`（裁决 A；上游 examples/run_scripts/analytical/congestion_aware 三脚本随①失效，ET 数据文件保留——登记于本实录）；
+- generator ①专有符号（AST 全仓引用面分析驱动，被 import 符号全存活）：write_wsc_llm_trace/build_wsc_llm_plan/print_shell_config/resolve_output_dir/build_trace_label/_write_wsc_session_lru_trace/_write_kv_events_csv/_atomic_publish_directory/_build_metadata/_allocation_dict/_eviction_dict/_hbm_snapshot_dict/_request_plan_dict/_session_lru_record/_timing_entry_dict/_to_scheduler_requests/_stage_tag/_xy_route/HistoryPieceGate/Phase0Counters 族（18 符号 + PHASE0_COUNTERS 模块级块）；`main()` 改为 fail-closed 拒绝桩（"path-1 removed; use plan_materializer.py"）；
+- `generate_trace.py` 的 `main()` 委派段改同款拒绝桩（模块本体整文件保留——Chakra 常量/TraceBuilder/transformer_pass(_aggregated) 等为③④与 microbench 共享符号库）。
+
+**GEN_MATCH 改造**：run_online_strategy/sensing/idle_fixture/wakeup_guard/same_tick_milestone 五脚本由硬编码改为 GEN_MATCH（原硬编码 1177 档标签目录随之废除）
+
+**测试处置**：pytest 35+33 全绿
+
+**验证（2026-08-18，①删除后仅靠 plan_materializer 输入）**：
+- 替代产出等价性：合成 manifest vs ①真实 manifest 逐字段 **0 mismatch**；
+- 重编 PASS（Online+fixtures，静态目标已不存在）；幸存 pytest 全绿（见各仓数字）；
+- ③冒烟 PASS：10s 270 request 交付 810、no_decision=0；另 30s/1177 全量④（plan_materializer 输入）PASS；④冒烟 PASS 且 online_decision_log 与③**逐字节一致**；
+- 分层账本对账：**对平 (balanced)**（30s/1177）；
+- fail-closed 实测：generate_trace.py 拒绝桩 exit=1；plan_materializer 空队列 exit=1；runner 缺 request_csv exit=1；GEN_MATCH 零目录/双目录均 exit=1。
+
+**本步工作树改动文件清单（供审阅提交）**：新增 plan_materializer.py；删 runall.sh/run_sh_test_aware.sh/generate_trace.sh/run_online_replay.sh、congestion_aware/main.cc、online/replay_source.py、online/wsc_llm_replay_scheduler.py；
+改 CMakeLists.txt、main_online.cc、Sys.cc/hh、Workload.cc/hh、OnlineCli.cc/hh、cli_online_test.cc、generate_wsc_llm_trace.py、generate_trace.py、online/{online_service,graph_batch_builder,wsc_llm_online_scheduler,wsc_llm_legacy_online_scheduler}.py、online/verify/idempotency_fixture.py、test_wsc_llm_legacy_online_scheduler.py、run_scripts/{run_online_strategy,run_online_strategy_sensing,run_online_idle_fixture,run_online_wakeup_guard_fixture,run_online_same_tick_milestone}.sh、README_COMMANDS.md、本实录。
+
+---
+
+## 路径①②终清与重验实录（2026-08-18，残余清扫轮）
+
+**扫描口径**：同 face 仓。
+
+**本仓改动（终清轮）**：
+1. 【功能残留-删】generate_wsc_llm_trace.py 的 `_write_replay_decision_log`（②决策日志写出死代码，131 行，全仓零调用面；与 face 同型补删）；
+2. 【活文件陈旧注释-改写】generate_wsc_llm_trace.py / generate_trace.py 拒绝桩 docstring；online/graph_batch_builder.py（docstring 的 _write_wsc_session_lru_trace 删除符号引用、B3/B4 归因、根因#5 的 replay 清链/LUT 时钟长叙事→现行口径、②清链注释）；online/online_service.py（②删除说明、tier_b_compare legacy 层注释）；online/wsc_llm_legacy_online_scheduler.py（kv_event_payload_legacy 的 tier_b_compare 引用→run-end 审计件口径、B4 归因×2）；test_wsc_llm_legacy_online_scheduler.py mode 白名单断言的②括注；metrics_integration.py（:20 文档引用 + :273 对齐注释）；run_metrics_postprocess.sh 头注释；run_online_strategy_legacy.sh:9；plan_materializer.py docstring；Workload.cc；execution_driven/tests/ 六文件构建注释；
+3. 【活文档陈旧内容-改写】sh_test_mesh/README.md（Offline static P→D mapping→Static P→D mapping policy、kv_cache_events 产物句、static-ET boundary 段、ET integration 标签、Run and validate→③④工作流，含 request-neutral 物化规则说明）；README_COMMANDS.md 整表重写（删「--layers B0..B1..B4」孤儿行）；
+4. 【边界-保留并登记】kv_event_payload_legacy.json 产出链：legacy 变体（③族）runner 在用（run_online_strategy_legacy.sh:100-102 归档到 results/），为活功能，仅改注释；wscllm 无仓内输入物化器（方案 §3 步骤 0-1，recompute 变体；本轮 10s/30s 输入即 traces/q10r.csv、q30.csv）；ledger_reconcile.py 内置 1177/112 验收期望（无 CLI 覆盖）→ 10s 场对账需按 30s 口径（见重验）；ETFeeder 共享边界、历史记录载体同 face。
+
+**本仓重验数字**：③④冒烟 10s/270 双 PASS：completed=270、no_decision=0、single_node=0、delivery=810==digests 810、③④决策日志 cmp 零差异；补 30s/1177 全量场：completed=1177、delivery=3531==digests 3531、③④字节一致、④对账 ledger_reconcile.py（--bridge-dir 合并目录 + --manifest plan manifest + --cpp-log）= **对平 (balanced)**；pytest 双根 35+33（基线一致）。
+
+**重验（2026-08-18 终清后全量）**：
+- clean 重建（rm -rf build_congestion_aware 后 cmake 重配 + 全目标）：exit=0，10 个 add_executable 目标（Unaware/_Online/8 fixtures）全部产出，0 error；
+- fail-closed 复测：generate_trace.py 拒绝桩 / 生成器 main 拒绝桩 / plan_materializer 空队列 / runner 缺 request_csv / GEN_MATCH 零目录 / GEN_MATCH 双目录 —— 全部 exit=1；
+- pytest 双根：workload 根 + sh_test_mesh/tests 根，与终清前基线逐项一致，零新增失败；
+- ③④ 冒烟：run_online_strategy.sh 与 run_online_strategy_sensing.sh 各一场，completed==物化数、no_decision_python_callback_count=0、single_node_bridge_count=0、delivery==graph_batch_digests 行数、③④ online_decision_log.jsonl 逐字节一致（cmp）、④ 分层账本对账 verdict=对平/BALANCED；发射前内存门控实测 ~11-12%（<70%）。

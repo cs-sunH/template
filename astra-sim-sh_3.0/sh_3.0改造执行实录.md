@@ -683,3 +683,69 @@ DecisionBridge.cc 同款 unlink），两侧恒读成空列表，空==空打出 P
   （main_online.cc / DecisionBridge.cc/.hh / EventQueue.h/.cpp map 版
   适配 / decision_bridge.py）+ fixtures 四件 + 脚本两件 + CMake
   ServiceVacuumTest + 两 fixture runner glob 化 + 本实录同步段。
+
+---
+
+## 路径②清理实录（2026-08-18，步骤 1/2：删 replay 路线）
+
+依据：《路径功能代码对应说明.md》。
+
+**删除（②专有）**：`run_online_replay.sh`；`online/replay_source.py`、`online/sh30_replay_scheduler.py`；online_service.py 的 replay 分发与 consumed 校验；generate_face_trace.py 的 `--replay-record`（词法保留显式拒绝）、`build_face_plan(replay_record)` 形参、`_write_replay_decision_log`/`_replay_kv_transfer_dict`；graph_batch_builder.py 的 replay_clock/清链与 LUT 校准；C++ replay_clock 全套（Workload.cc :249 dep-free、:375 remote MEM 1ns、:399 HBM restore 1ns、:502 校准 COMP 不入 HBM 模型、:545 comm 1ns）。
+
+**共享符号迁移（登记）**：`build_plan_dict`（manifest 记录 → plan dict 转换器，含 _LocationShim/_shard_from_dict/_transfer_from_dict/_transfers）原位于 sh30_replay_scheduler.py 但被 sh30_online_scheduler import——已整体迁入 sh30_online_scheduler.py（函数体零改动，仅迁移位置）。
+
+**保留（红线）**：face_scheduler/generate_face_trace 被 import 符号；sh30_online_scheduler（三段式准入/三态 KV）；tier_b_compare（无 replay 依赖）；idempotency_fixture（kwarg 适配）。
+
+**验证（2026-08-18）**：重编 PASS（9 binaries）；pytest 75 全绿；③④冒烟（30s 全量 1177）双 PASS、no_decision=0、③④决策日志逐字节一致；fail-closed 实测。
+
+---
+
+## 路径①清理实录（2026-08-18，步骤 2/2：删离线静态全管线）
+
+依据与设计：《路径功能代码对应说明.md》（§4-b 替代产出/§7 步骤 2/裁决 A/裁决 i 附三条件）。执行纪律更新（用户 2026-08-18）：全部改动留工作树，不自主 commit/tag。
+
+**替代产出（新增 `plan_materializer.py`，③④唯一输入物化入口）**：
+- `load_*_trace_config()` 装载副产 runtime_config 四小件（路径零改动）；
+- manifest.json = 队列派生 9 字段（turn0 history=0；turn>0 = min(prefix, 上请求 final)（sidecar 变体）/上请求 final（recompute）；context = input_tokens_total（sidecar）/折入 prefill（recompute t0）/history+prefill（recompute t>0））——**对①产出的真实 manifest 逐字段验证 0 mismatch（1177/1177 或 270/270）**；
+- metrics_manifest.json（裁决 i）：schema_version=1 + requests[]，`manifest_source="synthetic-prerun"` 显式标记（条件 a）；prefill/decode instance 恒 0、ranks 恒 instance-0——**静态 rank 归因维度不可信；请求级指标（e2e/完成/sim_end/tput）可信**（条件 b）；对账工具不取本 manifest 决策事实——synthetic manifest 本身不含决策字段（条件 c，结构性满足）；
+- 输出目录 `<prefix>_54npus_plan_<cfg8>`（保留 54npus 前缀过 GEN_MATCH）；幂等重跑覆盖。
+
+**删除（①专有）**：
+- 入口链：`run_scripts/runall.sh`、`run_sh_test_aware.sh`、`generate_trace.sh`；
+- CMake：`AstraSim_Analytical_Congestion_Aware` 静态目标（link/include/properties 段）+ `congestion_aware/main.cc`（裁决 A；上游 examples/run_scripts/analytical/congestion_aware 三脚本随①失效，ET 数据文件保留——登记于本实录）；
+- generator ①专有符号（AST 全仓引用面分析驱动，被 import 符号全存活）：write_face_trace/build_face_plan/load_or_build_face_plan/print_shell_config/resolve_output_dir/build_trace_label/ParallelTraceOutputs/StreamingTraceOutputs/_planner_cache_path/_replay_trace_worker 及 _*_dict 快照族（22 符号；_write_replay_* 已于步骤1删）；`main()` 改为 fail-closed 拒绝桩（"path-1 removed; use plan_materializer.py"）；
+- `generate_trace.py` 的 `main()` 委派段改同款拒绝桩（模块本体整文件保留——Chakra 常量/TraceBuilder/transformer_pass(_aggregated) 等为③④与 microbench 共享符号库）。
+
+**GEN_MATCH 改造**：（本仓 runner 原生 GEN_MATCH，无改造）
+
+**测试处置**：pytest 40+33 通过；删 1 个①耦合用例 test_shell_config_does_not_build_full_face_plan（print_shell_config 已删）；余 1 失败为锚点预存缺陷（request-neutral 断言期望物化队列名，锚点态同败，登记）
+
+**验证（2026-08-18，①删除后仅靠 plan_materializer 输入）**：
+- 替代产出等价性：合成 manifest vs ①真实 manifest 逐字段 **0 mismatch**；
+- 重编 PASS（Online+fixtures，静态目标已不存在）；幸存 pytest 全绿（见各仓数字）；
+- ③冒烟 PASS：10s 270 request 交付 810、no_decision=0；④冒烟 PASS 且 online_decision_log 与③**逐字节一致**；
+- 分层账本对账：**对平 (balanced)**（10s/270，sh30_ledger_reconcile --run-dir --manifest=合成 manifest——其 manifest 仅队列派生字段，决策事实不外取，裁决 i 条件 c 结构性满足）；
+- fail-closed 实测：generate_trace.py 拒绝桩 exit=1；plan_materializer 空队列 exit=1；runner 缺 request_csv exit=1；GEN_MATCH 零目录/双目录均 exit=1。
+
+**本步工作树改动文件清单（供审阅提交）**：新增 plan_materializer.py；删 runall.sh/run_sh_test_aware.sh/generate_trace.sh/run_online_replay.sh、congestion_aware/main.cc、online/replay_source.py、online/sh30_replay_scheduler.py；
+改 CMakeLists.txt、main_online.cc、Sys.cc/hh、Workload.cc/hh、OnlineCli.cc/hh、cli_online_test.cc、generate_face_trace.py、generate_trace.py、online/{online_service,graph_batch_builder,sh30_online_scheduler}.py（build_plan_dict 族自已删 replay 调度器迁入）、online/verify/idempotency_fixture.py、test_face_scheduler.py、run_online_strategy.sh、README_COMMANDS.md、本实录。
+
+---
+
+## 路径①②终清与重验实录（2026-08-18，残余清扫轮）
+
+**扫描口径**：同 face 仓。
+
+**本仓改动（终清轮）**：
+1. 【功能残留-删】online/online_service.py 的 `_CanonicalSink` 类 + `SH30_B3_DUMP` 环境门 + canonical_nodes.jsonl 实例化与挂接块 + online_scheduler_base.py 的 `batch_sink` 桥接钩子（getattr 守护 4 行）：唯一消费方 b3_canonical_compare.py 已在前轮补清删除，全仓零引用；经重建+③④冒烟+逐字节一致复核零影响；
+2. 【活文件陈旧注释-改写】generate_face_trace.py / generate_trace.py 拒绝桩 docstring；online/graph_batch_builder.py（docstring 的 write_face_trace 删除符号引用、B3 canonical key、②清链/LUT 时钟注释、「replay 自 decision_log」口径、「replay 权威=manifest/planner」句）；online/online_service.py（模块 docstring ②删除说明、根因#5 replay 括注、legacy 终值注释中的 tier_b_compare 引用、B3 dump hook 注释随钩子删除）；online/sh30_online_scheduler.py build_plan_dict 族迁移来源注释；metrics_integration.py；run_metrics_postprocess.sh 头注释；run_online_wakeup_guard_fixture.sh 报错指引；plan_materializer.py docstring；Workload.cc；execution_driven/tests/ 六文件构建注释；
+3. 【活文档陈旧内容-改写】sh_test_mesh/README.md（同型改写，物化器=traces/materialize_20_30s.py）；README_COMMANDS.md 整表重写（原表含「--layers B0..B4」孤儿行与②清理实录尾注、已删 ledger_reconcile.py 引用——改为 sh30_ledger_reconcile.py --run-dir --manifest 实际口径）；
+4. 【边界-保留并登记】同 face（ETFeeder 共享边界、issue_replay 机制语义、metrics microbenchmark 库级支持、历史记录载体）。
+
+**本仓重验数字**：③④冒烟 10s/270 双 PASS：completed=270、no_decision=0、single_node=0、delivery=810==digests 810、③④决策日志 cmp 零差异；④对账 sh30_ledger_reconcile.py --run-dir --manifest = **对平 (balanced)**；pytest 双根 40+33（另 1 失败=锚点预存缺陷，与基线同败，零新增）。
+
+**重验（2026-08-18 终清后全量）**：
+- clean 重建（rm -rf build_congestion_aware 后 cmake 重配 + 全目标）：exit=0，10 个 add_executable 目标（Unaware/_Online/8 fixtures）全部产出，0 error；
+- fail-closed 复测：generate_trace.py 拒绝桩 / 生成器 main 拒绝桩 / plan_materializer 空队列 / runner 缺 request_csv / GEN_MATCH 零目录 / GEN_MATCH 双目录 —— 全部 exit=1；
+- pytest 双根：workload 根 + sh_test_mesh/tests 根，与终清前基线逐项一致，零新增失败；
+- ③④ 冒烟：run_online_strategy.sh 与 run_online_strategy_sensing.sh 各一场，completed==物化数、no_decision_python_callback_count=0、single_node_bridge_count=0、delivery==graph_batch_digests 行数、③④ online_decision_log.jsonl 逐字节一致（cmp）、④ 分层账本对账 verdict=对平/BALANCED；发射前内存门控实测 ~11-12%（<70%）。

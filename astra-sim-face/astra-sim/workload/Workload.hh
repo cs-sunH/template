@@ -35,8 +35,7 @@ class Workload : public Callable {
              ExecutionDriven::ExecutionMode execution_mode =
                  ExecutionDriven::ExecutionMode::Static,
              std::shared_ptr<ExecutionDriven::GraphSource> graph_source =
-                 nullptr,
-             bool replay_clock = false);
+                 nullptr);
     ~Workload();
 
     // communicator groups
@@ -82,13 +81,8 @@ class Workload : public Callable {
     // injected at Sys creation (NodeStore-backed implementation in step 1-4).
     ExecutionDriven::ExecutionMode execution_mode_;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
-    // step-1-8 (main ruling 2026-08-15): replay-clock scope flag. ONLY
-    // --online-mode replay runs the LUT-clock semantics (calibrated COMP
-    // chains run concurrently past the single-slot gate; comm nodes complete
-    // instantly). strategy mode keeps real physics (serial compute + real
-    // network + real queuing, §6.1) -- the flag is false there. The static
-    // path never sets it.
-    bool replay_clock_;
+    // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
+    // with the replay route; strategy mode always keeps real physics.
 
   private:
     // From the node view, find out the corresponding communicator group, and

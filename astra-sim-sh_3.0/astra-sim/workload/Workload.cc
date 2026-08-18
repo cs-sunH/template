@@ -60,11 +60,9 @@ void record_node_terminal(
 
 Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                    ExecutionDriven::ExecutionMode execution_mode,
-                   std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
-                   bool replay_clock) {
+                   std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
-    this->replay_clock_ = replay_clock;
 
     string workload_filename = et_filename + "." + to_string(sys->id) + ".et";
     if (execution_mode == ExecutionDriven::ExecutionMode::Online) {
@@ -232,25 +230,10 @@ void Workload::issue_dep_free_nodes() {
     for (const auto& nv : graph_source_->dep_free_nodes()) {
         if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
             // Step 1-8: online availability check on the NodeView
-            // (et_node is nullptr in online mode).
-            //
-            // Step 1-8 (root-cause #3, main ruling 2026-08-15 -- replay
-            // scope only, see replay_clock_): calibrated COMP chains
-            // (runtime_ns != 0) are self-timed LUT-clock chains and must run
-            // CONCURRENTLY across requests. The offline planner models the
-            // decode instance as a batched processor (d_batch = concurrent
-            // decodes, iteration time grows with d_batch); the per-rank
-            // single-slot GPU gate serializes the chains into the .et
-            // emission order, which differs from the decision log's
-            // completion order. The gate remains for uncalibrated COMP
-            // (roofline fallback), CPU/timer ops and comm nodes; strategy
-            // mode keeps the real serialized physics (replay_clock_ ==
-            // false).
-            if (replay_clock_ &&
-                nv.kind == ExecutionDriven::NodeKind::Compute &&
-                nv.compute.runtime_ns != 0ul) {
-                issue(nv);
-            } else if (hw_resource->is_available(nv)) {
+            // (et_node is nullptr in online mode). Strategy mode keeps the
+            // real serialized physics (path-2 removal 2026-08-18 deleted the
+            // replay-only concurrent calibrated-COMP bypass).
+            if (hw_resource->is_available(nv)) {
                 issue(nv);
             }
         } else {
@@ -372,13 +355,9 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
     wlhd->sys_id = sys->id;
     wlhd->workload = this;
     wlhd->node_id = node.global_id;
-    if (replay_clock_) {
-        // 合同⑦ replay 装置第④项：远端 MEM_LOAD/MEM_STORE 即时完成
-        //（1ns General 事件；terminal/释放链完整保留，不经过远端端口
-        // FIFO——LUT 时钟无传输时长）。
-        sys->register_event(this, EventType::General, wlhd, 1ul);
-        return;
-    }
+    // Path-2 removal (2026-08-18): the replay-only instant (1ns) remote MEM
+    // completion branch was deleted with the replay route; strategy/static
+    // keep the real remote port-FIFO physics.
     sys->remote_mem->issue(node.mem.tensor_size, wlhd);
 }
 
@@ -396,14 +375,9 @@ void Workload::issue_local_hbm_kv_restore(
         MetricCollector::instance().on_local_hbm_restore_issue(sys->id,
                                                                tensor_size);
     }
-    if (replay_clock_) {
-        // 合同⑦ replay 装置第④项：远端 MEM 与本地 HBM restore 节点即时
-        // 完成（离线 planner LUT 时钟不含任何传输时长；KV 传输决策时即时
-        // 生效）。1ns General 事件；依赖/watch/terminal/释放链完整保留。
-        hw_resource->tics_hbm_dma_ops += 1;
-        sys->register_event(this, EventType::General, wlhd, 1ul);
-        return;
-    }
+    // Path-2 removal (2026-08-18): the replay-only instant (1ns) HBM restore
+    // completion branch was deleted with the replay route; strategy/static
+    // keep the real LocalHbmBandwidthModel DMA physics.
     if (local_hbm_bandwidth_model != nullptr) {
         local_hbm_bandwidth_model->issue_restore(tensor_size, wlhd);
         return;
@@ -492,25 +466,18 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
     // Step 1-8: online execution-driven calibration. The online GraphBatch
     // (graph_batch_builder.py) carries planner-LUT-aligned durations so the
-    // engine timeline is order-isomorphic to the replay's decision log
-    // (fail-closed order consumption, replay_source.py). The static .et
+    // engine timeline is order-isomorphic to the Python decision sequence
+    // (fail-closed order consumption). The static .et
     // path never sets runtime_ns (duration_micros=0, parsed as 0) and keeps
     // the roofline above -- byte-for-byte preserved.
     if (node.compute.runtime_ns != 0ul) {
         runtime = node.compute.runtime_ns;
     }
-    if (replay_clock_ && node.compute.runtime_ns != 0ul) {
-        // 合同⑦ replay 装置 LUT 时钟口径第④项（本仓新增）：校准 COMP 链
-        // 并发执行（单槽位门放行，Workload::issue_dep_free_nodes），多个
-        // 并发链会向 HBM 模型注册多个 compute job——模型是单 job 槽位
-        // （"multiple inference jobs entered one NPU HBM model" fail-closed），
-        // 而 LUT 时钟不含 HBM 50/50 竞争时长。replay 作用域：校准链不向
-        // HBM 模型注册 job，直接按 runtime_ns register_event（与 comm-0
-        // RECV 侧豁免同规则：只改完成时刻，terminal/释放链完整保留）。
-        // strategy/静态路径完全不动（模型执行建模保留对象 #18）。
-        hw_resource->tics_gpu_ops += runtime;
-        sys->register_event(this, EventType::General, wlhd, runtime);
-    } else if (local_hbm_bandwidth_model != nullptr) {
+    // Path-2 removal (2026-08-18): the replay-only calibrated-COMP HBM-model
+    // bypass was deleted with the replay route; the HBM 50/50 execution
+    // model (preserved object #18) owns every calibrated compute job in
+    // strategy mode.
+    if (local_hbm_bandwidth_model != nullptr) {
         // sh_3.0 HBM 50/50 execution model (preserved object #18): the model
         // owns the compute/restore job timing.
         local_hbm_bandwidth_model->issue_compute(node_num_ops,
@@ -541,27 +508,9 @@ void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
     if (node.is_cpu_op) {
         throw std::runtime_error("Comm node should not be on CPU");
     }
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        replay_clock_) {
-        // Step 1-8 (root-cause #3, main ruling 2026-08-15 -- replay scope
-        // only): the replay harness must reproduce the frozen offline
-        // timeline (方案 §5.2 oracle/replay 口径: 回放 decision_log, 离线
-        // 时序原样冻结, B1 含 tick 的 exact 只在此模式成立), and the
-        // offline LUT clock contains NO network time. Keeping the real
-        // network durations in the replay clock is provably order-breaking:
-        // decode windows as short as 4ms (session_5_request_0 /
-        // session_3_request_1, LUT 2173.6ms->2177.6ms) and 24ms gaps
-        // (session_4_request_0 -> session_2_request_0) vs. uncontended
-        // network residuals already at +23.5ms. Comm nodes therefore complete
-        // instantly (1ns General event); the normal dependency / terminal /
-        // issue-pass machinery is untouched. The network frontend stays fully
-        // wired for the static path and the strategy-mode real-online engine
-        // (:614, replay_clock_ == false).
-        WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
-        wlhd->node_id = node.global_id;
-        sys->register_event(this, EventType::General, wlhd, 1ul);
-        return;
-    }
+    // Path-2 removal (2026-08-18): the replay-only instant (1ns) comm
+    // completion branch was deleted with the replay route; strategy mode
+    // keeps the real network physics.
     const auto node_type = node.node_type;
     if (node_type == ChakraNodeType::COMM_COLL_NODE) {
         this->issue_coll_comm(node);

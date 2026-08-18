@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """online_service.py -- 在线决策服务入口(方案 §4 步骤 1-8 操作 5,face 版)。
 
-CLI(与步骤 1-8 验证命令一致):
-    python3 online/online_service.py --bridge-dir <dir> --mode replay \
-        --decision-log <path> --plan-dir <离线 plan/manifest 目录>
+CLI:
+    python3 online/online_service.py --bridge-dir <dir> --mode strategy \
+        --plan-dir <plan/manifest 目录>
 
 流程:
   1. 载入 plan-dir/manifest.json(每 request 全部事实,replay 权威之一)与
      trace_config(load_face_trace_config;--config 可覆盖);
-  2. replay 模式:ReplaySource(decision_log) + GraphBatchBuilder +
-     FaceReplayScheduler;
-  3. BridgeServer.serve_forever(scheduler.on_decision_batch,
+  2. BridgeServer.serve_forever(scheduler.on_decision_batch,
      on_commit_ack=scheduler.on_commit_ack)——阻塞读 req_notify.fifo,
      零 polling;决策异常 => error response + exit 1(fail-closed);
-  4. EOF(C++ 关闭写端)= 运行结束:verify_run_end + 日志消费完整性校验,
+     EOF(C++ 关闭写端)= 运行结束:verify_run_end + 日志消费完整性校验,
      并把 graph_batch_digests.jsonl / online_decision_log.jsonl 写入
      bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
 
 strategy 模式(步骤 1-9 的 FaceOnlineScheduler):真实策略(关感知)在
-在线骨架中运行,无决策日志(决策由策略实时产出)。
+在线骨架中运行(决策由策略实时产出)。
 """
 
 import argparse
@@ -41,8 +39,6 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
-from online.replay_source import ReplaySource  # noqa: E402
-from online.face_replay_scheduler import FaceReplayScheduler  # noqa: E402
 
 
 DIGEST_LOG_NAME = "graph_batch_digests.jsonl"
@@ -78,12 +74,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="face online decision service")
     parser.add_argument("--bridge-dir", required=True,
                         help="bridge FIFO/request-response 目录(与 C++ 共享)")
-    parser.add_argument("--mode", default="replay", choices=("replay", "strategy"),
-                        help="调度模式:replay(步骤 1-8);strategy(步骤 1-9)")
-    parser.add_argument("--decision-log", default=None,
-                        help="replay 模式:离线 decision_log.jsonl 路径")
+    parser.add_argument("--mode", default="strategy", choices=("strategy",),
+                        help="调度模式:strategy(步骤 1-9;唯一保留模式)")
     parser.add_argument("--plan-dir", required=True,
-                        help="离线 plan/manifest 目录(含 manifest.json)")
+                        help="plan/manifest 目录(含 manifest.json)")
     parser.add_argument("--config", default=None,
                         help="trace_config.csv 路径(缺省用 workload 默认)")
     parser.add_argument("--sensing", action="store_true", default=False,
@@ -91,13 +85,6 @@ def main(argv=None) -> int:
                              "账本最小子集 + 两层剩余负载查询;感知数据是"
                              "查询/审计输入,不进策略判据,决策序列不变")
     args = parser.parse_args(argv)
-
-    if args.mode == "replay" and not args.decision_log:
-        parser.error("replay 模式需要 --decision-log")
-    if args.sensing and args.mode != "strategy":
-        # 阶段 3 感知只接入 strategy 变体(真实策略);replay 是阶段 1/2 的
-        # 回放装置,不挂感知(fail-closed,不半吊子)。
-        parser.error("--sensing 仅支持 --mode strategy(阶段 3 感知范围)")
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
     with open(manifest_path, "r", encoding="utf-8") as source:
@@ -113,55 +100,42 @@ def main(argv=None) -> int:
     else:
         config = load_face_trace_config()
 
-    # 根因 #5(蓝本裁决 2026-08-15 第三项):replay 模式 prefill 链不链跨
-    # request previous_id(LUT 时钟并发);strategy 模式保持物理链。
-    graph = GraphBatchBuilder(config, replay_clock=(args.mode == "replay"))
+    # 根因 #5(蓝本裁决 2026-08-15 第三项):strategy 模式保持物理跨 request 链。
+    graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    replay = None
-    if args.mode == "replay":
-        replay = ReplaySource(args.decision_log)
-        scheduler = FaceReplayScheduler(
+    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
+    # 输入,不进策略判据,决策序列与关感知逐字节一致)。
+    # face 阶段 1-6 只做主变体 session_lru_recompute(legacy 第二变体在
+    # 阶段 7 §10.6 迁移);分发不依赖任何代码默认值(总改造计划 §9.4:
+    # runner 显式传 kv_cache_policy;构造器各自 fail-closed 校验——face
+    # 的代码默认值是 "legacy",显式校验防走错分支)。
+    if config.kv_cache_policy == "session_lru_recompute":
+        from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
+        scheduler = FaceOnlineScheduler(
             manifest=manifest,
             config=config,
-            replay=replay,
             graph=graph,
             digest_sink=digest_sink,
             mode=args.mode,
+            sensing=args.sensing,
+        )
+    elif config.kv_cache_policy == "legacy":
+        from online.face_legacy_online_scheduler import (  # noqa: E402
+            FaceLegacyOnlineScheduler,
+        )
+        scheduler = FaceLegacyOnlineScheduler(
+            manifest=manifest,
+            config=config,
+            graph=graph,
+            digest_sink=digest_sink,
+            mode=args.mode,
+            sensing=args.sensing,
         )
     else:
-        # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
-        # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
-        # 输入,不进策略判据,决策序列与关感知逐字节一致)。
-        # face 阶段 1-6 只做主变体 session_lru_recompute(legacy 第二变体在
-        # 阶段 7 §10.6 迁移);分发不依赖任何代码默认值(总改造计划 §9.4:
-        # runner 显式传 kv_cache_policy;构造器各自 fail-closed 校验——face
-        # 的代码默认值是 "legacy",显式校验防走错分支)。
-        if config.kv_cache_policy == "session_lru_recompute":
-            from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
-            scheduler = FaceOnlineScheduler(
-                manifest=manifest,
-                config=config,
-                graph=graph,
-                digest_sink=digest_sink,
-                mode=args.mode,
-                sensing=args.sensing,
-            )
-        elif config.kv_cache_policy == "legacy":
-            from online.face_legacy_online_scheduler import (  # noqa: E402
-                FaceLegacyOnlineScheduler,
-            )
-            scheduler = FaceLegacyOnlineScheduler(
-                manifest=manifest,
-                config=config,
-                graph=graph,
-                digest_sink=digest_sink,
-                mode=args.mode,
-                sensing=args.sensing,
-            )
-        else:
-            raise ValueError(
-                "strategy 模式不支持 kv_cache_policy {!r}".format(
-                    config.kv_cache_policy))
+        raise ValueError(
+            "strategy 模式不支持 kv_cache_policy {!r}".format(
+                config.kv_cache_policy))
 
     server = BridgeServer(args.bridge_dir)
     result = server.serve_forever(
@@ -174,7 +148,7 @@ def main(argv=None) -> int:
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
     # 阶段 7 §10.6:legacy 变体 run-end 终值(allocator 边权/剩余容量;
-    # 与离线 FacePlan 的 legacy 终值口径同构,供 tier_b legacy 层对照)。
+    # 与 metrics_integration.kv_event_payload_legacy 口径同构)。
     legacy_payload = getattr(scheduler, "kv_event_payload_legacy", None)
     if callable(legacy_payload):
         with open(os.path.join(args.bridge_dir,
@@ -182,10 +156,6 @@ def main(argv=None) -> int:
                   "w", encoding="utf-8") as output:
             json.dump(legacy_payload(), output, sort_keys=True)
             output.flush()
-    if args.mode == "replay" and not replay.consumed_all():
-        raise RuntimeError(
-            "run ended with unconsumed replay decisions: consumed={} total={}"
-            .format(replay.consumed_counts(), replay.total_counts()))
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)。
     scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))

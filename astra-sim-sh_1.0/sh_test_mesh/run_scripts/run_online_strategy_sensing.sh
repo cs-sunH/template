@@ -25,11 +25,11 @@ REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 sh_1.0�
 # deleted; resolve the single generated dir dynamically (the dir name
 # encodes this window's sess/req/p/d ranges and the trace-config digest, so
 # a hardcoded path breaks whenever the config bytes change -- same fix as
-# the sh_2.0 backport). Regenerate via generate_trace.sh after
+# the sh_2.0 backport). Regenerate via plan_materializer.py after
 # materializing the input (traces/PROVENANCE.md).
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (regenerate via generate_trace.sh after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (regenerate via plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}

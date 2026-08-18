@@ -85,9 +85,12 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
-            if (value != "replay" && value != "strategy") {
+            // Path-2 removal (2026-08-18): replay mode was deleted with the
+            // replay route; strategy is the only legal mode token.
+            if (value != "strategy") {
                 error = "unknown --online-mode value: " + value +
-                        " (expected \"replay\" or \"strategy\")";
+                        " (expected \"strategy\"; replay was removed with "
+                        "the replay route on 2026-08-18)";
                 return false;
             }
             mode = value;

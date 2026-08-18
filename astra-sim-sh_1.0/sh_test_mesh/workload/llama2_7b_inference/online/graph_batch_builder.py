@@ -7,7 +7,7 @@
 / transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
-  - 节点属性、插入顺序、rank ownership 与离线 .et 一致(B3 等价的前提);
+  - 节点属性、插入顺序、rank ownership 跨 request 链结构一致(节点级审计口径);
   - per-rank 节点 id 跨批次全局递增;
   - interval gate 的 after_node_id 指向上一同 session request 的 decode 完成
     barrier 节点 id(pending_history 账本,跨批次解析)。
@@ -30,8 +30,7 @@ transfer_order_per_request 十段 manifest 的三次分组):
     arrival alarm(future_alarms)替代,gate 不再等待;
   - 每段发射后按 (request_id, rank) 记录块末 previous_id(_block_ends 账本,
     emitted-ranks-only 语义),下一段发射前恢复——仅段首节点消费恢复值;
-  - replay 模式(replay_clock=True)段 1 发射开始时清空 prefill 组各 rank 的
-    previous_id(蓝本裁决 4③;strategy 模式保持物理跨 request 链);
+  - strategy 保持物理跨 request 链(无条件接续 frontier);
   - watch 锚点:PREFILL_DRAIN = prefill 段每 rank 末节点(= 离线
     prefill_completion_nodes,亦作 decode_evictions 触发门);
     DECODE_COMPLETION = decode 段每 rank 末节点(= decode_completion_nodes);
@@ -251,7 +250,7 @@ class OnlineTraceBuilder:
         # 对向迁移并发即死锁——实测 delivery 156 后 EventQueue 排空)。
         # strategy 模式将回程 recv 独立发射(不链 previous_id、不阻塞本
         # rank 后续节点):节点集合/名称/属性与离线一致,仅去掉成环串行
-        # 边(B4 归因类别②,sh_1.0改造执行实录.md §15.1 登记);replay
+        # 边(差分归因类别②,sh_1.0改造执行实录.md §15.1 登记);跨 request
         # 模式(comm 即时完成)保持离线精确链。
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
@@ -314,11 +313,9 @@ class GraphBatchBuilder:
     history_tokens_before/prefill_context_tokens(构图 span 用)。
     """
 
-    def __init__(self, config, *, digest_sink=None, replay_clock: bool = False):
+    def __init__(self, config, *, digest_sink=None):
         self.config = config
-        # 蓝本裁决 4③(三段推广):replay 模式下段 1 发射开始时清空 prefill 组
-        # 各 rank previous_id;strategy 模式保持物理跨 request 链。
-        self.replay_clock = replay_clock
+        # strategy 无条件接续 frontier(物理跨 request 链)。
         self.builders = {
             rank: OnlineTraceBuilder(
                 rank,
@@ -341,7 +338,7 @@ class GraphBatchBuilder:
         # request_id -> 连续 action 计数(离线 write_face_trace 的
         # per-request action_sequence:2057 计数跨全部 stage 连续;在线三段
         # 发射共用同一计数器,保证 actionNNN 命名与离线 .et 逐节点一致——
-        # B3 canonical key 含 name,分段各自归零会造成同逻辑节点改名)。
+        # canonical 命名 key 含 name,分段各自归零会造成同逻辑节点改名)。
         self._action_sequence_by_request = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -388,13 +385,6 @@ class GraphBatchBuilder:
             for rank in ranks
         }
 
-    def _restore_block_end(self, request_id: str, seg: str) -> None:
-        ends = self._block_ends.get(request_id, {}).get(seg)
-        if ends is None:
-            return
-        for rank, end_id in ends.items():
-            self.builders[rank].previous_id = end_id
-
     def _mark_pending_history_remote(self, session_id: str) -> None:
         # 离线 mark_pending_history_remote(:1954-1959)的在线复刻。
         pending_request_id = self.pending_request_by_session.get(session_id)
@@ -405,8 +395,7 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------------- 发射 --
 
-    def emit_prefill_batch(self, request_plan: dict,
-                           *, phase_duration_ns: int = 0) -> dict:
+    def emit_prefill_batch(self, request_plan: dict) -> dict:
         """段 1(ARRIVAL 边界):返回 PREFILL_DRAIN watch 成员
         {rank: prefill 段末节点 id}(= 离线 prefill_completion_nodes)。"""
         self._set_context(request_plan, "prefill", 0)
@@ -422,13 +411,9 @@ class GraphBatchBuilder:
         # 可构成环(recv 等待配对 send,send 链在本 rank 排在 recv 之后),
         # strategy 真实网络下死锁(实测 delivery 142 后 EventQueue 排空、
         # 每 rank 1-2 个 in-flight recv)。跨 request 偶发串行边登记为
-        # B4 归因类别②(刻意差异;同 session 串行化由 interval gate 显式
+        # 差分归因类别②(刻意差异;同 session 串行化由 interval gate 显式
         # 保留),sh_1.0改造执行实录.md §15.1 记录。
-        # [frontier 接续裁决(sh_2.0 修复移植)] replay 清链(LUT 时钟并发
-        # 语义);strategy 无条件接续 frontier(全局发射序)。
-        if self.replay_clock:
-            for builder in self.builders.values():
-                builder.previous_id = None
+        # [frontier 接续裁决(sh_2.0 修复移植)] strategy 无条件接续 frontier(全局发射序)。
         marker = self._mark()
         self._seg1_before = {r: marker[r][0] for r in marker}
         if (request_plan["turn_index"] == 0
@@ -437,19 +422,16 @@ class GraphBatchBuilder:
             # 保证 arm_timer_gate 的依赖边可解析)。
             self._emit_arrival_gate(request_plan)
         members = self._emit_segment1(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
-    def emit_decode_batch(self, request_plan: dict,
-                          *, phase_duration_ns: int = 0) -> dict:
+    def emit_decode_batch(self, request_plan: dict) -> dict:
         """段 2(PREFILL_DRAIN 边界):返回 DECODE_COMPLETION watch 成员
         {rank: decode 段末节点 id}(= 离线 decode_completion_nodes)。"""
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         self._seg2_before = {r: marker[r][0] for r in marker}
         members = self._emit_segment2(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
@@ -464,36 +446,6 @@ class GraphBatchBuilder:
         members = self._emit_segment3(request_plan)
         self._collect(marker)
         return members
-
-    def _calibrate_phase(self, phase_duration_ns: int, marker: dict) -> None:
-        """蓝本步骤 1-8 计时校准(仅 replay 使用,phase_duration_ns>0):
-        本段 COMP 链按 num_ops 比例分摊 phase_duration_ns,使每 rank 链合计
-        等于 LUT 时钟相位时长;comm/MEM/timer 保持各自语义时长。"""
-        if phase_duration_ns <= 0:
-            return
-        nodes = []
-        for rank, builder in self.builders.items():
-            node_mark, _ = marker[rank]
-            nodes.extend(builder.nodes[node_mark:])
-        if not nodes:
-            return
-        rank_ops = {}
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            ops = node["compute"]["num_ops"]
-            if ops > 0:
-                rank_ops[node["rank"]] = rank_ops.get(node["rank"], 0) + ops
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            total = rank_ops.get(node["rank"], 0)
-            ops = node["compute"]["num_ops"]
-            if total > 0 and ops > 0:
-                node["compute"]["runtime_ns"] = max(
-                    1, phase_duration_ns * ops // total)
-
-    # ------------------------------------------------- per-request 发射主体 --
 
     def _emit_segment1(self, request_plan: dict) -> dict:
         """离线 write_face_trace 主循环的段 1 部分(:2044-2240 的在线复刻)。"""
@@ -639,17 +591,11 @@ class GraphBatchBuilder:
         prefix = _prefix_of(request_plan)
         request = self.config.request_queue[request_plan["queue_index"]]
         # [frontier 接续裁决,strategy 死锁修复(移植 sh_2.0 已验证修复,
-        # 主控指令 2026-08-16)] replay(replay_clock=True)保留蓝本块末恢复
-        # (LUT 时钟语义,B1/B2 exact 载体);strategy **不做任何块末恢复/
-        # 段内清链**:per-rank previous_id 无条件接续当前 frontier(= 离线
-        # writer 跨 request 物理链同构),per-rank 发行序 = 全局发射序,
-        # 跨实例 P2P 与 collective 参与序不可能反转成环(sh_2.0 waits-for
-        # 环证据同款机理;B3 归因类别②既有口径)。
-        if self.replay_clock:
-            for builder in self.builders.values():
-                builder.previous_id = None
-            self._restore_block_end(request_plan["request_id"], "seg1")
-
+        # 主控指令 2026-08-16)] strategy **不做任何块末恢复/段内清链**:per-rank
+        # previous_id 无条件接续当前 frontier(= 离线 writer 跨 request
+        # 物理链同构),per-rank 发行序 = 全局发射序,跨实例 P2P 与
+        # collective 参与序不可能反转成环(sh_2.0 waits-for 环证据同款
+        # 机理;差分归因类别②既有口径)。
         def emit_transfer(transfer: KVTransfer, stage: str, *,
                           gate=None, trigger_gate=None) -> None:
             action_sequence = self._action_sequence_by_request
@@ -678,8 +624,7 @@ class GraphBatchBuilder:
             .get("seg1", {}).get(rank)
             for rank in prefill_group.ranks)
         if any(node_id is None for node_id in prefill_completion_nodes):
-            # replay 模式跨 request 清链后段 1 在 prefill 组必有块末;缺即账本
-            # 损坏(fail-closed)。
+            # 段 1 发射后 prefill 组必有块末;缺即账本损坏(fail-closed)。
             raise RuntimeError("segment-1 block ends missing on prefill ranks")
         decode_eviction_trigger = TransferTriggerGate(
             control_instance_index=request_plan["prefill_instance_index"],
@@ -775,12 +720,7 @@ class GraphBatchBuilder:
         decode_group = self.group_by_index[
             request_plan["decode_instance_index"]]
         prefix = _prefix_of(request_plan)
-        # [frontier 接续裁决,同段 2(sh_2.0 修复移植)] strategy 无条件
-        # 接续 frontier;replay 保留块末恢复。
-        if self.replay_clock:
-            for builder in self.builders.values():
-                builder.previous_id = None
-            self._restore_block_end(request_plan["request_id"], "seg2")
+        # [frontier 接续裁决,同段 2(sh_2.0 修复移植)] strategy 无条件接续 frontier。
         decode_completion_nodes = tuple(
             self._block_ends.get(request_plan["request_id"], {})
             .get("seg2", {}).get(rank)

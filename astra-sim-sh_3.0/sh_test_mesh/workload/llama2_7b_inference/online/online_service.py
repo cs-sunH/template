@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """online_service.py -- 在线决策服务入口(方案 §4 步骤 1-8 操作 5)。
 
-CLI(与步骤 1-8 验证命令一致):
-    python3 online/online_service.py --bridge-dir <dir> --mode replay \
-        --decision-log <path> --plan-dir <离线 plan/manifest 目录>
+CLI:
+    python3 online/online_service.py --bridge-dir <dir> --mode strategy \
+        --plan-dir <plan/manifest 目录>
 
 流程:
-  1. 载入 plan-dir/manifest.json(每 request 全部事实,replay 权威之一)与
-     trace_config(load_wsc_llm_trace_config;--config 可覆盖);
-  2. replay 模式:ReplaySource(decision_log) + GraphBatchBuilder +
-     WscLlmReplayScheduler;
+  1. 载入 plan-dir/manifest.json(每 request 全部事实)与
+     trace_config(load_face_trace_config;--config 可覆盖);
+  2. strategy 模式:GraphBatchBuilder + Sh30OnlineScheduler;
   3. BridgeServer.serve_forever(scheduler.on_decision_batch,
      on_commit_ack=scheduler.on_commit_ack)——阻塞读 req_notify.fifo,
      零 polling;决策异常 => error response + exit 1(fail-closed);
@@ -17,7 +16,7 @@ CLI(与步骤 1-8 验证命令一致):
      并把 graph_batch_digests.jsonl / online_decision_log.jsonl 写入
      bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
 
-strategy 模式(步骤 1-9 的 WscLlmOnlineScheduler):真实策略(关感知)在
+strategy 模式(步骤 1-9 的 Sh30OnlineScheduler):真实策略(关感知)在
 在线骨架中运行,无决策日志(决策由策略实时产出)。
 """
 
@@ -41,52 +40,11 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
-from online.replay_source import ReplaySource  # noqa: E402
 from online.sh30_online_scheduler import Sh30OnlineScheduler  # noqa: E402
-from online.sh30_replay_scheduler import Sh30ReplayScheduler  # noqa: E402
 
 
 DIGEST_LOG_NAME = "graph_batch_digests.jsonl"
 DECISION_LOG_NAME = "online_decision_log.jsonl"
-
-
-class _CanonicalSink:
-    """B3 canonical node dump (env-gated, SH30_B3_DUMP=1): appends every
-    applied batch's nodes + parent edges as canonical rows for the
-    b3_canonical_compare.py comparator (contract ⑦ B3; zero cost when off)."""
-
-    def __init__(self, path: str):
-        self.path = path
-        self.rows = 0
-        with open(path, "w", encoding="utf-8"):
-            pass
-
-    def __call__(self, batch: dict) -> None:
-        names = {}
-        with open(self.path, "a", encoding="utf-8") as output:
-            for node in batch.get("nodes", []):
-                names[(node["rank"], node["id"])] = node["name"]
-                output.write(json.dumps({
-                    "kind": "node",
-                    "rank": node["rank"],
-                    "name": node["name"],
-                    "type": node["type"],
-                    "is_cpu_op": node.get("is_cpu_op", False),
-                    "is_timer_op": node.get("is_timer_op", False),
-                    "compute": node.get("compute", {}),
-                    "mem": node.get("mem", {}),
-                    "comm": node.get("comm", {}),
-                    "coll": node.get("coll", {}),
-                }, sort_keys=True) + "\n")
-            for edge in batch.get("parent_edges", []):
-                output.write(json.dumps({
-                    "kind": "edge",
-                    "rank": edge["rank"],
-                    "from_name": names.get((edge["rank"], edge["from"])),
-                    "to_name": names.get((edge["rank"], edge["to"])),
-                }, sort_keys=True) + "\n")
-            output.flush()
-        self.rows += 1
 
 
 class _DigestSink:
@@ -119,10 +77,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_3.0 online decision service")
     parser.add_argument("--bridge-dir", required=True,
                         help="bridge FIFO/request-response 目录(与 C++ 共享)")
-    parser.add_argument("--mode", default="replay", choices=("replay", "strategy"),
-                        help="调度模式:replay(步骤 1-8);strategy(步骤 1-9)")
-    parser.add_argument("--decision-log", default=None,
-                        help="replay 模式:离线 decision_log.jsonl 路径")
+    parser.add_argument("--mode", default="strategy", choices=("strategy",),
+                        help="调度模式:strategy(唯一保留模式)")
     parser.add_argument("--plan-dir", required=True,
                         help="离线 plan/manifest 目录(含 manifest.json)")
     parser.add_argument("--config", default=None,
@@ -132,13 +88,6 @@ def main(argv=None) -> int:
                              "账本最小子集 + 两层剩余负载查询;感知数据是"
                              "查询/审计输入,不进策略判据,决策序列不变")
     args = parser.parse_args(argv)
-
-    if args.mode == "replay" and not args.decision_log:
-        parser.error("replay 模式需要 --decision-log")
-    if args.sensing and args.mode != "strategy":
-        # 阶段 3 感知只接入 strategy 变体(真实策略);replay 是阶段 1/2 的
-        # 回放装置,不挂感知(fail-closed,不半吊子)。
-        parser.error("--sensing 仅支持 --mode strategy(阶段 3 感知范围)")
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
     with open(manifest_path, "r", encoding="utf-8") as source:
@@ -154,48 +103,27 @@ def main(argv=None) -> int:
     else:
         config = load_face_trace_config()
 
-    # 根因 #5(主控裁决 2026-08-15 第三项):replay 模式 prefill 链不链跨
-    # request previous_id(LUT 时钟并发);strategy 模式保持物理链。
-    canonical_sink = None
-    if os.environ.get("SH30_B3_DUMP") == "1":
-        canonical_sink = _CanonicalSink(
-            os.path.join(args.bridge_dir, "canonical_nodes.jsonl"))
-    graph = GraphBatchBuilder(config, replay_clock=(args.mode == "replay"))
+    # strategy 模式保持物理跨 request 链(根因 #5 裁决:物理链为③④口径)。
+    graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    if args.mode == "replay":
-        replay = ReplaySource(args.decision_log)
-        scheduler = Sh30ReplayScheduler(
-            manifest=manifest,
-            config=config,
-            replay=replay,
-            graph=graph,
-            digest_sink=digest_sink,
-            mode=args.mode,
-        )
-    else:
-        # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
-        # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
-        # 输入,不进策略判据,决策序列与关感知逐字节一致)。
-        # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体
-        # session_lru_recompute -> WscLlmOnlineScheduler;第二变体 legacy ->
-        # WscLlmLegacyOnlineScheduler(WSC Relevant(P,D) 静态域 + FCFS 队头
-        # 阻塞)。分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式
-        # 传 kv_cache_policy;构造器各自 fail-closed 校验)。
-        # sh_3.0 单变体：三段式准入 + decode 同实例 + 三态 KV
-        # （Sh30OnlineScheduler 独立实现，无第二策略分支）。
-        scheduler = Sh30OnlineScheduler(
-            manifest=manifest,
-            config=config,
-            graph=graph,
-            digest_sink=digest_sink,
-            mode=args.mode,
-            sensing=args.sensing,
-        )
-
-    # B3 canonical dump hook (env-gated): the base class calls
-    # batch_sink(batch) after every applied build_graph_batch.
-    if canonical_sink is not None:
-        scheduler.batch_sink = canonical_sink
+    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
+    # 输入,不进策略判据,决策序列与关感知逐字节一致)。
+    # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体
+    # session_lru_recompute -> WscLlmOnlineScheduler;第二变体 legacy ->
+    # WscLlmLegacyOnlineScheduler(WSC Relevant(P,D) 静态域 + FCFS 队头
+    # 阻塞)。分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式
+    # 传 kv_cache_policy;构造器各自 fail-closed 校验)。
+    # sh_3.0 单变体：三段式准入 + decode 同实例 + 三态 KV
+    # （Sh30OnlineScheduler 独立实现，无第二策略分支）。
+    scheduler = Sh30OnlineScheduler(
+        manifest=manifest,
+        config=config,
+        graph=graph,
+        digest_sink=digest_sink,
+        mode=args.mode,
+        sensing=args.sensing,
+    )
 
     server = BridgeServer(args.bridge_dir)
     result = server.serve_forever(
@@ -207,14 +135,6 @@ def main(argv=None) -> int:
 
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
-    # 阶段 7 §10.6:legacy 变体 run-end 终值(allocator 的 Relevant(P,D) 剩余
-    # 容量;legacy 无逐事件 KV 日志,与 metrics_integration.kv_event_payload_
-    # legacy 同构口径,供 tier_b_compare legacy 层与离线 baseline 对照)。
-    # 多态取用(仅 legacy 调度器提供;session_lru 无此产物)。
-    if args.mode == "replay" and not replay.consumed_all():
-        raise RuntimeError(
-            "run ended with unconsumed replay decisions: consumed={} total={}"
-            .format(replay.consumed_counts(), replay.total_counts()))
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)。
     scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))

@@ -56,10 +56,10 @@ endif ()
 
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
-    # Shared implementation sources = GLOB result minus main files. Each target
-    # declares its own main below; main_online.cc must never enter the static
-    # target (two mains would collide at link time), and main.cc must never
-    # enter the online target.
+    # Path-1 removal (2026-08-18): the static aware target and
+    # congestion_aware/main.cc were deleted with the offline static pipeline
+    # (ruling A); the shared-source glob still excludes both entry files so
+    # the online target declares its own main only.
     set(srcs_congestion_aware_shared ${srcs_congestion_aware} ${srcs_common})
     list(REMOVE_ITEM srcs_congestion_aware_shared
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
@@ -70,10 +70,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # is listed explicitly here; the static target must not contain any of them.
     file(GLOB srcs_execution_driven
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
-
-    add_executable(AstraSim_Analytical_Congestion_Aware
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc)
 
     # Online entry point: shared sources + main_online.cc + execution_driven layer.
     add_executable(AstraSim_Analytical_Congestion_Aware_Online
@@ -150,8 +146,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_execution_driven})
 
     # Link libraries
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_CompletionFixture LINK_PRIVATE AstraSim)
@@ -172,9 +166,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
-    target_include_directories(AstraSim_Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
@@ -205,13 +196,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
-    set_target_properties(AstraSim_Analytical_Congestion_Aware PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Aware
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
     set_target_properties(AstraSim_Analytical_Congestion_Aware_Online PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_Online
             PROPERTIES

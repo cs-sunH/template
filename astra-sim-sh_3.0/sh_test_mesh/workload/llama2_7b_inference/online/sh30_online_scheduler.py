@@ -79,7 +79,108 @@ from online.online_scheduler_base import (  # noqa: E402
     STAGE_REQUEST,
     OnlineSchedulerBase,
 )
-from online.sh30_replay_scheduler import build_plan_dict  # noqa: E402
+# ---- build_plan_dict 族(共享 plan 构造符号,被本调度器与对账工具消费) ----
+
+class _LocationShim:
+    """history_location_before 的 dict -> 属性面 shim（builder/
+    reconcile_pending_history_location 消费）。"""
+
+    __slots__ = ("location", "instance_index", "resident_prefix_layers",
+                 "total_bytes", "context_tokens")
+
+    def __init__(self, record):
+        self.location = record["location"]
+        self.instance_index = record["instance_index"]
+        self.resident_prefix_layers = record["resident_prefix_layers"]
+        self.total_bytes = record["total_bytes"]
+        self.context_tokens = record["context_tokens"]
+
+
+def _shard_from_dict(shard: dict) -> KVTransferShard:
+    return KVTransferShard(
+        source_rank=shard["source_rank"],
+        target_rank=shard["target_rank"],
+        edge_rank=shard["edge_rank"],
+        bytes=shard["bytes"],
+        noc_path=tuple(shard["noc_path"]),
+        layer_start=shard["layer_start"],
+        layer_end=shard["layer_end"],
+    )
+
+
+def _transfer_from_dict(record: dict) -> KVTransfer:
+    return KVTransfer(
+        kind=record["kind"],
+        phase=record["phase"],
+        reason=record["reason"],
+        session_id=record["session_id"],
+        trigger_request_id=record["trigger_request_id"],
+        source_instance_index=record["source_instance_index"],
+        target_instance_index=record["target_instance_index"],
+        total_bytes=record["total_bytes"],
+        shards=tuple(
+            _shard_from_dict(shard) for shard in record["shards"]),
+        model_layers=record["model_layers"],
+        layer_start=record["layer_start"],
+        layer_end=record["layer_end"],
+        resident_prefix_layers_before=record["resident_prefix_layers_before"],
+        resident_prefix_layers_after=record["resident_prefix_layers_after"],
+    )
+
+
+def _transfers(records, key):
+    return tuple(
+        _transfer_from_dict(record)
+        for record in records["transfers_by_stage"][key])
+
+
+def build_plan_dict(record: dict) -> dict:
+    """manifest 逐请求记录 -> graph_batch_builder 消费的 plan dict。"""
+    timing = record["planned_timing_ns"]
+    history_location = record.get("history_location_before")
+    pd_records = record["transfers_by_stage"]["prefill_decode_transfer"]
+    return {
+        "request_id": record["request_id"],
+        "session_id": record["session_id"],
+        "turn_index": record["turn_index"],
+        "queue_index": record["queue_index"],
+        "prefill_length": record["prefill_length"],
+        "decode_length": record["decode_length"],
+        "prefill_instance_index":
+            record["prefill_assignment"]["instance_index"],
+        "decode_instance_index":
+            record["decode_assignment"]["instance_index"],
+        "prefill_affinity_reason":
+            record["prefill_assignment"].get("affinity_reason"),
+        "history_tokens_before": record["history_tokens_before"],
+        "prefill_context_tokens": record["prefill_context_tokens"],
+        "final_context_tokens": record["final_context_tokens"],
+        "admission_time_ns": timing["hbm_admission"],
+        "hbm_wait_ns": timing["hbm_wait"],
+        "history_source_instance_index":
+            record["history_source_instance_index"],
+        "history_transfer_bytes": record["history_transfer_bytes"],
+        "history_tokens_discarded": record["history_tokens_discarded"],
+        "history_location_before": (
+            None if history_location is None
+            else _LocationShim(history_location)),
+        "history_evictions":
+            _transfers(record, "history_evictions"),
+        "history_transfer": (
+            _transfer_from_dict(record["transfers_by_stage"]
+                                ["history_transfer"][0])
+            if record["transfers_by_stage"]["history_transfer"] else None),
+        "prefill_evictions": _transfers(record, "prefill_evictions"),
+        "decode_evictions": _transfers(record, "decode_evictions"),
+        "prefill_decode_transfer": (
+            _transfer_from_dict(pd_records[0]) if pd_records else None),
+        "completion_evictions": _transfers(record, "completion_evictions"),
+        "kv_location_after_completion":
+            record["completion_kv_location"]["location"],
+        "kv_instance_after_completion":
+            record["completion_kv_location"]["instance_index"],
+    }
+
 
 
 class _OnlineInstanceState:
@@ -661,7 +762,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """聚合粒度发射 prefill 整段（watch 注册 PREFILL_DRAIN；
         offline: face_scheduler.py:3836-3846 的发射对象为整段而非 chunk）。"""
         plan = runtime.plan_dict()
-        members = self.graph.emit_prefill_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_prefill_batch(plan)
         runtime.prefill_emitted = True
         self._note_emitted(runtime.request_id, STAGE_PREFILL)
         self._ledger_issue(runtime.request_id, tick, STAGE_PREFILL,
@@ -711,7 +812,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """聚合粒度发射 decode 整段（watch 注册 DECODE_COMPLETION；C++ 同
         fire 推 DECODE_COMPLETION + REQUEST_COMPLETE 两条 completed_groups）。"""
         plan = runtime.plan_dict()
-        members = self.graph.emit_decode_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_decode_batch(plan)
         runtime.decode_emitted = True
         self._note_emitted(runtime.request_id, STAGE_DECODE)
         self._ledger_issue(runtime.request_id, tick, STAGE_DECODE,

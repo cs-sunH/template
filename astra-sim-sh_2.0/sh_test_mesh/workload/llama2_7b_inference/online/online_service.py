@@ -2,15 +2,13 @@
 """online_service.py -- sh_2.0 在线决策服务入口（方案 §4 步骤 1-8 操作 5）。
 
 CLI：
-    python3 online/online_service.py --bridge-dir <dir> --mode replay \
-        --decision-log <path> --plan-dir <离线 manifest 目录>
+    python3 online/online_service.py --bridge-dir <dir> --mode strategy \
+        --plan-dir <manifest 目录>
 
 流程：
-  1. 载入 plan-dir/manifest.json（replay 权威之一）与 trace_config
-     （load_face_trace_config；--config 可覆盖）；
-  2. replay 模式：ReplaySource(decision_log) + GraphBatchBuilder +
-     Sh20ReplayScheduler；manifest["requests"] 由 decision_log 的
-     prefill/decode/completion 三流按 request 合并构造；
+  1. 载入 trace_config（load_face_trace_config；--config 可覆盖）；
+  2. strategy 模式：GraphBatchBuilder + Sh20OnlineScheduler；
+     manifest["requests"] 由 trace_config 队列派生；
   3. BridgeServer.serve_forever（阻塞读 req_notify.fifo，零 polling；
      决策异常 => error response + exit 1，fail-closed）；
   4. EOF（C++ 关闭写端）= 运行结束：verify_run_end + 日志消费完整性校验，
@@ -40,9 +38,7 @@ from generate_face_trace import (  # noqa: E402
 )
 from online.decision_bridge import BridgeServer  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
-from online.replay_source import ReplaySource  # noqa: E402
 from online.sh20_online_scheduler import Sh20OnlineScheduler  # noqa: E402
-from online.sh20_replay_scheduler import Sh20ReplayScheduler  # noqa: E402
 
 
 DIGEST_LOG_NAME = "graph_batch_digests.jsonl"
@@ -69,54 +65,6 @@ def _write_jsonl(path: str, rows: list) -> None:
     with open(path, "w", encoding="utf-8") as output:
         for row in rows:
             output.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def _manifest_from_decision_log(decision_log_path: str, config) -> dict:
-    """decision_log 三流按 request 合并 → manifest["requests"] 记录。
-
-    合并键 = prefill 决策的标识/账本字段 + decode/completion 的图发射字段
-    （graph_batch_builder 消费面）。"""
-    prefill = {}
-    decode = {}
-    completion = {}
-    with open(decision_log_path, "r", encoding="utf-8") as source:
-        for line in source:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            kind = record["kind"]
-            if kind == "prefill":
-                prefill[record["request_id"]] = record
-            elif kind == "decode":
-                decode[record["request_id"]] = record
-            elif kind == "completion":
-                completion[record["request_id"]] = record
-    requests = []
-    for request_id, record in prefill.items():
-        decision = record["decision"]
-        merged = dict(decision)
-        merged["request_id"] = request_id
-        merged["prefill_record_tick"] = record["tick"]
-        dec = decode[request_id]["decision"]
-        for key in ("decode_instance_index", "prefill_decode_transfer",
-                    "decode_evictions"):
-            merged[key] = dec.get(key)
-        comp = completion[request_id]["decision"]
-        for key in ("completion_evictions", "kv_location_after_completion",
-                    "kv_instance_after_completion"):
-            merged[key] = comp.get(key)
-        merged["completion_record_tick"] = completion[request_id]["tick"]
-        merged["decode_record_tick"] = decode[request_id]["tick"]
-        # 标识字段（prefill_length/decode_length/interval 等）从 config 队列
-        # 补齐（决策日志的 prefill 决策不含重复的输入事实）。
-        spec = config.request_queue[merged["queue_index"]]
-        for key in ("prefill_length", "decode_length", "prefix_tokens",
-                    "input_tokens_total", "session_arrival_time_ns",
-                    "inter_request_interval_ns"):
-            merged.setdefault(key, getattr(spec, key, None))
-        requests.append(merged)
-    requests.sort(key=lambda item: item["queue_index"])
-    return {"requests": requests}
 
 
 def _manifest_from_config(config) -> dict:
@@ -151,32 +99,18 @@ def _manifest_from_config(config) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_2.0 online decision service")
     parser.add_argument("--bridge-dir", required=True)
-    parser.add_argument("--mode", default="replay", choices=("replay", "strategy"))
-    parser.add_argument("--decision-log", default=None,
-                        help="replay 模式：离线 decision_log.jsonl 路径")
+    parser.add_argument("--mode", default="strategy", choices=("strategy",))
     parser.add_argument("--plan-dir", required=True,
-                        help="离线 manifest 目录（含 manifest.json；replay 模式"
-                             "仍以 --decision-log 合并流为权威输入）")
+                        help="manifest 目录（含 manifest.json；存在性凭据）")
     parser.add_argument("--config", default=None,
                         help="trace_config.csv 路径（缺省用 workload 默认）")
-    parser.add_argument("--dump-nodes", action="store_true", default=False,
-                        help="运行结束把构图器 per-rank 节点结构（id/name/"
-                             "type/request_id/stage/tag/tensor_size/num_ops/"
-                             "runtime_ns + 边表）流式写入 bridge 目录 "
-                             "online_nodes.jsonl——B3 逐节点 canonical 比较与"
-                             "发射序审计材料；中间产物，默认关")
     parser.add_argument("--sensing", action="store_true", default=False,
                         help="阶段 3 感知开关（默认关）：分层账本最小子集 + "
                              "两层剩余负载查询；查询/审计输入，不进策略判据")
     args = parser.parse_args(argv)
 
-    if args.mode == "replay" and not args.decision_log:
-        parser.error("replay 模式需要 --decision-log")
-    if args.sensing and args.mode != "strategy":
-        parser.error("--sensing 仅支持 --mode strategy（阶段 3 感知范围）")
-
-    # plan-dir 存在性校验（fail-closed；replay 的 request 事实来自
-    # decision_log 合并流，manifest.json 仅作存在性凭据）。
+    # plan-dir 存在性校验（fail-closed；strategy 的 request 事实由
+    # trace_config 队列派生，manifest.json 仅作存在性凭据）。
     if not os.path.isfile(os.path.join(args.plan_dir, "manifest.json")):
         parser.error(f"plan-dir 缺少 manifest.json: {args.plan_dir}")
 
@@ -185,29 +119,17 @@ def main(argv=None) -> int:
     else:
         config = load_face_trace_config()
 
-    graph = GraphBatchBuilder(config, replay_clock=(args.mode == "replay"))
+    graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    if args.mode == "replay":
-        replay = ReplaySource(args.decision_log)
-        manifest = _manifest_from_decision_log(args.decision_log, config)
-        scheduler = Sh20ReplayScheduler(
-            manifest=manifest,
-            config=config,
-            replay=replay,
-            graph=graph,
-            digest_sink=digest_sink,
-            mode=args.mode,
-        )
-    else:
-        manifest = _manifest_from_config(config)
-        scheduler = Sh20OnlineScheduler(
-            manifest=manifest,
-            config=config,
-            graph=graph,
-            digest_sink=digest_sink,
-            mode=args.mode,
-            sensing=args.sensing,
-        )
+    manifest = _manifest_from_config(config)
+    scheduler = Sh20OnlineScheduler(
+        manifest=manifest,
+        config=config,
+        graph=graph,
+        digest_sink=digest_sink,
+        mode=args.mode,
+        sensing=args.sensing,
+    )
 
     server = BridgeServer(args.bridge_dir)
     result = server.serve_forever(
@@ -217,43 +139,7 @@ def main(argv=None) -> int:
     if result != 0:
         raise RuntimeError("serve_forever returned {}".format(result))
 
-    # B3/审计材料（阶段 2）：per-rank 节点 + 边，运行结束流式写出
-    # （328,976 节点 ~35MB，有界：输入规模即上限；--dump-nodes 或
-    # SH20_DUMP_NODES=1 开启，默认关）。
-    if args.dump_nodes or os.environ.get("SH20_DUMP_NODES") == "1":
-        with open(os.path.join(args.bridge_dir, "online_nodes.jsonl"),
-                  "w", encoding="utf-8") as out:
-            for rank, builder in sorted(graph.builders.items()):
-                for node in builder.nodes:
-                    out.write(json.dumps({
-                        "rank": rank, "id": node["id"], "name": node["name"],
-                        "type": node["type"],
-                        "request_id": node.get("request_id", ""),
-                        "stage": node.get("stage", ""),
-                        "is_timer_op": node.get("is_timer_op", False),
-                        "is_local_hbm_kv_restore": node.get(
-                            "is_local_hbm_kv_restore", False),
-                        "comm_tag": (
-                            node["coll"]["priority"]
-                            if node["type"] == 7 else node["comm"]["tag"]),
-                        "comm_bytes": (
-                            node["coll"]["bytes"]
-                            if node["type"] == 7 else node["comm"]["bytes"]),
-                        "tensor_size": node["compute"]["tensor_size"],
-                        "num_ops": node["compute"]["num_ops"],
-                        "runtime_ns": node["compute"]["runtime_ns"],
-                    }, sort_keys=True) + "\n")
-                for edge in builder.edges:
-                    out.write(json.dumps({
-                        "rank": rank, "edge_from": edge["from"],
-                        "edge_to": edge["to"],
-                    }, sort_keys=True) + "\n")
-
     scheduler.verify_run_end()
-    if args.mode == "replay" and not replay.consumed_all():
-        raise RuntimeError(
-            "run ended with unconsumed replay decisions: consumed={} total={}"
-            .format(replay.consumed_counts(), replay.total_counts()))
     scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))
 
     bridge_stats = server.stats()
@@ -286,16 +172,8 @@ def main(argv=None) -> int:
     _write_jsonl(os.path.join(args.bridge_dir, "online_stats.jsonl"),
                  stats_rows)
 
-    # replay 模式 B1 口径出口：在线决策日志按权威 (record_tick, priority,
-    # record_seq) 排序——与离线 decision_log 的 (tick, priority, seq) 同键
-    # 同内容同序（触发序与记录序的解耦见 sh20_replay_scheduler 模块注释：
-    # sh_2.0 的秒级 turn-0 准入排队使到达/准入边界天然分离）。strategy 模式
-    # 行序 = 触发序（无权威日志）。
+    # strategy 模式行序 = 触发序（无权威日志重排）。
     log_rows = list(scheduler.online_log_rows)
-    if args.mode == "replay":
-        log_rows.sort(key=lambda row: (row.get("record_tick", row["tick"]),
-                                       row["priority"],
-                                       row.get("record_seq") if row.get("record_seq") is not None else row["seq"]))
     _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME), log_rows)
     if args.sensing:
         scheduler.dump_ledger(os.path.join(args.bridge_dir, "ledger.jsonl"))

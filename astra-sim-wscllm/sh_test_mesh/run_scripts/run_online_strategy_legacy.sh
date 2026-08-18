@@ -6,7 +6,7 @@
 #   - C++ 侧 workload 前缀 / metrics_manifest 指向调用方物化的 legacy 基线
 #     目录(<legacy_gen>,与运行同源对照物;物化规则见方案文档 §3 步骤 0-1);
 #   - 归档 kv_event_payload_legacy.json(legacy allocator run-end 终值,
-#     tier_b_compare legacy 层对照输入)。
+#     run-end 审计件,随 results/ 归档)。
 # Usage: bash run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
 set -euo pipefail
 

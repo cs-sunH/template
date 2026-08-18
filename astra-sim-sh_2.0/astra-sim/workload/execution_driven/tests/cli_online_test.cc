@@ -7,10 +7,10 @@ cli_online_test.cc -- phase-1 step 1-2 online CLI contract unit test.
 Rules under test (方案 §4 步骤 1-2 操作 5, amended step 1-8 for the mode
 token):
   R1  --online-mode is required for the online entry (missing = error).
-  R2  --online-mode takes a mode token: "replay" or "strategy" (both the
-      separate-value and inline "=" forms are legal; a missing value or any
-      other token is a hard error). "strategy" is parser-legal; the main
-      entry fails closed on it until step 1-9 lands (not a parser rule).
+  R2  --online-mode takes the mode token "strategy" (both the separate-value
+      and inline "=" forms are legal; a missing value or any other token --
+      including "replay", removed with the replay route on 2026-08-18 -- is a
+      hard error).
   R3  request-neutral default: without --request-queue-csv the service stays
        IDLE (option simply absent; nothing is loaded).
   R4  --request-queue-csv must name an existing, readable file.
@@ -86,76 +86,78 @@ int main() {
     // R2: mode token required
     assert(parse_error({"--online-mode"})
                .find("requires a value") != std::string::npos);
-    // R2: valid tokens, separate-value form
-    assert(parse_ok({"--online-mode", "replay"}, out));
-    assert(out.mode == "replay");
+    // R2: valid token, separate-value form
     assert(parse_ok({"--online-mode", "strategy"}, out));
     assert(out.mode == "strategy");
-    // R2: valid tokens, inline "=" form
-    assert(parse_ok({"--online-mode=replay"}, out));
-    assert(out.mode == "replay");
+    // R2: valid token, inline "=" form
     assert(parse_ok({"--online-mode=strategy"}, out));
     assert(out.mode == "strategy");
+    // R2: the replay token was removed with the replay route (2026-08-18)
+    assert(parse_error({"--online-mode", "replay"})
+               .find("unknown --online-mode value") != std::string::npos);
+    assert(parse_error({"--online-mode=replay"})
+               .find("unknown --online-mode value") != std::string::npos);
     // R2: any other token is a hard error
     assert(parse_error({"--online-mode", "bogus"})
                .find("unknown --online-mode value") != std::string::npos);
     assert(parse_error({"--online-mode=offline"})
                .find("unknown --online-mode value") != std::string::npos);
 
-    // R3: --online-mode replay alone -> request-neutral defaults (IDLE; no
+    // R3: --online-mode strategy alone -> request-neutral defaults (IDLE; no
     // CSV, no command FIFO)
-    assert(parse_ok({"--online-mode", "replay"}, out));
-    assert(out.mode == "replay" && !out.close_input && out.bridge_dir.empty() &&
+    assert(parse_ok({"--online-mode", "strategy"}, out));
+    assert(out.mode == "strategy" && !out.close_input &&
+           out.bridge_dir.empty() &&
            out.request_queue_csv.empty() && out.command_fifo.empty());
 
     // R4: existing readable CSV accepted
-    assert(parse_ok({"--online-mode", "replay",
+    assert(parse_ok({"--online-mode", "strategy",
                      "--request-queue-csv=/proc/self/exe"}, out));
     assert(out.request_queue_csv == "/proc/self/exe");
     // R4: space-separated value form accepted
-    assert(parse_ok({"--online-mode", "replay", "--request-queue-csv",
+    assert(parse_ok({"--online-mode", "strategy", "--request-queue-csv",
                      "/proc/self/exe"}, out));
     assert(out.request_queue_csv == "/proc/self/exe");
     // R4: missing file rejected
-    assert(parse_error({"--online-mode", "replay",
+    assert(parse_error({"--online-mode", "strategy",
                         "--request-queue-csv=/no/such/file.csv"})
                .find("not readable") != std::string::npos);
 
     // R5: --close-input flag
-    assert(parse_ok({"--online-mode", "replay", "--close-input"}, out));
+    assert(parse_ok({"--online-mode", "strategy", "--close-input"}, out));
     assert(out.close_input);
     // R5: value form rejected
-    assert(parse_error({"--online-mode", "replay", "--close-input=true"})
+    assert(parse_error({"--online-mode", "strategy", "--close-input=true"})
                .find("no value") != std::string::npos);
 
     // R6: --bridge-dir parsed and stored
-    assert(parse_ok({"--online-mode", "replay", "--bridge-dir=/tmp/bridge"},
+    assert(parse_ok({"--online-mode", "strategy", "--bridge-dir=/tmp/bridge"},
                     out));
     assert(out.bridge_dir == "/tmp/bridge");
     // R6: space-separated form
-    assert(parse_ok({"--online-mode", "replay", "--bridge-dir", "/tmp/bridge"},
+    assert(parse_ok({"--online-mode", "strategy", "--bridge-dir", "/tmp/bridge"},
                     out));
     assert(out.bridge_dir == "/tmp/bridge");
 
     // R7: typos in the online family are hard errors
-    assert(parse_error({"--online-mode", "replay", "--request-qeue-csv=/x"})
+    assert(parse_error({"--online-mode", "strategy", "--request-qeue-csv=/x"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "replay", "--online-flag"})
+    assert(parse_error({"--online-mode", "strategy", "--online-flag"})
                .find("unknown online-family") != std::string::npos);
-    assert(parse_error({"--online-mode", "replay", "--bridge-dirx=/x"})
+    assert(parse_error({"--online-mode", "strategy", "--bridge-dirx=/x"})
                .find("unknown online-family") != std::string::npos);
 
     // R7: unrelated (non-online-family) options are left to the shared
     // CmdLineParser, not rejected here
-    assert(parse_ok({"--online-mode", "replay", "--comm-scale=2.0"}, out));
+    assert(parse_ok({"--online-mode", "strategy", "--comm-scale=2.0"}, out));
 
     // R8: missing value after --bridge-dir / --request-queue-csv /
     // --command-fifo
-    assert(parse_error({"--online-mode", "replay", "--bridge-dir"})
+    assert(parse_error({"--online-mode", "strategy", "--bridge-dir"})
                .find("requires a value") != std::string::npos);
-    assert(parse_error({"--online-mode", "replay", "--request-queue-csv"})
+    assert(parse_error({"--online-mode", "strategy", "--request-queue-csv"})
                .find("requires a value") != std::string::npos);
-    assert(parse_error({"--online-mode", "replay", "--command-fifo"})
+    assert(parse_error({"--online-mode", "strategy", "--command-fifo"})
                .find("requires a value") != std::string::npos);
 
     // R9: --command-fifo parsed and stored (inline and separate-value forms)
@@ -209,7 +211,7 @@ int main() {
                .find("unknown online-family") != std::string::npos);
 
     // R10: --sensing-enabled default OFF (feature flag; phase 6 before 默认关)
-    assert(parse_ok({"--online-mode", "replay"}, out));
+    assert(parse_ok({"--online-mode", "strategy"}, out));
     assert(!out.sensing_enabled);
     assert(parse_ok({"--online-mode", "strategy"}, out));
     assert(!out.sensing_enabled);

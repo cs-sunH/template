@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """online_service.py -- 在线决策服务入口(方案 §4 步骤 1-8 操作 5)。
 
-CLI(与步骤 1-8 验证命令一致):
-    python3 online/online_service.py --bridge-dir <dir> --mode replay \
-        --decision-log <path> --plan-dir <离线 plan/manifest 目录>
+CLI:
+    python3 online/online_service.py --bridge-dir <dir> --mode strategy \
+        --plan-dir <plan/manifest 目录>
 
 流程:
-  1. 载入 plan-dir/manifest.json(每 request 全部事实,replay 权威之一)与
+  1. 载入 plan-dir/manifest.json(每 request 全部事实)与
      trace_config(load_wsc_llm_trace_config;--config 可覆盖);
-  2. replay 模式:ReplaySource(decision_log) + GraphBatchBuilder +
-     WscLlmReplayScheduler;
+  2. strategy 模式:GraphBatchBuilder + WscLlm( Legacy)OnlineScheduler;
   3. BridgeServer.serve_forever(scheduler.on_decision_batch,
      on_commit_ack=scheduler.on_commit_ack)——阻塞读 req_notify.fifo,
      零 polling;决策异常 => error response + exit 1(fail-closed);
@@ -41,12 +40,10 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 from generate_wsc_llm_trace import load_wsc_llm_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
-from online.replay_source import ReplaySource  # noqa: E402
 from online.wsc_llm_legacy_online_scheduler import (  # noqa: E402
     WscLlmLegacyOnlineScheduler,
 )
 from online.wsc_llm_online_scheduler import WscLlmOnlineScheduler  # noqa: E402
-from online.wsc_llm_replay_scheduler import WscLlmReplayScheduler  # noqa: E402
 
 
 DIGEST_LOG_NAME = "graph_batch_digests.jsonl"
@@ -83,10 +80,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="wscllm online decision service")
     parser.add_argument("--bridge-dir", required=True,
                         help="bridge FIFO/request-response 目录(与 C++ 共享)")
-    parser.add_argument("--mode", default="replay", choices=("replay", "strategy"),
-                        help="调度模式:replay(步骤 1-8);strategy(步骤 1-9)")
-    parser.add_argument("--decision-log", default=None,
-                        help="replay 模式:离线 decision_log.jsonl 路径")
+    parser.add_argument("--mode", default="strategy", choices=("strategy",),
+                        help="调度模式:strategy(唯一保留模式)")
     parser.add_argument("--plan-dir", required=True,
                         help="离线 plan/manifest 目录(含 manifest.json)")
     parser.add_argument("--config", default=None,
@@ -96,13 +91,6 @@ def main(argv=None) -> int:
                              "账本最小子集 + 两层剩余负载查询;感知数据是"
                              "查询/审计输入,不进策略判据,决策序列不变")
     args = parser.parse_args(argv)
-
-    if args.mode == "replay" and not args.decision_log:
-        parser.error("replay 模式需要 --decision-log")
-    if args.sensing and args.mode != "strategy":
-        # 阶段 3 感知只接入 strategy 变体(真实策略);replay 是阶段 1/2 的
-        # 回放装置,不挂感知(fail-closed,不半吊子)。
-        parser.error("--sensing 仅支持 --mode strategy(阶段 3 感知范围)")
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
     with open(manifest_path, "r", encoding="utf-8") as source:
@@ -118,51 +106,39 @@ def main(argv=None) -> int:
     else:
         config = load_wsc_llm_trace_config()
 
-    # 根因 #5(主控裁决 2026-08-15 第三项):replay 模式 prefill 链不链跨
-    # request previous_id(LUT 时钟并发);strategy 模式保持物理链。
-    graph = GraphBatchBuilder(config, replay_clock=(args.mode == "replay"))
+    # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
+    graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    if args.mode == "replay":
-        replay = ReplaySource(args.decision_log)
-        scheduler = WscLlmReplayScheduler(
+    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
+    # 输入,不进策略判据,决策序列与关感知逐字节一致)。
+    # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体
+    # session_lru_recompute -> WscLlmOnlineScheduler;第二变体 legacy ->
+    # WscLlmLegacyOnlineScheduler(WSC Relevant(P,D) 静态域 + FCFS 队头
+    # 阻塞)。分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式
+    # 传 kv_cache_policy;构造器各自 fail-closed 校验)。
+    if config.kv_cache_policy == "session_lru_recompute":
+        scheduler = WscLlmOnlineScheduler(
             manifest=manifest,
             config=config,
-            replay=replay,
             graph=graph,
             digest_sink=digest_sink,
             mode=args.mode,
+            sensing=args.sensing,
+        )
+    elif config.kv_cache_policy == "legacy":
+        scheduler = WscLlmLegacyOnlineScheduler(
+            manifest=manifest,
+            config=config,
+            graph=graph,
+            digest_sink=digest_sink,
+            mode=args.mode,
+            sensing=args.sensing,
         )
     else:
-        # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
-        # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
-        # 输入,不进策略判据,决策序列与关感知逐字节一致)。
-        # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体
-        # session_lru_recompute -> WscLlmOnlineScheduler;第二变体 legacy ->
-        # WscLlmLegacyOnlineScheduler(WSC Relevant(P,D) 静态域 + FCFS 队头
-        # 阻塞)。分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式
-        # 传 kv_cache_policy;构造器各自 fail-closed 校验)。
-        if config.kv_cache_policy == "session_lru_recompute":
-            scheduler = WscLlmOnlineScheduler(
-                manifest=manifest,
-                config=config,
-                graph=graph,
-                digest_sink=digest_sink,
-                mode=args.mode,
-                sensing=args.sensing,
-            )
-        elif config.kv_cache_policy == "legacy":
-            scheduler = WscLlmLegacyOnlineScheduler(
-                manifest=manifest,
-                config=config,
-                graph=graph,
-                digest_sink=digest_sink,
-                mode=args.mode,
-                sensing=args.sensing,
-            )
-        else:
-            raise ValueError(
-                "strategy 模式不支持 kv_cache_policy {!r}".format(
-                    config.kv_cache_policy))
+        raise ValueError(
+            "strategy 模式不支持 kv_cache_policy {!r}".format(
+                config.kv_cache_policy))
 
     server = BridgeServer(args.bridge_dir)
     result = server.serve_forever(
@@ -176,7 +152,7 @@ def main(argv=None) -> int:
     scheduler.verify_run_end()
     # 阶段 7 §10.6:legacy 变体 run-end 终值(allocator 的 Relevant(P,D) 剩余
     # 容量;legacy 无逐事件 KV 日志,与 metrics_integration.kv_event_payload_
-    # legacy 同构口径,供 tier_b_compare legacy 层与离线 baseline 对照)。
+    # legacy 同构口径,run-end 终值审计件)。
     # 多态取用(仅 legacy 调度器提供;session_lru 无此产物)。
     legacy_payload = getattr(scheduler, "kv_event_payload_legacy", None)
     if callable(legacy_payload):
@@ -184,10 +160,6 @@ def main(argv=None) -> int:
                   "w", encoding="utf-8") as output:
             json.dump(legacy_payload(), output, sort_keys=True)
             output.flush()
-    if args.mode == "replay" and not replay.consumed_all():
-        raise RuntimeError(
-            "run ended with unconsumed replay decisions: consumed={} total={}"
-            .format(replay.consumed_counts(), replay.total_counts()))
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)。
     scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))

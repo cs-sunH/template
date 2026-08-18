@@ -18,8 +18,15 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_DIR=$1
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 face仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
 
-ET_PREFIX=${PROJECT}/sh_test_mesh/generated/llama2_7b_inference_54npus_face_case5_config_c_9inst_tp6_112sess_1177req_pc512_p66-169395_d1-13812_grequest_aggregated_q23936bbc_cd6682e3b/llama2_7b_inference
-ET_DIR=$(dirname "${ET_PREFIX}")
+# ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
+# 见 traces/PROVENANCE.md 与《路径功能代码对应说明.md》)。
+GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
+if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
+  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  exit 1
+fi
+ET_DIR=${GEN_MATCH[0]}
+ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh

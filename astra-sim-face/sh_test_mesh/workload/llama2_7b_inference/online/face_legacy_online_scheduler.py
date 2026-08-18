@@ -393,8 +393,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
         )
 
     def _emit_decode(self, runtime, tick: int) -> None:
-        members = self.graph.emit_decode_batch(self._plan_dict(runtime),
-                                               phase_duration_ns=0)
+        members = self.graph.emit_decode_batch(self._plan_dict(runtime))
         self._note_emitted(runtime.request_id, STAGE_DECODE)
         self._ledger_issue(runtime.request_id, tick, STAGE_DECODE,
                            runtime.decode_instance_index)

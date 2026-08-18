@@ -83,8 +83,7 @@ class Sys : public Callable {
         bool rendezvous_enabled,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static,
-        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr,
-        bool replay_clock = false);
+        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr);
     ~Sys();
     //---------------------------------------------------------------------------
 
@@ -271,12 +270,10 @@ class Sys : public Callable {
 
     // step-1-2 execution-mode factory state (see constructor comment):
     // online mode injects the dynamic GraphSource at Sys creation and never
-    // constructs the ETFeeder; replay_clock_ is true only for
-    // --online-mode replay (contract ⑦ rulings; strategy keeps real physics).
+    // constructs the ETFeeder (strategy keeps real physics).
     ExecutionDriven::ExecutionMode execution_mode_ =
         ExecutionDriven::ExecutionMode::Static;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-    bool replay_clock_ = false;
 
     // roofline model
     bool roofline_enabled;

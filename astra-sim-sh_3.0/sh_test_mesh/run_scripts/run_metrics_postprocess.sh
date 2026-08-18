@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Cross-run metrics post-processing wrapper (implementation doc sec.11).
-# Collects [METRIC] JSON records from one or more run logs — service runs
-# from run_sh_test_aware.sh and/or microbenchmark runs from
-# run_metric_microbench.sh — and emits raw_metrics.csv plus
-# normalized_metrics.csv.  Works with whatever the logs contain: service
-# logs alone, microbenchmark logs alone, or a mix.
+# Collects [METRIC] JSON records from one or more run logs — online runs
+# from run_online_strategy.sh / run_online_strategy_sensing.sh (cpp.log) —
+# and emits raw_metrics.csv plus normalized_metrics.csv.  Works with
+# whatever the logs contain.
 #
 # Usage:
 #   bash run_metrics_postprocess.sh <run.log> [more.log ...] [options]

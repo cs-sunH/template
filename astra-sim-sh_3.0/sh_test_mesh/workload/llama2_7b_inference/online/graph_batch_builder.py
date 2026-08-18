@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- sh_3.0 在线 GraphBatch 构图器（方案 §4 步骤 1-8 操作 4）。
 
-阶段 1 最关键的对齐点：复用离线写出逻辑的节点结构。离线 per-request 发射
-（write_face_trace，generate_face_trace.py:2465-3086）由模块级助手函数组成
+阶段 1 最关键的对齐点：复用 generator 发射逻辑的节点结构。per-request 发射
+（generate_face_trace.py 模块级发射助手函数）组成
 （_emit_kv_transfer / _emit_tp_readiness_barrier /
 _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——
 本模块直接 import 它们，用 OnlineTraceBuilder（与 TraceBuilder 同构的在线侧
-builder）驱动，保证节点属性、插入顺序、rank ownership 与离线 .et 一致
-（B3 等价的前提）。
+builder）驱动，保证节点属性、插入顺序、rank ownership 跨 request 链一致
+（节点级审计口径）。
 
 与离线（一次 per-request 全段写出）的刻意差异（合同① 两段式发射边界）：
   - prefill 段（ARRIVAL 边界提交）= 到达/interval gate → history_evictions →
@@ -28,9 +28,7 @@ builder）驱动，保证节点属性、插入顺序、rank ownership 与离线 
     （跨请求的 arrival/interval gate 关联）；
   - partial 流水恢复的 chain_checkpoint/restore_chain 段内分支并行机制
     原样支持（generate_face_trace.py:2388-2391/:2435-2436 语义）；
-  - replay_clock（主控裁决 3/7/9 继承 + 本仓第 4 项）：replay 模式下
-    prefill 发射清除 prefill 组各 rank previous_id；远端 MEM 与本地 HBM
-    restore 节点即时完成由 C++ replay_clock_ 承担（不发射时长）。
+  - strategy 保持物理链与真实 MEM/HBM 物理时长。
 """
 
 import os
@@ -275,12 +273,9 @@ class GraphBatchBuilder:
     按决策边界发射 prefill 整段 / decode 整段 / completion 批，并维护
     pending_history / completion gates 账本（与离线 writer 同构）。"""
 
-    def __init__(self, config, *, digest_sink=None, replay_clock: bool = False):
+    def __init__(self, config, *, digest_sink=None):
         self.config = config
-        # 主控裁决 2026-08-15（第三项）：replay 模式下 prefill 链首不链跨
-        # request previous_id（LUT 时钟并发语义）；strategy 模式保持物理跨
-        # request 链（replay_clock == False 不生效）。
-        self.replay_clock = replay_clock
+        # strategy 模式保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
                 rank, remote_operand_loads=config.remote_operand_loads)
@@ -307,7 +302,7 @@ class GraphBatchBuilder:
         # request_id -> 跨阶段连续的 action 序号（离线 writer 的 per-
         # request action_sequence 闭包在两段式发射下的等价物：prefill/
         # decode/completion 三批共享同一计数器，保证 actionNNN 命名与
-        # 离线逐字节一致——B3 canonical key 对照前提）。
+        # 逐字节稳定——canonical 命名对照前提）。
         self._action_seq = {}
 
     # ------------------------------------------------------------- 批次 --
@@ -336,35 +331,25 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------------- 发射 --
 
-    def emit_prefill_batch(self, request_plan: dict,
-                           *, phase_duration_ns: int = 0) -> dict:
+    def emit_prefill_batch(self, request_plan: dict) -> dict:
         """发射 request 的 prefill 整段（ARRIVAL 决策的图；两段式发射的
         第一段）。返回 PREFILL_DRAIN watch 成员：{rank: prefill 末个真实
-        节点 id}（离线 EVENT_PREFILL_END 锚点口径，排除 end barrier）。"""
+        节点 id}（离线 EVENT_PREFILL_END 锚点口径，排除 end barrier）。
+
+        strategy 恒走 roofline 物理时钟。"""
         self._set_context(request_plan, "prefill", 0)
-        if self.replay_clock:
-            # 根因 #5（蓝本裁决 3）：replay 时钟下 per-rank 跨 request
-            # previous_id 边无 LUT 对应物，清除；保留 within-request 串行
-            # 化、decode 段 own-prefill-end 恢复、同 session interval gate。
-            prefill_group = self.group_by_index[
-                request_plan["prefill_instance_index"]]
-            for rank in prefill_group.ranks:
-                self.builders[rank].previous_id = None
         marker = self._mark()
         members = self._emit_prefill(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
-    def emit_decode_batch(self, request_plan: dict,
-                          *, phase_duration_ns: int = 0) -> dict:
+    def emit_decode_batch(self, request_plan: dict) -> dict:
         """发射 request 的 decode 整段（PREFILL_DRAIN 决策的图；两段式
         发射的第二段）。返回 DECODE_COMPLETION watch 成员：{rank: end
         barrier 前的 decode 末节点 id}（离线 EVENT_DECODE_END 锚点口径）。"""
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         members = self._emit_decode(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
@@ -377,38 +362,6 @@ class GraphBatchBuilder:
         self._emit_completion(request_plan)
         self._collect(marker)
         return {}
-
-    def _calibrate_phase(self, phase_duration_ns: int,
-                         marker: dict = None) -> None:
-        """步骤 1-8：把本次发射的 COMP 链校准到决策日志的 LUT 时钟（蓝本
-        同款，按"本次发射"作用域）。strategy 模式 phase_duration_ns=0 不
-        校准（roofline 真实物理）。"""
-        if phase_duration_ns <= 0:
-            return
-        if marker is None:
-            nodes = list(self.batch["nodes"]) if self.batch else []
-        else:
-            nodes = []
-            for rank, builder in self.builders.items():
-                node_mark, _ = marker[rank]
-                nodes.extend(builder.nodes[node_mark:])
-        if not nodes:
-            return
-        rank_ops = {}
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            ops = node["compute"]["num_ops"]
-            if ops > 0:
-                rank_ops[node["rank"]] = rank_ops.get(node["rank"], 0) + ops
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            total = rank_ops.get(node["rank"], 0)
-            ops = node["compute"]["num_ops"]
-            if total > 0 and ops > 0:
-                node["compute"]["runtime_ns"] = max(
-                    1, phase_duration_ns * ops // total)
 
     def _set_context(self, request_plan: dict, stage: str,
                      generation: int) -> None:
@@ -435,8 +388,8 @@ class GraphBatchBuilder:
 
     def _emit_prefill(self, request_plan: dict) -> dict:
         """离线 writer 的 turn-gates / history / prefill 块（:2465-2862 的
-        在线复刻）。request_plan 为 dict（replay 自 decision_log，strategy
-        自在线账本；字段与 FaceRequestPlan 同名）。"""
+        在线复刻）。request_plan 为 dict（strategy 自在线账本；
+        字段与 FaceRequestPlan 同名）。"""
         builders = self.builders
         config = self.config
         group_by_index = self.group_by_index
@@ -481,7 +434,7 @@ class GraphBatchBuilder:
             if arrival is None:
                 raise RuntimeError("first request lost its session arrival")
             # 离线 writer 的 turn-0 gate 命名用短前缀（:2404-2409：
-            # q{queue:04d}_{request_id}，无 session/turn 段）——B3 canonical
+            # q{queue:04d}_{request_id}，无 session/turn 段）——canonical 命名
             # name 键逐字节一致前提。
             short_prefix = (
                 f"q{request_plan['queue_index']:04d}_"
@@ -509,9 +462,8 @@ class GraphBatchBuilder:
         # 是 writer 侧的派生缓存（离线依赖 order_plans_for_static_emission
         # 全局 KV 因果预排序保持与 planner 一致）；在线按决策边界序发射时，
         # 触发 request 的准入/完成逐出（reserve/prepare/expand/enforce）与
-        # gate 注册/消费的相对顺序不同，缓存会滞后于权威账本（replay 权威
-        # = manifest/planner；strategy 权威 = kv_manager 快照——两者即
-        # history_location_before 本身）。故弹出 gate 时统一归一化到
+        # gate 注册/消费的相对顺序不同，缓存会滞后于权威账本（strategy 权威
+        # = kv_manager 快照,即 history_location_before 本身）。故弹出 gate 时统一归一化到
         # history_location_before；物理时序由图依赖保证（store 节点挂触发
         # request 链），gate location 仅是发射期元数据。结构性错误（缺
         # gate/缺 location）仍 fail-closed。
@@ -695,7 +647,7 @@ class GraphBatchBuilder:
                 f"{prefix}_prefill_chunks_aggregated_end_barrier",
                 pass_count, prefill_group.pg_name)
 
-        # [B3 修复] 记录本 request 的 per-rank prefill 块末 previous_id
+        # [previous_id 链修复] 记录本 request 的 per-rank prefill 块末 previous_id
         # （emitted-ranks-only；decode 段发射前恢复，蓝本裁决 3/7/9 继承）。
         decode_group = group_by_index[
             request_plan["decode_instance_index"]]
@@ -738,7 +690,7 @@ class GraphBatchBuilder:
                 self._mark_pending_history_store(transfer)
             return record
 
-        # [B3 修复] 恢复 prefill 块末 per-rank previous_id（emitted-ranks-
+        # [previous_id 链修复] 恢复 prefill 块末 per-rank previous_id（emitted-ranks-
         # only；仅段首节点消费恢复值，其余节点正常续链）。
         block_ends = self._prefill_block_ends.get(request_plan["request_id"])
         if block_ends is not None:
@@ -904,8 +856,8 @@ class GraphBatchBuilder:
     _plan_resolver = staticmethod(lambda request_id: None)
 
     def set_next_plan(self, next_plan: dict) -> None:
-        """request_id -> 下一 turn 的 plan dict（replay：静态 plan dict；
-        interval gate 发射用，由 scheduler 初始化时按 (session_id,
+        """request_id -> 下一 turn 的 plan dict
+        （interval gate 发射用，由 scheduler 初始化时按 (session_id,
         turn_index) 构建）。"""
         self.next_plan = next_plan
 

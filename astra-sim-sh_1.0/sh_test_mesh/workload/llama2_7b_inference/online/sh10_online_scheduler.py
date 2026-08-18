@@ -75,7 +75,7 @@ def load_frozen_lut(path) -> FaceLut:
     if not path.exists():
         raise FileNotFoundError(
             f"frozen LUT table missing: {path} (materialize via "
-            "generate_trace.py --replay-record; contract 09)")
+            "plan_materializer.py; contract 09 frozen-LUT rule)")
     entries = []
     with path.open(newline="", encoding="utf-8") as source:
         for row in csv.DictReader(source):

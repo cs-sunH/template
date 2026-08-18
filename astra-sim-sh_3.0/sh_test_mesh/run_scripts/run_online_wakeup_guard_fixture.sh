@@ -32,10 +32,10 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/sh30_wakeup_guard}
 
 # ET 目录动态解析(本仓阶段 7 口径:generated 目录名编码 trace-config 摘要,
-# 硬编码路径会随配置字节变化而失效——与 run_online_replay.sh 同款)。
+# 硬编码路径会随配置字节变化而失效——与在线 runner 同款动态解析)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[wakeup_guard] expected exactly one generated dir under sh_test_mesh/generated (regenerate via generate_trace.sh after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  echo "[wakeup_guard] expected exactly one generated dir under sh_test_mesh/generated (regenerate via plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}

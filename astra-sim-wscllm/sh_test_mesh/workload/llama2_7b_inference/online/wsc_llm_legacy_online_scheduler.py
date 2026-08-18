@@ -76,7 +76,7 @@ p_chunk 标定常数(用户裁决 2026-08-15,见方案文档 §3 步骤 0-1 物�
     history_kv transfer(category 1000,source = 前序 KV 主位
     history_source_instance_index,total_bytes = history_transfer_bytes)。
     总字节一致(分配总量 = kv_cache_bytes_for_tokens(final_context) =
-    子 request 的 history 需要量),边数为粒度差异(B4 归因类别,在线决策
+    子 request 的 history 需要量),边数为粒度差异(差分归因类别,在线决策
     日志的 history_action 仍按离线口径记录 NO_HISTORY——离线 legacy 不设置
     该字段,决策日志逐字段全等);
   - 完成顺序:真实完成 tick 决定(网络竞争、物理链),不要求与离线决策
@@ -609,7 +609,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         offline: wsc_llm_scheduler.py:1364-1395(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
-        members = self.graph.emit_prefill_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_prefill_batch(plan)
         # 阶段 3 感知账本:本批次发射记录(prefill 阶段;commit ack 到达后
         # 转移入 committed 层)。
         self._note_emitted(runtime.request_id, STAGE_PREFILL)
@@ -661,7 +661,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         offline: wsc_llm_scheduler.py:1397-1415(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
-        members = self.graph.emit_decode_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_decode_batch(plan)
         # 阶段 3 感知账本:本批次发射记录(decode 阶段)。
         self._note_emitted(runtime.request_id, STAGE_DECODE)
         # 阶段 7 §10.1:issued 层登记(已发射未完成;decode 段条目,prefill
@@ -707,7 +707,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         实例,字节 = kv_cache_bytes_for_tokens(history_tokens_before)。
         与离线 legacy ET 的差异仅粒度(离线逐 kv_allocation.piece 多个
         transfer,category 1000+piece*100;在线单 transfer,category 1000):
-        总字节一致,见 B4 归因类别。决策日志的 history_action 仍按离线
+        总字节一致,见差分归因类别。决策日志的 history_action 仍按离线
         口径记录 NO_HISTORY(见 _emit_prefill;离线 legacy 不设置该字段)。
         """
         return {
@@ -777,8 +777,8 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         """legacy run-end 终值报告(与 metrics_integration.kv_event_payload_
         legacy 同构;legacy 无逐事件 KV 日志,there is no KV event log)。
         在线侧由 online_service 在 verify_run_end 后写
-        bridge_dir/kv_event_payload_legacy.json,供 tier_b_compare legacy 层
-        与离线 baseline 的同一口径终值对照。"""
+        bridge_dir/kv_event_payload_legacy.json(runner 归档到 results/,
+        run-end 终值审计件)。"""
         return {
             "policy": "wsc_relevant_pd_static_decode_domain",
             "final_remaining_capacity_bytes": list(

@@ -65,7 +65,7 @@ Authoritative role and rank configuration:
 
 `@astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
 
-## Offline static Prefill-to-Decode mapping
+## Static Prefill-to-Decode mapping policy
 
 Routing is built once at whole-instance granularity. For each Prefill instance,
 the planner finds the nearest Decode instance, enumerates equal-length shortest
@@ -108,8 +108,8 @@ watermark, inactive resident sessions on that instance are deleted in
 `(last_completion_ns, session_id)` order. A later turn uses NoC migration when
 its KV is still resident and recomputes all window-local history when it was
 deleted. Neither action changes the least-request-count Prefill choice or the
-static P→D route. `kv_cache_events.csv` records all cache actions; deletes have
-zero ET cost and no remote-memory traffic.
+static P→D route. Cache actions are recorded per request in the online
+decision log; deletes have zero compute cost and no remote-memory traffic.
 
 When a request arrives, only Prefill instances are eligible. The unpublished
 WSC-LLM phrase “least occupied queue” is interpreted as the number of requests
@@ -120,7 +120,7 @@ Each Prefill-only instance executes one FCFS chunk per planner iteration. Each
 Decode-only instance advances every request in its active continuous batch by
 one token per iteration, preserving FCFS insertion order. No iteration can
 contain both phases. Prefill completion sends the request directly to the
-Decode queue fixed by the offline route and records its queue depth and route.
+Decode queue fixed by the static route and records its queue depth and route.
 
 The analytical table is now a phase-timing LUT only. Every entry is either a
 Prefill workload or a Decode workload; it does not choose an instance or alter
@@ -169,41 +169,50 @@ All Prefill operators are emitted on the selected Prefill instance's six ranks;
 all Decode operators are emitted on its fixed Decode instance's six ranks. KV
 movement pairs equal relative TP ranks.
 
-The planner models Decode continuous batching for timing. The default
-`request_aggregated` ET still emits each request's Decode phase as its own
-aggregated DAG rather than one fused cross-request batch node. This is the
-existing static-ET boundary; changing global ET iteration order is outside this
-mapping-only change. Aggregation preserves total FLOPs, tensor/HBM bytes, and
-All-Reduce payload, while compressing repeated invocations and startup latency.
+The scheduler models Decode continuous batching for timing. The default
+`request_aggregated` emission folds each request's Decode phase into its own
+aggregated node set rather than one fused cross-request batch node.
+Aggregation preserves total FLOPs, tensor/HBM bytes, and All-Reduce payload,
+while compressing repeated invocations and startup latency.
 
-ET integration:
+Trace-configuration loader:
 
 `@astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py`
 
 ## Run and validate
 
+The online strategy routes are the supported pipeline (route 3 = strategy,
+route 4 = strategy + sensing). This is a request-neutral bare repo: the
+request-queue input is materialized by the caller per the repository plan doc
+§3 steps 0-1 (recompute variant, same rule family as the face repo's
+`traces/derive_20_first_30_seconds.py`; only allowed source:
+`agent-traces/tracelab/astra_compute_20.csv`) and passed in explicitly; the
+plan directory is then produced by the in-repo materializer:
+
 ```bash
-cd astra-sim-wscllm
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest sh_test_mesh/workload/llama2_7b_inference/test_wsc_llm_scheduler.py
-bash sh_test_mesh/run_scripts/generate_trace.sh
-bash sh_test_mesh/run_scripts/run_sh_test_aware.sh
+cd sh_test_mesh/workload/llama2_7b_inference
+# 1. caller materializes the request-queue input (plan doc §3 steps 0-1)
+# 2. materialize the plan directory + runtime_config four-piece set
+python3 plan_materializer.py
+cd ../../..
+# 3. online strategy (route 3) and sensing variant (route 4)
+bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <abs request_csv>
+bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <abs request_csv>
+# legacy second variant (strategy mode + trace_config_legacy.csv)
+bash sh_test_mesh/run_scripts/run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
+# metrics post-processing of a run's cpp.log
+bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 ```
 
-The congestion-unaware entry is:
+Unit tests (workload layer + sh_test_mesh contracts):
 
 ```bash
-bash sh_test_mesh/run_scripts/run_sh_test_unaware.sh
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_wsc_llm_scheduler.py test_wsc_llm_legacy_online_scheduler.py test_checkpointing.py -q
+cd ../.. && python3 -m pytest tests/ -q
 ```
 
-Each successful generated directory contains 54 ET files, `manifest.json`,
-`wsc_llm_timing_lut.csv`, and `kv_cache_events.csv`. The manifest exposes
-instance roles, static routes, request-level cache actions, exact per-rank HBM
-snapshots, and final resident/evicted session state.
+Each generated plan directory contains `manifest.json` (queue-derived 9
+fields) and `metrics_manifest.json` (synthetic-prerun; rank attribution is
+placeholder).
 
 `@astra-sim-wscllm/sh_test_mesh/generated`
-
-WSC-LLM run logs use `run_aware_wsc_llm_...` and
-`run_unaware_wsc_llm_...` names so they do not overwrite or masquerade as prior
-FACE results.
-
-`@astra-sim-wscllm/sh_test_mesh/results/run_logs`

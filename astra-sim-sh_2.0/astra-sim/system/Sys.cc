@@ -152,11 +152,9 @@ Sys::Sys(int id,
          double comm_scale,
          bool rendezvous_enabled,
          ExecutionDriven::ExecutionMode execution_mode,
-         std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
-         bool replay_clock) {
+         std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
-    this->replay_clock_ = replay_clock;
 
     if ((id + 1) > this->all_sys.size()) {
         this->all_sys.resize(id + 1);
@@ -273,7 +271,7 @@ Sys::Sys(int id,
         workload =
             new Workload(this, workload_configuration,
                          comm_group_configuration, execution_mode_,
-                         graph_source_, replay_clock_);
+                         graph_source_);
     } else {
         workload =
             new Workload(this, workload_configuration,

@@ -276,28 +276,6 @@ class FaceSchedulerTests(unittest.TestCase):
             ),
         )
 
-    def test_shell_config_does_not_build_full_face_plan(self) -> None:
-        # request-neutral：合成 fixture 队列的计数只反映 fixture 自身
-        # （裸仓库不物化输入，见方案 §3 步骤 0-1 收尾先例）。
-        config = load_checked_in_fixture_config()
-        output = io.StringIO()
-        with (
-            patch(
-                "generate_face_trace.load_face_trace_config",
-                return_value=config,
-            ),
-            patch(
-                "generate_face_trace.load_or_build_face_plan",
-                side_effect=AssertionError("shell config must not build a plan"),
-            ),
-            redirect_stdout(output),
-        ):
-            generate_face_trace_main(["--print-shell-config"])
-        assignments = output.getvalue()
-        self.assertIn("REQUEST_COUNT=10\n", assignments)
-        self.assertIn("SESSION_COUNT=8\n", assignments)
-        self.assertIn("PREFILL_CHUNK_SIZE=512\n", assignments)
-        self.assertIn("PREFILL_RANGE=50-1600\n", assignments)
 
     def test_prefill_work_derivation_matches_prefix_reuse_rules(self) -> None:
         requests = (

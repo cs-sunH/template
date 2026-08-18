@@ -28,3 +28,9 @@ To join the mailing list, please fill out the following form: https://forms.gle/
 
 
 We appreciate your interest and support in ASTRA-sim!
+
+## 残留补清（2026-08-18，主 agent 执行，工作树未提交）
+
+删①②主链后的验收工具类残留清理：build_analytical_aware.sh（目标已删脚本必坏）、
+run_metric_microbench.sh + generate_metric_microbench.py（microbench=①族工具链）、
+( [ wscllm = sh_3.0 ] && echo "b3_canonical_compare.py（对照①离线产物）" )( [ wscllm = wscllm ] && echo "tier_b_compare.py（②族 oracle）" )；README_COMMANDS 悬空引用行同步清理。保留定性：clean_history.sh（清 generated/results，③④ 同用）、run_metrics_postprocess 链（③④共用）、contracts/tier_b 报告/实录（历史记录载体）。剩余文字性提及均为注释或历史文档，无功能性依赖。

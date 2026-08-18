@@ -26,7 +26,7 @@ test -- no network simulation, no baseline artifacts touched:
           state from free to in-flight).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
-(build with bash sh_test_mesh/run_scripts/build_analytical_aware.sh).
+(build with cmake --build build/astra_analytical/build_congestion_aware -j).
 Run (from template/astra-sim-sh_3.0, after generating the synthetic trace):
   python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py
   build/astra_analytical/build_congestion_aware/bin/\

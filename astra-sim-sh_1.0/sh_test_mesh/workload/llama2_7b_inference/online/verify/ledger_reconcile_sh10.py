@@ -264,8 +264,8 @@ def main():
         attrs.append(
             f"RF-residual: peak_pending={cpp_peak_pending}（26 端口单服务队列"
             f"实测未排队——远端访问被依赖链串行化，物理事实观测非缺陷）；"
-            f"peak_in_flight_bytes={cpp_peak_bytes}；replay 模式 MEM 即时完成"
-            f"（合同⑦第④项）不走真实 FIFO，其 FIFO 账本恒零——合同语义非泄漏")
+            f"peak_in_flight_bytes={cpp_peak_bytes}；本窗口无 remote 转移动作时"
+            f"FIFO 账本恒零（见 RF3d 覆盖口径）——窗口覆盖面非泄漏")
 
     print("== sh_1.0 分层账本对账（R0-R5 + RF1-RF4 remote FIFO 实账本层）==")
     ok_all = True

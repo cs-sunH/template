@@ -25,8 +25,8 @@ last_applied_sequence;reply cache 覆盖最后一笔交付)。
         --bridge-dir <真实运行 bridge 目录> --plan-dir <离线 plan 目录> \
         [--config <trace_config.csv>] [--limit N]
 
-默认 strategy 模式(真实策略产图;§7.2 是基类级合同,replay 变体走同一
-on_decision_batch)。--limit 只喂前 N 个 delta(快速冒烟),缺省全量。
+默认 strategy 模式(真实策略产图;§7.2 是基类级合同)。--limit 只喂前 N 个
+delta(快速冒烟),缺省全量。
 """
 
 import argparse
@@ -129,7 +129,7 @@ def main(argv=None) -> int:
         deltas = deltas[:args.limit]
 
     sink = _CountingDigestSink()
-    graph = GraphBatchBuilder(config, replay_clock=False)
+    graph = GraphBatchBuilder(config)
     scheduler = FaceOnlineScheduler(
         manifest=manifest,
         config=config,

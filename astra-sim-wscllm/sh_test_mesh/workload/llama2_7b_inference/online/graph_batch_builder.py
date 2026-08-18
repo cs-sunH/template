@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- 在线 GraphBatch 构图器(方案 §4 步骤 1-8 操作 4)。
 
-阶段 1 最关键的对齐点:复用离线写出逻辑的节点结构。离线 per-request 发射
-(_write_wsc_session_lru_trace, generate_wsc_llm_trace.py:1075-1376)由模块级
+阶段 1 最关键的对齐点:复用 generator 发射逻辑的节点结构。per-request 发射
+(generate_wsc_llm_trace.py 模块级函数)由
 助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
 transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
-  - 节点属性、插入顺序、rank ownership 与离线 .et 一致(B3 等价的前提);
-  - per-rank 节点 id 跨批次全局递增(与离线 per-rank .et id 序列一致);
+  - 节点属性、插入顺序、rank ownership 跨 request 链结构一致(节点级审计口径);
+  - per-rank 节点 id 跨批次全局递增(与 generator per-rank id 序列一致);
   - interval gate 的 after_node_id 指向上一 request 的完成 barrier 节点 id
     (completion_gates 账本,跨批次解析)。
 
@@ -221,12 +221,9 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 整段,并维护 completion_gates 账本。"""
 
-    def __init__(self, config, *, digest_sink=None, replay_clock: bool = False):
+    def __init__(self, config, *, digest_sink=None):
         self.config = config
-        # 主控裁决 2026-08-15(第三项):replay 模式下 prefill 链首不链跨
-        # request previous_id(LUT 时钟并发语义,根因 #5);strategy 模式保持
-        # 物理跨 request 链(replay_clock == False 不生效)。
-        self.replay_clock = replay_clock
+        # strategy 模式保持物理跨 request 链。
         self.builders = {
             rank: OnlineTraceBuilder(
                 rank, remote_operand_loads=config.remote_operand_loads)
@@ -244,9 +241,7 @@ class GraphBatchBuilder:
         # 的 prefill 末节点(end barrier / interval gate 等)。本账本在 decode 段
         # 发射前恢复 per-rank previous_id,使 within-request 依赖与本 request
         # 的 prefill 块末一致(主控裁决 2026-08-15 批准;恢复值在
-        # PREFILL_DRAIN 边界触发时必已发射,无死锁风险)。replay 模式跨
-        # request previous_id 边 = 0 为刻意差异(LUT 时钟语义,根因 #5,
-        # B4 归因类别①;此前"2001/2183 条不可消除、保留"表述作废)。
+        # PREFILL_DRAIN 边界触发时必已发射,无死锁风险)。
         self._prefill_block_ends = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -277,51 +272,30 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------------- 发射 --
 
-    def emit_prefill_batch(self, request_plan: dict,
-                           *, phase_duration_ns: int = 0) -> dict:
+    def emit_prefill_batch(self, request_plan: dict) -> dict:
         """发射 request 的 prefill 整段(ARRIVAL 决策的图)。
 
-        phase_duration_ns:该相位在决策日志 LUT 时钟下的时长(步骤 1-8 计时
-        校准,来自 replay_source.phase_durations);0 = 不校准(roofline 回退)。
+        strategy 恒走 roofline 物理时钟。
 
         返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点 id}
         (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier)。
         """
         self._set_context(request_plan, "prefill", 0)
-        # 根因 #5(主控裁决 2026-08-15 第三项,replay 作用域):清空 prefill
-        # 组各 rank 的 previous_id,使本 request 的 prefill 链首只依赖自身
-        # arrival/interval timer gate(告警),不链上一 request 在本 rank 的
-        # 链尾。离线 .et 的 per-rank previous_id 边把共享 rank 上的链串行化
-        # (实测 rank-3:s57r0 history barrier data_deps=[s52r1 kv_send,
-        # own timer]);LUT 时钟(decision_log 权威)把同实例 prefill 窗口
-        # 重叠排布(批量处理器语义,实测 s52r1 prefill
-        # [18945989659,19084399590] 与 s57r0 prefill [19077397000,
-        # 19267356328] 重叠 7.0ms、s55r0 与 s58r0 重叠 132.4ms,四者 decode
-        # tick 同为 19267356328)——边把链起点推后(实测 s57r0 prefill fire
-        # 迟 7,002,583ns,s58r0 的 PREFILL_DRAIN 在 s55r0 完成前不触发,
-        # 同 tick 组无法耗尽即 ReplayDesyncError,delivery 189 归因)。
-        # 保留:within-request 串行化;decode 段 own-prefill-end 恢复(B3);
-        # 同 session interval gate(after_node_id = 上一同 session request
-        # 完成 barrier,LUT 亦串行化同 session)。strategy 模式(非 replay)
-        # 保持物理跨 request 链。
-        if self.replay_clock:
-            prefill_group = self.group_by_index[
-                request_plan["prefill_instance_index"]]
-            for rank in prefill_group.ranks:
-                self.builders[rank].previous_id = None
+        # strategy 模式保持物理跨 request 链(根因 #5 裁决):prefill 组各
+        # rank 的 previous_id 不清空,本 request 的 prefill 链首可链上一
+        # request 在本 rank 的链尾(共享 rank 上的链串行化)。
+        # 保留:within-request 串行化;decode 段 own-prefill-end 恢复(previous_id 链);
+        # 同 session interval gate。
         marker = self._mark()
         members = self._emit_prelim(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
 
-    def emit_decode_batch(self, request_plan: dict,
-                          *, phase_duration_ns: int = 0) -> dict:
+    def emit_decode_batch(self, request_plan: dict) -> dict:
         """发射 request 的 decode 整段(含 prefill_to_decode transfer 3000 /
         decode 整段 / decode_request_end_barrier)(PREFILL_DRAIN 决策的图)。
 
-        phase_duration_ns:该相位在决策日志 LUT 时钟下的时长(步骤 1-8 计时
-        校准,来自 replay_source.phase_durations);0 = 不校准(roofline 回退)。
+        strategy 恒走 roofline 物理时钟。
 
         返回 DECODE_COMPLETION watch 成员:{rank: end barrier 前的 decode
         末节点 id}(离线 doc sec.6.4 口径)。
@@ -329,57 +303,8 @@ class GraphBatchBuilder:
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         members = self._emit_decode(request_plan)
-        self._calibrate_phase(phase_duration_ns, marker)
         self._collect(marker)
         return members
-
-    def _calibrate_phase(self, phase_duration_ns: int,
-                         marker: dict = None) -> None:
-        """步骤 1-8:把本次发射的 COMP 链校准到决策日志的 LUT 时钟。
-
-        在线引擎必须复现 decision_log 的 LUT 时间线(replay 按日志顺序
-        fail-closed 消费;实测 roofline 时钟比 LUT 时钟慢 ~3x,完成边界顺序
-        翻转即 ReplayDesyncError)。本方法给本次发射每个非 timer 的 COMP
-        节点赋 runtime_ns = phase_duration_ns × num_ops / 本 rank 本次发射
-        COMP 总和,使每 rank 的 COMP 链合计恰为 phase_duration_ns(即日志
-        tick 差给出的规划器相位时长)。comm 节点(all_reduce / transfer /
-        barrier)保持网络仿真时长;timer gate 保持 runtime_ns=0(arrival
-        alarm 替代等待)。static .et 路径不经过本方法——字节门不受影响。
-
-        marker: 本次发射前的 _mark() 快照。必须按"本次发射"作用域校准:
-        同 tick 组的多个边界在同一轮 commit 批次内先后发射(实测 s14r0 与
-        s1r2 的 PREFILL_DRAIN 同 tick 同轮),整批校准会让后一次发射的相位
-        重新缩放先前 request 的链(实测 s1r2 的 3.21s decode 相位把 s14r0
-        的链一并缩放,而 s1r2 自身链合计仅 856ms=roofline——校准丢失,完成
-        边界提前 2.35s,ReplayDesyncError)。marker 缺省(单发射批次)时与
-        旧整批行为一致。
-        """
-        if phase_duration_ns <= 0:
-            return
-        if marker is None:
-            nodes = list(self.batch["nodes"]) if self.batch else []
-        else:
-            nodes = []
-            for rank, builder in self.builders.items():
-                node_mark, _ = marker[rank]
-                nodes.extend(builder.nodes[node_mark:])
-        if not nodes:
-            return
-        rank_ops = {}
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            ops = node["compute"]["num_ops"]
-            if ops > 0:
-                rank_ops[node["rank"]] = rank_ops.get(node["rank"], 0) + ops
-        for node in nodes:
-            if node["type"] != COMP_NODE or node["is_timer_op"]:
-                continue
-            total = rank_ops.get(node["rank"], 0)
-            ops = node["compute"]["num_ops"]
-            if total > 0 and ops > 0:
-                node["compute"]["runtime_ns"] = max(
-                    1, phase_duration_ns * ops // total)
 
     def _set_context(self, request_plan: dict, stage: str,
                      generation: int) -> None:
@@ -477,20 +402,19 @@ class GraphBatchBuilder:
         # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
         # (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier)。
         members = {rank: bounds[1] for rank, bounds in prefill_bounds.items()}
-        # [B3 修复] 记录本 request 的 per-rank prefill 块末 previous_id。
+        # [previous_id 链修复] 记录本 request 的 per-rank prefill 块末 previous_id。
         # transfer3000 的 comm_send 在 prefill rank 上发射、comm_recv 在
         # decode rank 上发射。prefill 侧首节点(send)链本块末节点(离线同款,
         # 实测 .et send data_deps=[本 request prefill 末节点]);decode 侧首
         # 节点(recv)在离线 .et 中链"上一完整 request 块末"(跨 request 串行
-        # 化边,方案 §4 步骤 1-8 裁决明言不可复现、B4 归因)——本 request 的
+        # 化边,方案 §4 步骤 1-8 裁决明言不可复现、差分归因)——本 request 的
         # prefill 块在 decode 组 rank 上没有发射任何节点,块末 = None:
         # 恢复 None 使 recv 无父(与离线首个 decode 的 recv 同构,实测 .et
         # session_0 recv data_deps=[]),decode 块即到即跑,不串行等待上一
         # request 的 decode 段(实测 2026-08-15:若把 stale 的跨 request
         # previous_id 记入,recv 会等待上一 decode 的 end barrier——该 barrier
         # 在 PREFILL_DRAIN 触发时仍在执行,与方案 :1148 的"恢复值彼时必然
-        # 已完成"断言相悖,rank 上 decode 全部串行化,完成边界被整体推后,
-        # 与 LUT 时钟(决策日志)顺序失配即 ReplayDesyncError)。恢复值
+        # 已完成"断言相悖,rank 上 decode 全部串行化,完成边界被整体推后)。恢复值
         # 只作用于 transfer 首节点,块内其余节点正常续链。
         decode_group = self.group_by_index[
             request_plan["decode_instance_index"]]
@@ -509,7 +433,7 @@ class GraphBatchBuilder:
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
         decode_group = self.group_by_index[request_plan["decode_instance_index"]]
         prefix = _prefix_of(request_plan)
-        # [B3 修复] 恢复 prefill 块末 per-rank previous_id,使 transfer3000 /
+        # [previous_id 链修复] 恢复 prefill 块末 per-rank previous_id,使 transfer3000 /
         # decode 块的首节点依赖与离线逐边一致(own end barrier / own interval
         # gate)。仅恢复本 request 覆盖的 rank;restore 后本块内部继续自然链式。
         block_ends = self._prefill_block_ends.get(request_plan["request_id"])

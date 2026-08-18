@@ -648,9 +648,9 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         return EXIT_FAILURE;
     }
-    // Step 1-8/1-9 mode gates: both --online-mode tokens (replay/strategy)
-    // share this binary; replay freezes the offline LUT clock (decision log),
-    // strategy runs real physics. Both modes require the decision bridge.
+    // Step 1-8/1-9 mode gates: --online-mode strategy is the only mode
+    // (path-2 removal 2026-08-18 deleted the replay token with the replay
+    // route); strategy runs real physics and requires the decision bridge.
     // --request-queue-csv is optional (合同② request-neutral default, step
     // 1-10): when absent the service starts IDLE and reads no pre-loaded
     // queue -- it never falls back to a preset/stub queue (fail-closed).
@@ -758,16 +758,15 @@ int main(int argc, char* argv[]) {
         // create network and system
         auto network_api = std::make_unique<CongestionAwareNetworkApi>(i);
         // Step 1-8 (main ruling 2026-08-15): the replay-clock scope flag
-        // (concurrent calibrated COMP + instant comms) is bound to the
-        // --online-mode replay token; the step-1-9 strategy mode (real
-        // physics) passes false.
-        const bool replay_clock = (online_cli.mode == "replay");
+        // (concurrent calibrated COMP + instant comms) was bound to the
+        // --online-mode replay token; path-2 removal (2026-08-18) deleted
+        // that flag with the replay route -- strategy (the only mode) always
+        // runs real physics.
         auto* const system = new Sys(
             i, workload_configuration, comm_group_configuration,
             system_configuration, memory_api.get(), network_api.get(),
             npus_count_per_dim, queues_per_dim, injection_scale, comm_scale,
-            rendezvous_protocol, ExecutionMode::Online, graph_source,
-            replay_clock);
+            rendezvous_protocol, ExecutionMode::Online, graph_source);
 
         // push back network and system
         network_apis.push_back(std::move(network_api));

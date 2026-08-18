@@ -58,11 +58,9 @@ void record_node_terminal(
 
 Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                    ExecutionDriven::ExecutionMode execution_mode,
-                   std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
-                   bool replay_clock) {
+                   std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
-    this->replay_clock_ = replay_clock;
 
     string workload_filename = et_filename + "." + to_string(sys->id) + ".et";
     if (execution_mode == ExecutionDriven::ExecutionMode::Online) {
@@ -228,28 +226,14 @@ void Workload::issue_dep_free_nodes() {
     for (const auto& nv : graph_source_->dep_free_nodes()) {
         if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
             // Step 1-8: online availability check on the NodeView
-            // (et_node is nullptr in online mode).
-            //
-            // Step 1-8 (root-cause #3, main ruling 2026-08-15 -- replay
-            // scope only, see replay_clock_): calibrated COMP chains
-            // (runtime_ns != 0) are self-timed LUT-clock chains and must run
-            // CONCURRENTLY across requests. The offline planner models the
-            // decode instance as a batched processor (d_batch = concurrent
-            // decodes, iteration time grows with d_batch); the per-rank
-            // single-slot GPU gate serializes the chains into the .et
-            // emission order, which differs from the decision log's
-            // completion order (e.g. LUT: session_3_request_0 @1863.8ms and
-            // session_4_request_0 @2115.0ms BEFORE session_2_request_0
-            // @2139.3ms, while its .et chain is emitted earlier) -- no
-            // serialized execution can reproduce the log order. The gate
-            // remains for uncalibrated COMP (roofline fallback), CPU/timer
-            // ops and comm nodes; strategy mode keeps the real serialized
-            // physics (replay_clock_ == false).
+            // (et_node is nullptr in online mode). Strategy mode keeps the
+            // real serialized physics (path-2 removal 2026-08-18 deleted the
+            // replay-only concurrent calibrated-COMP bypass).
             auto t0 = std::chrono::steady_clock::now();
-            if (replay_clock_ && nv.kind == ExecutionDriven::NodeKind::Compute &&
-                nv.compute.runtime_ns != 0ul) {
-                issue(nv);
-            } else if (hw_resource->is_available(nv)) {
+            // Path-2 removal (2026-08-18): the replay-only concurrent
+            // calibrated-COMP bypass was deleted with the replay route;
+            // strategy keeps the real serialized physics.
+            if (hw_resource->is_available(nv)) {
                 issue(nv);
             }
             if (std::getenv("SH10_DEBUG_ISSUE")) {
@@ -384,23 +368,12 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
     wlhd->sys_id = sys->id;
     wlhd->workload = this;
     wlhd->node_id = node.global_id;
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        replay_clock_) {
-        // sh_1.0 contract ⑦ item ④ (replay scope only): the offline planner
-        // LUT clock contains no remote-memory access time (KV transfers are
-        // encoded in the offline ET as dependency edges and timer gates only,
-        // never advancing the planner event clock), so the replay harness
-        // must not keep the real AnalyticalRemoteMemory port-FIFO latency.
-        // MEM_LOAD/MEM_STORE nodes complete instantly (1ns General event);
-        // the normal dependency / terminal / issue-pass machinery is
-        // untouched. Strategy mode and the static path keep the real 26-port
-        // remote-memory FIFO physics (replay_clock_ == false).
-        sys->register_event(this, EventType::General, wlhd, 1ul);
-        return;
-    }
+    // Path-2 removal (2026-08-18): the replay-only instant (1ns) remote
+    // MEM completion branch was deleted with the replay route; strategy and
+    // the static path keep the real 26-port remote-memory FIFO physics.
+    //
     // Phase-4 sensing (方案 §6.2 操作 2): remote-FIFO 实账本层 issue record.
-    // Pure observation (counters only); replay-clock runs bypass the real
-    // FIFO entirely (contract ⑦ item ④) and record nothing. Static mode's
+    // Pure observation (counters only). Static mode's
     // MEM traffic also flows through here and is accounted the same way --
     // the layer mirrors AnalyticalRemoteMemory's own port state exactly
     // (see Workload.hh for the single-server reconstruction argument).
@@ -575,8 +548,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
     // Step 1-8: online execution-driven calibration. The online GraphBatch
     // (graph_batch_builder.py) carries planner-LUT-aligned durations so the
-    // engine timeline is order-isomorphic to the replay's decision log
-    // (fail-closed order consumption, replay_source.py). The static .et
+    // engine timeline is order-isomorphic to the Python decision sequence
+    // (fail-closed order consumption). The static .et
     // path never sets runtime_ns (duration_micros=0, parsed as 0) and keeps
     // the roofline above -- byte-for-byte preserved. Same honor pattern as
     // issue_replay's runtime_ns branch.
@@ -611,27 +584,9 @@ void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
     if (node.is_cpu_op) {
         throw std::runtime_error("Comm node should not be on CPU");
     }
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        replay_clock_) {
-        // Step 1-8 (root-cause #3, main ruling 2026-08-15 -- replay scope
-        // only): the replay harness must reproduce the frozen offline
-        // timeline (方案 §5.2 oracle/replay 口径: 回放 decision_log, 离线
-        // 时序原样冻结, B1 含 tick 的 exact 只在此模式成立), and the
-        // offline LUT clock contains NO network time. Keeping the real
-        // network durations in the replay clock is provably order-breaking:
-        // decode windows as short as 4ms (session_5_request_0 /
-        // session_3_request_1, LUT 2173.6ms->2177.6ms) and 24ms gaps
-        // (session_4_request_0 -> session_2_request_0) vs. uncontended
-        // network residuals already at +23.5ms. Comm nodes therefore complete
-        // instantly (1ns General event); the normal dependency / terminal /
-        // issue-pass machinery is untouched. The network frontend stays fully
-        // wired for the static path and the strategy-mode real-online engine
-        // (:614, replay_clock_ == false).
-        WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
-        wlhd->node_id = node.global_id;
-        sys->register_event(this, EventType::General, wlhd, 1ul);
-        return;
-    }
+    // Path-2 removal (2026-08-18): the replay-only instant (1ns) comm
+    // completion branch was deleted with the replay route; strategy mode
+    // keeps the real network physics.
     const auto node_type = node.node_type;
     if (node_type == ChakraNodeType::COMM_COLL_NODE) {
         this->issue_coll_comm(node);
@@ -936,12 +891,11 @@ void Workload::call(EventType event, CallData* data) {
                 // completion record -- the port-FIFO completion callback
                 // registers the workload's own event back, so MEM_LOAD/
                 // MEM_STORE completions arrive through this generic terminal
-                // branch. Gated to the real-FIFO online path only (replay
-                // MEM completes instantly with no issue recorded -- contract
-                // ⑦ item ④); pure counter observation, no semantics.
-                if (!replay_clock_ &&
-                    (nv->kind == ExecutionDriven::NodeKind::MemLoad ||
-                     nv->kind == ExecutionDriven::NodeKind::MemStore)) {
+                // branch (real-FIFO online path; the replay bypass was
+                // deleted with the replay route, 2026-08-18); pure counter
+                // observation, no semantics.
+                if (nv->kind == ExecutionDriven::NodeKind::MemLoad ||
+                    nv->kind == ExecutionDriven::NodeKind::MemStore) {
                     ExecutionDriven::RemoteFifoLedger::instance()
                         .record_completion(sys->id, nv->compute.tensor_size);
                 }

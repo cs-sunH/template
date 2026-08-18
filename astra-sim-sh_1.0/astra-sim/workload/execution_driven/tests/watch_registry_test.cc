@@ -25,7 +25,7 @@ standalone test -- no network simulation, no baseline artifacts touched:
           notifier wiring exercised here via set_fire_notifier.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
-(build with bash sh_test_mesh/run_scripts/build_analytical_aware.sh).
+(build with cmake --build build/astra_analytical/build_congestion_aware -j).
 Run (from template/astra-sim-wscllm):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_WatchRegistryTest

@@ -10,12 +10,11 @@ unknown options are silently ignored with no strong-typed values, so the
 online entry must parse its own family explicitly:
 
   --online-mode=<mode>  required for the online binary (missing = hard error).
-                        <mode> is a token: "replay" (decision-log replay
-                        scheduler, step 1-8) or "strategy" (live WSC-LLM
-                        scheduler, step 1-9; parsed but the binary fails
-                        closed until that step lands). Inline "=" values are
-                        legal (--online-mode=replay); a separate value token
-                        is also accepted. Any other token is a hard error.
+                        <mode> is the token "strategy" (live scheduler;
+                        replay was removed with the replay route on
+                        2026-08-18). Inline "=" values are legal
+                        (--online-mode=strategy); a separate value token is
+                        also accepted. Any other token is a hard error.
   --request-queue-csv   optional path of the 8-column request queue CSV.
                         Request-neutral default: when absent the service
                         stays IDLE and reads no pre-loaded queue (the static
@@ -83,9 +82,9 @@ namespace AstraSim {
 namespace ExecutionDriven {
 
 struct OnlineCliOptions {
-    // Mode token: "" (unset), "replay", or "strategy". "" is rejected at the
-    // end of parse_online_cli; "strategy" is accepted by the parser but the
-    // main entry fails closed on it until step 1-9 lands.
+    // Mode token: "" (unset) or "strategy". "" is rejected at the end of
+    // parse_online_cli; "replay" is rejected since the path-2 removal
+    // (2026-08-18).
     std::string mode;
     bool close_input = false;
     std::string bridge_dir;

@@ -222,20 +222,19 @@ The source owns the boundary-selection policy, latency, and logical-pool name:
 The concrete edge list is derived from the repository-local mesh and the
 bandwidth is derived from the repository-local hardware source.
 
-## Static Chakra ET adaptation
+## Online execution adaptation (Chakra node semantics)
 
-FACE is a live host scheduler, while ASTRA-sim consumes a static Chakra ET DAG.
-The planner therefore computes mappings, HBM state transitions, session
-locations, FIFO evictions, and routes at trace-generation time, then encodes
-those decisions as dependencies in 54 rank traces.
+FACE is a live host scheduler. The online strategy routes compute mappings, HBM
+state transitions, session locations, FIFO evictions, and routes at each
+decision boundary, then emit the resulting per-rank graph batches to the
+execution-driven engine (54 ranks).
 
-The ET expresses remote store as NoC transfer, edge `MEM_STORE`, and completion
-ACK. Remote restore is expressed as edge `MEM_LOAD`, NoC delivery, and a
-dependency gate before compute. Prefill and Decode each add an explicit
-TP-group readiness collective after their KV preparation stage. These
-dependencies preserve the required ordering, but the result remains a
-static-trace approximation rather than a runtime scheduler that can revise a
-decision in response to simulated contention.
+The emitted graph expresses remote store as NoC transfer, edge `MEM_STORE`,
+and completion ACK. Remote restore is expressed as edge `MEM_LOAD`, NoC
+delivery, and a dependency gate before compute. Prefill and Decode each add an
+explicit TP-group readiness collective after their KV preparation stage. These
+dependencies preserve the required ordering while the online scheduler makes
+each decision at runtime.
 
 The default `trace_granularity=request_aggregated` folds repeated Transformer
 layers, Prefill chunks, and Decode steps into operator-category nodes. Aggregate
@@ -293,23 +292,38 @@ Generated runtime files (do not edit):
 
 ## Run and validate
 
-Run from the `astra-sim-sh` repository root:
+Run from the repository root. The online strategy routes are the supported
+pipeline (route 3 = strategy, route 4 = strategy + sensing). Inputs are
+materialized per `traces/PROVENANCE.md` (only allowed source:
+`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+produced by the materializer:
 
 ```bash
-python3 -m unittest sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py -v
-bash sh_test_mesh/run_scripts/generate_trace.sh
-bash sh_test_mesh/run_scripts/generate_trace.sh --jobs 8
-bash sh_test_mesh/run_scripts/run_sh_test_aware.sh
-bash sh_test_mesh/run_scripts/run_sh_test_unaware.sh
+# 1. materialize the 30s request-queue input (rules: traces/PROVENANCE.md)
+cd sh_test_mesh/workload/llama2_7b_inference
+python3 traces/derive_20_first_30_seconds.py \
+  /home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv traces/
+# 2. materialize the plan directory + runtime_config + face_lut.csv
+python3 plan_materializer.py
+cd ../../..
+# 3. online strategy (route 3) and sensing variant (route 4)
+bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <abs request_csv>
+bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <abs request_csv>
+# metrics post-processing of a run's cpp.log
+bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 ```
 
-Each generated directory contains 54 ET files, `manifest.json`, and
-`face_lut.csv`.
+Unit tests (workload layer + sh_test_mesh contracts):
+
+```bash
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd ../.. && python3 -m pytest tests/ -q
+```
+
+Each generated plan directory contains `manifest.json` (queue-derived 9
+fields), `metrics_manifest.json` (synthetic-prerun; rank attribution is
+placeholder), and `face_lut.csv` (contract-9 frozen LUT).
 
 Generated artifacts:
 
 `@sh_test_mesh/generated`
-
-Simulation logs:
-
-`@sh_test_mesh/results/run_logs`

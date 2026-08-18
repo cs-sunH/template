@@ -85,8 +85,7 @@ class Sys : public Callable {
         bool rendezvous_enabled,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static,
-        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr,
-        bool replay_clock = false);
+        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr);
     ~Sys();
     //---------------------------------------------------------------------------
 
@@ -277,8 +276,6 @@ class Sys : public Callable {
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
     // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
     // --online-mode replay; strategy mode keeps real physics (false).
-    bool replay_clock_ = false;
-
     // roofline model
     bool roofline_enabled;
     double peak_perf;

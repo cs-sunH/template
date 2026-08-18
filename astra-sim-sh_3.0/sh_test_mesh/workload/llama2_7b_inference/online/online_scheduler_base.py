@@ -244,10 +244,6 @@ class OnlineSchedulerBase:
                 self._batch["kv_actions"])
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
-        # B3 canonical dump hook (sh_3.0; None in production): receives the
-        # full built batch for the canonical comparator.
-        if getattr(self, "batch_sink", None) is not None:
-            self.batch_sink(batch)
         # 阶段 4 §7.3:本决策批扫描条目数入 profile。
         self.profile_rows.append({
             "delivery_sequence": delivery_sequence,

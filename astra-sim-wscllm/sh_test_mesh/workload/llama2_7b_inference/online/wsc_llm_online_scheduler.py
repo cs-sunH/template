@@ -766,7 +766,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         offline: wsc_llm_scheduler.py:1927-1952(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
-        members = self.graph.emit_prefill_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_prefill_batch(plan)
         # 阶段 3 感知账本:本批次发射记录(prefill 阶段;commit ack 到达后
         # 转移入 committed 层)。
         self._note_emitted(runtime.request_id, STAGE_PREFILL)
@@ -823,7 +823,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         offline: wsc_llm_scheduler.py:1953-1973(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
-        members = self.graph.emit_decode_batch(plan, phase_duration_ns=0)
+        members = self.graph.emit_decode_batch(plan)
         # 阶段 3 感知账本:本批次发射记录(decode 阶段)。
         self._note_emitted(runtime.request_id, STAGE_DECODE)
         # 阶段 7 §10.1:issued 层登记(已发射未完成;decode 段条目,prefill

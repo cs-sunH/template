@@ -238,7 +238,7 @@ def resolve_metrics_detail(
     cli_value: Optional[str], environ: Mapping[str, str]
 ) -> str:
     """Resolve the generator metrics switch: CLI > METRICS_DETAIL >
-    ENABLE_METRICS > default on/full (aligned with run_sh_test_aware.sh)."""
+    ENABLE_METRICS > default on/full (aligned with the online runner metrics switch)."""
 
     detail = cli_value if cli_value is not None else environ.get("METRICS_DETAIL")
     if detail is None:
