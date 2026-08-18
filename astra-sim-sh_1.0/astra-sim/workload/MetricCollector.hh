@@ -52,6 +52,59 @@ class MetricCollector {
     void on_node_issue(int rank, uint64_t node_id, Tick tick);
     void on_node_complete(int rank, uint64_t node_id, Tick tick);
 
+    // ---------------------------------------------------------------------
+    // Phase-7 §10.3: online dynamic anchor registration (plan step 1-8
+    // contract ⑤/⑥, implemented at phase 7).
+    //
+    // The static manifest's sparse node events only match the offline
+    // per-rank node-id sequence. The online dynamic graph emits per-rank
+    // node ids in the online emission order, which interleaves requests
+    // across stages, so most boundary nodes do not match the static table
+    // (measured: 708/1177 requests got a completion anchor). The online
+    // driver therefore registers the anchors dynamically, BEFORE the nodes
+    // are issued, from the same data it commits:
+    //   - online_register_request: one call per request-queue CSV data row
+    //     at load time (turn-0 rows carry an ABSOLUTE arrival; turn>0 rows
+    //     arrive AFTER_REQUEST, parent = previous same-session row);
+    //   - online_register_ranks: the watch member sets (prefill/decode);
+    //   - online_register_node_anchor: for every (rank, request, stage)
+    //     group the FIRST node is the start anchor (issue event) and the
+    //     LAST is the end anchor (complete event); transfer nodes of the
+    //     KV routes (node names contain "kv") register the memory anchor
+    //     (code 7) on the last transfer node of each (request, rank) --
+    //     the offline doc-sec.4.3 semantics.
+    // Registration is idempotent: re-registering an existing (request,
+    // rank, node, event) is a no-op, and re-registering a request updates
+    // only missing fields (the online CSV data is authoritative for
+    // arrival/session fields; rank sets merge). No registered anchor ever
+    // makes the static path observable: all three entry points no-op when
+    // metrics are disabled, and the static main never calls them.
+    // Phase-7 §10.3: the online driver runs the collector against the live
+    // dynamic graph. The manifest's static node-event table is keyed by the
+    // OFFLINE ET's global node-id space, which overlaps the online per-rank
+    // id space (measured: online ids 0..7733 vs static ids 1..8000+), so
+    // static events would fire on unrelated online nodes and corrupt every
+    // request state. The online main therefore clears the static tables
+    // right after initialize() and lets the dynamic anchors fully own the
+    // event tables. The offline static main never calls this; the static
+    // [METRIC] bytes are untouched.
+    void clear_static_node_events();
+
+    void online_register_request(int64_t queue_index,
+                                 const std::string& request_id,
+                                 const std::string& session_id,
+                                 int64_t turn_index,
+                                 bool absolute_arrival,
+                                 Tick arrival_value_ns,
+                                 int64_t arrival_parent_queue_index,
+                                 Tick arrival_interval_ns);
+    void online_register_ranks(const std::string& request_id, bool prefill,
+                               const std::vector<int>& ranks);
+    void online_register_node_anchor(int rank, uint64_t node_id,
+                                     const std::string& request_id,
+                                     const std::string& kind,
+                                     bool transfer_anchor);
+
     // Side-band accumulation of executed GPU compute node FLOPs and local
     // tensor bytes (values already read by Workload::issue_comp).
     void on_compute_issue(int rank,
@@ -65,6 +118,37 @@ class MetricCollector {
     // Compute and print all metric records. Called after the event loop,
     // before systems are deleted. No-op when disabled.
     void finalize(const std::vector<Sys*>& systems, Tick sim_end_tick);
+
+    // Phase-0 performance counter framework (plan step 0-7; 总改造计划 §6
+    // 阶段 0): named per-category counters for the stage-6/7 accounting.
+    // Default OFF and never serialized into any [METRIC] record.  Offline
+    // static-ET runs never exercise these mechanisms, so every counter stays
+    // 0 and [METRIC] output is byte-identical to a build without this
+    // framework; stage 6/7 may opt in per category without touching the
+    // static baseline bytes.
+    struct PerformanceCounters {
+      uint64_t callback_count = 0;        // Python decision callbacks
+      uint64_t poll_count = 0;            // completion polling hits
+      uint64_t bridge_bytes = 0;          // Python<->C++ bridge payload bytes
+      uint64_t gil_contention_ns = 0;     // GIL wait time in the bridge
+      uint64_t log_bytes = 0;             // decision/audit log bytes written
+      uint64_t node_completion_count = 0; // node completion events observed
+      uint64_t reader_window_events = 0;  // ingress reader window events
+      uint64_t backpressure_events = 0;   // backpressure/watermark hits
+      uint64_t batch_count = 0;           // decision batches committed
+    };
+
+    void enable_counters() {
+      this->counters_enabled_ = true;
+    }
+
+    bool counters_enabled() const {
+      return this->counters_enabled_;
+    }
+
+    const PerformanceCounters& counters() const {
+      return this->counters_;
+    }
 
   private:
     MetricCollector() = default;
@@ -201,6 +285,9 @@ class MetricCollector {
 
     bool enabled_ = false;
     std::string detail_level_ = "off";
+    // Phase-0 counters (plan step 0-7): opt-in, default off, never emitted.
+    bool counters_enabled_ = false;
+    PerformanceCounters counters_;
 
     // Manifest metadata.
     int schema_version_ = 0;
@@ -214,6 +301,10 @@ class MetricCollector {
 
     std::vector<RequestMetricState> requests_;
     std::unordered_map<int64_t, size_t> request_index_by_queue_index_;
+    // Phase-7 §10.3: request_id -> requests_ index, populated by the online
+    // dynamic registration path (the online driver registers node/rank
+    // anchors by request_id, which is what the committed nodes carry).
+    std::unordered_map<std::string, size_t> request_index_by_request_id_;
     std::map<int64_t, IterationMetricState> iterations_;
     std::vector<MemoryAnchorTick> memory_anchor_ticks_;
     std::vector<MemoryAction> memory_actions_;

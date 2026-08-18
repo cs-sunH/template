@@ -148,6 +148,99 @@ bool HardwareResource::is_available(
     }
 }
 
+
+// ---------------------------------------------------------- NodeView (§4.3.3)
+
+void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
+    if (node.is_timer_op) {
+        return;
+    }
+    if (node.is_local_hbm_kv_restore) {
+        // sh_2.0 fourth resource class (hbm_dma restore DMA). Count-based:
+        // the replay bypass (Workload::issue_dep_free_nodes, replay scope
+        // only) issues MEM nodes concurrently past the single-slot gate; the
+        // strategy/online non-replay path still serializes through
+        // is_available below. The static ETFeederNode path keeps its
+        // single-slot assert (static mode never runs concurrent DMA).
+        ++num_in_flight_hbm_dma_ops;
+        ++num_hbm_dma_ops;
+        hbm_dma_ops_node.emplace(node.global_id);
+        return;
+    }
+    if (node.is_cpu_op) {
+        assert(num_in_flight_cpu_ops == 0);
+        ++num_in_flight_cpu_ops;
+        ++num_cpu_ops;
+        cpu_ops_node.emplace(node.global_id);
+    } else {
+        if (node.kind == ExecutionDriven::NodeKind::Compute) {
+            // Calibrated COMP chains run concurrently in online mode
+            // (self-timed chains, gate bypassed in
+            // Workload::issue_dep_free_nodes) -- the in-flight counter is a
+            // count, not a single slot. The static ETFeederNode path above
+            // keeps its single-slot assert.
+            ++num_in_flight_gpu_comp_ops;
+            ++num_gpu_ops;
+            gpu_ops_node.emplace(node.global_id);
+        } else {
+            if (node.kind == ExecutionDriven::NodeKind::CommRecv) {
+                return;
+            }
+            assert(num_in_flight_gpu_comm_ops == 0);
+            ++num_in_flight_gpu_comm_ops;
+            ++num_gpu_comms;
+            gpu_comms_node.emplace(node.global_id);
+        }
+    }
+}
+
+void HardwareResource::release(const ExecutionDriven::NodeView& node) {
+    if (node.is_timer_op) {
+        return;
+    }
+    if (node.is_local_hbm_kv_restore) {
+        --num_in_flight_hbm_dma_ops;
+        hbm_dma_ops_node.erase(node.global_id);
+        return;
+    }
+    if (node.is_cpu_op) {
+        --num_in_flight_cpu_ops;
+        assert(num_in_flight_cpu_ops == 0);
+        this->cpu_ops_node.erase(node.global_id);
+    } else {
+        if (node.kind == ExecutionDriven::NodeKind::Compute) {
+            --num_in_flight_gpu_comp_ops;
+            this->gpu_ops_node.erase(node.global_id);
+        } else {
+            if (node.kind == ExecutionDriven::NodeKind::CommRecv) {
+                return;
+            }
+            --num_in_flight_gpu_comm_ops;
+            assert(num_in_flight_gpu_comm_ops == 0);
+            this->gpu_comms_node.erase(node.global_id);
+        }
+    }
+}
+
+bool HardwareResource::is_available(const ExecutionDriven::NodeView& node) const {
+    if (node.is_timer_op) {
+        return true;
+    }
+    if (node.is_local_hbm_kv_restore) {
+        return num_in_flight_hbm_dma_ops == 0;
+    }
+    if (node.is_cpu_op) {
+        return num_in_flight_cpu_ops == 0;
+    }
+    if (node.kind == ExecutionDriven::NodeKind::Compute) {
+        return num_in_flight_gpu_comp_ops == 0;
+    }
+    if (node.kind == ExecutionDriven::NodeKind::CommRecv) {
+        return true;
+    }
+    return num_in_flight_gpu_comm_ops == 0;
+}
+
 void HardwareResource::report() {
     cout << "num_cpu_ops: " << num_cpu_ops << endl;
     cout << "num_gpu_ops: " << num_gpu_ops << endl;

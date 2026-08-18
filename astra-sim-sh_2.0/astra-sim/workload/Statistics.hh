@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+#include "astra-sim/workload/execution_driven/GraphSource.hh"
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
@@ -25,6 +26,12 @@ class Statistics {
         enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, REPLAY, INVALID };
         static OperatorType get_operator_type(
             const std::shared_ptr<Chakra::ETFeederNode> node);
+        // Step 1-8: online-mode overload dispatching on the NodeView fields
+        // (kind / is_cpu_op) with the same mapping as the ETFeederNode
+        // version: MemLoad/MemStore -> REMOTE_MEM, Compute -> CPU/GPU by
+        // is_cpu_op, CommSend/CommRecv/CommCollective -> COMM, else INVALID.
+        static OperatorType get_operator_type(
+            const ExecutionDriven::NodeView& node);
         OperatorStatistics(NodeId node_id,
                            Tick start_time,
                            Tick end_time,
@@ -79,6 +86,13 @@ class Statistics {
                       Tick start_time);
 
     void record_end(std::shared_ptr<Chakra::ETFeederNode> node, Tick end_time);
+
+    // Step 1-8: online-mode overloads keyed by NodeView::global_id (the
+    // static ETFeederNode path stays byte-exact for the baseline). The
+    // online path (GraphSource::et_node == nullptr) routes here.
+    void record_start(const ExecutionDriven::NodeView& node, Tick start_time);
+
+    void record_end(const ExecutionDriven::NodeView& node, Tick end_time);
 
     // Read-only accessors for side-band metric computation (doc sec.5.7).
     // Valid after post_processing() has run. They only scan existing

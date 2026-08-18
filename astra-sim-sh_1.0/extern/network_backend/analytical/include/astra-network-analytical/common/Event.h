@@ -27,6 +27,7 @@ class Event {
      * Invoke the callback function.
      */
     void invoke_event() noexcept;
+    void* invoke_event_ptr() const noexcept { return (void*)callback; }
 
     /**
      * Get the callback function and the argument.

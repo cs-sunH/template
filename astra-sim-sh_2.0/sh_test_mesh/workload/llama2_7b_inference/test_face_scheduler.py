@@ -104,6 +104,13 @@ def line_topology() -> tuple[FaceHardware, object]:
 
 
 class FaceSchedulerTests(unittest.TestCase):
+    # request-neutral（裸仓库还原，2026-08-16）：物化输入删除后这两个
+    # config 依赖用例跳过——按 traces/PROVENANCE.md 物化输入后自动恢复。
+    _MATERIALIZED = (
+        MODULE_DIR / "traces" /
+        "astra_compute_20_first_30_seconds_request_queue.csv"
+    ).is_file()
+
     @staticmethod
     def _request(
         session_id: str,
@@ -164,6 +171,10 @@ class FaceSchedulerTests(unittest.TestCase):
             ),
         )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_shell_config_does_not_build_full_face_plan(self) -> None:
         config = load_face_trace_config()
         output = io.StringIO()
@@ -180,10 +191,10 @@ class FaceSchedulerTests(unittest.TestCase):
         ):
             generate_face_trace_main(["--print-shell-config"])
         assignments = output.getvalue()
-        self.assertIn("REQUEST_COUNT=2091\n", assignments)
-        self.assertIn("SESSION_COUNT=136\n", assignments)
+        self.assertIn("REQUEST_COUNT=1177\n", assignments)
+        self.assertIn("SESSION_COUNT=112\n", assignments)
         self.assertIn("PREFILL_CHUNK_SIZE=512\n", assignments)
-        self.assertIn("PREFILL_RANGE=3-158929\n", assignments)
+        self.assertIn("PREFILL_RANGE=3-53924\n", assignments)
 
     def test_prefill_work_derivation_matches_prefix_reuse_rules(self) -> None:
         requests = (
@@ -387,6 +398,10 @@ class FaceSchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mesh-shape"):
                 load_remote_memory_config(source, 4, mesh_shape=(2, 2))
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_checked_in_astra_compute_selection_uses_three_minute_window(
         self,
     ) -> None:
@@ -403,33 +418,33 @@ class FaceSchedulerTests(unittest.TestCase):
             (config.layers, config.hidden_size, config.ffn_size, config.num_heads, config.vocab_size),
             (32, 4096, 11008, 32, 32000),
         )
+        # Execution-Driven 改造 步骤 0-1/0-6: simulation input is the
+        # materialized 20.csv first-30-seconds window (user directive
+        # 2026-08-15); expectations updated to the materialized values.
         expected_request_queue = (
-            MODULE_DIR.parents[3]
-            / "agent-traces"
-            / "TraceLab_ASTRA_WSC_empirical_arrival_compute_20_50_v1"
-            / "derived"
-            / "compute_20_first_3_minutes"
-            / "astra_compute_20_first_3_minutes_request_queue.csv"
+            MODULE_DIR
+            / "traces"
+            / "astra_compute_20_first_30_seconds_request_queue.csv"
         ).resolve()
         self.assertEqual(config.request_queue_csv, expected_request_queue)
         self.assertIsNone(config.request_queue_context_csv)
         self.assertEqual(config.request_queue_session_limit, 0)
         self.assertEqual(config.trace_granularity, "request_aggregated")
-        self.assertEqual(config.source_request_count, 2091)
-        self.assertEqual(config.source_session_count, 136)
-        self.assertEqual(len(config.request_queue), 2091)
-        self.assertEqual(len(config.selected_session_ids), 136)
+        self.assertEqual(config.source_request_count, 1177)
+        self.assertEqual(config.source_session_count, 112)
+        self.assertEqual(len(config.request_queue), 1177)
+        self.assertEqual(len(config.selected_session_ids), 112)
         self.assertEqual(
             config.selected_session_ids[:5],
-            ("0", "1", "2", "3", "4"),
+            ("session_0", "session_1", "session_2", "session_3", "session_4"),
         )
         self.assertEqual(
             config.selected_session_ids[-5:],
-            ("131", "132", "133", "134", "135"),
+            ("session_107", "session_108", "session_109", "session_110", "session_111"),
         )
         self.assertEqual(
             {request.session_id for request in config.request_queue},
-            {str(index) for index in range(136)},
+            {f"session_{index}" for index in range(112)},
         )
         self.assertTrue(
             all(request.prefix_tokens is None for request in config.request_queue)
@@ -440,7 +455,7 @@ class FaceSchedulerTests(unittest.TestCase):
         first_request_indexes: dict[str, int] = {}
         for index, request in enumerate(config.request_queue):
             first_request_indexes.setdefault(request.session_id, index)
-        self.assertEqual(len(first_request_indexes), 136)
+        self.assertEqual(len(first_request_indexes), 112)
         for index in first_request_indexes.values():
             request = config.request_queue[index]
             self.assertEqual(request.turn_index, 0)
@@ -461,14 +476,14 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(PREFILL_CHUNK_SIZE, 512)
         self.assertAlmostEqual(
             config.source_average_decode_length,
-            460.72549019607845,
+            459.4944774851317,
         )
-        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (3, 158929))
-        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 32000))
-        self.assertEqual(len(arrival_times), 136)
+        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (3, 53924))
+        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 13812))
+        self.assertEqual(len(arrival_times), 112)
         self.assertEqual(
             (min(arrival_times), max(arrival_times)),
-            (94835000, 177443874000),
+            (94835000, 25959142000),
         )
         request_arrivals: dict[str, int] = {}
         for request in config.request_queue:
@@ -484,9 +499,13 @@ class FaceSchedulerTests(unittest.TestCase):
                 )
             self.assertIsNotNone(request_arrival)
             request_arrivals[request.session_id] = request_arrival
-        self.assertEqual(max(request_arrivals.values()), 179719786000)
-        self.assertLessEqual(max(request_arrivals.values()), 180000000000)
+        self.assertEqual(max(request_arrivals.values()), 29988879000)
+        self.assertLessEqual(max(request_arrivals.values()), 30000000000)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_face_trace_config()
         attention_heads = tuple(
@@ -1088,6 +1107,10 @@ class FaceSchedulerTests(unittest.TestCase):
             (2, 4),
         )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_default_config_uses_hbm160_edge_pool_and_one_million_reserve(self) -> None:
         config = load_face_trace_config()
         self.assertEqual(
@@ -1149,6 +1172,10 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertEqual(system_raw["hbm-kv-restore-bandwidth-sharing"], 1)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_et_kv_migration_ack_and_cross_instance_store_trigger(self) -> None:
         config = load_face_trace_config()
         group_by_index = dict(enumerate(config.inference_groups))
@@ -1272,6 +1299,10 @@ class FaceSchedulerTests(unittest.TestCase):
             noc_builders[2].nodes[1].data_deps,
         )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_tp_readiness_barrier_waits_for_every_rank_local_predecessor(self) -> None:
         config = load_face_trace_config()
         group = config.inference_groups[0]
@@ -1313,6 +1344,10 @@ class FaceSchedulerTests(unittest.TestCase):
             first_compute = builders[rank].nodes[-1]
             self.assertIn(barrier.id, first_compute.data_deps)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_remote_suffix_load_emits_target_hbm_dma_and_branch_gate(self) -> None:
         config = load_face_trace_config()
         group_by_index = dict(enumerate(config.inference_groups))
@@ -1794,6 +1829,10 @@ class FaceSchedulerTests(unittest.TestCase):
                 reserve_context_tokens=0,
             )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_checked_in_shape_and_requests_plan_deterministically(self) -> None:
         config = load_face_trace_config()
         hardware = config.hardware

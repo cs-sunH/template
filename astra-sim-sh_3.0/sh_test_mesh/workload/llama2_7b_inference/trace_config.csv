@@ -9,8 +9,8 @@ config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
 config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
 config,output_prefix,llama2_7b_inference,,,,Trace file prefix
 config,output_dir,,,,,Leave empty for derived sh_test generated path
-config,request_queue_csv,../../../agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_20_50_v1/derived/compute_20_first_10_minutes/astra_compute_20_first_10_minutes_request_queue.csv,,,,Only requests with derived source arrival_time <= 600000000000 ns from astra_compute_20.csv
-config,request_queue_context_csv,,,,,Do not load source prefix context: each session's first request observable in the three-minute window starts with no history
+config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方按方案文档 §3 步骤 0-1 物化输入（sidecar_restore 三件套）后指定;正式入口缺失输入 fail-closed
+config,request_queue_context_csv,,,,,Prefix sidecar slot (sh_3.0 sidecar_restore): 与 request_queue_csv 一并由调用方物化后指定;为空 = 不加载 sidecar
 config,request_queue_session_limit,0,,,,Select every session already represented by the strict request-level window
 config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations
 config,kv_reserve_context_tokens,1000000,,,,Reserve local HBM capacity for a complete one-million-token KV cache shard before retaining historical KV locally

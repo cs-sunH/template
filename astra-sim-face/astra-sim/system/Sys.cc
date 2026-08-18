@@ -8,6 +8,8 @@ LICENSE file in the root directory of this source tree.
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <utility>
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/BaseStream.hh"
@@ -148,7 +150,14 @@ Sys::Sys(int id,
          vector<int> queues_per_dim,
          double injection_scale,
          double comm_scale,
-         bool rendezvous_enabled) {
+         bool rendezvous_enabled,
+         ExecutionDriven::ExecutionMode execution_mode,
+         std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
+         bool replay_clock) {
+    this->execution_mode_ = execution_mode;
+    this->graph_source_ = std::move(graph_source);
+    this->replay_clock_ = replay_clock;
+
     if ((id + 1) > this->all_sys.size()) {
         this->all_sys.resize(id + 1);
     }
@@ -256,8 +265,19 @@ Sys::Sys(int id,
     memBus = new MemBus("NPU", "MA", this, inp_L, inp_o, inp_g, inp_G,
                         model_shared_bus, communication_delay, true);
 
-    workload =
-        new Workload(this, workload_configuration, comm_group_configuration);
+    // step-1-2 execution-mode factory: online mode injects the dynamic
+    // GraphSource at Sys creation (never constructs the ETFeeder, never
+    // requires .et files); the static path stays byte-for-byte unchanged.
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
+        workload =
+            new Workload(this, workload_configuration,
+                         comm_group_configuration, execution_mode_,
+                         graph_source_, replay_clock_);
+    } else {
+        workload =
+            new Workload(this, workload_configuration,
+                         comm_group_configuration);
+    }
 
     if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
         inter_dimension_scheduling ==

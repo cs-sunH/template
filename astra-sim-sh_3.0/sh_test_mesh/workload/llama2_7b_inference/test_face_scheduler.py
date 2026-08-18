@@ -103,6 +103,91 @@ def line_topology() -> tuple[FaceHardware, object]:
     return hardware, topology
 
 
+# ---------------------------------------------------------------------------
+# request-neutral 合成 fixture（裸仓库不物化输入；计数只反映 fixture 自身，
+# 不依赖任何真实 trace 数据——方案 §3 步骤 0-1 / face/wscllm 收尾先例）。
+# sh_3.0 = sidecar_restore 变体：合成队列之外还需 context sidecar（每请求
+# prefix_tokens/input_tokens_total，满足 input_tokens_total ==
+# prefix_tokens + prefill_length）。
+# ---------------------------------------------------------------------------
+SYNTHETIC_QUEUE_ROWS = (
+    ("fixture_s0", "0", "fixture_s0_r0", "100", "5", "0", "", "synthetic fixture"),
+    ("fixture_s1", "0", "fixture_s1_r0", "200", "6", "0", "", "synthetic fixture"),
+    ("fixture_s2", "0", "fixture_s2_r0", "300", "7", "0", "", "synthetic fixture"),
+    ("fixture_s3", "0", "fixture_s3_r0", "400", "8", "0", "", "synthetic fixture"),
+    ("fixture_s4", "0", "fixture_s4_r0", "500", "9", "0", "", "synthetic fixture"),
+    ("fixture_s5", "0", "fixture_s5_r0", "600", "10", "0", "", "synthetic fixture"),
+    ("fixture_s6", "0", "fixture_s6_r0", "700", "11", "0", "", "synthetic fixture"),
+    ("fixture_s7", "0", "fixture_s7_r0", "800", "12", "0", "", "synthetic fixture"),
+    ("fixture_s0", "1", "fixture_s0_r1", "50", "4", "", "1000", "synthetic fixture"),
+    ("fixture_s1", "1", "fixture_s1_r1", "60", "5", "", "2000", "synthetic fixture"),
+)
+# context sidecar：turn-0 prefix 常驻；turn>0 prefix = 该 session 上一请求
+# 的 final context（prefill+decode）——与真实派生规则同构。
+SYNTHETIC_CONTEXT_ROWS = (
+    ("fixture_s0", "0", "fixture_s0_r0", "100", "200"),
+    ("fixture_s1", "0", "fixture_s1_r0", "200", "400"),
+    ("fixture_s2", "0", "fixture_s2_r0", "300", "600"),
+    ("fixture_s3", "0", "fixture_s3_r0", "400", "800"),
+    ("fixture_s4", "0", "fixture_s4_r0", "500", "1000"),
+    ("fixture_s5", "0", "fixture_s5_r0", "600", "1200"),
+    ("fixture_s6", "0", "fixture_s6_r0", "700", "1400"),
+    ("fixture_s7", "0", "fixture_s7_r0", "800", "1600"),
+    ("fixture_s0", "1", "fixture_s0_r1", "105", "155"),
+    ("fixture_s1", "1", "fixture_s1_r1", "206", "266"),
+)
+
+_FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="sh30_test_fixture_")
+
+
+def _write_synthetic_inputs() -> tuple[Path, Path]:
+    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    queue_path.write_text(
+        "session_id,turn_index,request_id,prefill_length,decode_length,"
+        "session_arrival_time_ns,inter_request_interval_ns,description\n"
+        + "\n".join(",".join(row) for row in SYNTHETIC_QUEUE_ROWS)
+        + "\n",
+        encoding="utf-8",
+    )
+    context_path = Path(_FIXTURE_DIR.name) / "synthetic_request_context.csv"
+    context_path.write_text(
+        "session_id,turn_index,request_id,prefix_tokens,input_tokens_total\n"
+        + "\n".join(",".join(row) for row in SYNTHETIC_CONTEXT_ROWS)
+        + "\n",
+        encoding="utf-8",
+    )
+    return queue_path, context_path
+
+
+def load_checked_in_fixture_config() -> object:
+    """request-neutral fixture：checked-in 配置 + 手写合成队列/上下文
+    sidecar（一次性物化）。相对路径解析与 checked-in 配置一致；仅输入
+    队列与 sidecar 槽位替换为合成数据。"""
+    queue_path, context_path = _write_synthetic_inputs()
+    config_path = Path(_FIXTURE_DIR.name) / "trace_config.csv"
+    lines = []
+    for raw_line in (MODULE_DIR / "trace_config.csv").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if raw_line.startswith("config,request_queue_csv,"):
+            lines.append(
+                "config,request_queue_csv,"
+                + str(queue_path)
+                + ",,,,request-neutral synthetic fixture queue (unit test)"
+            )
+        elif raw_line.startswith("config,request_queue_context_csv,"):
+            lines.append(
+                "config,request_queue_context_csv,"
+                + str(context_path)
+                + ",,,,request-neutral synthetic fixture sidecar (unit test)"
+            )
+        else:
+            lines.append(raw_line)
+    if not config_path.exists():
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return load_face_trace_config(config_path)
+
+
 def center_topology(capacity_bytes: int = 10_000) -> tuple[FaceHardware, object]:
     """3×3 mesh tiled as nine single-NPU instances.
 
@@ -192,7 +277,9 @@ class FaceSchedulerTests(unittest.TestCase):
         )
 
     def test_shell_config_does_not_build_full_face_plan(self) -> None:
-        config = load_face_trace_config()
+        # request-neutral：合成 fixture 队列的计数只反映 fixture 自身
+        # （裸仓库不物化输入，见方案 §3 步骤 0-1 收尾先例）。
+        config = load_checked_in_fixture_config()
         output = io.StringIO()
         with (
             patch(
@@ -207,10 +294,10 @@ class FaceSchedulerTests(unittest.TestCase):
         ):
             generate_face_trace_main(["--print-shell-config"])
         assignments = output.getvalue()
-        self.assertIn("REQUEST_COUNT=2091\n", assignments)
-        self.assertIn("SESSION_COUNT=136\n", assignments)
+        self.assertIn("REQUEST_COUNT=10\n", assignments)
+        self.assertIn("SESSION_COUNT=8\n", assignments)
         self.assertIn("PREFILL_CHUNK_SIZE=512\n", assignments)
-        self.assertIn("PREFILL_RANGE=3-158929\n", assignments)
+        self.assertIn("PREFILL_RANGE=50-1600\n", assignments)
 
     def test_prefill_work_derivation_matches_prefix_reuse_rules(self) -> None:
         requests = (
@@ -414,10 +501,13 @@ class FaceSchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mesh-shape"):
                 load_remote_memory_config(source, 4, mesh_shape=(2, 2))
 
-    def test_checked_in_astra_compute_selection_uses_three_minute_window(
+    def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(
         self,
     ) -> None:
-        config = load_face_trace_config()
+        """checked-in 配置 = request-neutral（占位队列路径，不绑定任何
+        默认 request 队列）+ 缺失输入 fail-closed + 配置字段语义（拓扑/
+        模型/硬件；计数只反映合成 fixture，见方案 §3 步骤 0-1 收尾先例）。"""
+        config = load_checked_in_fixture_config()
         self.assertEqual(config.model_name, "llama2_7b")
         self.assertEqual(config.mlp_variant, "swiglu")
         self.assertEqual(config.npus_count, 54)
@@ -430,44 +520,47 @@ class FaceSchedulerTests(unittest.TestCase):
             (config.layers, config.hidden_size, config.ffn_size, config.num_heads, config.vocab_size),
             (32, 4096, 11008, 32, 32000),
         )
-        expected_request_queue = (
-            MODULE_DIR.parents[3]
-            / "agent-traces"
-            / "TraceLab_ASTRA_WSC_empirical_arrival_compute_20_50_v1"
-            / "derived"
-            / "compute_20_first_3_minutes"
-            / "astra_compute_20_first_3_minutes_request_queue.csv"
-        ).resolve()
-        self.assertEqual(config.request_queue_csv, expected_request_queue)
-        self.assertIsNone(config.request_queue_context_csv)
+        self.assertEqual(config.request_queue_csv.name,
+                         "synthetic_request_queue.csv")
+        self.assertEqual(config.request_queue_context_csv.name,
+                         "synthetic_request_context.csv")
         self.assertEqual(config.request_queue_session_limit, 0)
         self.assertEqual(config.trace_granularity, "request_aggregated")
-        self.assertEqual(config.source_request_count, 2091)
-        self.assertEqual(config.source_session_count, 136)
-        self.assertEqual(len(config.request_queue), 2091)
-        self.assertEqual(len(config.selected_session_ids), 136)
+        self.assertEqual(config.source_request_count, 10)
+        self.assertEqual(config.source_session_count, 8)
+        self.assertEqual(len(config.request_queue), 10)
+        self.assertEqual(len(config.selected_session_ids), 8)
         self.assertEqual(
             config.selected_session_ids[:5],
-            ("0", "1", "2", "3", "4"),
+            ("fixture_s0", "fixture_s1", "fixture_s2", "fixture_s3",
+             "fixture_s4"),
         )
         self.assertEqual(
             config.selected_session_ids[-5:],
-            ("131", "132", "133", "134", "135"),
+            ("fixture_s3", "fixture_s4", "fixture_s5", "fixture_s6",
+             "fixture_s7"),
         )
         self.assertEqual(
             {request.session_id for request in config.request_queue},
-            {str(index) for index in range(136)},
+            {f"fixture_s{index}" for index in range(8)},
         )
         self.assertTrue(
-            all(request.prefix_tokens is None for request in config.request_queue)
+            all(request.prefix_tokens is not None for request in config.request_queue)
         )
         self.assertTrue(
-            all(request.input_tokens_total is None for request in config.request_queue)
+            all(request.input_tokens_total is not None for request in config.request_queue)
+        )
+        self.assertTrue(
+            all(
+                request.input_tokens_total
+                == request.prefix_tokens + request.prefill_length
+                for request in config.request_queue
+            )
         )
         first_request_indexes: dict[str, int] = {}
         for index, request in enumerate(config.request_queue):
             first_request_indexes.setdefault(request.session_id, index)
-        self.assertEqual(len(first_request_indexes), 136)
+        self.assertEqual(len(first_request_indexes), 8)
         for index in first_request_indexes.values():
             request = config.request_queue[index]
             self.assertEqual(request.turn_index, 0)
@@ -476,7 +569,7 @@ class FaceSchedulerTests(unittest.TestCase):
         for index in first_request_indexes.values():
             self.assertEqual(
                 prefill_work_tokens[index],
-                config.request_queue[index].prefill_length,
+                config.request_queue[index].input_tokens_total,
             )
         prefill_lengths = [request.prefill_length for request in config.request_queue]
         decode_lengths = [request.decode_length for request in config.request_queue]
@@ -488,15 +581,12 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(PREFILL_CHUNK_SIZE, 512)
         self.assertAlmostEqual(
             config.source_average_decode_length,
-            460.72549019607845,
+            7.7,
         )
-        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (3, 158929))
-        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 32000))
-        self.assertEqual(len(arrival_times), 136)
-        self.assertEqual(
-            (min(arrival_times), max(arrival_times)),
-            (94835000, 177443874000),
-        )
+        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (50, 800))
+        self.assertEqual((min(decode_lengths), max(decode_lengths)), (4, 12))
+        self.assertEqual(len(arrival_times), 8)
+        self.assertEqual(min(arrival_times), 0)
         request_arrivals: dict[str, int] = {}
         for request in config.request_queue:
             if request.turn_index == 0:
@@ -511,11 +601,42 @@ class FaceSchedulerTests(unittest.TestCase):
                 )
             self.assertIsNotNone(request_arrival)
             request_arrivals[request.session_id] = request_arrival
-        self.assertEqual(max(request_arrivals.values()), 179719786000)
-        self.assertLessEqual(max(request_arrivals.values()), 180000000000)
+        self.assertEqual(max(request_arrivals.values()), 2000)
+        self.assertLess(max(request_arrivals.values()), 10**9)
+        # checked-in 配置本体 = 双态（backport re-verification 2026-08-16
+        # 改为状态感知，与 sh_2.0 仓 skipUnless fixture 化同款语义）：
+        #  - 裸仓库态：request_queue_csv 是占位路径（不物化任何默认队列），
+        #    且占位路径不存在时正式入口 sys.exit(1)（fail-closed，不落随机
+        #    stub 队列）；
+        #  - 20.csv 前 30s 物化输入在位（traces/ 三件套，PROVENANCE 重建
+        #    入口）：:12/:13 指向物化 queue + context sidecar，正式入口
+        #    正常解析 1177 请求 / 112 session（sidecar_restore 生效）。
+        checked_in_text = (MODULE_DIR / "trace_config.csv").read_text(
+            encoding="utf-8")
+        queue_line = next(
+            line for line in checked_in_text.splitlines()
+            if line.startswith("config,request_queue_csv,")
+        )
+        materialized_queue = (
+            MODULE_DIR / "traces"
+            / "astra_compute_20_first_30_seconds_request_queue.csv"
+        )
+        if materialized_queue.is_file():
+            self.assertIn("traces/astra_compute_20_first_30_seconds_request_queue.csv", queue_line)
+            materialized_config = load_face_trace_config(
+                MODULE_DIR / "trace_config.csv")
+            self.assertEqual(materialized_config.source_request_count, 1177)
+            self.assertEqual(materialized_config.source_session_count, 112)
+        else:
+            self.assertIn("request_queue_placeholder.csv", queue_line)
+            # fail-closed：占位路径不存在时正式入口 sys.exit(1)（不落随机
+            # stub 队列）。
+            with self.assertRaises(SystemExit) as caught:
+                load_face_trace_config(MODULE_DIR / "trace_config.csv")
+            self.assertNotEqual(caught.exception.code, 0)
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         attention_heads = tuple(
             shard_extent(config.num_heads, 6, index) for index in range(6)
         )
@@ -1112,7 +1233,7 @@ class FaceSchedulerTests(unittest.TestCase):
         )
 
     def test_default_config_uses_hbm160_edge_pool_and_one_million_reserve(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         self.assertEqual(
             config.hardware.local_hbm_capacity_bytes,
             160 * 1024**3,
@@ -1173,7 +1294,7 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(system_raw["hbm-kv-restore-bandwidth-sharing"], 1)
 
     def test_et_kv_migration_ack_and_cross_instance_store_trigger(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         group_by_index = dict(enumerate(config.inference_groups))
         builders = {
             rank: TraceBuilder(remote_operand_loads=False)
@@ -1296,7 +1417,7 @@ class FaceSchedulerTests(unittest.TestCase):
         )
 
     def test_tp_readiness_barrier_waits_for_every_rank_local_predecessor(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         group = config.inference_groups[0]
         builders = {
             rank: TraceBuilder(remote_operand_loads=False)
@@ -1337,7 +1458,7 @@ class FaceSchedulerTests(unittest.TestCase):
             self.assertIn(barrier.id, first_compute.data_deps)
 
     def test_remote_suffix_load_emits_target_hbm_dma_and_branch_gate(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         group_by_index = dict(enumerate(config.inference_groups))
         target_group = group_by_index[0]
         target_rank = target_group.ranks[0]
@@ -1818,7 +1939,7 @@ class FaceSchedulerTests(unittest.TestCase):
             )
 
     def test_checked_in_shape_and_requests_plan_deterministically(self) -> None:
-        config = load_face_trace_config()
+        config = load_checked_in_fixture_config()
         hardware = config.hardware
         model = config.model
         specs = tuple(

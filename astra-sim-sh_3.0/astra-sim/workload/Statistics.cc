@@ -41,6 +41,23 @@ void Statistics::record_end(std::shared_ptr<Chakra::ETFeederNode> node,
     this->get_operator_statistics(node_id).end_time = end_time;
 }
 
+// ---------------------------------------------------------- NodeView (step 1-8)
+
+void Statistics::record_start(const ExecutionDriven::NodeView& node,
+                              Tick start_time) {
+    const NodeId& node_id = node.global_id;
+    const auto type = OperatorStatistics::get_operator_type(node);
+    operator_statistics[node_id] =
+        OperatorStatistics(node_id, start_time, type);
+    start_times.insert({start_time, node_id});
+}
+
+void Statistics::record_end(const ExecutionDriven::NodeView& node,
+                            Tick end_time) {
+    const NodeId& node_id = node.global_id;
+    this->get_operator_statistics(node_id).end_time = end_time;
+}
+
 Tick Statistics::get_wall_time() const {
     return this->wall_time;
 }
@@ -137,6 +154,40 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node_type, node.id={}, node.type={}",
                        node->id(), static_cast<uint64_t>(node->type()));
+        assert(false);
+    }
+    return stat_node_type;
+}
+
+Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
+    get_operator_type(const ExecutionDriven::NodeView& node) {
+    using ExecutionDriven::NodeKind;
+    Statistics::OperatorStatistics::OperatorType stat_node_type;
+    switch (node.kind) {
+    case NodeKind::MemLoad:
+    case NodeKind::MemStore:
+        stat_node_type =
+            Statistics::OperatorStatistics::OperatorType::REMOTE_MEM;
+        break;
+    case NodeKind::Compute:
+        stat_node_type =
+            node.is_cpu_op
+                ? Statistics::OperatorStatistics::OperatorType::CPU
+                : Statistics::OperatorStatistics::OperatorType::GPU;
+        break;
+    case NodeKind::CommCollective:
+    case NodeKind::CommSend:
+    case NodeKind::CommRecv:
+        stat_node_type = Statistics::OperatorStatistics::OperatorType::COMM;
+        break;
+    case NodeKind::Invalid:
+    case NodeKind::Metadata:
+        stat_node_type = Statistics::OperatorStatistics::OperatorType::INVALID;
+        break;
+    default:
+        LoggerFactory::get_logger("statistics")
+            ->critical("Invalid node kind, node.id={}, node.kind={}",
+                       node.global_id, static_cast<int>(node.kind));
         assert(false);
     }
     return stat_node_type;

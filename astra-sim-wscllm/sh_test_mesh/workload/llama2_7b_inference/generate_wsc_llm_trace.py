@@ -13,7 +13,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -461,6 +461,13 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
+    if not request_queue_csv.exists():
+        print(
+            f"missing request queue: {request_queue_csv};"
+            "请按方案文档 wscllm仓库改造详细执行方案.md §3 步骤 0-1 物化输入",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue, selected_session_ids = select_first_session_requests(
         source_request_queue,
@@ -2115,11 +2122,230 @@ def print_shell_config(config: WscLlmTraceConfig, plan: WscLlmPlan) -> None:
         print(f"{key}={shlex.quote(str(value))}")
 
 
+# Phase-0 performance counter framework (plan step 0-7; 总改造计划 §6 阶段 0):
+# named per-category counters for the stage-6/7 accounting.  The offline
+# static-ET path never exercises callback/poll/bridge/GIL/log/reader-window/
+# backpressure mechanisms and batching is not a Python decision boundary, so
+# every counter stays 0 here.  The structure is observation-side only and is
+# never serialized into any output (byte-equivalence gate: instrumentation
+# must not change a single production byte).
+@dataclass(frozen=True)
+class Phase0Counters:
+    callback_count: int = 0        # Python decision callbacks
+    poll_count: int = 0            # completion polling hits
+    bridge_bytes: int = 0          # Python<->C++ bridge payload bytes
+    gil_contention_ns: int = 0     # GIL wait time in the bridge
+    log_bytes: int = 0             # decision/audit log bytes written
+    node_completion_count: int = 0  # node completion events observed
+    reader_window_events: int = 0  # ingress reader window events
+    backpressure_events: int = 0   # backpressure/watermark hits
+    batch_count: int = 0           # decision batches committed
+
+    def snapshot(self) -> dict[str, int]:
+        """Return the nine named counters (all zero on the offline path)."""
+
+        return {
+            "callback_count": self.callback_count,
+            "poll_count": self.poll_count,
+            "bridge_bytes": self.bridge_bytes,
+            "gil_contention_ns": self.gil_contention_ns,
+            "log_bytes": self.log_bytes,
+            "node_completion_count": self.node_completion_count,
+            "reader_window_events": self.reader_window_events,
+            "backpressure_events": self.backpressure_events,
+            "batch_count": self.batch_count,
+        }
+
+
+PHASE0_COUNTERS = Phase0Counters()
+
+
+def phase0_counters_snapshot() -> dict[str, int]:
+    """Expose the offline counter snapshot; callable from any key path."""
+
+    return PHASE0_COUNTERS.snapshot()
+
+
+def _eviction_record_dict(eviction) -> dict[str, object]:
+    """Serialize one session-KV EvictionRecord for the replay decision log."""
+
+    return {
+        "time_ns": eviction.time_ns,
+        "phase": eviction.phase,
+        "reason": eviction.reason,
+        "trigger_request_id": eviction.trigger_request_id,
+        "victim_session_id": eviction.victim_session_id,
+        "victim_instance_index": eviction.victim_instance_index,
+        "victim_last_completion_ns": eviction.victim_last_completion_ns,
+        "context_tokens": eviction.context_tokens,
+        "shard_bytes": list(eviction.shard_bytes),
+    }
+
+
+def _kv_transfer_dict(transfer) -> Optional[dict[str, object]]:
+    """Serialize one session-KV KVTransfer (or None) for the decision log."""
+
+    if transfer is None:
+        return None
+    return {
+        "action": transfer.action,
+        "phase": transfer.phase,
+        "reason": transfer.reason,
+        "session_id": transfer.session_id,
+        "trigger_request_id": transfer.trigger_request_id,
+        "source_instance_index": transfer.source_instance_index,
+        "target_instance_index": transfer.target_instance_index,
+        "history_tokens": transfer.history_tokens,
+        "total_bytes": transfer.total_bytes,
+        "shards": [
+            {
+                "relative_tp_rank": shard.relative_tp_rank,
+                "source_rank": shard.source_rank,
+                "target_rank": shard.target_rank,
+                "bytes": shard.bytes,
+            }
+            for shard in transfer.shards
+        ],
+    }
+
+
+def _write_replay_decision_log(plan: WscLlmPlan, path: Path) -> None:
+    """Materialize the offline per-request/per-chunk decision sequence (step 0-5).
+
+    Replay sidecar for phase-1 zero-polling replay (方案 A): written only when
+    the explicit ``--replay-record`` CLI switch is set; the production path
+    never writes it.  Each line is one JSON record
+    ``{seq, tick, priority, kind, request_id, decision}`` sorted by
+    ``(tick, priority, seq)`` where ``seq`` is the emission order (request
+    records in queue_index order, per request prefill -> decode -> completion;
+    then iteration records in offline event-loop order).  ``priority`` is 0
+    for every decision fact (offline completion processing precedes arrivals
+    at the same tick; arrivals are not decision facts).  ``kind`` is one of
+    ``prefill``/``decode``/``completion`` (per-request decisions; decision =
+    prefill instance, decode route, admission, KV action sequence) or
+    ``iteration`` (per-chunk WscLlmIterationRecord, i.e. the offline event
+    loop timeline).  ``decision`` content follows the plan: prefill 实例、
+    decode 路由、准入与否、KV 动作序列.
+    """
+
+    records: list[dict[str, object]] = []
+    seq = 0
+    for request in plan.requests:
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.prefill_start_ns,
+                "priority": 0,
+                "kind": "prefill",
+                "request_id": request.request_id,
+                "decision": {
+                    "prefill_instance_index": request.prefill_instance_index,
+                    "prefill_assignment_key": list(request.prefill_assignment_key),
+                    "estimated_arrival_ns": request.estimated_arrival_ns,
+                    "effective_prefill_tokens": request.effective_prefill_tokens,
+                    "history_action": request.history_action,
+                    "history_cache_state_before": request.history_cache_state_before,
+                    "history_source_instance_index": request.history_source_instance_index,
+                    "history_transfer_bytes": request.history_transfer_bytes,
+                    "history_recompute_tokens": request.history_recompute_tokens,
+                    "admission_evictions": [
+                        _eviction_record_dict(eviction)
+                        for eviction in request.admission_evictions
+                    ],
+                    "decode_target_evictions": [
+                        _eviction_record_dict(eviction)
+                        for eviction in request.decode_target_evictions
+                    ],
+                },
+            }
+        )
+        seq += 1
+        route = request.static_route
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.decode_start_ns,
+                "priority": 0,
+                "kind": "decode",
+                "request_id": request.request_id,
+                "decision": {
+                    "decode_instance_index": request.decode_instance_index,
+                    "static_route": {
+                        "prefill_instance_index": route.prefill_instance_index,
+                        "decode_instance_index": route.decode_instance_index,
+                        "path": list(route.path),
+                        "hop_count": route.hop_count,
+                        "shared_edges": [list(edge) for edge in route.shared_edges],
+                    },
+                    "decode_queue_depth_before_enqueue": (
+                        request.decode_queue_depth_before_enqueue
+                    ),
+                    "prefill_decode_transfer": _kv_transfer_dict(
+                        request.prefill_decode_transfer
+                    ),
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.completion_ns,
+                "priority": 0,
+                "kind": "completion",
+                "request_id": request.request_id,
+                "decision": {
+                    "terminal_kv_release_at_completion": (
+                        request.terminal_kv_release_at_completion
+                    ),
+                    "kv_state_after_completion": request.kv_state_after_completion,
+                    "kv_instance_after_completion": request.kv_instance_after_completion,
+                    "completion_evictions": [
+                        _eviction_record_dict(eviction)
+                        for eviction in request.completion_evictions
+                    ],
+                },
+            }
+        )
+        seq += 1
+    for iteration in plan.iterations:
+        records.append(
+            {
+                "seq": seq,
+                "tick": iteration.start_ns,
+                "priority": 0,
+                "kind": "iteration",
+                "request_id": (
+                    iteration.prefill_request_id
+                    if iteration.prefill_request_id is not None
+                    else ""
+                ),
+                "decision": {
+                    "instance_index": iteration.instance_index,
+                    "phase_role": iteration.phase_role,
+                    "iteration_index": iteration.iteration_index,
+                    "end_ns": iteration.end_ns,
+                    "prefill_request_id": iteration.prefill_request_id,
+                    "prefill_chunk_tokens": iteration.prefill_chunk_tokens,
+                    "decode_request_ids": list(iteration.decode_request_ids),
+                    "timing_entry": _timing_entry_dict(iteration.timing_entry),
+                },
+            }
+        )
+        seq += 1
+    records.sort(key=lambda record: (record["tick"], record["priority"], record["seq"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     print_shell = False
     plan_only = False
     metrics_detail_arg: Optional[str] = None
+    replay_record = False
     while args and args[0].startswith("--"):
         option = args.pop(0)
         if option == "--print-shell-config":
@@ -2128,23 +2354,39 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             plan_only = True
         elif option.startswith("--metrics-detail="):
             metrics_detail_arg = option.split("=", 1)[1]
+        elif option == "--replay-record":
+            replay_record = True
         else:
             raise SystemExit(
                 f"Unknown option {option!r}. "
                 "Usage: generate_wsc_llm_trace.py [--print-shell-config|--plan-only] "
-                "[--metrics-detail=off|summary|full] [trace_config.csv]. "
+                "[--metrics-detail=off|summary|full] [--replay-record] "
+                "[trace_config.csv]. "
                 f"Default config: {CONFIG_CSV_PATH}"
             )
     if print_shell and plan_only:
         raise SystemExit("--print-shell-config and --plan-only cannot be combined")
+    if replay_record and (print_shell or plan_only):
+        raise SystemExit(
+            "--replay-record cannot be combined with --print-shell-config or --plan-only"
+        )
     if len(args) > 1:
         raise SystemExit(
             "Usage: generate_wsc_llm_trace.py [--print-shell-config|--plan-only] "
-            "[--metrics-detail=off|summary|full] [trace_config.csv]. "
+            "[--metrics-detail=off|summary|full] [--replay-record] "
+            "[trace_config.csv]. "
             f"Default config: {CONFIG_CSV_PATH}"
         )
     config_csv = CONFIG_CSV_PATH if not args else Path(args[0])
     config = load_wsc_llm_trace_config(config_csv)
+    # Replay decision-log sidecar (step 0-5, 方案 A): the switch re-enables
+    # per-iteration recording for this run only (production config keeps
+    # record_planning_iterations=false) and writes the sidecar decision_log.
+    # The recording is a pure observer: iteration_count advances and every
+    # planning decision is identical with or without it, so manifest.json and
+    # all .et files remain byte-identical to the archived baseline.
+    if replay_record:
+        config = replace(config, record_planning_iterations=True)
     # Metrics sidecar switch (doc sec.10): CLI > METRICS_DETAIL >
     # ENABLE_METRICS > default on.  When off, no metrics_manifest.json is
     # written and the .et output is byte-identical to the metrics-on output.
@@ -2177,8 +2419,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         }))
     else:
         write_wsc_llm_trace(config, plan, metrics=metrics)
+        output_dir = resolve_output_dir(config, plan)
         if metrics is not None and lut_stats is not None:
-            write_planner_lut_stats(lut_stats, output_dir=resolve_output_dir(config, plan))
+            write_planner_lut_stats(lut_stats, output_dir=output_dir)
+        if replay_record:
+            decision_log_path = output_dir / "decision_log.jsonl"
+            _write_replay_decision_log(plan, decision_log_path)
+            print(json.dumps({"replay_decision_log": str(decision_log_path)}))
 
 
 if __name__ == "__main__":

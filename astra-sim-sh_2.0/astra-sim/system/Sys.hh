@@ -8,6 +8,8 @@ LICENSE file in the root directory of this source tree.
 
 #include <chrono>
 
+#include <memory>
+
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/Callable.hh"
@@ -30,6 +32,11 @@ class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
 class OfflineGreedy;
+
+namespace ExecutionDriven {
+class GraphSource;
+enum class ExecutionMode;
+}  // namespace ExecutionDriven
 
 class Sys : public Callable {
   public:
@@ -73,7 +80,11 @@ class Sys : public Callable {
         std::vector<int> queues_per_dim,
         double injection_scale,
         double comm_scale,
-        bool rendezvous_enabled);
+        bool rendezvous_enabled,
+        ExecutionDriven::ExecutionMode execution_mode =
+            ExecutionDriven::ExecutionMode::Static,
+        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr,
+        bool replay_clock = false);
     ~Sys();
     //---------------------------------------------------------------------------
 
@@ -257,6 +268,15 @@ class Sys : public Callable {
 
     // workload
     Workload* workload;
+
+    // step-1-2 execution-mode factory state (see constructor comment):
+    // online mode injects the dynamic GraphSource at Sys creation and never
+    // constructs the ETFeeder; replay_clock_ is true only for
+    // --online-mode replay (contract ⑦ rulings; strategy keeps real physics).
+    ExecutionDriven::ExecutionMode execution_mode_ =
+        ExecutionDriven::ExecutionMode::Static;
+    std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
+    bool replay_clock_ = false;
 
     // roofline model
     bool roofline_enabled;

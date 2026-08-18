@@ -1,0 +1,31 @@
+kind,key,value,group_name,pg_name,ranks,description
+config,layers,32,,,,LLaMA 2 7B decoder layer count
+config,hidden_size,4096,,,,LLaMA 2 7B hidden size
+config,ffn_size,11008,,,,LLaMA 2 7B SwiGLU intermediate size
+config,num_heads,32,,,,LLaMA 2 7B attention head count
+config,vocab_size,32000,,,,LLaMA 2 tokenizer vocabulary size
+config,bytes_per_elem,2,,,,Element size in bytes
+config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
+config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
+config,output_prefix,llama2_7b_inference,,,,Trace file prefix
+config,output_dir,,,,,Leave empty for derived sh_test generated path
+config,request_queue_csv,llama2_7b_inference/traces/astra_compute_20_first_30_seconds_request_queue_recompute.csv,,,,First 30 seconds of tracelab astra_compute_20.csv (arrival_time < 30e9 ns) recompute variant; see traces/PROVENANCE.md (user directive 2026-08-15)
+config,request_queue_session_limit,0,,,,Use every session in the normalized three-minute queue
+config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations
+config,prefill_chunk_size,512,,,,Fixed Prefill and history-recompute chunk size in tokens
+config,kv_cache_policy,legacy,,,,Legacy FACE original mapping (KVAllocator cross-instance sharding + edge-weight adjustment; separate statistics from session_lru_recompute)
+config,kv_reserve_context_tokens,1000000,,,,Per physical TP rank reserve for one decimal-million-token KV cache
+config,record_planning_iterations,false,,,,Keep only bounded planning summaries for the full workload
+config,hardware_config,hardware/face_case5_config_c.json,,,,Single authoritative FACE Case 5 hardware source for this repository
+config,local_hbm_capacity_profile,validation-160gib,,,,Required profile: 160 GiB/NPU can hold the exact 1M KV reserve
+config,system_template,system/llama2_7b_roofline_template.json,,,,Hardware-free ASTRA-sim system template; runtime hardware fields are derived automatically
+config,remote_operand_loads,false,,,,Weights are already resident in NPU local memory; do not model startup or remote loads
+inference_group,,,face_instance_0_rows_3_5_cols_2_3_tp6,1,"20-21,26-27,32-33",Unified Prefill+Decode center instance covering rows 3 through 5 and columns 2 through 3
+inference_group,,,face_instance_1_rows_0_2_cols_2_3_tp6,2,"2-3,8-9,14-15",Unified Prefill+Decode north instance covering rows 0 through 2 and columns 2 through 3
+inference_group,,,face_instance_2_rows_3_5_cols_0_1_tp6,3,"18-19,24-25,30-31",Unified Prefill+Decode west instance covering rows 3 through 5 and columns 0 through 1
+inference_group,,,face_instance_3_rows_3_5_cols_4_5_tp6,4,"22-23,28-29,34-35",Unified Prefill+Decode east instance covering rows 3 through 5 and columns 4 through 5
+inference_group,,,face_instance_4_rows_6_8_cols_2_3_tp6,5,"38-39,44-45,50-51",Unified Prefill+Decode south instance covering rows 6 through 8 and columns 2 through 3
+inference_group,,,face_instance_5_rows_0_2_cols_0_1_tp6,6,"0-1,6-7,12-13",Unified Prefill+Decode northwest instance covering rows 0 through 2 and columns 0 through 1
+inference_group,,,face_instance_6_rows_0_2_cols_4_5_tp6,7,"4-5,10-11,16-17",Unified Prefill+Decode northeast instance covering rows 0 through 2 and columns 4 through 5
+inference_group,,,face_instance_7_rows_6_8_cols_0_1_tp6,8,"36-37,42-43,48-49",Unified Prefill+Decode southwest instance covering rows 6 through 8 and columns 0 through 1
+inference_group,,,face_instance_8_rows_6_8_cols_4_5_tp6,9,"40-41,46-47,52-53",Unified Prefill+Decode instance covering rows 6 through 8 and columns 4 through 5

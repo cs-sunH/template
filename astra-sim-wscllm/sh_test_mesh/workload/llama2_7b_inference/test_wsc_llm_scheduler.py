@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -87,8 +89,73 @@ EXPECTED_STATIC_ROUTES = {
 }
 
 
+# ------------------------------------------------------------------------
+# request-neutral 合成 fixture(方案 §0.3 / §3 步骤 0-1):checked-in 配置的
+# request_queue_csv 为占位路径,正式入口缺失输入 fail-closed。测试需要队列
+# 数据时只用本文件内手写的合成队列(绝不引用任何真实 trace 数据),通过
+# 临时配置副本把 request_queue_csv 指向合成队列后加载。
+# ------------------------------------------------------------------------
+REQUEST_QUEUE_HEADER = (
+    "session_id,turn_index,request_id,prefill_length,decode_length,"
+    "session_arrival_time_ns,inter_request_interval_ns,description"
+)
+# 8 个 turn-0 槽位 + 2 个 turn>0 槽位(槽位口径与 legacy 在线测试共用;
+# turn-0 行必须带 session_arrival_time_ns,turn>0 行必须带 interval)。
+SYNTHETIC_QUEUE_ROWS = (
+    ("fixture_s0", "0", "fixture_s0_r0", "100", "5", "0", "", "synthetic fixture"),
+    ("fixture_s1", "0", "fixture_s1_r0", "200", "6", "0", "", "synthetic fixture"),
+    ("fixture_s2", "0", "fixture_s2_r0", "300", "7", "0", "", "synthetic fixture"),
+    ("fixture_s3", "0", "fixture_s3_r0", "400", "8", "0", "", "synthetic fixture"),
+    ("fixture_s4", "0", "fixture_s4_r0", "500", "9", "0", "", "synthetic fixture"),
+    ("fixture_s5", "0", "fixture_s5_r0", "600", "10", "0", "", "synthetic fixture"),
+    ("fixture_s6", "0", "fixture_s6_r0", "700", "11", "0", "", "synthetic fixture"),
+    ("fixture_s7", "0", "fixture_s7_r0", "800", "12", "0", "", "synthetic fixture"),
+    ("fixture_s0", "1", "fixture_s0_r1", "50", "4", "", "1000", "synthetic fixture"),
+    ("fixture_s1", "1", "fixture_s1_r1", "60", "5", "", "2000", "synthetic fixture"),
+)
+
+_FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="wscllm_test_fixture_")
+
+
+def _write_synthetic_queue(path: Path) -> None:
+    path.write_text(
+        REQUEST_QUEUE_HEADER
+        + "\n"
+        + "\n".join(",".join(row) for row in SYNTHETIC_QUEUE_ROWS)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_checked_in_config() -> object:
+    """request-neutral fixture:checked-in 配置 + 手写合成队列(一次性物化)。
+
+    相对路径(hardware/、system/ 等)仍按 SH_TEST_DIR 解析,配置字段语义与
+    checked-in 配置一致;仅输入队列槽位替换为合成数据。
+    """
+    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    if not queue_path.exists():
+        _write_synthetic_queue(queue_path)
+    config_path = Path(_FIXTURE_DIR.name) / "trace_config.csv"
+    if not config_path.exists():
+        lines = []
+        for raw_line in (MODULE_DIR / "trace_config.csv").read_text(
+            encoding="utf-8"
+        ).splitlines():
+            if raw_line.startswith("config,request_queue_csv,"):
+                lines.append(
+                    "config,request_queue_csv,"
+                    + str(queue_path)
+                    + ",,,,,request-neutral synthetic fixture queue (unit test)"
+                )
+            else:
+                lines.append(raw_line)
+        config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return load_wsc_llm_trace_config(config_path)
+
+
 def checked_in_topology() -> tuple[object, object]:
-    config = load_wsc_llm_trace_config()
+    config = load_checked_in_config()
     specs = tuple(
         WscLlmInstanceSpec(
             name=group.name,
@@ -194,7 +261,10 @@ class WscLlmSchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mesh-shape"):
                 load_remote_memory_config(source, 4, mesh_shape=(2, 2))
 
-    def test_checked_in_three_minute_config_roles_ranks_model_and_requests(self) -> None:
+    def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(self) -> None:
+        """checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认
+        request 队列)+ 缺失输入 fail-closed + 配置字段语义(拓扑/角色/模型/
+        硬件;不依赖任何真实 trace 计数,见方案 §0.3 与 §3 步骤 0-1)。"""
         config, topology = checked_in_topology()
         self.assertEqual(config.model_name, "llama2_7b")
         self.assertEqual(config.mlp_variant, "swiglu")
@@ -241,17 +311,35 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(config.kv_cache_policy, "session_lru_recompute")
         self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
         self.assertFalse(config.record_planning_iterations)
-        self.assertEqual(config.source_request_count, 2091)
-        self.assertEqual(config.source_session_count, 136)
-        self.assertEqual(len(config.request_queue), 2091)
+        # request-neutral:合成 fixture 队列的计数只反映 fixture 自身,不依赖
+        # 任何真实 trace 数据(裸仓库不物化输入,见方案 §3 步骤 0-1)。
+        self.assertEqual(config.source_request_count, len(SYNTHETIC_QUEUE_ROWS))
+        self.assertEqual(config.source_session_count, 8)
+        self.assertEqual(len(config.request_queue), len(SYNTHETIC_QUEUE_ROWS))
         self.assertEqual(
             config.selected_session_ids,
-            tuple(str(index) for index in range(136)),
+            tuple(f"fixture_s{index}" for index in range(8)),
         )
-        prefill_lengths = [request.prefill_length for request in config.request_queue]
-        decode_lengths = [request.decode_length for request in config.request_queue]
-        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (3, 158929))
-        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 32000))
+        # checked-in 配置本体 = request-neutral:request_queue_csv 是占位路径。
+        checked_in_text = (MODULE_DIR / "trace_config.csv").read_text(encoding="utf-8")
+        queue_line = next(
+            line
+            for line in checked_in_text.splitlines()
+            if line.startswith("config,request_queue_csv,")
+        )
+        self.assertEqual(
+            queue_line.split(",")[2],
+            "llama2_7b_inference/request_queue_placeholder.csv",
+        )
+        self.assertIn("request-neutral", queue_line)
+        # 缺失输入 fail-closed:正式入口(checked-in 配置,无物化队列)必须
+        # exit 非 0 并打印 missing request queue,不得回退到任何 stub 队列。
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as exit_context:
+                load_wsc_llm_trace_config()
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertIn("missing request queue", stderr.getvalue())
 
     def test_session_lru_mode_keeps_terminal_kv_and_uses_static_route(self) -> None:
         config, _ = checked_in_topology()
@@ -438,7 +526,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
             allocator2.allocate(request_id="too_large", route=route, total_bytes=501)
 
     def test_64_gib_fails_fast_for_the_exact_one_million_reserve(self) -> None:
-        config = load_wsc_llm_trace_config()
+        config = load_checked_in_config()
         hardware = WscLlmHardware(2, 6, 64 * 1024**3, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
             hardware,
@@ -666,7 +754,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(first.final_remaining_capacity_bytes, expected_free)
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
-        config = load_wsc_llm_trace_config()
+        config = load_checked_in_config()
         attention_heads = tuple(
             shard_extent(config.num_heads, 6, index) for index in range(6)
         )

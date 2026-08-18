@@ -9,7 +9,7 @@ config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
 config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
 config,output_prefix,llama2_7b_inference,,,,Trace file prefix
 config,output_dir,,,,,Leave empty for derived sh_test generated path
-config,request_queue_csv,../../../agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_20_50_v1/derived/compute_20_first_20_minutes/astra_compute_20_first_20_minutes_request_queue.csv,,,,Only requests with derived source arrival_time <= 1200000000000 ns from astra_compute_20.csv
+config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方按方案文档 sh_1.0仓库改造详细执行方案.md §3 步骤 0-1 物化输入（traces/derive_20_first_30_seconds.py）后指定;正式入口缺失输入 fail-closed
 config,prefill_chunk_size,512,,,,Fixed token count processed by each Prefill chunk
 config,request_queue_session_limit,0,,,,Select every session already represented by the strict request-level window
 config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations

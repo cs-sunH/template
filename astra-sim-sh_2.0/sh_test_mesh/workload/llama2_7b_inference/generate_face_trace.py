@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import heapq
 import hashlib
 import io
@@ -775,15 +776,42 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
+    # fail-closed (Execution-Driven 改造 步骤 0-1): a missing request queue must
+    # terminate the run. load_request_queue would otherwise silently WRITE a
+    # random stub (generate_trace.py create_default_request_queue) and may
+    # create directories outside this repository.
+    if not request_queue_csv.is_file():
+        sys.exit(
+            f"missing request queue: {request_queue_csv}；"
+            "请按 traces/PROVENANCE.md 物化输入"
+        )
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue_context_csv = parsed["request_queue_context_csv"]
     if request_queue_context_csv is not None:
         request_queue_context_csv = _resolve_request_queue(
             request_queue_context_csv
         )
+        # fail-closed: a configured-but-missing context sidecar must terminate
+        # the run (load_request_prefix_tokens itself raises FileNotFoundError;
+        # this distinguishes "not configured" from "configured but missing").
+        if not request_queue_context_csv.is_file():
+            sys.exit(
+                f"missing request queue context sidecar: "
+                f"{request_queue_context_csv}；请按 traces/PROVENANCE.md 物化输入"
+            )
+        print(
+            "request queue context sidecar enabled: "
+            f"{request_queue_context_csv}",
+            file=sys.stderr,
+        )
         source_request_queue = load_request_prefix_tokens(
             request_queue_context_csv,
             source_request_queue,
+        )
+    else:
+        print(
+            "request queue context sidecar not configured (prefix_mode=off)",
+            file=sys.stderr,
         )
     source_average_decode_length = sum(
         request.decode_length for request in source_request_queue
@@ -3124,6 +3152,243 @@ def write_face_trace(
     )
 
 
+def _kv_transfer_log_dict(transfer: Optional[KVTransfer]) -> Optional[dict]:
+    if transfer is None:
+        return None
+    return {
+        "kind": transfer.kind,
+        "phase": transfer.phase,
+        "reason": transfer.reason,
+        "session_id": transfer.session_id,
+        "trigger_request_id": transfer.trigger_request_id,
+        "source_instance_index": transfer.source_instance_index,
+        "target_instance_index": transfer.target_instance_index,
+        "total_bytes": transfer.total_bytes,
+        "model_layers": transfer.model_layers,
+        "layer_start": transfer.layer_start,
+        "layer_end": transfer.layer_end,
+        "resident_prefix_layers_before": transfer.resident_prefix_layers_before,
+        "resident_prefix_layers_after": transfer.resident_prefix_layers_after,
+        "shards": [
+            {
+                "source_rank": shard.source_rank,
+                "target_rank": shard.target_rank,
+                "edge_rank": shard.edge_rank,
+                "bytes": shard.bytes,
+                "noc_path": list(shard.noc_path),
+                "layer_start": shard.layer_start,
+                "layer_end": shard.layer_end,
+            }
+            for shard in transfer.shards
+        ],
+    }
+
+
+def _load_snapshot_log_dict(snapshot: InstanceTaskLoadSnapshot) -> dict:
+    return {
+        "instance_index": snapshot.instance_index,
+        "running_prefill_task_load_ns": snapshot.running_prefill_task_load_ns,
+        "queued_prefill_task_load_ns": snapshot.queued_prefill_task_load_ns,
+        "active_decode_task_load_ns": snapshot.active_decode_task_load_ns,
+        "last_arrival_ns": snapshot.last_arrival_ns,
+        "total_task_load_ns": snapshot.total_task_load_ns,
+        "ordering_key": list(snapshot.ordering_key),
+    }
+
+
+def _candidate_cost_log_dict(candidate: DecodeCandidateCost) -> dict:
+    return {
+        "instance_index": candidate.instance_index,
+        "weighted_distance": candidate.weighted_distance,
+        "current_lut": dataclasses.asdict(candidate.current_lut),
+        "updated_lut": dataclasses.asdict(candidate.updated_lut),
+        "delta_time_ns": candidate.delta_time_ns,
+        "per_die_delta_ns": candidate.per_die_delta_ns,
+        "remaining_hbm_capacity_bytes": candidate.remaining_hbm_capacity_bytes,
+        "hbm_feasible": candidate.hbm_feasible,
+    }
+
+
+def _allocation_log_dict(allocation: Optional[KVAllocation]) -> Optional[dict]:
+    if allocation is None:
+        return None
+    return {
+        "request_id": allocation.request_id,
+        "decode_instance_index": allocation.decode_instance_index,
+        "total_bytes": allocation.total_bytes,
+        "pieces": [
+            {
+                "instance_index": piece.instance_index,
+                "bytes": piece.bytes,
+                "weighted_distance": piece.weighted_distance,
+                "path": list(piece.path),
+                "rank_bytes": [list(pair) for pair in piece.rank_bytes],
+            }
+            for piece in allocation.pieces
+        ],
+    }
+
+
+def _write_replay_decision_log(plan: FacePlan, path: Path) -> None:
+    """Materialize the offline per-request decision sequence (step 0-5).
+
+    Replay sidecar for phase-1 zero-polling replay (方案 A): written only when
+    the explicit ``--replay-record`` CLI switch is set; the production path
+    never writes it.  Each line is one JSON record
+    ``{seq, tick, priority, kind, request_id, decision}`` sorted by
+    ``(tick, priority, seq)`` where ``seq`` is the per-request emission order
+    (queue_index order; per request prefill -> decode -> completion; then
+    iteration records in event-loop order when recorded).  ``priority`` is 0
+    for every decision fact (offline completion processing precedes arrivals
+    at the same tick; arrivals are not decision facts).  Ticks are the offline
+    planner LUT clock: prefill = prefill_start_ns, decode = decode_start_ns,
+    completion = completion_ns (phase durations include admission queueing,
+    same convention as the wscllm blueprint).
+    """
+    records: list[dict] = []
+    seq = 0
+    for request in plan.requests:
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.prefill_start_ns,
+                "priority": 0,
+                "kind": "prefill",
+                "request_id": request.request_id,
+                "decision": {
+                    "queue_index": request.queue_index,
+                    "session_id": request.session_id,
+                    "turn_index": request.turn_index,
+                    "prefill_instance_index": request.prefill_instance_index,
+                    "prefill_assignment_key": list(request.prefill_assignment_key),
+                    "prefill_affinity_reason": request.prefill_affinity_reason,
+                    "prefill_instance_loads": [
+                        _load_snapshot_log_dict(load)
+                        for load in request.prefill_instance_loads
+                    ],
+                    "prefill_hbm_feasible_instances": list(
+                        request.prefill_hbm_feasible_instances
+                    ),
+                    "estimated_arrival_ns": request.estimated_arrival_ns,
+                    "admission_time_ns": request.admission_time_ns,
+                    "history_tokens_before": request.history_tokens_before,
+                    "history_tokens_discarded": request.history_tokens_discarded,
+                    "prefill_context_tokens": request.prefill_context_tokens,
+                    "final_context_tokens": request.final_context_tokens,
+                    "history_source_instance_index": (
+                        request.history_source_instance_index
+                    ),
+                    "history_location_before_location": (
+                        request.history_location_before.location
+                        if request.history_location_before is not None else None
+                    ),
+                    "history_location_before_instance_index": (
+                        request.history_location_before.instance_index
+                        if request.history_location_before is not None else None
+                    ),
+                    "history_resident_prefix_layers": (
+                        request.history_location_before.resident_prefix_layers
+                        if request.history_location_before is not None else 0
+                    ),
+                    "hbm_wait_ns": request.hbm_wait_ns,
+                    "history_transfer_bytes": request.history_transfer_bytes,
+                    "history_transfer": _kv_transfer_log_dict(
+                        request.history_transfer
+                    ),
+                    "history_evictions": [
+                        _kv_transfer_log_dict(eviction)
+                        for eviction in request.history_evictions
+                    ],
+                    "prefill_evictions": [
+                        _kv_transfer_log_dict(eviction)
+                        for eviction in request.prefill_evictions
+                    ],
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.decode_start_ns,
+                "priority": 0,
+                "kind": "decode",
+                "request_id": request.request_id,
+                "decision": {
+                    "decode_instance_index": request.decode_instance_index,
+                    "prefill_instance_index": request.prefill_instance_index,
+                    "decode_candidates": [
+                        _candidate_cost_log_dict(candidate)
+                        for candidate in request.decode_candidates
+                    ],
+                    "prefill_decode_transfer": _kv_transfer_log_dict(
+                        request.prefill_decode_transfer
+                    ),
+                    "decode_evictions": [
+                        _kv_transfer_log_dict(eviction)
+                        for eviction in request.decode_evictions
+                    ],
+                    "kv_allocation": _allocation_log_dict(request.kv_allocation),
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.completion_ns,
+                "priority": 0,
+                "kind": "completion",
+                "request_id": request.request_id,
+                "decision": {
+                    "completion_evictions": [
+                        _kv_transfer_log_dict(eviction)
+                        for eviction in request.completion_evictions
+                    ],
+                    "kv_location_after_completion": (
+                        request.kv_location_after_completion
+                    ),
+                    "kv_instance_after_completion": (
+                        request.kv_instance_after_completion
+                    ),
+                    "reserve_unmet_ranks": list(request.reserve_unmet_ranks),
+                },
+            }
+        )
+        seq += 1
+    for iteration in plan.iterations:
+        records.append(
+            {
+                "seq": seq,
+                "tick": iteration.start_ns,
+                "priority": 0,
+                "kind": "iteration",
+                "request_id": (
+                    iteration.prefill_request_id
+                    if iteration.prefill_request_id is not None
+                    else ""
+                ),
+                "decision": {
+                    "instance_index": iteration.instance_index,
+                    "iteration_index": iteration.iteration_index,
+                    "start_ns": iteration.start_ns,
+                    "end_ns": iteration.end_ns,
+                    "prefill_request_id": iteration.prefill_request_id,
+                    "prefill_chunk_tokens": iteration.prefill_chunk_tokens,
+                    "decode_request_ids": list(iteration.decode_request_ids),
+                    "lut_entry": dataclasses.asdict(iteration.lut_entry),
+                },
+            }
+        )
+        seq += 1
+    records.sort(key=lambda record: (record["tick"], record["priority"], record["seq"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
+    print(json.dumps({"replay_decision_log": str(path)}))
+
+
 def print_shell_config(
     config: FaceTraceConfig,
     plan: Optional[FacePlan] = None,
@@ -3198,6 +3463,7 @@ def _default_jobs() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     print_shell = False
+    replay_record = False
     jobs: Optional[int] = None
     metrics_detail_arg: Optional[str] = None
     config_paths: list[str] = []
@@ -3213,6 +3479,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             jobs = _parse_jobs(argument.split("=", 1)[1], "--jobs")
         elif argument.startswith("--metrics-detail="):
             metrics_detail_arg = argument.split("=", 1)[1]
+        elif argument == "--replay-record":
+            replay_record = True
         elif argument in {"-h", "--help"}:
             raise SystemExit(
                 "Usage: generate_trace.py [--print-shell-config] "
@@ -3235,6 +3503,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     config_csv = CONFIG_CSV_PATH if not config_paths else Path(config_paths[0])
     config = load_face_trace_config(config_csv)
     if print_shell:
+        if replay_record:
+            raise SystemExit(
+                "--replay-record cannot be combined with --print-shell-config"
+            )
         print_shell_config(config)
         return
     # Metrics sidecar switch (doc sec.10): CLI > METRICS_DETAIL >
@@ -3271,6 +3543,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         write_planner_lut_stats(
             lut_stats, output_dir=resolve_output_dir(config, plan)
         )
+    if replay_record:
+        decision_log_path = resolve_output_dir(config, plan) / "decision_log.jsonl"
+        _write_replay_decision_log(plan, decision_log_path)
 
 
 if __name__ == "__main__":

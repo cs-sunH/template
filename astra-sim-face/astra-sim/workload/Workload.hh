@@ -12,6 +12,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CommunicatorGroup.hh"
+#include "astra-sim/workload/execution_driven/ExecutionMode.hh"
+#include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
@@ -24,30 +26,41 @@ class DataSet;
 
 class Workload : public Callable {
   public:
+    // execution_mode/graph_source: step-1-2 execution-mode factory
+    // (ExecutionMode.hh). Static default keeps the legacy call sites and the
+    // byte-for-byte static behavior unchanged.
     Workload(Sys* sys,
              std::string et_filename,
-             std::string comm_group_filename);
+             std::string comm_group_filename,
+             ExecutionDriven::ExecutionMode execution_mode =
+                 ExecutionDriven::ExecutionMode::Static,
+             std::shared_ptr<ExecutionDriven::GraphSource> graph_source =
+                 nullptr,
+             bool replay_clock = false);
     ~Workload();
 
     // communicator groups
     // Parse the user provided 'comm_group_filename' and extract the list of
     // communicator groups. Refer to the wiki for the format.
     void initialize_comm_groups(std::string comm_group_filename);
-    void issue_pytorch_pg_metadata(
-        std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
+    void issue_pytorch_pg_metadata(const ExecutionDriven::NodeView& node);
 
-    // event-based simulation
+    // event-based simulation. Step 1-4 (方案 §4 步骤 1-4 操作 4): every issue_*
+    // consumes the NodeView read view from the GraphSource (依赖状态唯一所有
+    // 者); the ETFeederNode handle is fetched through GraphSource::et_node
+    // only where the static-path consumers (HardwareResource / Statistics /
+    // local_mem tracker) still need it.
     void issue_dep_free_nodes();
-    void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_metadata(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_replay(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_remote_mem(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_comp(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_coll_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_send_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_recv_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void skip_invalid(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
+    void issue(const ExecutionDriven::NodeView& node);
+    void issue_metadata(const ExecutionDriven::NodeView& node);
+    void issue_replay(const ExecutionDriven::NodeView& node);
+    void issue_remote_mem(const ExecutionDriven::NodeView& node);
+    void issue_comp(const ExecutionDriven::NodeView& node);
+    void issue_comm(const ExecutionDriven::NodeView& node);
+    void issue_coll_comm(const ExecutionDriven::NodeView& node);
+    void issue_send_comm(const ExecutionDriven::NodeView& node);
+    void issue_recv_comm(const ExecutionDriven::NodeView& node);
+    void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
     void fire();
 
@@ -64,12 +77,24 @@ class Workload : public Callable {
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
 
+    // step-1-2 execution-mode factory state: online mode never constructs the
+    // ETFeeder and never requires .et files; the dynamic GraphSource is
+    // injected at Sys creation (NodeStore-backed implementation in step 1-4).
+    ExecutionDriven::ExecutionMode execution_mode_;
+    std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
+    // step-1-8 (main ruling 2026-08-15): replay-clock scope flag. ONLY
+    // --online-mode replay runs the LUT-clock semantics (calibrated COMP
+    // chains run concurrently past the single-slot gate; comm nodes complete
+    // instantly). strategy mode keeps real physics (serial compute + real
+    // network + real queuing, §6.1) -- the flag is false there. The static
+    // path never sets it.
+    bool replay_clock_;
+
   private:
-    // From the ET node, find out the corresponding communicator group, and
-    // return the pointer. If no communicator group is specified for this ET
+    // From the node view, find out the corresponding communicator group, and
+    // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
-    CommunicatorGroup* extract_comm_group(
-        std::shared_ptr<Chakra::ETFeederNode> node);
+    CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
 };
 
 }  // namespace AstraSim

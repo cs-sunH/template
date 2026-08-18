@@ -400,3 +400,128 @@ TEST_F(TestNetworkAnalyticalCongestionAware, AllGatherOnRing) {
     const auto simulation_time = event_queue->get_current_time();
     EXPECT_EQ(simulation_time, 704'116);
 }
+
+// ===========================================================================
+// Phase-7 §10.2: per-link route-congestion snapshot accessor.
+//
+// The accessor is a pure query -- no flow is advanced, no state is touched.
+// It is audit/explanation input only (the wscllm strategy never consumes it;
+// red-line decision inputs stay the Python queue/KV ledgers and the static
+// route). Snapshot validity is guarded by (tick, epoch): a snapshot taken at
+// (t, e) is only consumable while the scheduler is still at (t, e); any stale
+// handle must be rejected.
+// ===========================================================================
+
+TEST_F(TestNetworkAnalyticalCongestionAware, FluidLinkCongestionSnapshotAccessor) {
+    const auto network_parser = NetworkParser("../../input/Mesh2D.yml");
+    const auto topology = construct_topology(network_parser);
+    const auto scheduler = make_fluid_scheduler(topology);
+    const auto route = topology->fluid_route(0, 3);
+    ASSERT_GE(route->link_ids.size(), 2);
+
+    scheduler->start_flow(chunk_size, route, callback, nullptr);
+    scheduler->start_flow(2 * chunk_size, route, callback, nullptr);
+    scheduler->flush_pending_starts();
+    scheduler->mark_event_loop_started();
+
+    const auto current_tick = event_queue->get_current_time();
+    const auto current_epoch = scheduler->link_state_epoch();
+
+    // Every link of the shared route must report both flows; each active flow
+    // contributes its full outstanding bytes (the fluid model transfers the
+    // whole flow over every link of its route).
+    for (const auto link_id : route->link_ids) {
+        const auto snapshot =
+            scheduler->link_congestion_snapshot(link_id, current_tick, current_epoch);
+        ASSERT_TRUE(snapshot.has_value());
+        EXPECT_EQ(snapshot->link_id, link_id);
+        EXPECT_EQ(snapshot->tick, current_tick);
+        EXPECT_EQ(snapshot->epoch, current_epoch);
+        EXPECT_EQ(snapshot->active_flow_count, 2);
+        EXPECT_EQ(snapshot->remaining_bytes, 3 * chunk_size);
+    }
+}
+
+TEST_F(TestNetworkAnalyticalCongestionAware, FluidLinkCongestionSnapshotExpiredHandlesRejected) {
+    const auto network_parser = NetworkParser("../../input/Mesh2D.yml");
+    const auto topology = construct_topology(network_parser);
+    const auto scheduler = make_fluid_scheduler(topology);
+    const auto route = topology->fluid_route(0, 3);
+
+    scheduler->start_flow(chunk_size, route, callback, nullptr);
+    scheduler->flush_pending_starts();
+    scheduler->mark_event_loop_started();
+
+    const auto current_tick = event_queue->get_current_time();
+    const auto current_epoch = scheduler->link_state_epoch();
+    const auto link_id = route->link_ids.front();
+
+    // Stale tick, stale epoch, and unknown link must all be rejected.
+    EXPECT_FALSE(
+        scheduler->link_congestion_snapshot(link_id, current_tick + 1, current_epoch).has_value());
+    EXPECT_FALSE(
+        scheduler->link_congestion_snapshot(link_id, current_tick, current_epoch + 1).has_value());
+    EXPECT_FALSE(
+        scheduler->link_congestion_snapshot(link_id, current_tick + 1, current_epoch + 1).has_value());
+    EXPECT_FALSE(
+        scheduler->link_congestion_snapshot(static_cast<LinkId>(scheduler->link_count()),
+                                            current_tick, current_epoch)
+            .has_value());
+    // The fresh handle still works (rejections above did not disturb state).
+    EXPECT_TRUE(
+        scheduler->link_congestion_snapshot(link_id, current_tick, current_epoch).has_value());
+}
+
+TEST_F(TestNetworkAnalyticalCongestionAware, FluidLinkCongestionSnapshotEpochAdvancesOnMembershipChanges) {
+    const auto network_parser = NetworkParser("../../input/Mesh2D.yml");
+    const auto topology = construct_topology(network_parser);
+    const auto scheduler = make_fluid_scheduler(topology);
+    const auto route = topology->fluid_route(0, 3);
+    auto tracker = ArrivalTracker{event_queue.get(), {}};
+
+    // Two flows of different sizes over the same route: the 1MB flow finishes
+    // first, the 2MB flow stays active.
+    scheduler->start_flow(chunk_size, route, record_arrival, &tracker);
+    scheduler->start_flow(2 * chunk_size, route, record_arrival, &tracker);
+    scheduler->flush_pending_starts();
+    scheduler->mark_event_loop_started();
+
+    const auto epoch_after_flush = scheduler->link_state_epoch();
+    EXPECT_GT(epoch_after_flush, 0);  // membership added on flush
+
+    // Run until the first (smaller) flow has fully arrived; the larger flow is
+    // still active on the route.
+    while (tracker.arrival_times.empty() && !event_queue->finished()) {
+        event_queue->proceed();
+    }
+    ASSERT_EQ(tracker.arrival_times.size(), 1);
+
+    const auto mid_tick = event_queue->get_current_time();
+    const auto mid_epoch = scheduler->link_state_epoch();
+    EXPECT_GT(mid_epoch, epoch_after_flush);  // the completed flow removed its memberships
+
+    for (const auto link_id : route->link_ids) {
+        const auto snapshot = scheduler->link_congestion_snapshot(link_id, mid_tick, mid_epoch);
+        ASSERT_TRUE(snapshot.has_value());
+        EXPECT_EQ(snapshot->active_flow_count, 1);  // only the 2MB flow remains
+        // The 2MB flow is still active but already transferred part of its
+        // bytes (flows advance lazily on membership changes): the snapshot
+        // reports the bookkeeping remaining strictly between 0 and the full
+        // flow size, not the original full size.
+        EXPECT_GT(snapshot->remaining_bytes, 0);
+        EXPECT_LT(snapshot->remaining_bytes, 2 * chunk_size);
+    }
+
+    // Run to completion: every link empties, and the epoch advances again.
+    run_simulation();
+    const auto end_epoch = scheduler->link_state_epoch();
+    EXPECT_GT(end_epoch, mid_epoch);
+    for (const auto link_id : route->link_ids) {
+        const auto snapshot = scheduler->link_congestion_snapshot(
+            link_id, event_queue->get_current_time(), end_epoch);
+        ASSERT_TRUE(snapshot.has_value());
+        EXPECT_EQ(snapshot->active_flow_count, 0);
+        EXPECT_EQ(snapshot->remaining_bytes, 0);
+    }
+    EXPECT_EQ(scheduler->get_total_completed_flows(), 2);
+}

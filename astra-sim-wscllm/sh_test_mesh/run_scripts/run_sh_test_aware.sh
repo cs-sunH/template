@@ -19,7 +19,10 @@ TRACE_CONFIG_ASSIGNMENTS=$(load_trace_config)
 eval "${TRACE_CONFIG_ASSIGNMENTS}"
 RESULT_DIR="${SH_TEST_DIR}/results"
 RUN_OUTPUT_LOG_DIR="${RESULT_DIR}/run_logs"
-RUN_OUTPUT_LOG_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+# Phase-0 determinism (plan step 0-7): the log filename feeds metrics
+# postprocess run_id, so byte-identical raw_metrics.csv reruns require a
+# reproducible timestamp.  Default stays "now"; override for rerun parity.
+RUN_OUTPUT_LOG_TIMESTAMP="${RUN_OUTPUT_LOG_TIMESTAMP:-$(date +"%Y%m%d_%H%M%S")}"
 RESULT_LOG="${RUN_OUTPUT_LOG_DIR}/run_aware_wsc_llm_${TRACE_LABEL}_${RUN_OUTPUT_LOG_TIMESTAMP}.log"
 
 ENABLE_ASTRA_INTERNAL_DEBUG_LOG=0

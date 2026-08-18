@@ -654,6 +654,14 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
+    # fail-closed (stage 0, step 0-1): a missing request queue must abort the
+    # official entry point BEFORE load_request_queue can silently fall back to
+    # the random create_default_request_queue stub (generate_trace.py:410-412).
+    if not request_queue_csv.exists():
+        sys.exit(
+            f"missing request queue: {request_queue_csv}；"
+            "请按 traces/PROVENANCE.md / derive_20_first_30_seconds.py 物化输入"
+        )
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue, selected_session_ids = select_first_session_requests(
         source_request_queue,
@@ -753,7 +761,7 @@ def _to_scheduler_requests(requests: Sequence[RequestSpec]) -> tuple[FaceRequest
     )
 
 
-def build_face_plan(config: FaceTraceConfig) -> FacePlan:
+def build_face_plan(config: FaceTraceConfig, force_record_iterations: bool = False) -> FacePlan:
     specs = tuple(
         FaceInstanceSpec(group.name, group.pg_name, group.ranks)
         for group in config.inference_groups
@@ -765,9 +773,205 @@ def build_face_plan(config: FaceTraceConfig) -> FacePlan:
         requests=_to_scheduler_requests(config.request_queue),
         edge_ranks=config.remote_memory.edge_npus,
         reserve_context_tokens=config.kv_reserve_context_tokens,
-        record_iterations=config.trace_granularity == "token_expanded",
+        record_iterations=(
+            force_record_iterations
+            or config.trace_granularity == "token_expanded"
+        ),
         prefill_chunk_size=config.prefill_chunk_size,
     )
+
+
+def _replay_transfer_shard_dict(shard: "KVTransferShard") -> dict[str, object]:
+    return {
+        "source_rank": shard.source_rank,
+        "target_rank": shard.target_rank,
+        "edge_rank": shard.edge_rank,
+        "bytes": shard.bytes,
+        "noc_path": list(shard.noc_path),
+    }
+
+
+def _replay_kv_transfer_dict(transfer: "KVTransfer") -> dict[str, object]:
+    return {
+        "kind": transfer.kind,
+        "phase": transfer.phase,
+        "reason": transfer.reason,
+        "session_id": transfer.session_id,
+        "trigger_request_id": transfer.trigger_request_id,
+        "source_instance_index": transfer.source_instance_index,
+        "target_instance_index": transfer.target_instance_index,
+        "total_bytes": transfer.total_bytes,
+        "shards": [_replay_transfer_shard_dict(shard) for shard in transfer.shards],
+    }
+
+
+def _replay_lut_entry_dict(entry: "FaceLutEntry") -> dict[str, object]:
+    return {
+        "instance_size": entry.instance_size,
+        "p_chunk": entry.p_chunk,
+        "d_batch": entry.d_batch,
+        "d_token": entry.d_token,
+        "iteration_time_ns": entry.iteration_time_ns,
+        "source": entry.source,
+    }
+
+
+def _replay_decode_candidate_dict(candidate: "DecodeCandidateCost") -> dict[str, object]:
+    return {
+        "instance_index": candidate.instance_index,
+        "weighted_distance": candidate.weighted_distance,
+        "current_lut": _replay_lut_entry_dict(candidate.current_lut),
+        "updated_lut": _replay_lut_entry_dict(candidate.updated_lut),
+        "delta_time_ns": candidate.delta_time_ns,
+        "per_die_delta_ns": candidate.per_die_delta_ns,
+    }
+
+
+def _write_replay_decision_log(plan: FacePlan, path: Path) -> None:
+    """Materialize the offline decision sequence (stage-0 step 0-5).
+
+    Replay sidecar for phase-1 zero-polling replay (方案 A): written only when
+    the explicit ``--replay-record`` CLI switch is set; the production path
+    never writes it.  Each line is one JSON record
+    ``{seq, tick, priority, kind, request_id, decision}`` sorted by
+    ``(tick, priority, seq)``.  ``priority`` is 0 for every decision fact
+    (offline completion processing precedes arrivals at the same tick,
+    face_scheduler.py:2970).  ``kind`` is one of ``prefill`` (admission:
+    prefill instance + history transfer + admission/prefill eviction
+    sequences, tick = admission_time_ns), ``decode`` (decode instance +
+    candidates + migration/decode eviction sequences, tick =
+    prefill_complete_ns), ``completion`` (completion evictions + KV terminal
+    state, tick = completion_ns) or ``iteration`` (LUT 计时计划, replay 不
+    消费, 与蓝本同构).  The recording is a pure observer: production
+    manifest.json / .et outputs are byte-identical with or without it
+    (byte-equality gate, step 0-5).
+    """
+
+    records: list[dict[str, object]] = []
+    seq = 0
+    for request in plan.requests:
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.admission_time_ns,
+                "priority": 0,
+                "kind": "prefill",
+                "request_id": request.request_id,
+                "decision": {
+                    "queue_index": request.queue_index,
+                    "session_id": request.session_id,
+                    "turn_index": request.turn_index,
+                    "estimated_arrival_ns": request.estimated_arrival_ns,
+                    "admission_time_ns": request.admission_time_ns,
+                    "hbm_wait_ns": request.hbm_wait_ns,
+                    "prefill_instance_index": request.prefill_instance_index,
+                    "prefill_assignment_key": list(request.prefill_assignment_key),
+                    "prefill_context_tokens": request.prefill_context_tokens,
+                    "final_context_tokens": request.final_context_tokens,
+                    "history_tokens_before": request.history_tokens_before,
+                    "history_source_instance_index": (
+                        request.history_source_instance_index
+                    ),
+                    "history_transfer_bytes": request.history_transfer_bytes,
+                    "history_location_before": (
+                        None
+                        if request.history_location_before is None
+                        else request.history_location_before.location
+                    ),
+                    "history_transfer": (
+                        None
+                        if request.history_transfer is None
+                        else _replay_kv_transfer_dict(request.history_transfer)
+                    ),
+                    "history_evictions": [
+                        _replay_kv_transfer_dict(transfer)
+                        for transfer in request.history_evictions
+                    ],
+                    "prefill_evictions": [
+                        _replay_kv_transfer_dict(transfer)
+                        for transfer in request.prefill_evictions
+                    ],
+                    "prefill_start_ns": request.prefill_start_ns,
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.prefill_complete_ns,
+                "priority": 0,
+                "kind": "decode",
+                "request_id": request.request_id,
+                "decision": {
+                    "decode_instance_index": request.decode_instance_index,
+                    "decode_candidates": [
+                        _replay_decode_candidate_dict(candidate)
+                        for candidate in request.decode_candidates
+                    ],
+                    "prefill_decode_transfer": (
+                        None
+                        if request.prefill_decode_transfer is None
+                        else _replay_kv_transfer_dict(request.prefill_decode_transfer)
+                    ),
+                    "decode_evictions": [
+                        _replay_kv_transfer_dict(transfer)
+                        for transfer in request.decode_evictions
+                    ],
+                    "decode_start_ns": request.decode_start_ns,
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.completion_ns,
+                "priority": 0,
+                "kind": "completion",
+                "request_id": request.request_id,
+                "decision": {
+                    "completion_evictions": [
+                        _replay_kv_transfer_dict(transfer)
+                        for transfer in request.completion_evictions
+                    ],
+                    "kv_location_after_completion": (
+                        request.kv_location_after_completion
+                    ),
+                    "kv_instance_after_completion": (
+                        request.kv_instance_after_completion
+                    ),
+                    "reserve_unmet_ranks": list(request.reserve_unmet_ranks),
+                },
+            }
+        )
+        seq += 1
+    for iteration in plan.iterations:
+        records.append(
+            {
+                "seq": seq,
+                "tick": iteration.start_ns,
+                "priority": 0,
+                "kind": "iteration",
+                "request_id": iteration.prefill_request_id or "",
+                "decision": {
+                    "instance_index": iteration.instance_index,
+                    "iteration_index": iteration.iteration_index,
+                    "start_ns": iteration.start_ns,
+                    "end_ns": iteration.end_ns,
+                    "prefill_request_id": iteration.prefill_request_id,
+                    "prefill_chunk_tokens": iteration.prefill_chunk_tokens,
+                    "decode_request_ids": list(iteration.decode_request_ids),
+                    "lut_entry": _replay_lut_entry_dict(iteration.lut_entry),
+                },
+            }
+        )
+        seq += 1
+    records.sort(key=lambda record: (record["tick"], record["priority"], record["seq"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
 
 
 def _transfer_trigger_time_ns(
@@ -2535,6 +2739,7 @@ def _default_jobs() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     print_shell = False
+    replay_record = False
     jobs: Optional[int] = None
     metrics_detail_arg: Optional[str] = None
     config_paths: list[str] = []
@@ -2542,6 +2747,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         argument = args.pop(0)
         if argument == "--print-shell-config":
             print_shell = True
+        elif argument == "--replay-record":
+            replay_record = True
         elif argument in {"-j", "--jobs"}:
             if not args:
                 raise SystemExit(f"{argument} requires a positive integer")
@@ -2586,6 +2793,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         jobs=_default_jobs() if jobs is None else jobs,
         metrics=metrics,
     )
+    if replay_record:
+        # Stage-0 step 0-5: pure observation sidecar.  The plan is re-derived
+        # with per-iteration recording enabled for this run only; production
+        # outputs above stay byte-identical (byte-equality gate).
+        recorded_plan = build_face_plan(config, force_record_iterations=True)
+        decision_log_path = resolve_output_dir(config, recorded_plan) / "decision_log.jsonl"
+        _write_replay_decision_log(recorded_plan, decision_log_path)
+        print(json.dumps({"replay_decision_log": str(decision_log_path)}))
 
 
 if __name__ == "__main__":

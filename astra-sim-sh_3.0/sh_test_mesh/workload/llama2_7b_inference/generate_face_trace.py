@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import heapq
 import hashlib
 import io
@@ -775,6 +776,17 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
+    # ED 改造阶段 0（步骤 0-1）：正式入口 fail-closed。必须在调用
+    # load_request_queue 之前拦截——该函数在文件缺失时会静默调用
+    # create_default_request_queue 生成随机 4-request 队列（request-neutral
+    # 红线）。随机 stub 保留仅供显式 fixture 使用。
+    if not request_queue_csv.exists():
+        sys.exit(
+            f"missing request queue: {request_queue_csv}；"
+            "request-neutral 仓库不绑定默认队列——请按方案文档 "
+            "(sh_3.0仓库改造详细执行方案.md §3 步骤 0-1) 物化 "
+            "sidecar_restore 三件套后在 trace_config.csv 指定"
+        )
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue_context_csv = parsed["request_queue_context_csv"]
     if request_queue_context_csv is not None:
@@ -891,7 +903,7 @@ def _to_scheduler_requests(requests: Sequence[RequestSpec]) -> tuple[FaceRequest
     )
 
 
-def build_face_plan(config: FaceTraceConfig) -> FacePlan:
+def build_face_plan(config: FaceTraceConfig, replay_record: bool = False) -> FacePlan:
     specs = tuple(
         FaceInstanceSpec(group.name, group.pg_name, group.ranks)
         for group in config.inference_groups
@@ -904,8 +916,225 @@ def build_face_plan(config: FaceTraceConfig) -> FacePlan:
         edge_ranks=config.remote_memory.edge_npus,
         reserve_context_tokens=config.kv_reserve_context_tokens,
         average_decode_length=config.source_average_decode_length,
-        record_iterations=config.trace_granularity == "token_expanded",
+        # ED 改造步骤 0-5（方案 A）：--replay-record 专用规划运行强制记录
+        # iteration 明细（record_iterations 仅追加观测列表，不改变调度行为；
+        # 生产路径保持 request_aggregated=False 且产物字节不变）。
+        record_iterations=replay_record
+        or config.trace_granularity == "token_expanded",
     )
+
+
+def _replay_kv_transfer_dict(transfer: Optional[KVTransfer]) -> Optional[dict]:
+    if transfer is None:
+        return None
+    return {
+        "kind": transfer.kind,
+        "phase": transfer.phase,
+        "reason": transfer.reason,
+        "session_id": transfer.session_id,
+        "trigger_request_id": transfer.trigger_request_id,
+        "source_instance_index": transfer.source_instance_index,
+        "target_instance_index": transfer.target_instance_index,
+        "total_bytes": transfer.total_bytes,
+        "model_layers": transfer.model_layers,
+        "layer_start": transfer.layer_start,
+        "layer_end": transfer.layer_end,
+        "resident_prefix_layers_before": transfer.resident_prefix_layers_before,
+        "resident_prefix_layers_after": transfer.resident_prefix_layers_after,
+        "shards": [
+            {
+                "source_rank": shard.source_rank,
+                "target_rank": shard.target_rank,
+                "edge_rank": shard.edge_rank,
+                "bytes": shard.bytes,
+                "noc_path": list(shard.noc_path),
+                "layer_start": shard.layer_start,
+                "layer_end": shard.layer_end,
+            }
+            for shard in transfer.shards
+        ],
+    }
+
+
+def _load_snapshot_dict(snapshot: InstanceTaskLoadSnapshot) -> dict:
+    return {
+        "instance_index": snapshot.instance_index,
+        "running_prefill_task_load_ns": snapshot.running_prefill_task_load_ns,
+        "queued_prefill_task_load_ns": snapshot.queued_prefill_task_load_ns,
+        "active_decode_task_load_ns": snapshot.active_decode_task_load_ns,
+        "last_arrival_ns": snapshot.last_arrival_ns,
+        "total_task_load_ns": snapshot.total_task_load_ns,
+        "ordering_key": list(snapshot.ordering_key),
+    }
+
+
+def _lut_entry_dict(entry: FaceLutEntry) -> dict:
+    return {
+        "instance_size": entry.instance_size,
+        "p_chunk": entry.p_chunk,
+        "d_batch": entry.d_batch,
+        "d_token": entry.d_token,
+        "iteration_time_ns": entry.iteration_time_ns,
+        "source": entry.source,
+    }
+
+
+def _write_replay_decision_log(plan: FacePlan, path: Path) -> None:
+    """Materialize the offline per-request/per-chunk decision sequence (step 0-5).
+
+    Replay sidecar for phase-1 zero-polling replay (方案 A): written only when
+    the explicit ``--replay-record`` CLI switch is set; the production path
+    never writes it.  Each line is one JSON record
+    ``{seq, tick, priority, kind, request_id, decision}`` sorted by
+    ``(tick, priority, seq)``; ``priority`` 0 = decision fact (offline
+    completion processing precedes arrivals at the same tick; arrivals are
+    not decision facts).  ``kind`` ∈ ``prefill``/``decode``/``completion``
+    (per-request decisions: prefill 实例 + affinity reason + 负载快照键、
+    decode 实例（恒等于 prefill 实例）、KV 动作序列) or ``iteration``
+    (per-chunk FaceIterationRecord, the offline event-loop timeline).
+    """
+
+    records: list[dict[str, object]] = []
+    seq = 0
+    for request in plan.requests:
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.prefill_start_ns,
+                "priority": 0,
+                "kind": "prefill",
+                "request_id": request.request_id,
+                "decision": {
+                    "queue_index": request.queue_index,
+                    "session_id": request.session_id,
+                    "turn_index": request.turn_index,
+                    "prefill_instance_index": request.prefill_instance_index,
+                    "prefill_assignment_key": list(request.prefill_assignment_key),
+                    "prefill_affinity_reason": request.prefill_affinity_reason,
+                    "prefill_hbm_feasible_instances": list(
+                        request.prefill_hbm_feasible_instances
+                    ),
+                    "instance_loads": [
+                        _load_snapshot_dict(snapshot)
+                        for snapshot in request.prefill_instance_loads
+                    ],
+                    "estimated_arrival_ns": request.estimated_arrival_ns,
+                    "admission_time_ns": request.admission_time_ns,
+                    "hbm_wait_ns": request.hbm_wait_ns,
+                    "history_tokens_before": request.history_tokens_before,
+                    "prefill_context_tokens": request.prefill_context_tokens,
+                    "final_context_tokens": request.final_context_tokens,
+                    "history_source_instance_index": (
+                        request.history_source_instance_index
+                    ),
+                    "history_transfer_bytes": request.history_transfer_bytes,
+                    "history_tokens_discarded": request.history_tokens_discarded,
+                    "history_location_before": (
+                        None
+                        if request.history_location_before is None
+                        else {
+                            "location": request.history_location_before.location,
+                            "instance_index": (
+                                request.history_location_before.instance_index
+                            ),
+                            "context_tokens": (
+                                request.history_location_before.context_tokens
+                            ),
+                            "total_bytes": (
+                                request.history_location_before.total_bytes
+                            ),
+                        }
+                    ),
+                    "history_transfer": _replay_kv_transfer_dict(request.history_transfer),
+                    "history_evictions": [
+                        _replay_kv_transfer_dict(eviction)
+                        for eviction in request.history_evictions
+                    ],
+                    "prefill_evictions": [
+                        _replay_kv_transfer_dict(eviction)
+                        for eviction in request.prefill_evictions
+                    ],
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.decode_start_ns,
+                "priority": 0,
+                "kind": "decode",
+                "request_id": request.request_id,
+                "decision": {
+                    "decode_instance_index": request.decode_instance_index,
+                    "prefill_decode_transfer": _replay_kv_transfer_dict(
+                        request.prefill_decode_transfer
+                    ),
+                    "decode_evictions": [
+                        _replay_kv_transfer_dict(eviction)
+                        for eviction in request.decode_evictions
+                    ],
+                },
+            }
+        )
+        seq += 1
+        records.append(
+            {
+                "seq": seq,
+                "tick": request.completion_ns,
+                "priority": 0,
+                "kind": "completion",
+                "request_id": request.request_id,
+                "decision": {
+                    "kv_location_after_completion": (
+                        request.kv_location_after_completion
+                    ),
+                    "kv_instance_after_completion": (
+                        request.kv_instance_after_completion
+                    ),
+                    "completion_evictions": [
+                        _replay_kv_transfer_dict(eviction)
+                        for eviction in request.completion_evictions
+                    ],
+                    "reserve_unmet_ranks": list(request.reserve_unmet_ranks),
+                },
+            }
+        )
+        seq += 1
+    if not plan.iterations_recorded:
+        raise SystemExit(
+            "replay-record requires iteration records "
+            "(record_iterations forced by --replay-record)"
+        )
+    for iteration in plan.iterations:
+        records.append(
+            {
+                "seq": seq,
+                "tick": iteration.start_ns,
+                "priority": 0,
+                "kind": "iteration",
+                "request_id": (
+                    iteration.prefill_request_id
+                    if iteration.prefill_request_id is not None
+                    else ""
+                ),
+                "decision": {
+                    "instance_index": iteration.instance_index,
+                    "iteration_index": iteration.iteration_index,
+                    "end_ns": iteration.end_ns,
+                    "prefill_request_id": iteration.prefill_request_id,
+                    "prefill_chunk_tokens": iteration.prefill_chunk_tokens,
+                    "decode_request_ids": list(iteration.decode_request_ids),
+                    "lut_entry": _lut_entry_dict(iteration.lut_entry),
+                },
+            }
+        )
+        seq += 1
+    records.sort(key=lambda record: (record["tick"], record["priority"], record["seq"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
 
 
 def _planner_cache_path(config: FaceTraceConfig) -> Path:
@@ -3199,6 +3428,7 @@ def _default_jobs() -> int:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     print_shell = False
+    replay_record = False
     jobs: Optional[int] = None
     metrics_detail_arg: Optional[str] = None
     config_paths: list[str] = []
@@ -3206,6 +3436,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         argument = args.pop(0)
         if argument == "--print-shell-config":
             print_shell = True
+        elif argument == "--replay-record":
+            replay_record = True
         elif argument in {"-j", "--jobs"}:
             if not args:
                 raise SystemExit(f"{argument} requires a positive integer")
@@ -3218,7 +3450,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             raise SystemExit(
                 "Usage: generate_trace.py [--print-shell-config] "
                 "[-j JOBS|--jobs JOBS] [--metrics-detail=off|summary|full] "
-                "[trace_config.csv]. "
+                "[--replay-record] [trace_config.csv]. "
                 "Set TRACE_GEN_JOBS to choose the default worker count. "
                 f"Default config: {CONFIG_CSV_PATH}"
             )
@@ -3230,8 +3462,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         raise SystemExit(
             "Usage: generate_trace.py [--print-shell-config] "
             "[-j JOBS|--jobs JOBS] [--metrics-detail=off|summary|full] "
-            "[trace_config.csv]. "
+            "[--replay-record] [trace_config.csv]. "
             f"Default config: {CONFIG_CSV_PATH}"
+        )
+    if replay_record and print_shell:
+        raise SystemExit(
+            "--replay-record cannot be combined with --print-shell-config"
         )
     config_csv = CONFIG_CSV_PATH if not config_paths else Path(config_paths[0])
     config = load_face_trace_config(config_csv)
@@ -3244,7 +3480,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     metrics_detail = resolve_metrics_detail(metrics_detail_arg, os.environ)
     metrics = None if metrics_detail == "off" else ServiceMetrics(metrics_detail)
     lut_stats: Optional[PlannerLutStatsAccumulator] = None
-    if metrics is None:
+    replay_plan = None
+    if replay_record and metrics is None:
+        replay_plan = build_face_plan(config, replay_record=True)
+        plan = dataclasses.replace(
+            replay_plan, iterations=(), iterations_recorded=False
+        )
+    elif metrics is None:
         plan = load_or_build_face_plan(config)
     else:
         # The metrics manifest needs the KV manager's live memory-delta
@@ -3258,8 +3500,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         set_metrics_observer(metrics.memory)
         set_iteration_stats_hook(lut_stats.record_lut_iteration)
         try:
-            plan = build_face_plan(config)
+            built = build_face_plan(config, replay_record=replay_record)
         finally:
+            set_metrics_observer(None)
+            set_iteration_stats_hook(None)
+        if replay_record:
+            replay_plan = built
+            plan = dataclasses.replace(
+                built, iterations=(), iterations_recorded=False
+            )
+        else:
+            plan = built
             set_metrics_observer(None)
             set_iteration_stats_hook(None)
     write_face_trace(
@@ -3272,6 +3523,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         write_planner_lut_stats(
             lut_stats, output_dir=resolve_output_dir(config, plan)
         )
+    if replay_record:
+        decision_log_path = (
+            resolve_output_dir(config, plan) / "decision_log.jsonl"
+        )
+        _write_replay_decision_log(replay_plan, decision_log_path)
+        print(json.dumps({"replay_decision_log": str(decision_log_path)}))
 
 
 if __name__ == "__main__":

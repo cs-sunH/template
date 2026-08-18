@@ -6,12 +6,16 @@ LICENSE file in the root directory of this source tree.
 #ifndef __WORKLOAD_HH__
 #define __WORKLOAD_HH__
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CommunicatorGroup.hh"
+#include "astra-sim/workload/execution_driven/ExecutionMode.hh"
+#include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
@@ -24,30 +28,41 @@ class DataSet;
 
 class Workload : public Callable {
   public:
+    // execution_mode/graph_source: step-1-2 execution-mode factory
+    // (ExecutionMode.hh). Static default keeps the legacy call sites and the
+    // byte-for-byte static behavior unchanged.
     Workload(Sys* sys,
              std::string et_filename,
-             std::string comm_group_filename);
+             std::string comm_group_filename,
+             ExecutionDriven::ExecutionMode execution_mode =
+                 ExecutionDriven::ExecutionMode::Static,
+             std::shared_ptr<ExecutionDriven::GraphSource> graph_source =
+                 nullptr,
+             bool replay_clock = false);
     ~Workload();
 
     // communicator groups
     // Parse the user provided 'comm_group_filename' and extract the list of
     // communicator groups. Refer to the wiki for the format.
     void initialize_comm_groups(std::string comm_group_filename);
-    void issue_pytorch_pg_metadata(
-        std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
+    void issue_pytorch_pg_metadata(const ExecutionDriven::NodeView& node);
 
-    // event-based simulation
+    // event-based simulation. Step 1-4 (方案 §4 步骤 1-4 操作 4): every issue_*
+    // consumes the NodeView read view from the GraphSource (依赖状态唯一所有
+    // 者); the ETFeederNode handle is fetched through GraphSource::et_node
+    // only where the static-path consumers (HardwareResource / Statistics /
+    // local_mem tracker) still need it.
     void issue_dep_free_nodes();
-    void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_metadata(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_replay(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_remote_mem(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_comp(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_coll_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_send_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void issue_recv_comm(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
-    void skip_invalid(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
+    void issue(const ExecutionDriven::NodeView& node);
+    void issue_metadata(const ExecutionDriven::NodeView& node);
+    void issue_replay(const ExecutionDriven::NodeView& node);
+    void issue_remote_mem(const ExecutionDriven::NodeView& node);
+    void issue_comp(const ExecutionDriven::NodeView& node);
+    void issue_comm(const ExecutionDriven::NodeView& node);
+    void issue_coll_comm(const ExecutionDriven::NodeView& node);
+    void issue_send_comm(const ExecutionDriven::NodeView& node);
+    void issue_recv_comm(const ExecutionDriven::NodeView& node);
+    void skip_invalid(const ExecutionDriven::NodeView& node);
     void call(EventType event, CallData* data);
     void fire();
 
@@ -64,13 +79,83 @@ class Workload : public Callable {
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
 
+    // step-1-2 execution-mode factory state: online mode never constructs the
+    // ETFeeder and never requires .et files; the dynamic GraphSource is
+    // injected at Sys creation (NodeStore-backed implementation in step 1-4).
+    ExecutionDriven::ExecutionMode execution_mode_;
+    std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
+    // step-1-8 (main ruling 2026-08-15): replay-clock scope flag. ONLY
+    // --online-mode replay runs the LUT-clock semantics (calibrated COMP
+    // chains run concurrently past the single-slot gate; comm nodes complete
+    // instantly). strategy mode keeps real physics (serial compute + real
+    // network + real queuing, §6.1) -- the flag is false there. The static
+    // path never sets it.
+    bool replay_clock_;
+
   private:
-    // From the ET node, find out the corresponding communicator group, and
-    // return the pointer. If no communicator group is specified for this ET
+    // From the node view, find out the corresponding communicator group, and
+    // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
-    CommunicatorGroup* extract_comm_group(
-        std::shared_ptr<Chakra::ETFeederNode> node);
+    CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
 };
+
+namespace ExecutionDriven {
+
+// ---------------------------------------------------------------------------
+// Phase-4 sensing (方案 §6.2 操作 2 / contract ⑥): remote-memory FIFO
+// 实账本层 -- sh_1.0's distinguishing ledger layer (the blueprint repos hold
+// an "n/a" placeholder here; this repo executes MEM_LOAD/MEM_STORE traffic
+// through the real AnalyticalRemoteMemory 26-port FIFO).
+//
+// Observation without touching the red-line AnalyticalRemoteMemory files
+// (实录: 两文件零改动): every real-FIFO request enters through
+// Workload::issue_remote_mem -> issue() and completes through the generic
+// wlhd terminal branch of Workload::call (the port-FIFO completion callback
+// registers the workload's own event back). Per port (= per npu-id under
+// PER_NPU_MEMORY_EXPANSION, the configured architecture here), the counters
+// give the exact FIFO state because the port FIFO is a strict single server:
+//   in_flight  = issued - completed   (== active + pending)
+//   active     = (in_flight > 0) ? 1 : 0
+//   pending    = in_flight - active
+// (server is busy iff any started request is unfinished; every issue either
+// starts or enqueues, every completion either starts the next or idles the
+// server -- AnalyticalRemoteMemory::issue/call, read-only analysis).
+// Query/audit data only; no simulation semantics are touched anywhere.
+// Single-threaded event loop -> no locking.
+// ---------------------------------------------------------------------------
+class RemoteFifoLedger {
+  public:
+    struct PortCounters {
+        uint64_t issued_count = 0;
+        uint64_t issued_bytes = 0;
+        uint64_t completed_count = 0;
+        uint64_t completed_bytes = 0;
+        uint64_t peak_in_flight_count = 0;   // max active+pending requests
+        uint64_t peak_in_flight_bytes = 0;   // max active+pending bytes
+    };
+
+    static RemoteFifoLedger& instance();
+
+    void record_issue(int sys_id, uint64_t tensor_size);
+    void record_completion(int sys_id, uint64_t tensor_size);
+
+    /// Ports with any activity, sorted by sys_id (deterministic dump order).
+    std::vector<int> active_ports() const;
+    const PortCounters* port(int sys_id) const;
+    uint64_t total_issued_count() const;
+    uint64_t total_issued_bytes() const;
+    uint64_t total_completed_count() const;
+    uint64_t total_completed_bytes() const;
+    /// True iff every port drained (issued == completed per port). A run that
+    /// ends undrained lost a completion -- the caller fails closed on it.
+    bool drained() const;
+
+  private:
+    RemoteFifoLedger() = default;
+    std::map<int, PortCounters> ports_;
+};
+
+}  // namespace ExecutionDriven
 
 }  // namespace AstraSim
 

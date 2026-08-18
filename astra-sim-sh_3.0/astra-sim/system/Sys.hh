@@ -31,6 +31,10 @@ class LogicalTopology;
 class BasicLogicalTopology;
 class OfflineGreedy;
 
+namespace ExecutionDriven {
+class GraphSource;
+}  // namespace ExecutionDriven
+
 class Sys : public Callable {
   public:
     // SchedulerUnit
@@ -63,6 +67,11 @@ class Sys : public Callable {
 
     // Constructor / Destructor
     // -------------------------------------------------
+    // execution_mode/graph_source: step-1-2 execution-mode factory
+    // (ExecutionMode.hh / GraphSource.hh). The Static default keeps the
+    // legacy main.cc call site and the byte-for-byte static behavior
+    // unchanged; Online mode never constructs the ETFeeder and never
+    // requires .et files.
     Sys(int id,
         std::string workload_configuration,
         std::string comm_group_configuration,
@@ -73,7 +82,11 @@ class Sys : public Callable {
         std::vector<int> queues_per_dim,
         double injection_scale,
         double comm_scale,
-        bool rendezvous_enabled);
+        bool rendezvous_enabled,
+        ExecutionDriven::ExecutionMode execution_mode =
+            ExecutionDriven::ExecutionMode::Static,
+        std::shared_ptr<ExecutionDriven::GraphSource> graph_source = nullptr,
+        bool replay_clock = false);
     ~Sys();
     //---------------------------------------------------------------------------
 
@@ -257,6 +270,14 @@ class Sys : public Callable {
 
     // workload
     Workload* workload;
+
+    // step-1-2 execution-mode factory state (see constructor comment).
+    ExecutionDriven::ExecutionMode execution_mode_ =
+        ExecutionDriven::ExecutionMode::Static;
+    std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
+    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
+    // --online-mode replay; strategy mode keeps real physics (false).
+    bool replay_clock_ = false;
 
     // roofline model
     bool roofline_enabled;

@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 #include <cstdint>
 
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+#include "astra-sim/workload/execution_driven/GraphSource.hh"
 
 namespace AstraSim {
 
@@ -45,6 +46,18 @@ class HardwareResource {
     void release(const std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
     bool is_available(
         const std::shared_ptr<Chakra::FeederV3::ETFeederNode> node) const;
+    // Online-mode overloads keyed by NodeView (§4.3.3). The static
+    // ETFeederNode path above is untouched (byte-exact baseline); the online
+    // path (GraphSource::et_node == nullptr) dispatches on the NodeView
+    // fields: is_timer_op -> no-op, MEM_LOAD/MEM_STORE with
+    // is_local_hbm_kv_restore -> hbm_dma class (sh_2.0 fourth resource
+    // class, single slot; count-based occupy/release like Compute -- the
+    // replay bypass in Workload::issue_dep_free_nodes can issue several
+    // concurrently), is_cpu_op -> CPU, CommRecv -> no-op, Compute -> GPU
+    // comp, else -> GPU comm.
+    void occupy(const ExecutionDriven::NodeView& node);
+    void release(const ExecutionDriven::NodeView& node);
+    bool is_available(const ExecutionDriven::NodeView& node) const;
     void report();
 
     std::unordered_set<uint64_t> cpu_ops_node;

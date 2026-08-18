@@ -122,9 +122,20 @@ int CommonNetworkApi::sim_recv(void* const buffer,
             // pop entry
             callback_tracker.pop_entry(tag, src, dst, count, chunk_id);
 
-            // run recv callback immediately
-            const auto delta = timespec_t{NS, 0};
-            sim_schedule(delta, msg_handler, fun_arg);
+            // run recv callback immediately. In the invoke context (static
+            // path) the current_time alarm merges into the EventList currently
+            // being invoked and executes within the same pass -- pre-extension
+            // behavior, byte-for-byte preserved. From a tick-end/deferred
+            // context (online post-commit issue pass) a schedule_event at
+            // current_time would trip the strict-increase assert on the next
+            // proceed(), so the callback goes through the same-tick deferred
+            // drain instead (EventQueue hard rule).
+            if (event_queue->in_invoke_context()) {
+                const auto delta = timespec_t{NS, 0};
+                sim_schedule(delta, msg_handler, fun_arg);
+            } else {
+                event_queue->schedule_event_deferred(msg_handler, fun_arg);
+            }
         } else {
             // transmission not finished yet, just register callback
             entry.value()->register_recv_callback(msg_handler, fun_arg);

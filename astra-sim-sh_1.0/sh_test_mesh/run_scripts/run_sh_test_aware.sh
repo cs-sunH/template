@@ -19,7 +19,10 @@ TRACE_CONFIG_ASSIGNMENTS=$(load_trace_config)
 eval "${TRACE_CONFIG_ASSIGNMENTS}"
 RESULT_DIR="${SH_TEST_DIR}/results"
 RUN_OUTPUT_LOG_DIR="${RESULT_DIR}/run_logs"
-RUN_OUTPUT_LOG_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+# Stage-0 step 0-7: reproducible run identity for the byte-equality gate.
+# RUN_OUTPUT_LOG_TIMESTAMP may be overridden via environment (fixed archived
+# log name -> fixed run_id); the default date-derived behaviour is unchanged.
+RUN_OUTPUT_LOG_TIMESTAMP=${RUN_OUTPUT_LOG_TIMESTAMP:-$(date +"%Y%m%d_%H%M%S")}
 RESULT_LOG="${RUN_OUTPUT_LOG_DIR}/run_aware_face_${TRACE_LABEL}_${RUN_OUTPUT_LOG_TIMESTAMP}.log"
 
 ENABLE_ASTRA_INTERNAL_DEBUG_LOG=0

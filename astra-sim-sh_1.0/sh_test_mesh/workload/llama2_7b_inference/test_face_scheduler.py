@@ -98,6 +98,16 @@ def line_topology() -> tuple[FaceHardware, object]:
 
 
 class FaceSchedulerTests(unittest.TestCase):
+    # request-neutral（裸仓库还原，2026-08-16，阶段 7）：物化输入删除后
+    # config 依赖用例跳过——按 traces/PROVENANCE.md 物化输入并在
+    # trace_config.csv 指定后自动恢复（占位路径 fail-closed 由
+    # test_checked_in_config_is_request_neutral_and_fails_closed_without_input
+    # 常态覆盖）。
+    _MATERIALIZED = (
+        MODULE_DIR / "traces" /
+        "astra_compute_20_first_30_seconds_request_queue_recompute.csv"
+    ).is_file()
+
     @staticmethod
     def _request(
         session_id: str,
@@ -185,6 +195,10 @@ class FaceSchedulerTests(unittest.TestCase):
         if completion_ns is not None:
             manager.mark_complete(session_id, completion_ns)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_shell_config_does_not_build_full_face_plan(self) -> None:
         config = load_face_trace_config()
         output = io.StringIO()
@@ -201,10 +215,10 @@ class FaceSchedulerTests(unittest.TestCase):
         ):
             generate_face_trace_main(["--print-shell-config"])
         assignments = output.getvalue()
-        self.assertIn("REQUEST_COUNT=2091\n", assignments)
-        self.assertIn("SESSION_COUNT=136\n", assignments)
+        self.assertIn("REQUEST_COUNT=1177\n", assignments)
+        self.assertIn("SESSION_COUNT=112\n", assignments)
         self.assertIn("PREFILL_CHUNK_SIZE=512\n", assignments)
-        self.assertIn("PREFILL_RANGE=3-158929\n", assignments)
+        self.assertIn("PREFILL_RANGE=66-169395\n", assignments)
 
     def test_first_n_session_selection_keeps_all_source_rows(self) -> None:
         requests = (
@@ -246,7 +260,11 @@ class FaceSchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "mesh-shape"):
                 load_remote_memory_config(source, 4, mesh_shape=(2, 2))
 
-    def test_checked_in_astra_compute_selection_uses_three_minute_window(
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
+    def test_checked_in_astra_compute_selection_uses_first_30_seconds_window(
         self,
     ) -> None:
         config = load_face_trace_config()
@@ -263,32 +281,28 @@ class FaceSchedulerTests(unittest.TestCase):
             (32, 4096, 11008, 32, 32000),
         )
         expected_request_queue = (
-            MODULE_DIR.parents[3]
-            / "agent-traces"
-            / "TraceLab_ASTRA_WSC_empirical_arrival_compute_20_50_v1"
-            / "derived"
-            / "compute_20_first_3_minutes"
-            / "astra_compute_20_first_3_minutes_request_queue.csv"
+            MODULE_DIR / "traces" /
+            "astra_compute_20_first_30_seconds_request_queue_recompute.csv"
         ).resolve()
         self.assertEqual(config.request_queue_csv, expected_request_queue)
         self.assertEqual(config.request_queue_session_limit, 0)
         self.assertEqual(config.prefill_chunk_size, 512)
         self.assertEqual(config.trace_granularity, "request_aggregated")
-        self.assertEqual(config.source_request_count, 2091)
-        self.assertEqual(config.source_session_count, 136)
-        self.assertEqual(len(config.request_queue), 2091)
-        self.assertEqual(len(config.selected_session_ids), 136)
+        self.assertEqual(config.source_request_count, 1177)
+        self.assertEqual(config.source_session_count, 112)
+        self.assertEqual(len(config.request_queue), 1177)
+        self.assertEqual(len(config.selected_session_ids), 112)
         self.assertEqual(
             config.selected_session_ids[:5],
-            ("0", "1", "2", "3", "4"),
+            ("session_0", "session_1", "session_2", "session_3", "session_4"),
         )
         self.assertEqual(
             config.selected_session_ids[-5:],
-            ("131", "132", "133", "134", "135"),
+            ("session_107", "session_108", "session_109", "session_110", "session_111"),
         )
         self.assertEqual(
             {request.session_id for request in config.request_queue},
-            {str(index) for index in range(136)},
+            {f"session_{index}" for index in range(112)},
         )
         prefill_lengths = [
             request.prefill_length for request in config.request_queue
@@ -299,12 +313,12 @@ class FaceSchedulerTests(unittest.TestCase):
             for request in config.request_queue
             if request.session_arrival_time_ns is not None
         ]
-        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (3, 158929))
-        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 32000))
-        self.assertEqual(len(arrival_times), 136)
+        self.assertEqual((min(prefill_lengths), max(prefill_lengths)), (66, 169395))
+        self.assertEqual((min(decode_lengths), max(decode_lengths)), (1, 13812))
+        self.assertEqual(len(arrival_times), 112)
         self.assertEqual(
             (min(arrival_times), max(arrival_times)),
-            (94835000, 177443874000),
+            (94835000, 25959142000),
         )
         request_arrivals: dict[str, int] = {}
         for request in config.request_queue:
@@ -320,8 +334,8 @@ class FaceSchedulerTests(unittest.TestCase):
                 )
             self.assertIsNotNone(request_arrival)
             request_arrivals[request.session_id] = request_arrival
-        self.assertEqual(max(request_arrivals.values()), 179719786000)
-        self.assertLessEqual(max(request_arrivals.values()), 180000000000)
+        self.assertEqual(max(request_arrivals.values()), 29988879000)
+        self.assertLessEqual(max(request_arrivals.values()), 30000000000)
 
     def test_parallel_et_replay_matches_serial_et_bytes(self) -> None:
         """Workers may change CPU placement, never ET contents or FACE policy."""
@@ -403,6 +417,10 @@ class FaceSchedulerTests(unittest.TestCase):
             )
             self.assertEqual(list(output_dir.glob(".trace-generation-*")), [])
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_face_trace_config()
         attention_heads = tuple(
@@ -838,6 +856,10 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(plan.reserve_context_tokens, 80)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_default_config_uses_hbm160_edge_pool_and_one_million_reserve(self) -> None:
         config = load_face_trace_config()
         self.assertEqual(
@@ -898,6 +920,10 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(system_raw["remote-mem-latency"], 100)
         self.assertEqual(system_raw["peak-perf"], 261.12)
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_et_kv_migration_ack_and_cross_instance_store_trigger(self) -> None:
         config = load_face_trace_config()
         group_by_index = dict(enumerate(config.inference_groups))
@@ -1007,6 +1033,10 @@ class FaceSchedulerTests(unittest.TestCase):
             noc_builders[2].nodes[1].data_deps,
         )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_tp_readiness_barrier_waits_for_every_rank_local_predecessor(self) -> None:
         config = load_face_trace_config()
         group = config.inference_groups[0]
@@ -1310,6 +1340,10 @@ class FaceSchedulerTests(unittest.TestCase):
             ["producer", "trigger", "following"],
         )
 
+    @unittest.skipUnless(
+        _MATERIALIZED,
+        "materialized 30s input absent (request-neutral bare repo)",
+    )
     def test_checked_in_shape_and_requests_plan_deterministically(self) -> None:
         config = load_face_trace_config()
         hardware = config.hardware
@@ -1404,6 +1438,25 @@ class FaceSchedulerTests(unittest.TestCase):
                     candidate.weighted_distance,
                     hardware.schedulable_distance_limit,
                 )
+
+
+
+    def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(
+            self) -> None:
+        """裸仓库态常态用例（sh_2.0 回灌轮同款）：checked-in 配置必须指向
+        占位路径且正式入口缺失输入 fail-closed（SystemExit 非 0），任何
+        物化输入或默认队列 stub 不得回填进仓。"""
+        config_path = MODULE_DIR / "trace_config.csv"
+        with config_path.open(encoding="utf-8") as handle:
+            lines = [
+                ln for ln in handle
+                if ln.startswith("config,request_queue_csv,")
+            ]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("request_queue_placeholder.csv", lines[0])
+        with self.assertRaises(SystemExit) as caught:
+            load_face_trace_config()
+        self.assertNotEqual(caught.exception.code, 0)
 
 
 if __name__ == "__main__":

@@ -444,6 +444,141 @@ void MetricCollector::on_local_hbm_restore_issue(int rank, uint64_t bytes) {
     this->rank_states_[rank].local_hbm_restore_bytes += bytes;
 }
 
+// ---------------------------------------------------------------------------
+// Phase-7 §10.3: online dynamic anchor registration (see the header comment).
+// All entry points no-op when metrics are disabled; none of them touches the
+// static manifest path (the static main never calls them).
+// ---------------------------------------------------------------------------
+
+void MetricCollector::online_register_request(
+    int64_t queue_index, const std::string& request_id,
+    const std::string& session_id, int64_t turn_index, bool absolute_arrival,
+    Tick arrival_value_ns, int64_t arrival_parent_queue_index,
+    Tick arrival_interval_ns) {
+    if (!this->enabled_) {
+        return;
+    }
+    const auto existing = this->request_index_by_queue_index_.find(queue_index);
+    if (existing == this->request_index_by_queue_index_.end()) {
+        // Fresh dynamic request (the manifest already covered the static
+        // requests; anything not covered is an online-injected one).
+        RequestMetricState state;
+        state.queue_index = queue_index;
+        state.request_id = request_id;
+        state.session_id = session_id;
+        state.turn_index = turn_index;
+        state.arrival.kind = absolute_arrival
+                                 ? ArrivalSpec::Kind::ABSOLUTE
+                                 : ArrivalSpec::Kind::AFTER_REQUEST;
+        state.arrival.value_ns = arrival_value_ns;
+        state.arrival.parent_queue_index = arrival_parent_queue_index;
+        state.arrival.interval_ns = arrival_interval_ns;
+        this->request_index_by_queue_index_[queue_index] = this->requests_.size();
+        this->request_index_by_request_id_[request_id] = this->requests_.size();
+        this->requests_.push_back(std::move(state));
+        return;
+    }
+    // Idempotent re-registration: the online CSV data is authoritative for
+    // the arrival/session fields; overwrite them (the manifest values are
+    // planner-side, the CSV row is the actual online input).
+    RequestMetricState& state = this->requests_[existing->second];
+    state.request_id = request_id;
+    state.session_id = session_id;
+    state.turn_index = turn_index;
+    state.arrival.kind = absolute_arrival ? ArrivalSpec::Kind::ABSOLUTE
+                                          : ArrivalSpec::Kind::AFTER_REQUEST;
+    state.arrival.value_ns = arrival_value_ns;
+    state.arrival.parent_queue_index = arrival_parent_queue_index;
+    state.arrival.interval_ns = arrival_interval_ns;
+    this->request_index_by_request_id_[request_id] = existing->second;
+}
+
+void MetricCollector::clear_static_node_events() {
+    // Online mode only (see the header comment): the manifest's static
+    // node-event tables are keyed by the offline ET node-id space, which
+    // overlaps the online per-rank id space and would fire on unrelated
+    // online nodes. Clearing keeps the dynamic anchors as the sole event
+    // source. Requests/arrivals/memory actions stay loaded (the manifest
+    // request list is authoritative for arrivals; anchors are not).
+    this->issue_events_.clear();
+    this->complete_events_.clear();
+}
+
+void MetricCollector::online_register_ranks(const std::string& request_id,
+                                            bool prefill,
+                                            const std::vector<int>& ranks) {
+    if (!this->enabled_) {
+        return;
+    }
+    const auto it = this->request_index_by_request_id_.find(request_id);
+    if (it == this->request_index_by_request_id_.end()) {
+        // Unknown request (anchor registration before request registration
+        // is a driver wiring bug, not a metrics-data property); ignore.
+        return;
+    }
+    RequestMetricState& state = this->requests_[it->second];
+    // REPLACE, not union: the manifest ranks are the OFFLINE planner's
+    // instance assignment, the online watch members are the ranks the live
+    // dynamic graph actually emitted on. The two differ by an instance
+    // offset (measured: prefill {2,3,8,9,14,15} -> {38,39,44,45,50,51},
+    // +36; decode {18,19,24,25,30,31} -> {22,23,28,29,34,35}, +4), so a
+    // union would inflate the expected rank set (6+6=12) while the anchors
+    // only cover the emitted ranks -- completion could never be satisfied.
+    // The watch members are authoritative for the online run.
+    std::set<int>& target =
+        prefill ? state.prefill_ranks : state.decode_ranks;
+    target.clear();
+    target.insert(ranks.begin(), ranks.end());
+}
+
+void MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
+                                                  const std::string& request_id,
+                                                  const std::string& kind,
+                                                  bool transfer_anchor) {
+    if (!this->enabled_) {
+        return;
+    }
+    uint8_t event_code = 0;
+    if (kind == "prefill_start") {
+        event_code = static_cast<uint8_t>(EventCode::PREFILL_START_ISSUE);
+    } else if (kind == "prefill_end") {
+        event_code = static_cast<uint8_t>(EventCode::PREFILL_END_COMPLETE);
+    } else if (kind == "decode_start") {
+        event_code = static_cast<uint8_t>(EventCode::DECODE_START_ISSUE);
+    } else if (kind == "completion") {
+        event_code = static_cast<uint8_t>(EventCode::COMPLETION_COMPLETE);
+    } else if (transfer_anchor) {
+        event_code = static_cast<uint8_t>(EventCode::MEMORY_ANCHOR_COMPLETE);
+    } else {
+        return;  // unknown kind: nothing to register
+    }
+    const auto it = this->request_index_by_request_id_.find(request_id);
+    if (it == this->request_index_by_request_id_.end()) {
+        return;  // unknown request (see online_register_ranks)
+    }
+    // apply_event resolves subjects through request_index_by_queue_index_,
+    // so the event subject is the queue index (the manifest semantics).
+    const int64_t subject_id =
+        this->requests_[it->second].queue_index;
+    const NodeMetricEvent event{event_code, subject_id};
+    const bool is_issue =
+        event_code == static_cast<uint8_t>(EventCode::PREFILL_START_ISSUE) ||
+        event_code == static_cast<uint8_t>(EventCode::DECODE_START_ISSUE);
+    std::vector<NodeMetricEvent>& table =
+        is_issue ? this->issue_events_[rank][node_id]
+                 : this->complete_events_[rank][node_id];
+    // Idempotent: the same (rank, node_id, event) may be re-registered (e.g.
+    // a transfer node that is also a stage boundary); it must not double the
+    // event stream.
+    for (const auto& existing : table) {
+        if (existing.event_code == event.event_code &&
+            existing.subject_id == event.subject_id) {
+            return;
+        }
+    }
+    table.push_back(event);
+}
+
 void MetricCollector::check_consistency(bool condition,
                                         const std::string& message) {
     if (!condition) {
