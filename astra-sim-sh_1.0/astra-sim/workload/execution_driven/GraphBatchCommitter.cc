@@ -718,11 +718,18 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
             node.compute.remote_weight_bytes =
                 compute.value("remote_weight_bytes", uint64_t{0});
         }
+        // Local-HBM contention (MEM_LOAD/MEM_STORE): 0/absent = no local
+        // HBM access, 1 = read, 2 = write (bytes = tensor_size).
+        node.compute.hbm_access_mode =
+            compute.value("hbm_access_mode", int64_t{0});
         const auto& comm = node_json.value("comm", nlohmann::json::object());
         node.comm.bytes = comm.value("bytes", uint64_t{0});
         node.comm.src = comm.value("src", 0);
         node.comm.dst = comm.value("dst", 0);
         node.comm.tag = comm.value("tag", uint32_t{0});
+        // Local-HBM contention (COMM_SEND/COMM_RECV): default true; false =
+        // pass-through endpoint, no local-HBM job.
+        node.comm.hbm_charge = comm.value("hbm_charge", true);
         const auto& coll = node_json.value("coll", nlohmann::json::object());
         node.coll.comm_type = coll.value("comm_type", uint64_t{0});
         node.coll.bytes = coll.value("bytes", uint64_t{0});

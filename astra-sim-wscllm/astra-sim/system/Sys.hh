@@ -286,6 +286,14 @@ class Sys : public Callable {
     std::string local_mem_trace_filename;
     double local_mem_bw;
     uint64_t local_mem_latency;
+    // Multi-user local-HBM bandwidth contention (system config key
+    // "hbm-bandwidth-contention", default true). When true, COMP roofline
+    // traffic and NoC p2p comm endpoint reads/writes compete for the single
+    // local-mem-bw scalar through LocalHbmBandwidthModel (strict fair
+    // sharing, event-driven re-allocation). local-mem-bw <= 0 force-disables
+    // it (a zero-rate fluid model would stall forever); false restores the
+    // legacy closed-form roofline + comm-without-HBM behavior.
+    bool hbm_bandwidth_contention;
     double remote_mem_bw;
     uint64_t remote_mem_latency;
     double pipeline_tile_fraction;

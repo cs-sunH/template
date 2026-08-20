@@ -1,10 +1,12 @@
 # online_contracts — face 九项语义合同(阶段 0 冻结)
 
-冻结时间: 2026-08-15(阶段 0 步骤 0-4)。依据:执行方案 §3 步骤 0-4 与 §12;
+冻结时间: ①-⑧ 2026-08-15,⑨ 2026-08-16(阶段 0 步骤 0-4)。依据:执行方案 §3 步骤 0-4 与 §12;
 总体方案 §5.7 全部前置("九项语义合同未冻结前不进入逐文件编码")。
 **九项合同逐项审查通过是阶段 1 开工硬门槛**(阶段 1 门槛清单第 1 条)。
 
 ## 清单
+
+> 注：合同本体文件（`nine_contracts/contract_01~09.md`）与 `traces/PROVENANCE.md` 已于 2026-08-20 按用户指示删除；下表路径仅作条款标识，本 README 的摘要描述即为现存权威记录。
 
 | # | 文件 | 主题 |
 |---|---|---|
@@ -16,7 +18,7 @@
 | ⑥ | `nine_contracts/contract_06_load_state.md` | 分层账本字段/转移/对账(face 裁剪:remote FIFO 与 local HBM 为"不适用"显式占位) |
 | ⑦ | `nine_contracts/contract_07_tier_b.md` | B0-B4 分层验收;LUT 时间与真实 completion tick 不无条件强行相等;exact 仅 oracle/replay 模式 |
 | ⑧ | `nine_contracts/contract_08_prefix_canonical.md` | recompute 变体;规范输入 = 8 列队列 + canonical sidecar(digest 校验) |
-| ⑨ | `nine_contracts/contract_09_window_future_params.md` | 窗口派生口径、未来参数裁决表、**LUT 关键裁决复核记录(四函数逐行证据,无反例)** |
+| ⑨ | `nine_contracts/contract_09_window_future_params.md` | 窗口派生口径、未来参数裁决表、**face 版 LUT 关键裁决五条(2026-08-16 逐行复核 + grep 调用点证据,无反例)** |
 
 每份合同均含"口径 / 裁决 / 验证方法"三要素。决策粒度口径:对照按
 request/stage 粒度(合同⑦/⑨),不要求在线逐迭代构图。

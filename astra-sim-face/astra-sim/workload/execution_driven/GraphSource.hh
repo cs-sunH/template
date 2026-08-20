@@ -77,6 +77,12 @@ struct CommAttrs {
     int src = 0;
     int dst = 0;
     uint32_t tag = 0;
+    // ET attr "hbm-charge" (default true): when false, this endpoint does
+    // not create a local-HBM job under hbm-bandwidth-contention.  All p2p
+    // transfers in this repository are real data endpoints, so generators
+    // never need to write it; the field exists so an explicit opt-out stays
+    // parseable (static ET attr read, online POD default).
+    bool hbm_charge = true;
 };
 
 /// Collective comm attributes (issue_coll_comm).

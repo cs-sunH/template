@@ -38,7 +38,7 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
 }
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
-    return compute_job.has_value() || restore_job.has_value();
+    return !jobs.empty();
 }
 
 bool LocalHbmBandwidthModel::memory_done(const Job& job) {
@@ -59,35 +59,34 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
         return;
     }
 
-    if (compute_job.has_value()) {
-        const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
-        compute_job->remaining_ops = std::max(
-            0.0,
-            compute_job->remaining_ops -
-                compute_rate_ops_per_ns * elapsed_ns);
+    // Compute FLOPs always progress at peak rate in parallel with the HBM
+    // fluid (Roofline max(compute, memory) semantics), for every COMPUTE
+    // job regardless of how many jobs share the bus.
+    const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
+    for (Job& job : jobs) {
+        if (job.kind == JobKind::COMPUTE) {
+            job.remaining_ops = std::max(
+                0.0,
+                job.remaining_ops -
+                    compute_rate_ops_per_ns * elapsed_ns);
+        }
     }
 
     const double full_rate_bytes_per_ns = sys->local_mem_bw / 1e9;
     double remaining_ns = elapsed_ns;
     while (remaining_ns > kEpsilon) {
-        std::vector<Job*> jobs;
-        if (compute_job.has_value()) {
-            jobs.push_back(&compute_job.value());
-        }
-        if (restore_job.has_value()) {
-            jobs.push_back(&restore_job.value());
-        }
-
         std::vector<Job*> bandwidth_users;
         double step_ns = remaining_ns;
-        for (Job* job : jobs) {
-            if (job->memory_latency_ns > kEpsilon) {
-                step_ns = std::min(step_ns, job->memory_latency_ns);
-            } else if (job->remaining_bytes > kEpsilon) {
-                bandwidth_users.push_back(job);
+        for (Job& job : jobs) {
+            if (job.memory_latency_ns > kEpsilon) {
+                step_ns = std::min(step_ns, job.memory_latency_ns);
+            } else if (job.remaining_bytes > kEpsilon) {
+                bandwidth_users.push_back(&job);
             }
         }
 
+        // N-way strict equal split: every byte-streaming job receives
+        // full_rate / N where N is the number of concurrent streamers.
         const double per_user_rate = bandwidth_users.empty()
             ? 0.0
             : full_rate_bytes_per_ns /
@@ -108,15 +107,15 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             // quantity that can complete within the time tolerance, then
             // recompute rates without consuming measurable simulation time.
             bool clamped_residue = false;
-            for (Job* job : jobs) {
-                if (job->memory_latency_ns > 0 &&
-                    job->memory_latency_ns <= kEpsilon) {
-                    job->memory_latency_ns = 0;
+            for (Job& job : jobs) {
+                if (job.memory_latency_ns > 0 &&
+                    job.memory_latency_ns <= kEpsilon) {
+                    job.memory_latency_ns = 0;
                     clamped_residue = true;
                 }
-                if (job->remaining_bytes > 0 &&
-                    job->remaining_bytes <= kEpsilon) {
-                    job->remaining_bytes = 0;
+                if (job.remaining_bytes > 0 &&
+                    job.remaining_bytes <= kEpsilon) {
+                    job.remaining_bytes = 0;
                     clamped_residue = true;
                 }
             }
@@ -135,10 +134,10 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             continue;
         }
 
-        for (Job* job : jobs) {
-            if (job->memory_latency_ns > kEpsilon) {
-                job->memory_latency_ns =
-                    std::max(0.0, job->memory_latency_ns - step_ns);
+        for (Job& job : jobs) {
+            if (job.memory_latency_ns > kEpsilon) {
+                job.memory_latency_ns =
+                    std::max(0.0, job.memory_latency_ns - step_ns);
             }
         }
         for (Job* job : bandwidth_users) {
@@ -154,11 +153,8 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                 this->hbm_shared_ns_ += step_ns;
             }
             for (const Job* job : bandwidth_users) {
-                if (job->kind == JobKind::COMPUTE) {
-                    this->compute_bytes_served_ += per_user_rate * step_ns;
-                } else {
-                    this->restore_bytes_served_ += per_user_rate * step_ns;
-                }
+                this->bytes_served_by_kind_[kind_index(job->kind)] +=
+                    per_user_rate * step_ns;
             }
         }
         remaining_ns -= step_ns;
@@ -172,20 +168,13 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         return;
     }
 
-    std::vector<const Job*> jobs;
-    if (compute_job.has_value()) {
-        jobs.push_back(&compute_job.value());
-    }
-    if (restore_job.has_value()) {
-        jobs.push_back(&restore_job.value());
-    }
     std::vector<const Job*> bandwidth_users;
     double next_ns = std::numeric_limits<double>::infinity();
-    for (const Job* job : jobs) {
-        if (job->memory_latency_ns > kEpsilon) {
-            next_ns = std::min(next_ns, job->memory_latency_ns);
-        } else if (job->remaining_bytes > kEpsilon) {
-            bandwidth_users.push_back(job);
+    for (const Job& job : jobs) {
+        if (job.memory_latency_ns > kEpsilon) {
+            next_ns = std::min(next_ns, job.memory_latency_ns);
+        } else if (job.remaining_bytes > kEpsilon) {
+            bandwidth_users.push_back(&job);
         }
     }
 
@@ -200,10 +189,15 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         }
     }
 
-    if (compute_job.has_value() && memory_done(compute_job.value()) &&
-        compute_job->remaining_ops > kEpsilon) {
-        next_ns = std::min(
-            next_ns, compute_job->remaining_ops / (sys->peak_perf / 1e9));
+    // A COMPUTE job whose HBM side is already done may still be streaming
+    // FLOPs; its ops completion is a transition of its own.
+    const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
+    for (const Job& job : jobs) {
+        if (job.kind == JobKind::COMPUTE && memory_done(job) &&
+            job.remaining_ops > kEpsilon) {
+            next_ns = std::min(
+                next_ns, job.remaining_ops / compute_rate_ops_per_ns);
+        }
     }
 
     if (!std::isfinite(next_ns)) {
@@ -218,41 +212,67 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         delay);
 }
 
-void LocalHbmBandwidthModel::issue_compute(
+void LocalHbmBandwidthModel::issue_job(
+    JobKind kind,
     uint64_t num_ops,
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
     advance_to(Sys::boostedTick());
-    if (compute_job.has_value()) {
-        throw std::runtime_error("multiple inference jobs entered one NPU HBM model");
-    }
-    compute_job = Job{
-        JobKind::COMPUTE,
+    const bool joins_active_jobs = !jobs.empty();
+    jobs.push_back(Job{
+        kind,
         wlhd,
         static_cast<double>(num_ops),
         static_cast<double>(tensor_size),
         static_cast<double>(sys->local_mem_latency),
         Sys::boostedTick(),
-    };
+    });
+    if (jobs.size() > peak_concurrent_jobs_) {
+        peak_concurrent_jobs_ = static_cast<uint64_t>(jobs.size());
+    }
+    if (joins_active_jobs) {
+        // Every new streamer immediately dilutes the equal split for the
+        // already-active ones -- one redistribution per joining job.
+        ++redistribution_events_;
+    }
     schedule_next_transition();
+}
+
+void LocalHbmBandwidthModel::issue_compute(
+    uint64_t num_ops,
+    uint64_t tensor_size,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::COMPUTE, num_ops, tensor_size, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_restore(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
-    advance_to(Sys::boostedTick());
-    if (restore_job.has_value()) {
-        throw std::runtime_error("multiple KV restores entered one NPU HBM model");
-    }
-    restore_job = Job{
-        JobKind::RESTORE,
-        wlhd,
-        0.0,
-        static_cast<double>(tensor_size),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    };
-    schedule_next_transition();
+    issue_job(JobKind::RESTORE, 0, tensor_size, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_comm_read(
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::COMM_READ, 0, bytes, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_comm_write(
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::COMM_WRITE, 0, bytes, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_pool_read(
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::POOL_READ, 0, bytes, wlhd);
+}
+
+void LocalHbmBandwidthModel::issue_pool_write(
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::POOL_WRITE, 0, bytes, wlhd);
 }
 
 void LocalHbmBandwidthModel::call(EventType, CallData* data) {
@@ -266,13 +286,22 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     const Tick now = Sys::boostedTick();
     advance_to(now);
     std::vector<Job> completed;
-    if (compute_job.has_value() && complete(compute_job.value())) {
-        completed.push_back(compute_job.value());
-        compute_job.reset();
+    for (auto it = jobs.begin(); it != jobs.end();) {
+        if (complete(*it)) {
+            completed.push_back(std::move(*it));
+            it = jobs.erase(it);
+        } else {
+            ++it;
+        }
     }
-    if (restore_job.has_value() && complete(restore_job.value())) {
-        completed.push_back(restore_job.value());
-        restore_job.reset();
+
+    // 中-4④ unified batch-level rule (face semantics): the whole completion
+    // batch leaves the survivors' shares re-split (full_rate/N ->
+    // full_rate/(N-k)); the batch counts ONCE regardless of how many jobs
+    // completed together (previously each completed job counted separately,
+    // diverging from the other four repos).
+    if (!completed.empty() && !jobs.empty()) {
+        ++redistribution_events_;
     }
 
     for (const Job& job : completed) {
@@ -280,14 +309,17 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
         if (job.kind == JobKind::COMPUTE) {
             workload->hw_resource->tics_gpu_ops += elapsed;
         } else {
+            // RESTORE / COMM_* / POOL_* jobs are HBM transfers; their
+            // elapsed time accumulates on the hbm_dma counter.
             workload->hw_resource->tics_hbm_dma_ops += elapsed;
         }
         job.wlhd->workload->call(EventType::General, job.wlhd);
     }
 
-    // A completion callback may immediately issue the next compute or restore
-    // job, which schedules a transition and advances the generation.  Do not
-    // invalidate that event by scheduling the same state a second time.
+    // A completion callback may immediately issue the next job (compute,
+    // restore, comm, or pool), which schedules a transition and advances
+    // the generation.  Do not invalidate that event by scheduling the same
+    // state a second time.
     if (event_generation == generation) {
         schedule_next_transition();
     }

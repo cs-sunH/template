@@ -19,6 +19,7 @@ if str(MODULE_DIR) not in sys.path:
 from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
     PREFILL_ROLE,
+    InstanceGraph,
     KVAllocation,
     PrefillQueueSnapshot,
     WscLlmHardware,
@@ -87,6 +88,21 @@ EXPECTED_STATIC_ROUTES = {
     7: (2, (7, 2)),
     8: (3, (8, 3)),
 }
+# 真实 9 实例布局（trace_config 顺序，roles = [D,P,D,D,P,P,P,P,P]）。
+# 中-1 裁决（2026-08-20）：实测该布局下每个 Prefill 实例的最近 Decode 实例
+# 唯一——实例级平局不存在；布局若改动引入平局，
+# test_real_layout_nearest_decode_is_unique 失败提示需重新裁决。
+REAL_LAYOUT_INSTANCE_SPECS = (
+    WscLlmInstanceSpec("decode_0", "1", (20, 21, 26, 27, 32, 33), DECODE_ROLE),
+    WscLlmInstanceSpec("prefill_1", "2", (2, 3, 8, 9, 14, 15), PREFILL_ROLE),
+    WscLlmInstanceSpec("decode_2", "3", (18, 19, 24, 25, 30, 31), DECODE_ROLE),
+    WscLlmInstanceSpec("decode_3", "4", (22, 23, 28, 29, 34, 35), DECODE_ROLE),
+    WscLlmInstanceSpec("prefill_4", "5", (38, 39, 44, 45, 50, 51), PREFILL_ROLE),
+    WscLlmInstanceSpec("prefill_5", "6", (0, 1, 6, 7, 12, 13), PREFILL_ROLE),
+    WscLlmInstanceSpec("prefill_6", "7", (4, 5, 10, 11, 16, 17), PREFILL_ROLE),
+    WscLlmInstanceSpec("prefill_7", "8", (36, 37, 42, 43, 48, 49), PREFILL_ROLE),
+    WscLlmInstanceSpec("prefill_8", "9", (40, 41, 46, 47, 52, 53), PREFILL_ROLE),
+)
 
 
 # ------------------------------------------------------------------------
@@ -427,6 +443,54 @@ class WscLlmSchedulerTests(unittest.TestCase):
             self.assertEqual(
                 allocation.relevant_instance_indices,
                 expected_domain,
+            )
+
+    def test_real_layout_nearest_decode_is_unique(self) -> None:
+        """钉住"真实布局无实例平局"（中-1 裁决 2026-08-20）。
+
+        本仓 decode 为静态最近实例映射；实测真实 9 实例布局下每个 Prefill
+        实例的最近 Decode 实例唯一——实例级平局不存在。布局若改动引入
+        平局，本测试失败提示需重新裁决（勿静默改断言迁就新布局）。
+        """
+        hardware = WscLlmHardware(
+            mesh_rows=9,
+            mesh_cols=6,
+            local_hbm_capacity_bytes=50,
+            local_hbm_bandwidth_gbps=1.0,
+            d2d_bandwidth_gbps=2.0,
+            peak_perf_tflops=1.0,
+            d2d_latency_ns=0,
+            local_hbm_latency_ns=0,
+        )
+        topology = build_instances(hardware, REAL_LAYOUT_INSTANCE_SPECS)
+        graph = InstanceGraph(topology)
+        decode_indices = topology.indices_for_role(DECODE_ROLE)
+        self.assertEqual(decode_indices, (0, 2, 3))
+        expected_nearest_decode = {1: 0, 4: 0, 5: 2, 6: 3, 7: 2, 8: 3}
+        for prefill_index in topology.indices_for_role(PREFILL_ROLE):
+            decode_distances = {
+                decode_index: graph.shortest_distance(prefill_index, decode_index)
+                for decode_index in decode_indices
+            }
+            nearest_distance = min(decode_distances.values())
+            nearest_decode_indices = tuple(
+                decode_index
+                for decode_index in decode_indices
+                if decode_distances[decode_index] == nearest_distance
+            )
+            self.assertEqual(
+                len(nearest_decode_indices),
+                1,
+                msg=(
+                    f"real-layout nearest-Decode tie for Prefill instance "
+                    f"{prefill_index} at distance {nearest_distance} "
+                    f"(decode distances {decode_distances}); the 2026-08-20 "
+                    "decode tie-break ruling requires re-adjudication"
+                ),
+            )
+            self.assertEqual(
+                nearest_decode_indices[0],
+                expected_nearest_decode[prefill_index],
             )
 
     def test_prefill_selection_uses_request_count_then_config_order(self) -> None:

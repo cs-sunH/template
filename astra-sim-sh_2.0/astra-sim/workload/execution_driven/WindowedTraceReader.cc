@@ -144,22 +144,26 @@ void WindowedTraceReader::read_one_row() {
         ++rows_read_;
         return;
     }
+    // Turn-0 row (arrival column non-empty): counted separately for the
+    // run-end accepted-accounting invariant (accepted + dropped == turn-0
+    // rows; backport fix 2026-08-16).
+    ++turn0_rows_;
     const uint64_t arrival_ns = std::stoull(arrival_s);
     env.arrival_world_ns = arrival_ns;
     ++rows_read_;
-    if (max_arrival_ns_ != 0 && arrival_ns > max_arrival_ns_) {
+    if (max_arrival_ns_ > 0 && arrival_ns > max_arrival_ns_) {
         // Phase-7 §10.4: simulation-out-of-range rejection (EXPLICIT window
         // only; default 0 = unbounded, backport fix 2026-08-16 对比报告
-        // §5.1). Counted and never submitted; the row still got its
-        // queue_index and metrics request registered above ("every data row
-        // registered" stays true). The rejected row is marked consumed right
-        // here: it will never fire an arrival alarm, so leaving it un-consumed
-        // would clog the window at high_water un-consumed rows, keep the
-        // reader from ever reaching EOF (expected_requests stays 0 and the
-        // run-end completion audit is silently skipped -- the exact
-        // silent-PASS failure mode of 对比报告 §5.1). Rows are read strictly
+        // §5.1; 推进机制统一 2026-08-20 中-3). Counted and never submitted;
+        // the row still got its queue_index and metrics request registered
+        // above ("every data row registered" stays true). The rejected row
+        // is marked consumed right here: it will never fire an arrival
+        // alarm, so leaving it un-consumed would pin the window occupancy
+        // at high_water and stall pump() before EOF. Rows are read strictly
         // in order, so this row currently holds the highest queue index and
-        // advancing the consumed prefix to it is exact.
+        // advancing the consumed prefix to it is exact. The run-end
+        // completion audit fail-closes on any nonzero count (the drop is
+        // visible, never silent).
         ++rejected_out_of_range_;
         if (queue_index > consumed_idx_) {
             consumed_idx_ = queue_index;
@@ -321,7 +325,10 @@ bool WindowedTraceReader::read_checkpoint(const std::string& path) {
 
 void WindowedTraceReader::report(std::ostream& os) const {
     os << "[online] windowed reader: high_water=" << high_water_
-       << " rows=" << rows_read_ << " rejected_out_of_range="
+       << " max_arrival_ns=" << max_arrival_ns_
+       << (max_arrival_ns_ == 0 ? " (unbounded)" : "") << " rows=" << rows_read_
+       << " total_rows=" << total_data_rows()
+       << " turn0_rows=" << turn0_data_rows() << " rejected_out_of_range="
        << rejected_out_of_range_ << " read_pumps=" << read_pumps_
        << " peak_window_occupancy=" << peak_occupancy_
        << " io_read_ns=" << io_read_ns_;
@@ -331,6 +338,46 @@ void WindowedTraceReader::report(std::ostream& os) const {
                static_cast<double>(io_read_ns_));
     }
     os << std::endl;
+}
+
+CompletionAuditVerdict audit_completion(const CompletionAuditCounts& counts) {
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1). The OLD audit
+    // (completed == rows-the-window-read) let a stalled/dropping run PASS
+    // silently: with the 30e9 default and a longer input, over-window
+    // requests were rejected, the window stalled on the un-consumable
+    // rejects, EOF (and with it the expected-rows bookkeeping) was never
+    // reached, and the audit was skipped entirely -- exit 0 "PASS" with
+    // 12.5% of the input silently missing (sh_2.0 strategy-20 measured:
+    // 2091 input rows, 1830 completed). Fail-closed order: drops first (the
+    // loudest, most actionable), then the turn-0 accepted accounting, then
+    // the completed-vs-total shortfall.
+    if (counts.dropped > 0) {
+        return CompletionAuditVerdict::Dropped;
+    }
+    if (counts.accepted + counts.dropped != counts.turn0_rows) {
+        return CompletionAuditVerdict::AccountMismatch;
+    }
+    if (counts.completed + counts.dropped != counts.total_rows) {
+        return CompletionAuditVerdict::Incomplete;
+    }
+    return CompletionAuditVerdict::Ok;
+}
+
+const char* completion_audit_why(const CompletionAuditVerdict verdict) {
+    switch (verdict) {
+        case CompletionAuditVerdict::Ok:
+            return "ok";
+        case CompletionAuditVerdict::Dropped:
+            return "input rows rejected by the explicit arrival window "
+                   "(dropped_out_of_range > 0; visible drop, fail-closed)";
+        case CompletionAuditVerdict::AccountMismatch:
+            return "accepted + dropped != turn-0 data rows (a turn-0 row "
+                   "was neither accepted by the service nor rejected)";
+        case CompletionAuditVerdict::Incomplete:
+            return "completed + dropped != total data rows (requests "
+                   "missing from the run)";
+    }
+    return "unknown";
 }
 
 }  // namespace ExecutionDriven

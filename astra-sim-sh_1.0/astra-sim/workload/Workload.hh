@@ -19,6 +19,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
 namespace AstraSim {
@@ -74,6 +75,10 @@ class Workload : public Callable {
     Sys* sys;
     Statistics* stats;
     std::unique_ptr<LocalMemUsageTracker> local_mem_usage_tracker;
+    // Multi-user local-HBM contention model (sys->hbm_bandwidth_contention);
+    // null when the flag is off -> every issue path below keeps the legacy
+    // single-owner timing byte-for-byte.
+    std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
@@ -91,6 +96,41 @@ class Workload : public Callable {
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
     CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
+
+    // -----------------------------------------------------------------
+    // Local-HBM contention node-completion join (hbm-bandwidth-contention).
+    //
+    // A COMM_SEND/COMM_RECV endpoint with HBM charge and a MEM_LOAD/
+    // MEM_STORE node with hbm-access-mode completes only when BOTH its
+    // network-side event (PacketSent/PacketReceived / the remote-port
+    // transaction callback) AND its local-HBM endpoint job have fired. The
+    // join is implemented inside Workload (two pending flags + idempotent
+    // fire); no network API signature changes.
+    struct HbmNodeJoin {
+        bool network_done = false;
+        bool hbm_done = false;
+        // Whichever side arrived first holds the terminal handler data
+        // alive until the join fires; the terminal sequence runs with it.
+        WorkloadLayerHandlerData* held_wlhd = nullptr;
+        EventType held_event = EventType::General;
+        // The HBM-side handler data (is_local_hbm_job), awaiting deletion
+        // at join fire.
+        WorkloadLayerHandlerData* hbm_wlhd = nullptr;
+    };
+    std::unordered_map<uint64_t, HbmNodeJoin> pending_hbm_joins_;
+
+    /// Register the two-sided completion for a node; called at issue time,
+    /// before the network/port side can possibly fire.
+    void arm_hbm_join(uint64_t node_id);
+    /// Allocate the HBM endpoint job's handler data (is_local_hbm_job).
+    WorkloadLayerHandlerData* make_hbm_job_wlhd(uint64_t node_id);
+    /// Generic wlhd terminal sequence (release / record / finish_node /
+    /// auto-advance); does NOT delete the wlhd -- the caller owns it.
+    void run_wlhd_terminal(WorkloadLayerHandlerData* wlhd, EventType event);
+    /// Join bookkeeping for one wlhd arrival (network/port or HBM side).
+    /// Returns true when the arrival was consumed by a pending join (the
+    /// caller must not run the terminal sequence itself).
+    bool try_join_hbm_node(WorkloadLayerHandlerData* wlhd, EventType event);
 };
 
 namespace ExecutionDriven {

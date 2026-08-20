@@ -12,5 +12,6 @@
   "roofline-enabled": 1,
   "replay-only": 0,
   "track-local-mem": 0,
-  "trace-enabled": 0
+  "trace-enabled": 0,
+  "hbm-bandwidth-contention": 1
 }

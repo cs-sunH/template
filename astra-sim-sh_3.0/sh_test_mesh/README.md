@@ -16,22 +16,23 @@ required transfer delays execution without remapping the request.
 Physical mesh, D2D, local HBM, remote-memory bandwidth, and peak-compute
 parameters are authored only once in this repository:
 
-`@astra-sim-sh/sh_test_mesh/hardware/face_case5_config_c.json`
+`@astra-sim-sh_3.0/sh_test_mesh/hardware/face_case5_config_c.json`
 
 This scenario selects the `validation-160gib` local-HBM capacity profile in
 its trace CSV. The profile selection is scenario-specific; all common hardware
 values remain in the repository-local source. The mesh NPU count is derived from rows and
 columns rather than configured separately.
 
-The remote-memory source below defines only the edge-pool policy and its own
-latency. Boundary ranks and bandwidth are derived from the repository-local hardware:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
+The edge-pool remote-memory policy (memory type, latency, boundary selection,
+logical-pool name) is embedded in the `remote-memory` section of the hardware
+source above; the resolver reads it directly and derives the concrete boundary
+ranks and bandwidth from the repository-local hardware. There is no standalone
+remote-memory source file.
 
 At load time, the repository-local resolver generates the ASTRA-Sim-native system,
 network, remote-memory, and communicator files in the runtime directory:
 
-`@astra-sim-sh/sh_test_mesh/generated/runtime_config`
+`@astra-sim-sh_3.0/sh_test_mesh/generated/runtime_config`
 
 These files are derived output and must not be edited manually.
 
@@ -62,7 +63,7 @@ neighbors, then the four corners. It remains the final deterministic tie-break
 for Prefill; Decode uses it only when both per-die cost and current aggregate
 remaining HBM capacity are equal.
 
-## Default workload: requests arriving in the first three minutes
+## Default workload: materialized first-30-seconds window
 
 The simulated model is Meta LLaMA 2 7B: 32 decoder layers, hidden size 4096,
 32 attention heads with 128 dimensions per head, SwiGLU intermediate size
@@ -74,37 +75,15 @@ TP ranks own six heads each and four own five heads each. The six shard sizes
 sum exactly to the complete session KV size; no model or KV padding is added,
 and one session is not capacity-split across multiple instances.
 
-The default config reads the selected native `astra_compute_100_trunc1M.csv`
-through its checked-in normalized queue. It retains only requests in the
-inclusive simulation-time window `0 <= t <= 180,000,000,000 ns`: request zero
-uses `arrival_time`, and each following request adds the preceding row's
-`human_time` or `tool_time`. A session can therefore end at its last in-window
-request rather than retaining a later tail:
+This bare template repository ships no checked-in request queue (placeholder
+state); the runner fails closed on a missing `--request-queue-csv` input. The
+only allowed source trace is `agent-traces/tracelab/astra_compute_20.csv`, and
+the official input is its first-30-seconds window (sidecar_restore variant:
+the turn-0 prefix is kept as historical KV, see the context sidecar),
+materialized by the traces/ script (the run commands below show the exact
+invocation):
 
-- source session IDs cover `0` through `677` (678 sessions, 9,179 requests);
-- Prefill length range 1-161,734 tokens;
-- Decode length range 1-32,000 tokens;
-- session first-arrival offsets span 26,249,000-179,437,413,000 ns, without
-  rebasing; the latest retained request is at 179,937,766,000 ns.
-
-The adapter moves each native row's outgoing `human_time` or `tool_time`
-onto the following request's closed-loop interval. The 20 retained nonterminal
-rows with neither value are explicitly represented as a zero-nanosecond wait.
-
-Native source CSV:
-
-`@agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_80_100_120_v1/astra_compute_100_trunc1M.csv`
-
-Normalized request queue (the prefix-context sidecar is intentionally not
-loaded):
-
-`@agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_80_100_120_v1/derived/compute_100_trunc1M_first_3_minutes/astra_compute_100_trunc1M_first_3_minutes_request_queue.csv`
-
-For every session, the first request observable in this three-minute window is
-treated as turn zero with no prior KV or prompt context. The trace therefore
-does not reconstruct any context from before the window; later retained
-requests accumulate only context produced by earlier retained requests from
-the same session.
+`@astra-sim-sh_3.0/sh_test_mesh/workload/llama2_7b_inference/traces/materialize_20_30s.py`
 
 ## Request mapping implemented by the planner
 
@@ -112,9 +91,9 @@ The pure Python planner performs a deterministic discrete-event pass before ET
 generation:
 
 1. `p_chunk` is fixed at 512 tokens.
-2. The selected 9,179-row queue has arithmetic mean Decode length
-   `463.43926353633293` tokens. Active Decode load uses this mean and becomes zero
-   once a request has generated at least that many tokens.
+2. Active Decode load uses the arithmetic-mean Decode length of the
+   materialized request queue and becomes zero once a request has generated
+   at least that many tokens.
 3. Each instance records remaining Roofline service-time load in nanoseconds:
    the unfinished fraction of its running Prefill chunk, all queued Prefill
    chunks, and all active Decode requests. Prefill chunk work uses prior-session
@@ -220,26 +199,42 @@ equivalent Decode-group readiness barrier completes before any Decode rank
 starts computation. The session's local authoritative location after completion
 is the Decode instance.
 
-## Two-stage FIFO migration after request completion
+## Typed two-class, two-stage eviction after request completion
 
-After a request completes, every rank in the owning TP instance checks whether
-its remaining HBM can hold its exact 1M-token KV shard reserve. If any rank is
-below its reserve, locally resident historical sessions are ordered by:
+Each queued request carries a `next_trigger_type` column (`human`/`tool`,
+materialized from the source trace's per-row human_time/tool_time return
+path). When a request completes, `mark_complete` records that type on the
+session; an idle session's class is `tool` only when its latest completed
+request was followed by a tool-call return, everything else -- including
+sessions with no recorded successor -- is the `human` class.
+
+After a request completes, every rank in the owning TP instance checks
+whether its remaining HBM can hold its exact 1M-token KV shard reserve. If
+any rank is below its reserve, reclamation visits trigger classes in the
+fixed order `human` then `tool`. Within each class, eligible sessions are
+ordered by:
 
 ```text
 (last_completion_ns, session_id)
 ```
 
-Reclamation has two strictly ordered stages:
+and reclamation has two strictly ordered stages, giving the four-segment
+order `human-half -> human-full -> tool-half -> tool-full`:
 
-1. Visit inactive, fully local sessions in FIFO order and offload only their
-   latter `floor(L/2)` layers. Recheck the watermark after every session.
-2. Only if every eligible full-local session has been halved and the watermark
-   is still unmet, revisit resident sessions in FIFO order and offload each
-   remaining prefix, making that session fully remote.
+1. Visit inactive, fully local sessions of the class in oldest-completed
+   order and offload only their latter `floor(L/2)` layers. Recheck the
+   watermark after every session.
+2. Only if every eligible full-local session of the class has been halved
+   and the watermark is still unmet, revisit resident sessions of the same
+   class in the same order and offload each remaining prefix, making that
+   session fully remote.
+3. Move to the next trigger class only after both stages of the previous
+   class are exhausted.
 
-An executing session is excluded in both stages. If no eligible history can
-satisfy the reserve, the planner records `reserve_unmet` and terminates.
+The watermark is rechecked after every single eviction, so the pass stops as
+soon as the reserve is met. An executing session is excluded in both stages.
+If no eligible history can satisfy the reserve, the planner records
+`reserve_unmet` and terminates.
 
 For a shard already on an edge rank, the edge issues the remote store directly.
 For an internal rank, the shard first follows a minimum-hop physical NoC path
@@ -254,17 +249,16 @@ The configured remote-memory edges are all 26 physical boundary ranks of the
 0,1,2,3,4,5,6,11,12,17,18,23,24,29,30,35,36,41,42,47,48,49,50,51,52,53
 ```
 
-The source owns the boundary-selection policy, latency, and logical-pool name:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
-
-The concrete edge list is derived from the repository-local mesh and the
+The boundary-selection policy, latency, and logical-pool name are owned by the
+`remote-memory` section of the repository-local hardware source (the resolver
+reads it directly; there is no standalone remote-memory source file). The
+concrete edge list is derived from the repository-local mesh and the
 bandwidth is derived from the repository-local hardware source.
 
 ## Online execution adaptation (Chakra node semantics)
 
 FACE is a live host scheduler. The online strategy routes compute mappings, HBM
-state transitions, session locations, FIFO evictions, and routes at each
+state transitions, session locations, typed-class evictions, and routes at each
 decision boundary, then emit the resulting per-rank graph batches to the
 execution-driven engine (54 ranks).
 
@@ -280,14 +274,14 @@ FLOPs, tensor/HBM bytes, KV migration bytes, and collective payload bytes are
 preserved, while repeated collective startup costs are compressed. Small
 workloads can still select `token_expanded`.
 
-The selected ASTRA-compute sessions have first-arrival offsets from 26,249,000
-to 179,437,413,000 ns. The analytical network adapter retains event time as
+The selected ASTRA-compute source trace carries first-arrival offsets from
+`94,835,000` to `44,609,097,174,000` ns. The analytical network adapter retains event time as
 `long double` when returning ASTRA-sim time so large 64-bit nanosecond
 event-map keys remain stable.
 
 Time-precision implementation:
 
-`@astra-sim-sh/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc`
+`@astra-sim-sh_3.0/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc`
 
 Each generated `manifest.json` records the FACE mapping decisions together
 with:
@@ -298,45 +292,47 @@ with:
 - local migrations, remote stores, remote restores, edge choices, paths, and
   byte counts;
 - per-request completion HBM snapshots and transfer-completion dependencies;
-- FIFO order, eviction reasons, and any `reserve_unmet` result;
+- FIFO order within each trigger class, eviction reasons, and any
+  `reserve_unmet` result;
 - LUT queries, candidate costs, planning iterations, and final state.
 
 ## Key configuration files
 
 Single hardware source:
 
-`@astra-sim-sh/sh_test_mesh/hardware/face_case5_config_c.json`
+`@astra-sim-sh_3.0/sh_test_mesh/hardware/face_case5_config_c.json`
 
 Hardware-free system template:
 
-`@astra-sim-sh/sh_test_mesh/system/llama2_7b_roofline_template.json`
+`@astra-sim-sh_3.0/sh_test_mesh/system/llama2_7b_roofline_template.json`
 
 Shared resolver and generated-file contract:
 
-`@astra-sim-sh/sh_test_mesh/config_resolver.py`
+`@astra-sim-sh_3.0/sh_test_mesh/config_resolver.py`
 
-Edge-attached remote-memory policy:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
+Edge-attached remote-memory policy: embedded in the `remote-memory` section of
+the single hardware source above (resolver reads it directly; there is no
+standalone remote-memory source file).
 
 Default trace configuration:
 
-`@astra-sim-sh/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
+`@astra-sim-sh_3.0/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
 
 Generated runtime files (do not edit):
 
-`@astra-sim-sh/sh_test_mesh/generated/runtime_config`
+`@astra-sim-sh_3.0/sh_test_mesh/generated/runtime_config`
 
 ## Run and validate
 
 Run from the repository root. The online strategy routes are the supported
 pipeline (route 3 = strategy, route 4 = strategy + sensing). Inputs are
-materialized per `traces/PROVENANCE.md` (only allowed source:
-`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+materialized per `traces/materialize_20_30s.py` (only allowed
+source: `agent-traces/tracelab/astra_compute_20.csv`; its stdout is the
+authoritative provenance record), then the plan directory is
 produced by the materializer:
 
 ```bash
-# 1. materialize the 30s request-queue input (rules: traces/PROVENANCE.md)
+# 1. materialize the 30s request-queue input (traces/materialize_20_30s.py)
 cd sh_test_mesh/workload/llama2_7b_inference
 python3 traces/materialize_20_30s.py \
   /home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv traces/
@@ -353,7 +349,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 Unit tests (workload layer + sh_test_mesh contracts):
 
 ```bash
-cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py -q
 cd ../.. && python3 -m pytest tests/ -q
 ```
 

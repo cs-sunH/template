@@ -6,7 +6,6 @@ LICENSE file in the root directory of this source tree.
 #pragma once
 
 #include "common/EventQueue.h"
-#include "congestion_aware/Chunk.h"
 #include "congestion_aware/Device.h"
 #include "congestion_aware/fluid/FluidFlow.h"
 #include <memory>
@@ -22,13 +21,6 @@ namespace NetworkAnalyticalCongestionAware {
  */
 class Topology {
   public:
-    /**
-     * Set the event queue to be used by the topology.
-     *
-     * @param event_queue pointer to the event queue
-     */
-    static void set_event_queue(std::shared_ptr<EventQueue> event_queue) noexcept;
-
     /**
      * Constructor.
      */
@@ -53,13 +45,6 @@ class Topology {
 
     [[nodiscard]] const std::vector<std::shared_ptr<const Link>>&
     get_directed_links() const noexcept;
-
-    /**
-     * Initiate a transmission of a chunk.
-     *
-     * @param chunk chunk to be transmitted
-     */
-    void send(std::unique_ptr<Chunk> chunk) noexcept;
 
     /**
      * Get the number of NPUs in the topology.

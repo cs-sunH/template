@@ -4,7 +4,7 @@
 #   默认: 删除全部运行产物/物化数据/缓存，git 恢复 trace_config.csv 原始字节
 #   --full: 额外删除 build*/ 构建目录（下次需重新编译）
 # 边界: 绝不触碰 git 跟踪文件（除用 git checkout 恢复 trace_config.csv）；
-#       traces/ 仅保留 PROVENANCE.md 与 *.py 物化器脚本
+#       traces/ 仅保留 *.py 物化器脚本
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
@@ -22,16 +22,17 @@ rm_art "sh_test_mesh/log"
 rm_art "$WL/online_runs"
 # 2. completion_fixture 等测试再生目录
 find sh_test_mesh -maxdepth 4 -type d -name "completion_fixture" 2>/dev/null | while read -r d; do rm_art "$d"; done
-# 3. traces/ 物化数据（保留 PROVENANCE.md 与 *.py）
+# 3. traces/ 物化数据（仅保留 *.py 物化器脚本）
 if [ -d "$WL/traces" ]; then
-  find "$WL/traces" -mindepth 1 -type f ! -name "PROVENANCE.md" ! -name "*.py" -delete 2>/dev/null
+  find "$WL/traces" -mindepth 1 -type f ! -name "*.py" -delete 2>/dev/null
   find "$WL/traces" -mindepth 1 -type d -empty -delete 2>/dev/null
-  echo "[clean] traces/ 数据件已清除（保留 PROVENANCE.md 与物化器脚本）"
+  echo "[clean] traces/ 数据件已清除（仅保留 *.py 物化器脚本）"
 fi
 # 4. trace_config.csv 恢复 git 原始字节（若被仿真流程改指物化输入）
 if git rev-parse --git-dir >/dev/null 2>&1; then
   if ! git diff --quiet -- "$WL/trace_config.csv" 2>/dev/null; then
     git checkout -- "$WL/trace_config.csv" && echo "[clean] trace_config.csv 已恢复 git 原始字节"
+  echo "[clean] 提示: trace_config 已恢复占位态;重跑前需运行 traces/ 物化器脚本重新物化并接线（sidecar 仓 request_queue_context_csv 必填,漏接将 fail-closed）"
   fi
 else
   echo "[clean][warn] 非 git 环境，跳过 trace_config 恢复（请手动核对第12/13行指向 placeholder）"

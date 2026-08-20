@@ -7,7 +7,9 @@ sh_2.0 的 ledger_reconcile_sh20.py 为模板；本仓差异（合同⑥/两态 
     Workload 计数采集，remote_fifo_ledger.jsonl 逐交付快照）——本对账器的
     核心对平项 RF1-RF4：逐交付覆盖 / drain 守恒 / Python 决策字节 vs C++
     实发字节逐 rank 对平（残差逐条归因）/ 峰值占用登记；
-  - local HBM job 层 = 显式"不适用"占位（本仓无 LocalHbmBandwidthModel）。
+  - local HBM job 层 = 计费观测不在本对账器（hbm-bandwidth-contention 开启时
+    LocalHbmBandwidthModel 每 rank served bytes/busy 经 [METRIC] 行导出；
+    本对账器只对平 KV 账本与 remote FIFO 字节，不做 HBM 均分数值断言）。
 
 用法: python3 online/verify/ledger_reconcile_sh10.py --run-dir <sensing_run_dir>
                                           [--expected 1177]
@@ -172,7 +174,8 @@ def main():
         "end-barrier 控制尾（最终 delivery 后自完成，无后续交付消费）——"
         "自完成尾部类残差，比照 sh_3.0 合同① 口径归因（C++ phase-4 end "
         "audit 的 completed_facts_residual 即该尾量）；local HBM job 层 = "
-        "不适用占位（无 LocalHbmBandwidthModel，合同⑥）")
+        "观测导出占位（LocalHbmBandwidthModel 经 [METRIC] hbm_* 键导出，"
+        "不入本对账器的字节对平口径，合同⑥）")
 
     # ---- remote FIFO 实账本层（本仓核心差异项）RF1-RF4 ----
     fm = re.search(

@@ -3,8 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 service_vacuum_test.cc -- defect-A regression fixture (2026-08-16,
-synced from face-defectfix2-done; source analysis: face主动测试错误分析.md
-缺陷 A: 服务终判 finished() 的计数真空).
+face主动测试错误分析.md 缺陷 A: 服务终判 finished() 的计数真空).
 
 Reproduces, deterministically and unit-level, the F2/F3/F4 race window:
 the online main loop's OLD order was
@@ -157,7 +156,7 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
 }  // namespace
 
 int main() {
-    const std::string root = "/tmp/sh10_service_vacuum_" +
+    const std::string root = "/tmp/service_vacuum_" +
                              std::to_string(::getpid());
     if (::mkdir(root.c_str(), 0755) != 0) {
         std::perror("mkdir");

@@ -15,6 +15,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/HardwareResource.hh"
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
@@ -23,6 +24,7 @@ namespace AstraSim {
 
 class Sys;
 class DataSet;
+class WorkloadLayerHandlerData;
 
 class Workload : public Callable {
   public:
@@ -72,6 +74,9 @@ class Workload : public Callable {
     Sys* sys;
     Statistics* stats;
     std::unique_ptr<LocalMemUsageTracker> local_mem_usage_tracker;
+    // Multi-user local-HBM bandwidth contention (hbm-bandwidth-contention):
+    // one fluid model per rank; null in the legacy closed-form mode.
+    std::unique_ptr<LocalHbmBandwidthModel> local_hbm_bandwidth_model;
     std::unordered_map<int, uint64_t> collective_comm_node_id_map;
     std::unordered_map<int, DataSet*> collective_comm_wrapper_map;
     bool is_finished;
@@ -84,11 +89,40 @@ class Workload : public Callable {
     // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
     // with the replay route; strategy mode always keeps real physics.
 
+    // LocalHbmBandwidthModel completion callback (re-entrant, fired from the
+    // model's transition event): COMP jobs take the plain generic completion
+    // path; COMM_READ/COMM_WRITE jobs mark the HBM side of the joined comm
+    // node and complete it only when the network side already arrived.  Takes
+    // ownership of wlhd.
+    void on_local_hbm_job_complete(WorkloadLayerHandlerData* wlhd,
+                                   LocalHbmBandwidthModel::JobKind kind);
+
   private:
     // From the node view, find out the corresponding communicator group, and
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
     CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
+
+    // Body shared by every generic (wlhd) node completion: node release /
+    // stats / metrics / terminal record / dependency release / static-mode
+    // auto-advance.  Extracted from Workload::call's generic branch so the
+    // LocalHbmBandwidthModel callback can complete COMP nodes through the
+    // exact same path.  event is the completion event the caller observed
+    // (PacketSent/PacketReceived keep their network-bandwidth statistics
+    // semantics).
+    void finish_generic_node(uint64_t node_id, EventType event);
+
+    // Two-event join for p2p comm nodes with an HBM endpoint job: the node
+    // completes exactly once, when both the network-side callback and the
+    // endpoint HBM job have fired (two pending flags; the entry is erased at
+    // the single fire, which also guards against re-entry).
+    struct HbmCommJoin {
+        bool network_done = false;
+        bool hbm_done = false;
+        EventType completion_event = EventType::General;
+    };
+    std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
+    void maybe_complete_hbm_joined_comm(uint64_t node_id);
 };
 
 }  // namespace AstraSim

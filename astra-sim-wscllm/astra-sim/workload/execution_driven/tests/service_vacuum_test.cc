@@ -156,7 +156,7 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
 }  // namespace
 
 int main() {
-    const std::string root = "/tmp/face_service_vacuum_" +
+    const std::string root = "/tmp/service_vacuum_" +
                              std::to_string(::getpid());
     if (::mkdir(root.c_str(), 0755) != 0) {
         std::perror("mkdir");

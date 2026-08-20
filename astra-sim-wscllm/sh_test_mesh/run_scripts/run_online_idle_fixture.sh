@@ -24,10 +24,10 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/wscllm_idle_fixture}
 
 # ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
-# 见 traces/PROVENANCE.md 与《路径功能代码对应说明.md》)。
+# 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}

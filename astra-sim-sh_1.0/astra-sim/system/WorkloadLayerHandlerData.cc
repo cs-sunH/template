@@ -9,4 +9,5 @@ using namespace AstraSim;
 
 WorkloadLayerHandlerData::WorkloadLayerHandlerData() {
     node_id = 0;
+    is_local_hbm_job = false;
 }

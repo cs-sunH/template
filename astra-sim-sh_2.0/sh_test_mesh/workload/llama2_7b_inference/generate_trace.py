@@ -64,8 +64,12 @@ REQUEST_QUEUE_COLUMNS = (
     "decode_length",
     "session_arrival_time_ns",
     "inter_request_interval_ns",
+    "next_trigger_type",
     "description",
 )
+# Allowed values of the typed-eviction trigger column (see materialize_first_30s.py:
+# the type of the request that follows each row -- human reply vs tool call).
+NEXT_TRIGGER_TYPES = ("human", "tool")
 REQUIRED_CONFIG_KEYS = (
     "npus_count",
     "layers",
@@ -113,6 +117,10 @@ class RequestSpec:
     inter_request_interval_ns: Optional[int]
     prefix_tokens: Optional[int] = None
     input_tokens_total: Optional[int] = None
+    # Trigger type of the request following this one ("human"/"tool");
+    # consumed by the typed KV eviction policy. None only for synthetic
+    # specs built without a queue CSV.
+    next_trigger_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -171,20 +179,6 @@ def parse_nonnegative_int(value: str, key: str) -> int:
     if parsed < 0:
         raise ValueError(f"{key} must be non-negative, got {parsed}")
     return parsed
-
-
-def quantize_timer_duration_ns(duration_ns: int) -> int:
-    """Round a planned timer up to Chakra's whole-microsecond resolution.
-
-    Scheduler and roofline calculations operate in nanoseconds, while Chakra's
-    ``duration_micros`` field cannot encode a fractional microsecond.  Ceiling
-    rounding preserves the planned causal lower bound: a dependent request can
-    be delayed by at most 999 ns, but can never be released early.
-    """
-
-    if duration_ns < 0:
-        raise ValueError("timer duration must be non-negative")
-    return ((duration_ns + 999) // 1000) * 1000
 
 
 def parse_bool(value: str, key: str) -> bool:
@@ -396,6 +390,14 @@ def create_default_request_queue(queue_csv: Path) -> None:
                     "inter_request_interval_ns": (
                         "" if turn_index == 0 else 1_000_000_000
                     ),
+                    # Synthetic stub rule (mirrors the materializer boundary
+                    # ruling): a session's final turn has no successor ->
+                    # "human"; earlier turns -> "tool".
+                    "next_trigger_type": (
+                        "human"
+                        if turn_index == EXPECTED_REQUESTS_PER_SESSION - 1
+                        else "tool"
+                    ),
                     "description": "auto-generated queued session request",
                 })
 
@@ -484,6 +486,13 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
                 ("prompt_length", "prefill"),
             )
             decode_length = parse_request_length(row, "decode_length", ("decode",))
+            next_trigger_type = (row.get("next_trigger_type", "") or "").strip()
+            if next_trigger_type not in NEXT_TRIGGER_TYPES:
+                raise ValueError(
+                    f"request queue line {line_number} next_trigger_type must "
+                    f"be one of {', '.join(NEXT_TRIGGER_TYPES)}, got "
+                    f"{next_trigger_type!r}"
+                )
             requests.append(
                 RequestSpec(
                     session_id=session_id,
@@ -493,6 +502,7 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
                     decode_length=decode_length,
                     session_arrival_time_ns=session_arrival_time_ns,
                     inter_request_interval_ns=inter_request_interval_ns,
+                    next_trigger_type=next_trigger_type,
                 )
             )
 
@@ -602,7 +612,8 @@ def request_queue_digest(request_queue: tuple[RequestSpec, ...]) -> str:
         f"{'' if request.session_arrival_time_ns is None else request.session_arrival_time_ns},"
         f"{'' if request.inter_request_interval_ns is None else request.inter_request_interval_ns},"
         f"{'' if request.prefix_tokens is None else request.prefix_tokens},"
-        f"{'' if request.input_tokens_total is None else request.input_tokens_total}"
+        f"{'' if request.input_tokens_total is None else request.input_tokens_total},"
+        f"{request.next_trigger_type or ''}"
         for request in request_queue
     )
     return hashlib.sha1(digest_input.encode("utf-8")).hexdigest()[:8]
@@ -739,7 +750,10 @@ class TraceBuilder:
         *,
         after_node_id: Optional[int] = None,
     ) -> Optional[int]:
-        duration_ns = quantize_timer_duration_ns(duration_ns)
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
 
@@ -758,14 +772,24 @@ class TraceBuilder:
         self._commit_node(node)
         return node.id
 
-    def mem_store(self, name: str, tensor_size: int) -> None:
+    def mem_store(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_STORE_NODE)
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
+        if hbm_access_mode:
+            # sh_2.0 N-way HBM contention: pool endpoint charging
+            # (1 = local HBM read, 2 = local HBM write; bytes = tensor_size).
+            node.attr.append(
+                self._uint64_attr("hbm-access-mode", hbm_access_mode)
+            )
         self._commit_node(node)
 
-    def mem_load(self, name: str, tensor_size: int) -> None:
+    def mem_load(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_LOAD_NODE)
         node.attr.append(self._uint64_attr("tensor_size", tensor_size))
+        if hbm_access_mode:
+            node.attr.append(
+                self._uint64_attr("hbm-access-mode", hbm_access_mode)
+            )
         self._commit_node(node)
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
@@ -813,6 +837,7 @@ class TraceBuilder:
         dst: int,
         comm_size: int,
         comm_tag: int,
+        hbm_charge: bool = True,
     ) -> None:
         node = self._new_node(name, COMM_SEND_NODE)
         node.attr.extend([
@@ -821,6 +846,10 @@ class TraceBuilder:
             self._uint64_attr("comm_size", comm_size),
             ChakraAttr(name="comm_tag", uint32_val=comm_tag),
         ])
+        if not hbm_charge:
+            # sh_2.0 N-way HBM contention: false = pass-through traffic, no
+            # local HBM endpoint job (default true = sender HBM read).
+            node.attr.append(ChakraAttr(name="hbm-charge", bool_val=False))
         self._commit_node(node)
 
     def comm_recv(
@@ -831,6 +860,7 @@ class TraceBuilder:
         dst: int,
         comm_size: int,
         comm_tag: int,
+        hbm_charge: bool = True,
     ) -> None:
         node = self._new_node(name, COMM_RECV_NODE)
         node.attr.extend([
@@ -839,6 +869,10 @@ class TraceBuilder:
             self._uint64_attr("comm_size", comm_size),
             ChakraAttr(name="comm_tag", uint32_val=comm_tag),
         ])
+        if not hbm_charge:
+            # Default true = receiver HBM write; false = pass-through /
+            # restore-covered target write (single charge per byte flow).
+            node.attr.append(ChakraAttr(name="hbm-charge", bool_val=False))
         self._commit_node(node)
 
 
@@ -916,7 +950,10 @@ class TraceCommandRecorder:
         *,
         after_node_id: Optional[int] = None,
     ) -> Optional[int]:
-        duration_ns = quantize_timer_duration_ns(duration_ns)
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
         node_id = self.next_id
@@ -930,13 +967,13 @@ class TraceCommandRecorder:
         )
         return node_id
 
-    def mem_store(self, name: str, tensor_size: int) -> None:
+    def mem_store(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         self._new_node()
-        self._record("mem_store", name, tensor_size)
+        self._record("mem_store", name, tensor_size, hbm_access_mode)
 
-    def mem_load(self, name: str, tensor_size: int) -> None:
+    def mem_load(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         self._new_node()
-        self._record("mem_load", name, tensor_size)
+        self._record("mem_load", name, tensor_size, hbm_access_mode)
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
         self._new_node()
@@ -964,6 +1001,7 @@ class TraceCommandRecorder:
         dst: int,
         comm_size: int,
         comm_tag: int,
+        hbm_charge: bool = True,
     ) -> None:
         self._new_node()
         self._record(
@@ -973,6 +1011,7 @@ class TraceCommandRecorder:
             dst=dst,
             comm_size=comm_size,
             comm_tag=comm_tag,
+            hbm_charge=hbm_charge,
         )
 
     def comm_recv(
@@ -983,6 +1022,7 @@ class TraceCommandRecorder:
         dst: int,
         comm_size: int,
         comm_tag: int,
+        hbm_charge: bool = True,
     ) -> None:
         self._new_node()
         self._record(
@@ -992,6 +1032,7 @@ class TraceCommandRecorder:
             dst=dst,
             comm_size=comm_size,
             comm_tag=comm_tag,
+            hbm_charge=hbm_charge,
         )
 
 
@@ -1730,9 +1771,12 @@ def append_remote_restore_stage(
         request_tag = stage_tag(scheduled.queue_index, 400, owner_rank)
         data_tag = stage_tag(scheduled.queue_index, 500, owner_rank)
         if edge_rank == owner_rank:
+            # 目标即边缘rank且此 legacy 路径无 restore 节点：owner 的本地
+            # HBM 写由 mem_load 端点唯一承担（hbm-access-mode:2，勿双计）。
             builders[owner_rank].mem_load(
                 f"{request_prefix}_history_kv_remote_load_local_edge{edge_rank}",
                 tensor_size,
+                hbm_access_mode=2,
             )
         else:
             builders[owner_rank].comm_send(
@@ -1749,6 +1793,9 @@ def append_remote_restore_stage(
                 comm_size=1,
                 comm_tag=request_tag,
             )
+            # 边缘rank SerDes->NoC 直通装载与转发不占其本地 HBM；owner 的
+            # comm_recv 保持自动计费（此 legacy 路径无 restore 节点，目标
+            # HBM 写由该端点唯一承担）。
             builders[edge_rank].mem_load(
                 f"{request_prefix}_history_kv_remote_load_for_rank{owner_rank}",
                 tensor_size,
@@ -1759,6 +1806,7 @@ def append_remote_restore_stage(
                 dst=owner_rank,
                 comm_size=tensor_size,
                 comm_tag=data_tag,
+                hbm_charge=False,
             )
             builders[owner_rank].comm_recv(
                 f"{request_prefix}_history_kv_restore_recv_from_edge{edge_rank}",
@@ -1799,9 +1847,11 @@ def append_remote_store_stage(
         data_tag = stage_tag(scheduled.queue_index, 100, owner_rank)
         ack_tag = stage_tag(scheduled.queue_index, 200, owner_rank)
         if edge_rank == owner_rank:
+            # 池存储端点即边缘rank：本地 HBM 读计费（hbm-access-mode:1）。
             builders[owner_rank].mem_store(
                 f"{request_prefix}_history_kv_remote_store_local_edge{edge_rank}",
                 tensor_size,
+                hbm_access_mode=1,
             )
         else:
             builders[owner_rank].comm_send(
@@ -1811,12 +1861,14 @@ def append_remote_store_stage(
                 comm_size=tensor_size,
                 comm_tag=data_tag,
             )
+            # 边缘rank NoC->SerDes 直通转发不占其本地 HBM。
             builders[edge_rank].comm_recv(
                 f"{request_prefix}_history_kv_store_recv_from_rank{owner_rank}",
                 src=owner_rank,
                 dst=edge_rank,
                 comm_size=tensor_size,
                 comm_tag=data_tag,
+                hbm_charge=False,
             )
             builders[edge_rank].mem_store(
                 f"{request_prefix}_history_kv_remote_store_for_rank{owner_rank}",
@@ -2282,9 +2334,8 @@ def main() -> None:
     """fail-closed 拒绝桩(2026-08-18 起生效):离线静态 ET 生成入口已删除。
 
     本模块保留的是③④在线路径只读 import 的符号库(Chakra 常量/
-    TraceBuilder/transformer_pass(_aggregated)/RequestSpec 等,见
-    《路径功能代码对应说明.md》§4-a)。③④ 的输入物化入口是
-    plan_materializer.py;静态 ET 生成入口不再存在。
+    TraceBuilder/transformer_pass(_aggregated)/RequestSpec 等)。
+    ③④ 的输入物化入口是 plan_materializer.py;静态 ET 生成入口不再存在。
     """
     raise SystemExit(
         "path-1 (offline static full pipeline) was removed on 2026-08-18; "

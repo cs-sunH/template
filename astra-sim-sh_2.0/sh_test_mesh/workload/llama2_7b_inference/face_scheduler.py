@@ -1211,6 +1211,11 @@ class SessionKVState:
     resident_prefix_layers: int
     last_completion_ns: Optional[int] = None
     active: bool = False
+    # Trigger type of the session's next request ("human"/"tool"), recorded
+    # by mark_complete from the completed request's next_trigger_type. It
+    # drives the typed eviction order; None (unspecified) is treated as the
+    # human class (user ruling: sessions with no successor are human class).
+    next_request_type: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -2590,9 +2595,20 @@ class KVCacheManager:
         )
         return candidates
 
+    @staticmethod
+    def _eviction_class(session: SessionKVState) -> str:
+        # Typed eviction (2026-08-18): an idle session's class is the trigger
+        # type recorded at its latest completion. Sessions whose next request
+        # type is "tool" form the tool class; everything else -- "human" and
+        # None (no successor / unspecified) -- forms the human class. The
+        # None-is-human mapping is a user ruling: a session with no recorded
+        # successor is evicted with human-return sessions.
+        return "tool" if session.next_request_type == "tool" else "human"
+
     def _completed_full_candidates(
         self,
         instance_index: int,
+        trigger_type: Optional[str] = None,
     ) -> list[SessionKVState]:
         if self.partial_resident_prefix_layers == self.model.layers:
             return []
@@ -2603,11 +2619,16 @@ class KVCacheManager:
             and session.instance_index == instance_index
             and not session.active
             and session.last_completion_ns is not None
+            and (
+                trigger_type is None
+                or self._eviction_class(session) == trigger_type
+            )
         ])
 
     def _completed_resident_candidates(
         self,
         instance_index: int,
+        trigger_type: Optional[str] = None,
     ) -> list[SessionKVState]:
         return self._fifo_sort([
             session
@@ -2616,6 +2637,10 @@ class KVCacheManager:
             and session.instance_index == instance_index
             and not session.active
             and session.last_completion_ns is not None
+            and (
+                trigger_type is None
+                or self._eviction_class(session) == trigger_type
+            )
         ])
 
     def _evict_suffix(
@@ -2750,71 +2775,88 @@ class KVCacheManager:
         protected_session_id: Optional[str] = None,
     ) -> tuple[KVTransfer, ...]:
         evictions: list[KVTransfer] = []
-        # Stage 1: oldest-first, move only each eligible session's latter half.
-        while self._insufficient_ranks(
-            instance_index,
-            required_bytes_by_tp_rank,
-            reservation_request_id=reservation_request_id,
-        ):
-            candidates = self._completed_full_candidates(instance_index)
-            if protected_session_id is not None:
-                candidates = [
-                    session
-                    for session in candidates
-                    if session.session_id != protected_session_id
-                ]
-            if not candidates:
-                break
-            evictions.append(
-                self._evict_suffix(
-                    candidates[0],
-                    phase=phase,
-                    reason=reason,
-                    trigger_request_id=trigger_request_id,
+        # Typed two-stage reclamation (2026-08-18): classes are visited in
+        # the fixed order ("human", "tool"); within each class the original
+        # two stages run -- stage 1 halves each inactive full-local session
+        # (suffix offload), stage 2 evicts complete resident sessions. The
+        # watermark is rechecked after every single eviction, so the loops
+        # stop as soon as the requirement is satisfied.
+        for trigger_type in ("human", "tool"):
+            # Stage 1: oldest-first within the class, move only each
+            # eligible session's latter half.
+            while self._insufficient_ranks(
+                instance_index,
+                required_bytes_by_tp_rank,
+                reservation_request_id=reservation_request_id,
+            ):
+                candidates = self._completed_full_candidates(
+                    instance_index, trigger_type
                 )
-            )
+                if protected_session_id is not None:
+                    candidates = [
+                        session
+                        for session in candidates
+                        if session.session_id != protected_session_id
+                    ]
+                if not candidates:
+                    break
+                evictions.append(
+                    self._evict_suffix(
+                        candidates[0],
+                        phase=phase,
+                        reason=reason,
+                        trigger_request_id=trigger_request_id,
+                    )
+                )
 
-        # Stage 2: only after every inactive full session has been halved,
-        # evict complete sessions (the remaining prefix for partial sessions)
-        # in the same deterministic FIFO order.
-        while self._insufficient_ranks(
+            # Stage 2: only after every inactive full session of this class
+            # has been halved, evict complete sessions (the remaining prefix
+            # for partial sessions) in the same deterministic FIFO order.
+            while self._insufficient_ranks(
+                instance_index,
+                required_bytes_by_tp_rank,
+                reservation_request_id=reservation_request_id,
+            ):
+                candidates = self._completed_resident_candidates(
+                    instance_index, trigger_type
+                )
+                if protected_session_id is not None:
+                    candidates = [
+                        session
+                        for session in candidates
+                        if session.session_id != protected_session_id
+                    ]
+                if not candidates:
+                    break
+                evictions.append(
+                    self._evict_session(
+                        candidates[0],
+                        phase=phase,
+                        reason=reason,
+                        trigger_request_id=trigger_request_id,
+                    )
+                )
+
+        # Every class and stage is exhausted while the watermark is still
+        # unmet: report the failing ranks.
+        insufficient = self._insufficient_ranks(
             instance_index,
             required_bytes_by_tp_rank,
             reservation_request_id=reservation_request_id,
-        ):
-            candidates = self._completed_resident_candidates(instance_index)
-            if protected_session_id is not None:
-                candidates = [
-                    session
-                    for session in candidates
-                    if session.session_id != protected_session_id
-                ]
-            if not candidates:
-                insufficient = self._insufficient_ranks(
-                    instance_index,
-                    required_bytes_by_tp_rank,
-                    reservation_request_id=reservation_request_id,
-                )
-                effective_remaining = self._effective_remaining_by_tp_rank(
-                    instance_index,
-                    exclude_request_id=reservation_request_id,
-                )
-                details = ", ".join(
-                    f"rank {rank}: remaining="
-                    f"{effective_remaining[self._rank_relative_index[rank]]}, "
-                    f"required={required_bytes_by_tp_rank[self._rank_relative_index[rank]]}"
-                    for rank in insufficient
-                )
-                raise ValueError(
-                    f"insufficient target HBM in instance {instance_index}; {details}"
-                )
-            evictions.append(
-                self._evict_session(
-                    candidates[0],
-                    phase=phase,
-                    reason=reason,
-                    trigger_request_id=trigger_request_id,
-                )
+        )
+        if insufficient:
+            effective_remaining = self._effective_remaining_by_tp_rank(
+                instance_index,
+                exclude_request_id=reservation_request_id,
+            )
+            details = ", ".join(
+                f"rank {rank}: remaining="
+                f"{effective_remaining[self._rank_relative_index[rank]]}, "
+                f"required={required_bytes_by_tp_rank[self._rank_relative_index[rank]]}"
+                for rank in insufficient
+            )
+            raise ValueError(
+                f"insufficient target HBM in instance {instance_index}; {details}"
             )
         return tuple(evictions)
 
@@ -3175,12 +3217,26 @@ class KVCacheManager:
             ),
         )
 
-    def mark_complete(self, session_id: str, completion_ns: int) -> None:
+    def mark_complete(
+        self,
+        session_id: str,
+        completion_ns: int,
+        next_request_type: Optional[str] = None,
+    ) -> None:
+        if next_request_type not in (None, "human", "tool"):
+            raise ValueError(
+                "next_request_type must be None, 'human' or 'tool', got "
+                f"{next_request_type!r}"
+            )
         session = self._sessions[session_id]
         if session.location != self.LOCAL_HBM or session.instance_index is None:
             raise RuntimeError("completed request KV must be local")
         session.active = False
         session.last_completion_ns = completion_ns
+        # Record the idle session's trigger class before any follow-up
+        # enforce_reserve pass so the typed eviction order sees it (the
+        # event loop batches mark_complete before enforce_reserve).
+        session.next_request_type = next_request_type
         self._check_invariants()
 
     def enforce_reserve(
@@ -3200,31 +3256,39 @@ class KVCacheManager:
             )
 
         evictions: list[KVTransfer] = []
-        while unmet():
-            candidates = self._completed_full_candidates(instance_index)
-            if not candidates:
-                break
-            evictions.append(
-                self._evict_suffix(
-                    candidates[0],
-                    phase="completion",
-                    reason="reserve_threshold",
-                    trigger_request_id=trigger_request_id,
+        # Same typed two-stage order as _ensure_capacity: ("human", "tool")
+        # classes, half-suffix stage before full-session stage inside each
+        # class, watermark rechecked after every eviction.
+        for trigger_type in ("human", "tool"):
+            while unmet():
+                candidates = self._completed_full_candidates(
+                    instance_index, trigger_type
                 )
-            )
+                if not candidates:
+                    break
+                evictions.append(
+                    self._evict_suffix(
+                        candidates[0],
+                        phase="completion",
+                        reason="reserve_threshold",
+                        trigger_request_id=trigger_request_id,
+                    )
+                )
 
-        while unmet():
-            candidates = self._completed_resident_candidates(instance_index)
-            if not candidates:
-                break
-            evictions.append(
-                self._evict_session(
-                    candidates[0],
-                    phase="completion",
-                    reason="reserve_threshold",
-                    trigger_request_id=trigger_request_id,
+            while unmet():
+                candidates = self._completed_resident_candidates(
+                    instance_index, trigger_type
                 )
-            )
+                if not candidates:
+                    break
+                evictions.append(
+                    self._evict_session(
+                        candidates[0],
+                        phase="completion",
+                        reason="reserve_threshold",
+                        trigger_request_id=trigger_request_id,
+                    )
+                )
         reserve_unmet_ranks = unmet()
         self._check_invariants()
         return tuple(evictions), reserve_unmet_ranks
@@ -3235,8 +3299,9 @@ class KVCacheManager:
         session_id: str,
         completion_ns: int,
         trigger_request_id: str,
+        next_request_type: Optional[str] = None,
     ) -> tuple[tuple[KVTransfer, ...], tuple[int, ...]]:
-        self.mark_complete(session_id, completion_ns)
+        self.mark_complete(session_id, completion_ns, next_request_type)
         instance_index = self._sessions[session_id].instance_index
         if instance_index is None:
             raise RuntimeError("completed session lost its local instance")
@@ -3258,6 +3323,10 @@ class FaceRequest:
     inter_request_interval_ns: Optional[int]
     prefix_tokens: Optional[int] = None
     input_tokens_total: Optional[int] = None
+    # Trigger type of the request following this one ("human"/"tool"); feeds
+    # the typed eviction policy via mark_complete. Defaults keep the many
+    # positional test constructions valid.
+    next_trigger_type: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.queue_index < 0 or self.turn_index < 0:
@@ -3266,6 +3335,11 @@ class FaceRequest:
             raise ValueError("session_id and request_id must not be empty")
         if self.prefill_length <= 0 or self.decode_length <= 0:
             raise ValueError("prefill_length and decode_length must be positive")
+        if self.next_trigger_type not in (None, "human", "tool"):
+            raise ValueError(
+                "next_trigger_type must be None, 'human' or 'tool', got "
+                f"{self.next_trigger_type!r}"
+            )
         if self.prefix_tokens is not None and (
             isinstance(self.prefix_tokens, bool)
             or not isinstance(self.prefix_tokens, int)
@@ -3977,6 +4051,9 @@ def plan_face_requests(
             kv_manager.mark_complete(
                 runtimes[request_index].request.session_id,
                 now_ns,
+                next_request_type=(
+                    runtimes[request_index].request.next_trigger_type
+                ),
             )
         for request_index in completion_order:
             runtime = runtimes[request_index]

@@ -40,7 +40,7 @@ def _read_rows(path: str) -> list:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="wscllm phase-4 §7.3 profile scan audit")
+        description="sh_3.0 phase-4 §7.3 profile scan audit")
     parser.add_argument("--profile", required=True,
                         help="profile.jsonl 路径(真实运行产出)")
     parser.add_argument("--total-requests", type=int, default=1177,

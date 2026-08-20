@@ -17,16 +17,18 @@ Contract (mirrors the phase-1 full loader, byte-for-byte request semantics):
 
   - rows WITH an explicit session_arrival_time_ns (turn-0) are enqueued as
     Submit commands (alarm-only: no policy decision). A turn-0 arrival beyond
-    `max_arrival_ns` (仿真输入窗口上限; default 0 = unbounded, backport fix
-    2026-08-16 对比报告 §5.1 -- the old 30e9 default was the 30s acceptance
-    input's window assumption and silently dropped later rows of longer
-    inputs) is REJECTED when an explicit nonzero window is set: counted in
+    `max_arrival_ns` (仿真输入窗口上限; backport fix 2026-08-16, sh_2.0测试
+    §5.1: default 0 = UNBOUNDED -- the old 30e9 default burned the 30s
+    acceptance window into the code and silently dropped over-window
+    requests; the bound now exists only as the explicit
+    --request-max-arrival-ns experiment knob) is REJECTED: counted in
     rejected_out_of_range(), logged once at report time, never submitted --
     the row still gets its queue_index registered and its metrics request
-    registered (conservative: "every data row registered" stays true), it is
-    marked consumed at reject time (a rejected row will never fire an
-    arrival alarm, so it must not clog the window), and the run-end audit in
-    main_online fails the run on any nonzero rejection (fail-closed).
+    registered (conservative: "every data row registered" stays true). The
+    rejected row is marked consumed at reject time (a rejected row
+    never fires an arrival alarm, so it must not clog the window). Any
+    rejection fail-closes the run-end completion audit (the drop is never
+    silent; see audit_completion below).
   - rows with an EMPTY arrival (turn>0) are never submitted directly; their
     arrivals are scheduled by the REQUEST_COMPLETE commit through
     future_alarms. The reader registers their queue_index as soon as the row
@@ -37,7 +39,11 @@ Contract (mirrors the phase-1 full loader, byte-for-byte request semantics):
     lowered the occupancy and triggered the read of the following rows).
   - ALL data rows are counted toward the run-end completion assertion
     (completed_request_count == data_rows; 1177 for the 20.csv first-30s
-    input), exactly like the full loader.
+    input), exactly like the full loader. Backport fix (2026-08-16,
+    unified 2026-08-20 中-3): the assertion denominator is the file's
+    TOTAL data rows. A rejected row is consumed at reject time, so the
+    window always flows to EOF and total_data_rows() at run end IS the
+    whole-file count (no tail scan needed).
 
 Zero decision-sequence perturbation by construction: the same CSV rows are
 read in the same order and submitted through the same RequestIngress; the
@@ -89,15 +95,12 @@ class WindowedTraceReader {
     ///                     0 = unbounded, one pump reads the whole file --
     ///                     the full-pass control arm of the phase-7 §10.4
     ///                     window benchmark).
-    /// @param max_arrival_ns simulation input window upper bound; 0 (the
-    ///                     default, backport fix 2026-08-16 对比报告 §5.1)
-    ///                     = UNBOUNDED: no turn-0 row is ever rejected. A
-    ///                     nonzero value is an EXPLICIT window: turn-0 rows
-    ///                     with arrival > this are rejected (counted in
-    ///                     rejected_out_of_range(), never submitted; the
-    ///                     rejected row is marked consumed at reject time so
-    ///                     the window never clogs on it, and main_online's
-    ///                     run-end audit FAILS the run -- never silent).
+    /// @param max_arrival_ns simulation input window upper bound; turn-0
+    ///                     rows with arrival > this are rejected (counted,
+    ///                     never submitted). Backport fix 2026-08-16: the
+    ///                     default 0 = UNBOUNDED (no cap); a nonzero value is
+    ///                     an explicit experiment knob whose drops fail-close
+    ///                     the run-end completion audit.
     WindowedTraceReader(const std::string& csv_path, RequestIngress& ingress,
                         size_t high_water = 128,
                         uint64_t max_arrival_ns = 0);
@@ -116,10 +119,21 @@ class WindowedTraceReader {
     /// equals the file's total data-row count (the run-end completion
     /// assertion target: 1177 for the 20.csv first-30-seconds input).
     uint64_t data_rows() const { return data_rows_; }
+    /// Backport fix (2026-08-16): turn-0 data rows (arrival column
+    /// non-empty), read by read_one_row. The accepted-request accounting
+    /// invariant of the run-end completion audit (accepted + dropped ==
+    /// turn-0 rows: every turn-0 row was either submitted to the service
+    /// or rejected out-of-window; turn>0 rows arrive via the future-alarm
+    /// path and are covered by the completed == total - dropped check).
+    uint64_t turn0_data_rows() const { return turn0_rows_; }
     /// True once the file was fully read.
     bool eof() const { return eof_; }
     /// Turn-0 rows rejected because arrival > max_arrival_ns.
     size_t rejected_out_of_range() const { return rejected_out_of_range_; }
+    /// The whole-file data-row count. Equals data_rows() once EOF was
+    /// reached (consume-at-reject guarantees EOF under any explicit
+    /// window). The run-end completion audit denominator (backport fix).
+    uint64_t total_data_rows() const { return data_rows_; }
     /// Number of pump calls that actually read at least one row.
     size_t read_pumps() const { return read_pumps_; }
     /// Accumulated wall time spent reading/parsing rows.
@@ -174,7 +188,56 @@ class WindowedTraceReader {
 
     size_t occupancy() const;
     void read_one_row();
+
+    // Turn-0 rows (arrival non-empty): read by read_one_row.
+    uint64_t turn0_rows_ = 0;
 };
+
+/// Backport fix (2026-08-16, sh_2.0测试 §5.1): the run-end completion-audit
+/// arithmetic, factored out so the fail-closed contract is unit-testable
+/// without the full online binary (windowed_trace_reader_test.cc part H).
+///
+/// Denominator = the CSV's TOTAL data rows (not "rows the window happened to
+/// read"): a request silently missing from the run must always be able to
+/// widen the completed+dropped vs total gap, and any explicit-window drop is
+/// itself a loud failure. Verdicts (first match wins):
+///   Ok              completed + dropped == total (all rows accounted),
+///                   accepted + dropped == turn0_rows (every turn-0 row
+///                   either submitted or rejected), dropped == 0.
+///   Dropped         dropped > 0 (an explicit --request-max-arrival-ns window
+///                   rejected input rows: visible, fail-closed -- never a
+///                   silent PASS).
+///   AccountMismatch accepted + dropped != turn0_rows (a turn-0 row was read
+///                   but neither accepted by the service nor rejected --
+///                   e.g. Submit commands lost to an ingress overflow or a
+///                   stalled window).
+///   Incomplete      completed + dropped != total (requests missing from the
+///                   run: never-read tail rows, un-fired future alarms, or
+///                   accepted-but-unfinished requests).
+///
+/// Counter semantics note (measured on every official run): accepted counts
+/// ONLY turn-0 submissions (112 for the 20.csv first-30s input); turn>0
+/// requests arrive via the future-alarm path and never increment it, so the
+/// accepted invariant is against turn-0 rows, never against total rows.
+struct CompletionAuditCounts {
+    uint64_t total_rows;   // reader.total_data_rows()
+    uint64_t turn0_rows;   // reader.turn0_data_rows()
+    uint64_t accepted;     // service accepted_request_count()
+    uint64_t completed;    // service completed_request_count()
+    uint64_t dropped;      // reader rejected_out_of_range()
+};
+
+enum class CompletionAuditVerdict {
+    Ok,
+    Dropped,
+    AccountMismatch,
+    Incomplete,
+};
+
+CompletionAuditVerdict audit_completion(const CompletionAuditCounts& counts);
+
+/// One-line human-readable verdict reason for the audit's [Error] line.
+const char* completion_audit_why(const CompletionAuditVerdict verdict);
 
 }  // namespace ExecutionDriven
 }  // namespace AstraSim

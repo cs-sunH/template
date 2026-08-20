@@ -1,8 +1,0 @@
-topology: [ Line, Line ]
-npus_count: [ 4, 4 ]
-bandwidth: [ 50.0, 50.0 ]
-latency: [ 500.0, 500.0 ]
-transmission-mode: fluid-pipelined
-fluid-max-active-flows: 20000
-fluid-max-route-memberships: 500000
-progress-report-event-interval: 100000

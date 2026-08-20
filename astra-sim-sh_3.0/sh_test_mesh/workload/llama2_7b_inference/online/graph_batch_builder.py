@@ -113,8 +113,10 @@ class OnlineTraceBuilder:
             "stage": self.stage,
             "generation": self.generation,
             "compute": {"num_ops": 0, "tensor_size": 0, "runtime_ns": 0},
-            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False},
-            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False,
+                    "hbm_access_mode": 0},
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0,
+                     "hbm_charge": True},
             "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
                      "pg_name": "", "involved_dim": []},
         }
@@ -149,16 +151,24 @@ class OnlineTraceBuilder:
         if node_id is not None:
             self.pending_extra_dependencies.append(int(node_id))
 
-    # 与 TraceBuilder.chain_checkpoint/restore_chain（:721/:726）同构：
-    # partial 流水恢复的段内分支并行机制（prefix 计算与 suffix 恢复并行，
-    # restore 恢复 checkpoint 前的链首）。返回 checkpoint 句柄。
+    # 与离线 TraceBuilder.chain_checkpoint/restore_chain
+    # （generate_trace.py:732/:737）同构（sh_2.0 在线版同款完整恢复）：
+    # partial 流水恢复的段内分支并行机制（prefix 计算与 suffix 恢复并行）。
+    # checkpoint 同时捕获 previous_id 与 pending_extra_dependencies，
+    # restore 两者一并回滚——分支内新 arm 的依赖不泄漏到恢复点之后。
+    # 返回 checkpoint 句柄。（2026-08-20 前在线版只存/回 previous_id，
+    # 因唯一调用点 checkpoint 时 pending_extra_dependencies 恒被
+    # readiness barrier 清空而无实际差异；补齐为完整同构以消除潜伏
+    # 分叉，对现行行为零变化。）
     def chain_checkpoint(self):
         handle = len(self._checkpoints)
-        self._checkpoints[handle] = self.previous_id
+        self._checkpoints[handle] = (
+            self.previous_id, tuple(self.pending_extra_dependencies))
         return handle
 
     def restore_chain(self, handle) -> None:
-        self.previous_id = self._checkpoints.pop(handle)
+        self.previous_id, dependencies = self._checkpoints.pop(handle)
+        self.pending_extra_dependencies = list(dependencies)
 
     def timer_gate(self, name: str, duration_ns: int, *,
                    after_node_id=None):
@@ -175,6 +185,10 @@ class OnlineTraceBuilder:
         离线语义（duration = admission/interval 等待）由 C++ arrival alarm
         （future_alarms）替代——gate 只保留结构与依赖，保持时长会双重等待。
         """
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
         node = {
@@ -189,8 +203,10 @@ class OnlineTraceBuilder:
             "stage": self.stage,
             "generation": self.generation,
             "compute": {"num_ops": 0, "tensor_size": 0, "runtime_ns": 0},
-            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False},
-            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "mem": {"tensor_size": 0, "is_local_hbm_kv_restore": False,
+                    "hbm_access_mode": 0},
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0,
+                     "hbm_charge": True},
             "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
                      "pg_name": "", "involved_dim": []},
         }
@@ -224,33 +240,39 @@ class OnlineTraceBuilder:
         node["coll"]["involved_dim"] = [True, True]
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge: bool = True) -> None:
         from generate_trace import COMM_SEND_NODE
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        node["comm"]["hbm_charge"] = bool(hbm_charge)
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge: bool = True) -> None:
         from generate_trace import COMM_RECV_NODE
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        node["comm"]["hbm_charge"] = bool(hbm_charge)
 
-    def mem_store(self, name: str, tensor_size: int) -> None:
+    def mem_store(self, name: str, tensor_size: int, *,
+                  hbm_access_mode: int = 0) -> None:
         from generate_trace import MEM_STORE_NODE
         node = self._new_node(name, MEM_STORE_NODE)
         node["mem"]["tensor_size"] = self._uint64(tensor_size)
+        node["mem"]["hbm_access_mode"] = int(hbm_access_mode)
         node["compute"]["tensor_size"] = node["mem"]["tensor_size"]
 
-    def mem_load(self, name: str, tensor_size: int) -> None:
+    def mem_load(self, name: str, tensor_size: int, *,
+                 hbm_access_mode: int = 0) -> None:
         from generate_trace import MEM_LOAD_NODE
         node = self._new_node(name, MEM_LOAD_NODE)
         node["mem"]["tensor_size"] = self._uint64(tensor_size)
+        node["mem"]["hbm_access_mode"] = int(hbm_access_mode)
         node["compute"]["tensor_size"] = node["mem"]["tensor_size"]
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
@@ -288,8 +310,9 @@ class GraphBatchBuilder:
         self.pending_history = {}
         self.pending_request_by_session = {}
         self.deferred_session_locations = {}
-        # request_id -> {rank: prefill 块末 previous_id}（两段式发射的
-        # within-request 依赖恢复，蓝本裁决 3/7/9 继承）。
+        # request_id -> {rank: prefill 块末 previous_id}（decode 段
+        # decode_eviction_trigger 的 node_gates 来源；frontier 接续裁决
+        # 2026-08-19 起不再作恢复用，见 _emit_decode）。
         self._prefill_block_ends = {}
         # request_id -> decode 完成节点 per rank（completion 批的
         # completion_eviction trigger gate 与 interval gate after_node_id）。
@@ -647,8 +670,9 @@ class GraphBatchBuilder:
                 f"{prefix}_prefill_chunks_aggregated_end_barrier",
                 pass_count, prefill_group.pg_name)
 
-        # [previous_id 链修复] 记录本 request 的 per-rank prefill 块末 previous_id
-        # （emitted-ranks-only；decode 段发射前恢复，蓝本裁决 3/7/9 继承）。
+        # 记录本 request 的 per-rank prefill 块末 previous_id（emitted-ranks-
+        # only；仅作 decode 段 decode_eviction_trigger 的 node_gates 来源，
+        # 不再恢复进 builders——frontier 接续裁决 2026-08-19，见 _emit_decode）。
         decode_group = group_by_index[
             request_plan["decode_instance_index"]]
         self._prefill_block_ends[request_plan["request_id"]] = {
@@ -690,15 +714,25 @@ class GraphBatchBuilder:
                 self._mark_pending_history_store(transfer)
             return record
 
-        # [previous_id 链修复] 恢复 prefill 块末 per-rank previous_id（emitted-ranks-
-        # only；仅段首节点消费恢复值，其余节点正常续链）。
-        block_ends = self._prefill_block_ends.get(request_plan["request_id"])
-        if block_ends is not None:
-            for rank, end_id in block_ends.items():
-                builders[rank].previous_id = end_id
+        # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,对齐 sh_1.0/
+        # sh_2.0)] strategy **不做任何块末恢复/段内清链**:per-rank
+        # previous_id 无条件接续当前 frontier(= 离线 writer 跨 request
+        # 物理链同构),per-rank 发行序 = 全局发射序——任意两个发射段在
+        # 所有共享 rank 上的相对次序一致,跨请求 P2P 与 collective 参与
+        # 序不可能反转成环。decode 段首节点(decode_evictions 的首个
+        # transfer)因此链到该 rank 当前 frontier(跨 request 边);本
+        # request 的 prefill 块末依赖经 per-rank 全序传递性保持(prefill
+        # 先于 decode 发射)。(蓝本裁决 3/7/9 的 own-prefill-end 恢复
+        # 自此废止;块末账本仅存 trigger gate 用途。)
 
         prefill_completion_nodes = tuple(
-            builders[rank].previous_id for rank in prefill_group.ranks)
+            self._prefill_block_ends.get(request_plan["request_id"], {})
+            .get(rank)
+            for rank in prefill_group.ranks)
+        if any(node_id is None for node_id in prefill_completion_nodes):
+            # 段 1 发射后 prefill 组必有块末;缺即账本损坏(fail-closed)。
+            raise RuntimeError(
+                "segment-1 block ends missing on prefill ranks")
         decode_eviction_trigger = TransferTriggerGate(
             control_instance_index=request_plan["prefill_instance_index"],
             node_gates=prefill_completion_nodes,

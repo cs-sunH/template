@@ -325,7 +325,7 @@ void test_et_feeder_graph_source(const std::string& et_path) {
     ETFeederGraphSource src(&feeder, 0);
 
     auto views = src.dep_free_nodes();
-    expect(views.size() == 3, "C: 3 dependency-free nodes in the fixture");
+    expect(views.size() == 5, "C: 5 dependency-free nodes in the fixture");
     expect(views.size() >= 3 && views[0].global_id == 0 &&
                views[1].global_id == 1 && views[2].global_id == 2,
            "C: free ids ascending");
@@ -371,7 +371,7 @@ void test_et_feeder_graph_source(const std::string& et_path) {
     // take / finish lifecycle.
     src.take_node(0);
     views = src.dep_free_nodes();
-    expect(views.size() == 2 && views[0].global_id == 1,
+    expect(views.size() == 4 && views[0].global_id == 1,
            "C: take_node consumes from the free set");
     src.finish_node(0);
     expect(!src.static_all_done(), "C: not done while nodes remain");
@@ -380,6 +380,28 @@ void test_et_feeder_graph_source(const std::string& et_path) {
     expect(!src.static_all_done(), "C: not done while node2 free");
     src.take_node(2);
     src.finish_node(2);
+    expect(!src.static_all_done(), "C: not done while nodes 3/4 free");
+    // nodes 3/4 (rank 0 is an edge rank with a configured remote-memory
+    // port, so the generator emits both): node 3 is the remote-mem FIFO
+    // fixture node, node 4 carries the sh_2.0 restore routing bit.
+    views = src.dep_free_nodes();
+    expect(views.size() == 2 && views[0].global_id == 3 &&
+               views[1].global_id == 4,
+           "C: nodes 3/4 remain free after 0-2 finished");
+    expect(views[0].kind == NodeKind::MemLoad &&
+               views[0].compute.tensor_size == 4096 &&
+               !views[0].is_local_hbm_kv_restore &&
+               views[0].hbm_access_mode == 0,
+           "C: node3 MemLoad mapped (no restore bit, no hbm-access-mode)");
+    expect(views[1].kind == NodeKind::MemLoad &&
+               views[1].compute.tensor_size == 4096 &&
+               views[1].is_local_hbm_kv_restore &&
+               views[1].hbm_access_mode == 0,
+           "C: node4 restore routing bit mapped");
+    src.take_node(3);
+    src.finish_node(3);
+    src.take_node(4);
+    src.finish_node(4);
     expect(src.static_all_done(),
            "C: static_all_done when free and ongoing are both empty");
     expect(src.dep_free_nodes().empty(), "C: no free nodes after all taken");

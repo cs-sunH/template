@@ -27,7 +27,7 @@ RUN_ROOT=${1:-/tmp/sh10_idle_fixture}
 # 本 fixture runner 曾硬编码已删除的 baseline/20_30s 归档路径)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[fixture] expected exactly one generated dir under sh_test_mesh/generated (regenerate via plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  echo "[fixture] expected exactly one generated dir under sh_test_mesh/generated (regenerate via plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}

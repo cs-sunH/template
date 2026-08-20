@@ -36,19 +36,19 @@ C++ 状态读取。
 与离线蓝图的刻意差异（real-online 语义，合同⑦ Tier B real-online 验收）：
   - 计时/迭代粒度：离线 LUT 时钟 + 逐 chunk 迭代 → 在线真实完成事件 +
     request-aggregated 构图；
-  - task-load 三分量口径：running prefill 的剩余比例与 active decode 的
-    剩余步数在 request-aggregated 语义下取整段剩余（fraction=1.0、
-    current_decode_token=prefill_context），公式与参数与离线同一估算器
-    （estimate_prefill_task_load_ns / estimate_decode_remaining_task_load_ns /
-    prefill_chunk_task_load_ns 只读复用）；完成时序由真实物理决定，不要求
-    与离线 LUT 时钟 exact；
+  - task-load 三分量口径：running prefill 与 queued prefill 均按 512-chunk
+    逐块求和（在飞段 fraction=1.0 全量剩余、恰计一次——在线无 chunk 级
+    进度事件的上界近似），active decode 剩余步数在 request-aggregated
+    语义下取整段剩余（current_decode_token=prefill_context），公式与参数
+    与离线同一估算器（estimate_prefill_task_load_ns /
+    estimate_decode_remaining_task_load_ns / _prefill_chunk_task_load_ns
+    缓存同款）；完成时序由真实物理决定，不要求与离线 LUT 时钟 exact；
   - 实例 busy 语义：在线 busy 覆盖"一个 prefill 整段在飞"；decode 段发射
     不受 busy 门（strategy 保持物理跨 request 链，per-rank previous_id
     天然串行化同实例段）。
 """
 
 import heapq
-import math
 import os
 import sys
 from collections import deque
@@ -162,6 +162,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self.average_decode_length = constants.get(
             "average_decode_length", config.source_average_decode_length)
         self.p_chunk = PREFILL_CHUNK_SIZE
+        # task-load 逐 chunk 估计缓存（同款 key 与离线 plan_face_requests 的
+        # prefill_task_cache / sh_3.0 在线版一致）。
+        self._prefill_task_cache: dict[tuple[int, int, int], int] = {}
 
         # offline: face_scheduler.py:3499（topology）
         specs = tuple(
@@ -409,7 +412,11 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         index = self._runtime_index[request_id]
         runtime = self.runtimes[index]
         # offline: face_scheduler.py:3976-3980（mark_complete）
-        self.kv_manager.mark_complete(runtime.request.session_id, tick)
+        self.kv_manager.mark_complete(
+            runtime.request.session_id,
+            tick,
+            next_request_type=runtime.request.next_trigger_type,
+        )
         # offline: face_scheduler.py:3981-3991（enforce_reserve）
         (runtime.completion_evictions,
          runtime.reserve_unmet_ranks) = self.kv_manager.enforce_reserve(
@@ -591,15 +598,34 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
 
     # ------------------------------------------------- task-load 三分量 --
 
+    def _prefill_chunk_task_load_ns(self, *, instance_size: int,
+                                    chunk_tokens: int,
+                                    context_tokens: int) -> int:
+        """逐 chunk Roofline 估计（缓存 key 同离线 prefill_task_cache；
+        sh_3.0 修复版同款助手）。"""
+        key = (instance_size, chunk_tokens, context_tokens)
+        if key not in self._prefill_task_cache:
+            self._prefill_task_cache[key] = estimate_prefill_task_load_ns(
+                hardware=self.config.hardware,
+                model=self.config.model,
+                instance_size=instance_size,
+                chunk_tokens=chunk_tokens,
+                context_tokens=context_tokens,
+            )
+        return self._prefill_task_cache[key]
+
     def _task_load_snapshot(self, state: _OnlineInstanceState,
                             now_ns: int) -> InstanceTaskLoadSnapshot:
-        """离线 task_load_snapshot（face_scheduler.py:3619-3674）的在线复刻。
-
-        估算公式与参数同一（prefill_chunk_task_load_ns /
-        estimate_decode_remaining_task_load_ns 只读复用）；request-aggregated
-        口径差异（real-online 刻意差异，模块 docstring）：running fraction
-        取 1.0（整段在飞），current_decode_token = prefill_context（整段
-        剩余），prompt_tokens_processed 在段完成前置 0。"""
+        """离线 task_load_snapshot（face_scheduler.py:3693 起）的在线复刻。
+        三分量口径（每个请求恰计一次）：
+          - running_prefill：在飞段全量剩余**逐 512-chunk 求和，恰计一次**
+            （在线无 chunk 级进度事件，fraction=1.0 上界近似；与 sh_3.0
+            修复版及离线蓝本的逐 chunk 口径同形，时间折算归阶段 3 事件
+            驱动账本）；
+          - queued_prefill：未在飞请求逐 chunk 求和（在飞请求折 0，见
+            _queued_prefill_task_load_ns）；
+          - active_decode：estimate_decode_remaining_task_load_ns 逐请求，
+            generated_tokens 在线恒 0（current_decode_token 段内不推进）。"""
         instance_size = self.topology.instance(state.index).size
 
         running_prefill_load_ns = 0
@@ -607,21 +633,20 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             state.qp[0] if (state.busy and state.qp) else None)
         if running_index is not None:
             runtime = self.runtimes[running_index]
+            processed_tokens = runtime.prompt_tokens_processed
             remaining_tokens = (
-                runtime.prefill_tokens_to_process
-                - runtime.prompt_tokens_processed)
-            if remaining_tokens > 0:
+                runtime.prefill_tokens_to_process - processed_tokens)
+            while remaining_tokens > 0:
+                chunk_tokens = min(self.p_chunk, remaining_tokens)
                 context_tokens = (
                     runtime.history_tokens_before
-                    + runtime.prompt_tokens_processed + remaining_tokens)
-                running_prefill_load_ns = math.ceil(
-                    estimate_prefill_task_load_ns(
-                        hardware=self.config.hardware,
-                        model=self.config.model,
-                        instance_size=instance_size,
-                        chunk_tokens=remaining_tokens,
-                        context_tokens=context_tokens,
-                    ) * 1.0)
+                    + processed_tokens + chunk_tokens)
+                running_prefill_load_ns += self._prefill_chunk_task_load_ns(
+                    instance_size=instance_size,
+                    chunk_tokens=chunk_tokens,
+                    context_tokens=context_tokens)
+                processed_tokens += chunk_tokens
+                remaining_tokens -= chunk_tokens
 
         active_decode_load_ns = 0
         for request_index in state.active_decode:
@@ -651,7 +676,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
     def _queued_prefill_task_load_ns(self, state: _OnlineInstanceState, *,
                                      instance_size: int,
                                      running_index) -> int:
-        """离线 queued_prefill_task_load_ns（:3591-3617）的在线复刻；
+        """离线 queued_prefill_task_load_ns（:3665-3691）的在线复刻；
         running request 的当前段剩余计入 running 分量（processed += 剩余）。"""
         total_load_ns = 0
         for request_index in state.qp:
@@ -668,13 +693,10 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 context_tokens = (
                     runtime.history_tokens_before
                     + processed_tokens + chunk_tokens)
-                total_load_ns += estimate_prefill_task_load_ns(
-                    hardware=self.config.hardware,
-                    model=self.config.model,
+                total_load_ns += self._prefill_chunk_task_load_ns(
                     instance_size=instance_size,
                     chunk_tokens=chunk_tokens,
-                    context_tokens=context_tokens,
-                )
+                    context_tokens=context_tokens)
                 processed_tokens += chunk_tokens
                 remaining_tokens -= chunk_tokens
         return total_load_ns

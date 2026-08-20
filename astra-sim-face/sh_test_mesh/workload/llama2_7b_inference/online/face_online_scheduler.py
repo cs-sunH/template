@@ -100,6 +100,7 @@ from session_kv_manager import (  # noqa: E402
 )
 from face_scheduler import (  # noqa: E402
     NOC_MIGRATE,
+    DecodeTieCounter,
     FaceInstanceSpec,
     FaceLut,
     PrefillQueueSnapshot,
@@ -297,6 +298,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             config.model,
             reserve_context_tokens=config.kv_reserve_context_tokens,
         )
+        # 中-1 裁决（2026-08-20）：decode 平局按 instance_index 升序轮流；
+        # 在线调度器与离线 plan 各持一个计数器，前进条件相同（仅真实平局）。
+        self._decode_tie_counter = DecodeTieCounter()
 
         # 蓝图 :1331:实例账本(统一实例,无 phase_role)。
         # offline: face_scheduler.py:1331
@@ -453,6 +457,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             has_prefill_work=has_prefill,
             decode_token_lengths=active_tokens,
             new_request_token_length=runtime.prefill_context_tokens,
+            tie_counter=self._decode_tie_counter,
         )
         runtime.decode_instance_index = selected  # :1637
         runtime.decode_candidates = costs  # :1638

@@ -193,10 +193,30 @@ std::optional<std::string> GraphBatchCommitter::validate(
             (void)compute.value("num_ops", uint64_t{0});
             (void)compute.value("tensor_size", uint64_t{0});
             (void)compute.value("runtime_ns", uint64_t{0});
+            // sh_2.0 N-way HBM contention pool endpoint charging mode:
+            // online JSON snake key in the compute section, synonymous with
+            // the offline kebab ET attr (optional; fail-closed on malformed).
+            if (compute.contains("hbm_access_mode") &&
+                (!compute["hbm_access_mode"].is_number_integer() ||
+                 compute["hbm_access_mode"].get<int64_t>() < 0)) {
+                return "node[" + std::to_string(node_index) +
+                       "] compute.hbm_access_mode must be a non-negative "
+                       "integer";
+            }
             const auto& comm = node.value("comm", nlohmann::json::object());
             if (!comm.is_object()) {
                 return "node[" + std::to_string(node_index) +
                        "] comm not an object";
+            }
+            // sh_2.0 N-way HBM contention p2p endpoint charging switch:
+            // online JSON snake key in the comm section, synonymous with
+            // the offline kebab ET attr (optional; fail-closed on
+            // malformed). NOT scoped to types 5/6 -- real batches carry the
+            // comm default section on every node.
+            if (comm.contains("hbm_charge") &&
+                !comm["hbm_charge"].is_boolean()) {
+                return "node[" + std::to_string(node_index) +
+                       "] comm.hbm_charge must be a boolean";
             }
             // The src/dst/tag range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
@@ -606,18 +626,9 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        "] duplicate request_id " + request_id +
                        " in the batch";
             }
-            // sh_2.0 replay alignment extension: a turn-0 request whose CSV
-            // arrival already fired stays in_flight while its prefill segment
-            // emission is deferred to an alarm aligned to the offline
-            // admission (prefill record) tick -- seconds-scale admission
-            // queueing under task-load balancing. Such an alignment alarm is
-            // legal while the request is in-flight but NOT yet drained
-            // (prefill_drained); a request whose prefill already drained must
-            // never receive another arrival alarm.
-            if (prefill_drained.count(request_id) != 0) {
+            if (in_flight.count(request_id) != 0) {
                 return "future_alarm[" + std::to_string(alarm_index) +
-                       "] for request " + request_id +
-                       " whose prefill already drained";
+                       "] for already in-flight request " + request_id;
             }
             if (envelope.value("session_id", std::string()).empty()) {
                 return "future_alarm[" + std::to_string(alarm_index) +
@@ -733,11 +744,21 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
             node.compute.remote_weight_bytes =
                 compute.value("remote_weight_bytes", uint64_t{0});
         }
+        // sh_2.0 N-way HBM contention: pool endpoint charging mode (0/absent
+        // = none, 1 = local HBM read, 2 = local HBM write). Online JSON
+        // snake key in the compute section, synonymous with the offline
+        // kebab ET attr "hbm-access-mode"; the struct field stays top-level.
+        node.hbm_access_mode = compute.value("hbm_access_mode", int64_t{0});
         const auto& comm = node_json.value("comm", nlohmann::json::object());
         node.comm.bytes = comm.value("bytes", uint64_t{0});
         node.comm.src = comm.value("src", 0);
         node.comm.dst = comm.value("dst", 0);
         node.comm.tag = comm.value("tag", uint32_t{0});
+        // sh_2.0 N-way HBM contention: p2p endpoint charging switch (default
+        // true). Online JSON snake key in the comm section, synonymous with
+        // the offline kebab ET attr "hbm-charge"; the struct field stays
+        // top-level.
+        node.hbm_charge = comm.value("hbm_charge", true);
         const auto& coll = node_json.value("coll", nlohmann::json::object());
         node.coll.comm_type = coll.value("comm_type", uint64_t{0});
         node.coll.bytes = coll.value("bytes", uint64_t{0});

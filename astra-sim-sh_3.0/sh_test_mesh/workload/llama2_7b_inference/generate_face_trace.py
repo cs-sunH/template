@@ -419,6 +419,29 @@ def load_request_prefix_tokens(
     return tuple(enriched)
 
 
+def _require_sidecar_wiring(queue_csv: Path, context_csv) -> None:
+    """fail-closed（排查报告高-4①，2026-08-20）：sidecar_restore 物化的
+    plain 队列（伴生 *_request_context.csv 存在）必须接线
+    request_queue_context_csv，否则 turn-0 前缀既不重算也不恢复——静默
+    丢失（20 档口径 79 行、单行最大 169,395 token）。recompute 队列
+    （*_request_queue_recompute.csv，前缀已折入 prefill）与无伴生
+    context 的合成/测试队列不适用本守卫。"""
+    name = queue_csv.name
+    if name.endswith("_request_queue_recompute.csv"):
+        return
+    if not name.endswith("_request_queue.csv"):
+        return
+    sibling = queue_csv.with_name(
+        name[: -len("_request_queue.csv")] + "_request_context.csv")
+    if sibling.is_file() and not context_csv:
+        raise SystemExit(
+            "[fail-closed] 队列 {} 为 sidecar_restore 物化产物（伴生 {} 存在），"
+            "但 request_queue_context_csv 为空：turn-0 前缀将既不重算也不恢复"
+            "（静默丢失）。请将 trace_config 的 request_queue_context_csv 指向 "
+            "{}，或改用 *_request_queue_recompute.csv（recompute 口径）。".format(
+                name, sibling.name, sibling))
+
+
 def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfig:
     values, groups = load_config_rows(config_csv, SUPPORTED_CONFIG_KEYS)
 
@@ -449,6 +472,7 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         )
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue_context_csv = parsed["request_queue_context_csv"]
+    _require_sidecar_wiring(request_queue_csv, request_queue_context_csv)
     if request_queue_context_csv is not None:
         request_queue_context_csv = _resolve_request_queue(
             request_queue_context_csv
@@ -1036,14 +1060,21 @@ def _emit_kv_transfer(
                 )
             )
             if source_rank == edge_rank:
+                # N-way HBM contention: the edge rank itself is the pool
+                # data endpoint -- its HBM read is charged through the
+                # mem_store node (hbm-access-mode 1). The pool-side
+                # transaction is the remote-memory port; node completion
+                # joins both sides in the engine.
                 builders[edge_rank].mem_store(
                     f"{action_name}_shard{shard_index}_edge_store",
                     shard.bytes,
+                    hbm_access_mode=1,
                 )
                 record.update(
                     {
                         "direct_edge_access": True,
                         "source_release_dependency": "mem_store_completion",
+                        "hbm_charge": "edge_mem_store_read",
                     }
                 )
             else:
@@ -1056,12 +1087,21 @@ def _emit_kv_transfer(
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
                 )
+                # N-way HBM contention: the edge rank only passes the bytes
+                # from the NoC router to its SerDes pool port -- a
+                # NoC<->SerDes direct-through that must not touch the edge
+                # rank's local HBM. The pool write itself goes through the
+                # remote-memory port below without a local-HBM charge (the
+                # bytes leave the chip; the pool-side write is not a local
+                # HBM access), and the source rank's HBM read is charged by
+                # its own comm_send above.
                 builders[edge_rank].comm_recv(
                     f"{action_name}_shard{shard_index}_recv_from_rank{source_rank}",
                     src=source_rank,
                     dst=edge_rank,
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
+                    hbm_charge=False,
                 )
                 builders[edge_rank].mem_store(
                     f"{action_name}_shard{shard_index}_remote_store",
@@ -1087,6 +1127,9 @@ def _emit_kv_transfer(
                         "data_tag": data_tag,
                         "ack_tag": ack_tag,
                         "source_release_dependency": "remote_store_ack_recv",
+                        "hbm_charge": (
+                            "source_send_read;edge_pass_through"
+                        ),
                     }
                 )
 
@@ -1123,6 +1166,10 @@ def _emit_kv_transfer(
                     comm_size=1,
                     comm_tag=request_tag,
                 )
+            # N-way HBM contention: the edge rank reads the bytes out of the
+            # pool through its SerDes port and hands them to the NoC router
+            # -- a SerDes<->NoC direct-through that must not touch the edge
+            # rank's local HBM (the mem_load below stays uncharged).
             builders[edge_rank].mem_load(
                 f"{action_name}_shard{shard_index}_remote_load",
                 shard.bytes,
@@ -1136,13 +1183,19 @@ def _emit_kv_transfer(
                     dst=target_rank,
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
+                    hbm_charge=False,
                 )
+                # The target's HBM write is carried by the serial restore
+                # node emitted below -- the NoC-stage recv at the target is
+                # a router<->HBM-DMA handoff, not the endpoint itself, so it
+                # must not charge (avoids double counting with the restore).
                 builders[target_rank].comm_recv(
                     f"{action_name}_shard{shard_index}_recv_from_edge{edge_rank}",
                     src=edge_rank,
                     dst=target_rank,
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
+                    hbm_charge=False,
                 )
             builders[target_rank].local_hbm_kv_restore(
                 f"{action_name}_shard{shard_index}_target_hbm_write",
@@ -1165,7 +1218,12 @@ def _emit_kv_transfer(
                         target_hbm_completion_node_id
                     ),
                     "target_hbm_bandwidth_policy": (
-                        "half_with_inference_then_full_after_peer_completion"
+                        "n_way_equal_split_with_all_local_hbm_users"
+                    ),
+                    "hbm_charge": (
+                        "target_restore_write"
+                        + (";edge_pass_through" if data_tag is not None
+                           else ";edge_mem_load_uncharged_restore_covers")
                     ),
                     "control_dependencies": [
                         "previous_decode_interval_gate",
@@ -1324,7 +1382,7 @@ def main(argv=None) -> None:  # noqa: ARG001
     """fail-closed 拒绝桩(2026-08-18 起生效):离线静态全管线入口已删除。
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
-    估算函数,见《路径功能代码对应说明.md》§4-a)。③④ 的输入物化入口是
+    估算函数)。③④ 的输入物化入口是
     plan_materializer.py(manifest/metrics/runtime_config/face_lut);
     静态 ET 生成入口不再存在。
     """

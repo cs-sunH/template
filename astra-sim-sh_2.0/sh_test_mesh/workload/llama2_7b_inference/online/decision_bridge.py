@@ -319,10 +319,7 @@ class BridgeServer:
                     except BridgeError as exc:
                         self._fail(req_seq, str(exc))
                     except Exception as exc:  # noqa: BLE001 -- handler 异常
-                        import traceback  # noqa: E402 -- 调试增强(保留:错误响应携带栈)
-                        self._fail(req_seq, "{}: {}\n{}".format(
-                            type(exc).__name__, exc,
-                            traceback.format_exc()))
+                        self._fail(req_seq, "{}: {}".format(type(exc).__name__, exc))
         finally:
             os.close(fd)
             if self._resp_fd is not None:

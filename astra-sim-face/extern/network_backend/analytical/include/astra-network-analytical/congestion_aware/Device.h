@@ -41,14 +41,6 @@ class Device {
      */
     [[nodiscard]] int get_links_count() const noexcept;
 
-    /**
-     * Initiate a chunk transmission.
-     * You must invoke this method on the source device of the chunk.
-     *
-     * @param chunk chunk to send
-     */
-    void send(std::unique_ptr<Chunk> chunk) noexcept;
-
     [[nodiscard]] std::shared_ptr<const Link> get_link(DeviceId next_device_id) const noexcept;
 
     /**

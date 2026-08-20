@@ -13,13 +13,6 @@ LICENSE file in the root directory of this source tree.
 
 using namespace NetworkAnalyticalCongestionAware;
 
-void Topology::set_event_queue(std::shared_ptr<EventQueue> event_queue) noexcept {
-    assert(event_queue != nullptr);
-
-    // pass the given event_queue to Link
-    Link::set_event_queue(std::move(event_queue));
-}
-
 Topology::Topology() noexcept : npus_count(-1), devices_count(-1), dims_count(-1) {
     npus_count_per_dim = {};
 }
@@ -115,19 +108,6 @@ std::vector<Bandwidth> Topology::get_bandwidth_per_dim() const noexcept {
     assert(bandwidth_per_dim.size() == dims_count);
 
     return bandwidth_per_dim;
-}
-
-void Topology::send(std::unique_ptr<Chunk> chunk) noexcept {
-    assert(chunk != nullptr);
-
-    // get src npu node_id
-    const auto src = chunk->current_device()->get_id();
-
-    // assert src is valid
-    assert(0 <= src && src < devices_count);
-
-    // initiate transmission from src
-    devices[src]->send(std::move(chunk));
 }
 
 void Topology::connect(const DeviceId src,

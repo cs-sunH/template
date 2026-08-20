@@ -279,18 +279,24 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             // tensor_size (strict in the baseline). sh_3.0: the
             // is_local_hbm_kv_restore flag routes MEM_LOAD to the HBM
             // restore model (Workload.cc:198-204 baseline semantics).
+            // N-way HBM contention: hbm-access-mode (0 none / 1 read /
+            // 2 write) charges the pool endpoint's local-HBM half.
             if (node->has_attr("tensor_size")) {
                 nv.compute.tensor_size = node->tensor_size<uint64_t>();
                 nv.mem.tensor_size = nv.compute.tensor_size;
             }
             nv.mem.is_local_hbm_kv_restore =
                 node->get_attr<bool>("is_local_hbm_kv_restore", false);
+            nv.mem.hbm_access_mode = static_cast<int>(
+                node->get_attr<uint64_t>("hbm-access-mode", 0));
             break;
         case NodeKind::CommSend:
         case NodeKind::CommRecv:
             // Baseline defaults preserved: comm_src/dst default to the local
             // rank (this rank == adapter rank_), tag defaults 0; size was
             // strict at consumption time, guard keeps eager reads identical.
+            // N-way HBM contention: hbm-charge defaults true (endpoint
+            // COMM_READ/COMM_WRITE job); false = pass-through, no job.
             if (node->has_attr("comm_size")) {
                 nv.comm.bytes = node->comm_size<uint64_t>();
             }
@@ -307,6 +313,8 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             if (node->has_attr("comm_tag")) {
                 nv.comm.tag = node->comm_tag<uint32_t>();
             }
+            nv.comm.hbm_charge =
+                node->get_attr<bool>("hbm-charge", true);
             break;
         case NodeKind::CommCollective:
             if (node->has_attr("comm_type")) {

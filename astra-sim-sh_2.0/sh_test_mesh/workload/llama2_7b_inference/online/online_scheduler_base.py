@@ -673,12 +673,6 @@ class OnlineSchedulerBase:
             self._profile_scan()  # §7.3:受影响条目(直接定位,非扫描)
             request_id = arrival["request_id"]
             if request_id in self.in_flight:
-                # sh_2.0 replay 对齐重复到达（合法）：turn-0 的 CSV 到达后，
-                # prefill 段发射对齐到离线 admission tick 的 alarm 会触发第二
-                # 次 ARRIVAL（prefill 仍在待办）。prefill 已完成的重复到达
-                # 仍是失步（fail-closed）。
-                if STAGE_PREFILL in self.in_flight[request_id]:
-                    continue
                 raise ValueError("request {!r} arrived twice".format(request_id))
             self.in_flight[request_id] = {STAGE_PREFILL, STAGE_DECODE}
 
@@ -695,10 +689,6 @@ class OnlineSchedulerBase:
             "seq": len(self.online_log_rows) + 1,
             "tick": tick,
             "priority": record.get("priority", 0),
-            # sh_2.0 replay B1 口径：携带离线记录的权威 (tick, seq)——排序
-            # 出口（online_service）按它重排后与离线 decision_log 同序。
-            "record_tick": record.get("tick", tick),
-            "record_seq": record.get("seq"),
             "kind": record["kind"],
             "request_id": record["request_id"],
             "decision": (

@@ -288,6 +288,12 @@ class Sys : public Callable {
     double remote_mem_bw;
     uint64_t remote_mem_latency;
     double pipeline_tile_fraction;
+    // Multi-user local-HBM bandwidth contention (LocalHbmBandwidthModel):
+    // true = COMP / NoC p2p endpoints / remote-pool endpoints of this rank
+    // compete for the single local-mem-bw bus with strict equal sharing.
+    // Config key "hbm-bandwidth-contention"; code default true; auto-false
+    // when local-mem-bw <= 0 (guards a zero-rate fluid model).
+    bool hbm_bandwidth_contention;
     AstraRemoteMemoryAPI* remote_mem;
 
     // memory bus

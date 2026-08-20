@@ -145,6 +145,16 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/service_vacuum_test.cc
             ${srcs_execution_driven})
 
+    # hbm-bandwidth-contention unit fixture (test-only): LocalHbmBandwidthModel
+    # N-user fair sharing / completion reallocation numerics, comm-join both
+    # orders, per-job latency, flag-off fallback, single-COMP roofline
+    # parity; standalone fake network/memory backends, no .et / no CSV
+    # inputs; never part of the baseline gates.
+    add_executable(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc
+            ${srcs_execution_driven})
+
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
@@ -164,6 +174,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -193,6 +205,9 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -240,6 +255,23 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     )
     set_target_properties(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+            PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+    # sh_1.0 fix (same gap as sh_3.0): the blueprint CMake lacked this block,
+    # so the reader-test binary landed in AstraSim_Analytical/ instead of bin/
+    # (port gap; phase 5-6 parallel-reader validation runs it from bin/).
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
+            PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest
             PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/

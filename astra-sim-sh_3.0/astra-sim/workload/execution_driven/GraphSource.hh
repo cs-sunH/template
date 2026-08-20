@@ -75,17 +75,29 @@ struct ComputeAttrs {
 /// sh_3.0 (wscllm-blueprint had no remote memory): is_local_hbm_kv_restore
 /// routes a MEM_LOAD node to the LocalHbmBandwidthModel restore path and the
 /// HardwareResource hbm_dma slot instead of the remote-memory FIFO.
+/// hbm-access-mode (N-way HBM contention): 0/absent = no local-HBM endpoint
+/// charge; 1 = POOL_READ (HBM read at this rank); 2 = POOL_WRITE (HBM write
+/// at this rank). The MEM node then completes on the join of the pool-port
+/// transaction and the local-HBM job.
 struct MemAttrs {
     uint64_t tensor_size = 0;
     bool is_local_hbm_kv_restore = false;
+    int hbm_access_mode = 0;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).
+/// hbm-charge (N-way HBM contention, default true): when true and
+/// hbm-bandwidth-contention is enabled, the node creates a COMM_READ job on
+/// the sender / a COMM_WRITE job on the receiver (bytes = comm bytes);
+/// false = this endpoint is a NoC<->SerDes pass-through that must not touch
+/// the local HBM (no job). Multi-hop transit never charges anyway (only the
+/// endpoint ranks issue comm nodes).
 struct CommAttrs {
     uint64_t bytes = 0;
     int src = 0;
     int dst = 0;
     uint32_t tag = 0;
+    bool hbm_charge = true;
 };
 
 /// Collective comm attributes (issue_coll_comm).

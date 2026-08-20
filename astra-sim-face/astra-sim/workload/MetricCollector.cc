@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/MetricCollector.hh"
 
 #include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
 
@@ -754,6 +755,105 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 "unavailable: roofline model disabled";
         }
         emit_record(record.dump());
+
+        // Multi-user local-HBM bandwidth contention export (sh_2.0
+        // local_hbm record pattern, generalized to N users): when this rank
+        // runs the LocalHbmBandwidthModel (hbm-bandwidth-contention),
+        // report the runtime model's own read-only counters.  The
+        // plain roofline_local_bytes record above is still emitted
+        // unchanged (dram_bw_util and every legacy key keep their meaning).
+        const LocalHbmBandwidthModel* hbm_model =
+            sys->workload->local_hbm_bandwidth_model.get();
+        if (hbm_model != nullptr) {
+            const double hbm_busy_ns = hbm_model->hbm_busy_ns();
+            const double compute_bytes_served =
+                hbm_model->compute_bytes_served();
+            const double comm_read_bytes_served =
+                hbm_model->comm_read_bytes_served();
+            const double comm_write_bytes_served =
+                hbm_model->comm_write_bytes_served();
+            const uint64_t peak_concurrent_jobs =
+                hbm_model->peak_concurrent_jobs();
+            const uint64_t redistribution_events =
+                hbm_model->redistribution_events();
+            const long double served_bytes =
+                static_cast<long double>(compute_bytes_served) +
+                static_cast<long double>(comm_read_bytes_served) +
+                static_cast<long double>(comm_write_bytes_served);
+
+            json hbm_record;
+            hbm_record["schema"] = 1;
+            hbm_record["type"] = "local_hbm";
+            hbm_record["source"] = "shared_hbm_runtime_model";
+            hbm_record["repo_variant"] = this->repo_variant_;
+            hbm_record["run_id"] = this->run_id_;
+            hbm_record["rank"] = sys->id;
+            hbm_record["model"] =
+                "LocalHbmBandwidthModel: N concurrent per-rank HBM users "
+                "(COMP roofline traffic, p2p send COMM_READ, p2p recv "
+                "COMM_WRITE) strictly equally share local-mem-bw; any "
+                "completion immediately redistributes the rate "
+                "(hbm-bandwidth-contention)";
+            hbm_record["utilization_window_ns"] = sim_end_tick;
+            hbm_record["utilization_window"] = "[0, sim_end_ns]";
+            hbm_record["hbm_busy_ns"] = hbm_busy_ns;
+            hbm_record["hbm_busy_definition"] =
+                "sum of advance_to() steps during which at least one job was "
+                "streaming HBM bytes (memory-latency-only steps excluded)";
+            hbm_record["compute_bytes_served"] = compute_bytes_served;
+            hbm_record["comm_read_bytes_served"] = comm_read_bytes_served;
+            hbm_record["comm_write_bytes_served"] = comm_write_bytes_served;
+            hbm_record["bytes_served_definition"] =
+                "sum of per-step per_user_rate*step_ns accumulated inside "
+                "advance_to(); does not alter transition scheduling";
+            hbm_record["peak_concurrent_jobs"] = peak_concurrent_jobs;
+            hbm_record["peak_concurrent_jobs_definition"] =
+                "largest number of simultaneously active HBM jobs observed "
+                "at a membership change (issue or completion)";
+            hbm_record["redistribution_events"] = redistribution_events;
+            hbm_record["redistribution_events_definition"] =
+                "count of equal-share recomputations: every membership "
+                "change (job joining a non-empty set, completion leaving "
+                "survivors) with at least one remaining bandwidth user";
+            hbm_record["local_hbm_bw_bytes_per_second"] = sys->local_mem_bw;
+            hbm_record["local_hbm_bw_source"] =
+                "system-configuration:local-mem-bw";
+            if (sim_end_tick > 0) {
+                const long double busy_util =
+                    static_cast<long double>(hbm_busy_ns) /
+                    static_cast<long double>(sim_end_tick);
+                hbm_record["hbm_busy_util"] =
+                    static_cast<double>(busy_util);
+                check_consistency(
+                    busy_util <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " hbm_busy_util out of range: numerator=" +
+                        std::to_string(hbm_busy_ns) +
+                        " denominator=" + std::to_string(sim_end_tick));
+            } else {
+                hbm_record["hbm_busy_util"] = nullptr;
+            }
+            if (sys->local_mem_bw > 0 && sim_end_tick > 0) {
+                const long double bw_util =
+                    served_bytes /
+                    (static_cast<long double>(sys->local_mem_bw) *
+                     window_seconds);
+                hbm_record["dram_bw_util"] = static_cast<double>(bw_util);
+                hbm_record["dram_bw_util_numerator_bytes"] =
+                    static_cast<double>(served_bytes);
+                hbm_record["dram_bw_util_denominator"] =
+                    "local_hbm_bw*window_seconds";
+                check_consistency(
+                    bw_util <= 1.0L + kUtilEpsilon,
+                    "rank " + std::to_string(sys->id) +
+                        " local_hbm dram_bw_util out of range: numerator=" +
+                        std::to_string(static_cast<double>(served_bytes)) +
+                        " denominator=local_hbm_bw*window_seconds");
+            } else {
+                hbm_record["dram_bw_util"] = nullptr;
+            }
+            emit_record(hbm_record.dump());
+        }
     }
 
     // Per-request records (doc sec.5.9 field list), sorted by queue_index.

@@ -69,6 +69,12 @@ struct ComputeAttrs {
     uint64_t runtime_ns = 0;  // replay runtime, duration_micros * 1000
     bool has_remote_weight_bytes = false;
     uint64_t remote_weight_bytes = 0;
+    // MEM_LOAD/MEM_STORE only: ET int attr "hbm-access-mode" -- 0/absent =
+    // no local-HBM access, 1 = read job, 2 = write job (bytes =
+    // tensor_size). Marks the edge rank that is the local data endpoint of a
+    // remote-pool transfer; node completion joins the remote-port
+    // transaction with this HBM job.
+    int hbm_access_mode = 0;
 };
 
 /// Point-to-point comm attributes (issue_send_comm / issue_recv_comm).
@@ -77,6 +83,11 @@ struct CommAttrs {
     int src = 0;
     int dst = 0;
     uint32_t tag = 0;
+    // ET bool attr "hbm-charge" (default true): false = this endpoint does
+    // not create a local-HBM job in Workload::issue_{send,recv}_comm (used
+    // for NoC<->SerDes pass-through endpoints on edge ranks whose byte
+    // stream is charged at its real data endpoint instead).
+    bool hbm_charge = true;
 };
 
 /// Collective comm attributes (issue_coll_comm).

@@ -18,6 +18,12 @@ class WorkloadLayerHandlerData : public BasicEventHandlerData, public MetaData {
     int sys_id;
     Workload* workload;
     uint64_t node_id;
+    // LocalHbmBandwidthModel endpoint-job completions arrive at
+    // Workload::call through this same handler; the flag distinguishes the
+    // HBM-side arrival of a joined node completion (network / remote-port
+    // side uses the default false). Set by Workload when it allocates the
+    // endpoint job's handler; never read elsewhere.
+    bool is_local_hbm_job;
     WorkloadLayerHandlerData();
 };
 

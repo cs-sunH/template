@@ -156,12 +156,10 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         return;
     }
     if (node.is_local_hbm_kv_restore) {
-        // sh_2.0 fourth resource class (hbm_dma restore DMA). Count-based:
-        // the replay bypass (Workload::issue_dep_free_nodes, replay scope
-        // only) issues MEM nodes concurrently past the single-slot gate; the
-        // strategy/online non-replay path still serializes through
-        // is_available below. The static ETFeederNode path keeps its
-        // single-slot assert (static mode never runs concurrent DMA).
+        // sh_2.0 fourth resource class (hbm_dma restore DMA): single slot,
+        // serialized through the is_available check below (static mode never
+        // runs concurrent DMA).
+        assert(num_in_flight_hbm_dma_ops == 0);
         ++num_in_flight_hbm_dma_ops;
         ++num_hbm_dma_ops;
         hbm_dma_ops_node.emplace(node.global_id);

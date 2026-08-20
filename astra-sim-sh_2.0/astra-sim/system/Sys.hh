@@ -289,6 +289,14 @@ class Sys : public Callable {
     uint64_t remote_mem_latency;
     double pipeline_tile_fraction;
     bool hbm_kv_restore_bandwidth_sharing;
+    // sh_2.0 N-way HBM contention master switch (system key
+    // "hbm-bandwidth-contention", default true; forced false when
+    // local-mem-bw <= 0). true: the N-way equal-split LocalHbmBandwidthModel
+    // takes over every HBM user (COMP, KV restore, NoC p2p comm endpoints,
+    // off-chip pool endpoints). false: legacy behavior is fully preserved,
+    // including the two-user 50/50 semantics of the old
+    // hbm-kv-restore-bandwidth-sharing flag (A/B baseline).
+    bool hbm_bandwidth_contention;
     AstraRemoteMemoryAPI* remote_mem;
 
     // memory bus

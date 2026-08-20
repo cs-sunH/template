@@ -145,13 +145,26 @@ def _derive_metrics_requests(config):
 
 def _write_face_lut(config, output_dir: Path) -> None:
     """sh_1.0 合同⑨冻结 LUT（FaceLut 构建，与请求规划无关）。"""
-    from face_scheduler import FaceInstanceSpec, build_instances  # noqa: E402
+    from face_scheduler import (  # noqa: E402
+        FaceInstanceSpec,
+        FaceLut,
+        build_instances,
+    )
     specs = tuple(
         FaceInstanceSpec(group.name, group.pg_name, group.ranks)
         for group in config.inference_groups
     )
-    instances = build_instances(config.hardware, config.model, specs)
-    lut = instances.lut
+    topology = build_instances(config.hardware, specs)
+    requests = _derive_manifest_requests(config)
+    max_d_token = max(r["final_context_tokens"] for r in requests)
+    lut = FaceLut.build(
+        config.hardware,
+        config.model,
+        instance_sizes=(instance.size for instance in topology.instances),
+        p_chunk=config.prefill_chunk_size,
+        request_count=len(requests),
+        max_d_token=max_d_token,
+    )
     lut.export_csv(output_dir / "face_lut.csv")
 
 

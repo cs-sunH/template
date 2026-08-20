@@ -301,6 +301,10 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             if (node->has_attr("comm_tag")) {
                 nv.comm.tag = node->comm_tag<uint32_t>();
             }
+            // hbm-charge (bool, default true): explicit opt-out of the
+            // local-HBM endpoint charge under hbm-bandwidth-contention
+            // (same get_attr<bool> pattern as is_timer_op above).
+            nv.comm.hbm_charge = node->get_attr<bool>("hbm-charge", true);
             break;
         case NodeKind::CommCollective:
             if (node->has_attr("comm_type")) {

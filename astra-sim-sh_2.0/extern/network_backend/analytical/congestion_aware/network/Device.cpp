@@ -4,7 +4,6 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include "congestion_aware/Device.h"
-#include "congestion_aware/Chunk.h"
 #include "congestion_aware/Link.h"
 #include <cassert>
 
@@ -22,28 +21,6 @@ DeviceId Device::get_id() const noexcept {
 
 int Device::get_links_count() const noexcept {
     return static_cast<int>(links.size());
-}
-
-void Device::send(std::unique_ptr<Chunk> chunk) noexcept {
-    // assert the validity of the chunk
-    assert(chunk != nullptr);
-
-    // assert this node is the current source of the chunk
-    assert(chunk->current_device()->get_id() == device_id);
-
-    // assert the chunk hasn't arrived its final destination yet
-    assert(!chunk->arrived_dest());
-
-    // get next dest
-    const auto next_dest = chunk->next_device();
-    const auto next_dest_id = next_dest->get_id();
-
-    // assert the next dest is connected to this node
-    assert(connected(next_dest_id));
-
-    // send the chunk to the next dest
-    // delegate this task to the link
-    links[next_dest_id]->send(std::move(chunk));
 }
 
 std::shared_ptr<const Link> Device::get_link(const DeviceId next_device_id) const noexcept {

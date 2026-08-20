@@ -18,6 +18,16 @@ Derivation rules (frozen 3-minute lineage, template_back/history/20_3mins):
      every row (sidecar_restore variant). Prefix must not be double counted.
   3. session_arrival_time_ns uses the source absolute time (turn-0 only).
   4. interval semantics = per-row human_time||tool_time gap.
+  5. next_trigger_type (added 2026-08-18, typed KV eviction): per-row
+     classification of the return path AFTER this row's request completes,
+     derived from the row's own human_time/tool_time -- "human" if
+     human_time is non-empty, "tool" if tool_time is non-empty; boundary
+     rulings (user, 2026-08-18): a session's final source row (both fields
+     empty, no successor) classifies "human"; a non-final row with both
+     fields empty (0-interval successor) classifies "tool". The column is
+     appended after inter_request_interval_ns; the C++ WindowedTraceReader
+     parses only the first 7 columns by position, so it is transparent to
+     the simulator.
 
 Single pass over the source csv produces queue + sidecar + canonical digest.
 """
@@ -34,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 QUEUE_HEADER = [
     "session_id", "turn_index", "request_id", "prefill_length",
     "decode_length", "session_arrival_time_ns", "inter_request_interval_ns",
+    "next_trigger_type",
     "description",
 ]
 CONTEXT_HEADER = [
@@ -51,6 +62,24 @@ def _gap_ns(human_time, tool_time):
     t = (tool_time or "").strip()
     raw = h if h else (t if t else "")
     return int(raw) if raw else 0
+
+
+def _next_trigger_type(human_time, tool_time, is_last_row):
+    """Trigger type of the request that follows this row (typed eviction).
+
+    human_time non-empty -> "human" (next request comes from a human reply);
+    tool_time non-empty -> "tool" (tool-call return). Boundary rulings
+    (user, 2026-08-18): the session's final source row (no successor)
+    classifies "human"; a non-final row with both fields empty has a
+    0-interval successor and classifies "tool".
+    """
+    h = (human_time or "").strip()
+    t = (tool_time or "").strip()
+    if h:
+        return "human"
+    if t:
+        return "tool"
+    return "human" if is_last_row else "tool"
 
 
 def main():
@@ -95,11 +124,15 @@ def main():
             else:
                 session_ns = ""
                 interval_ns = str(_gap_ns(srows[turn - 1]["human_time"], srows[turn - 1]["tool_time"]))
+            trigger_type = _next_trigger_type(
+                r["human_time"], r["tool_time"],
+                is_last_row=(turn == len(srows) - 1),
+            )
             queue_rows.append([
                 sid, turn, rid, prefill, r["decode_length"], session_ns,
-                interval_ns,
-                "compute_20 first-30-seconds window (sidecar_restore); "
-                "turn-0 prefix kept as remote-resident history KV (see context sidecar)",
+                interval_ns, trigger_type,
+                "compute_20 first-30-seconds window; turn-0 prefix kept as "
+                "historical KV (see context sidecar)",
             ])
             ctx_rows.append([sid, turn, rid, prefix, prefix + prefill])
             digest = hashlib.sha256(
@@ -122,6 +155,10 @@ def main():
     print("sessions=%d requests=%d" % (session_count, len(queue_rows)))
     print("average_decode_length=%s"
           % (sum(int(r[4]) for r in queue_rows) / float(len(queue_rows))))
+    print("[next-steps] 1) trace_config.csv:12 request_queue_csv -> %s" % out_queue)
+    print("[next-steps] 2) trace_config.csv:13 request_queue_context_csv -> %s" % out_ctx)
+    print("[next-steps] 3) 漏接 :13 将在加载时 fail-closed（守卫 "
+          "_require_sidecar_wiring）")
 
 
 if __name__ == "__main__":

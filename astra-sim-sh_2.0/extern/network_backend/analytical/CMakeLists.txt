@@ -102,7 +102,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
         )
     else ()
         add_executable(Analytical_Congestion_Aware ${srcs_congestion_aware} ${srcs_common})
-        target_sources(Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/example.cpp)
 
         # Properties
         set_target_properties(Analytical_Congestion_Aware

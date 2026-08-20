@@ -71,7 +71,7 @@ if [[ ${PY_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/python.log" >&2
 fi
 if [[ ${CPP_EXIT} -ne 0 || ${PY_EXIT} -ne 0 ]]; then
-  echo "[run_online_strategy_legacy] FAIL: bridge retained for debugging (request=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l), jsonl=$(ls "${RUN_DIR}/bridge/"*.jsonl 2>/dev/null | wc -l)); next run rm -rf clears it" >&2
+  echo "[run_online_strategy_legacy] FAIL: bridge retained for debugging (request=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l), jsonl=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l)); next run rm -rf clears it" >&2
 fi
 [[ ${CPP_EXIT} -eq 0 && ${PY_EXIT} -eq 0 ]] || exit 1
 
@@ -102,10 +102,9 @@ if [ -f "${RUN_DIR}/bridge/kv_event_payload_legacy.json" ]; then
      "${RUN_DIR}/results/kv_event_payload_legacy.json"
   ARCHIVED=$((ARCHIVED + 1))
 fi
-CP_COUNT=$(ls "${RUN_DIR}/bridge/checkpoints/"*.json 2>/dev/null | wc -l)
-# Backport fix (2026-08-16, sh_2.0测试 §5.3): ls with a >2e4-entry glob
-# exceeds ARG_MAX (E2BIG -> exit 126 under set -e -o pipefail); count
-# via find -maxdepth 1 instead (same diagnostic value).
+CP_COUNT=$(find "${RUN_DIR}/bridge/checkpoints" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+# Backport 2026-08-16 (对比报告 §5.3): ls with a >2e4-entry glob exceeds
+# ARG_MAX (E2BIG, exit 126 under set -e) -- count via find instead.
 REQ_COUNT=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l)
 echo "[run_online_strategy_legacy] artifacts: ${ARCHIVED} archived -> results/; checkpoints=${CP_COUNT}; request retained=${REQ_COUNT}"
 echo "[run_online_strategy_legacy] PASS: ${RUN_DIR}"

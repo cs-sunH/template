@@ -17,10 +17,10 @@ WSC-LLM differences versus the FACE original:
 - The legacy WSC planner (Relevant(P,D) static Decode domain) keeps no
   ``final_edge_weights``; the legacy KV digest payload therefore uses the
   allocator's ``final_remaining_capacity_bytes`` instead.
-- Doc sec.9.2 (trace_config.csv:16 / online runner): the scenario
-  banner is not a machine-readable KV policy source, so the manifest carries
-  the real policy fields (``kv_policy``, ``kv_reserve_context_tokens``) read
-  from the actual trace configuration.
+
+The manifest is exactly the frozen-schema product of
+:class:`metrics_schema.MetricManifestBuilder`; no extra keys are injected
+beyond what the frozen ``MetricsManifest`` dataclass emits.
 
 Digest recipes (deterministic, identical with metrics on/off):
 
@@ -501,13 +501,6 @@ class ServiceMetrics:
             builder.add_planner_memory_peak(rank_result.to_dict())
         manifest = builder.build()
         manifest_dict = manifest.to_dict()
-        # Doc sec.9.2: the scenario banner is not a machine-readable KV policy
-        # source; carry the real policy fields from the actual trace config so
-        # logs and post-processing never have to parse the banner.
-        manifest_dict["kv_policy"] = str(config.kv_cache_policy)
-        manifest_dict["kv_reserve_context_tokens"] = int(
-            config.kv_reserve_context_tokens
-        )
         manifest_path = output_dir / "metrics_manifest.json"
         # Compact serialization: the memory action stream is machine-read
         # (C++ MetricCollector / post-processing), and pretty-printing it

@@ -753,6 +753,70 @@ void test_empty_comm_compute_batch(Fixture& f) {
            "G: graph_batch_count == 4");
 }
 
+// ----------------------------------------------------------- Part H ------
+// Online JSON "hbm_charge" parsing nail (低-2 online key unification): the
+// snake_case comm-section key is parsed into NodeView comm.hbm_charge; an
+// absent key defaults to true; the legacy kebab spelling comm["hbm-charge"]
+// is no longer read (reverse nail pinning the new spelling).
+void test_hbm_charge_key_parsing(Fixture& f) {
+    StateDelta delta;
+    delta.delivery_sequence = 4;
+    delta.delivery_epoch = 4;
+    delta.tick = 400;
+    DecisionEvent arrival;
+    arrival.reason = DecisionReason::ARRIVAL;
+    arrival.request_id = "r10";
+    arrival.stage = "prefill";
+    arrival.generation = 0;
+    arrival.payload.session_id = "s1";
+    arrival.payload.prefill_length = 10;
+    arrival.payload.decode_length = 1;
+    delta.events.push_back(arrival);
+
+    // comm_node() hardcodes request_id "r1" -- retarget the pair to this
+    // batch's request so node/watch (request, stage) coverage matches.
+    auto send = comm_node(0, 1, 5, 0, 1, 7);
+    send["request_id"] = "r10";
+    send["comm"]["hbm_charge"] = false;
+    auto recv = comm_node(1, 0, 6, 0, 1, 7);
+    recv["request_id"] = "r10";
+    recv["comm"]["hbm-charge"] = false;  // legacy kebab spelling: inert
+
+    GraphBatch b;
+    b.batch_id = 4;
+    b.source_delivery_sequence = 4;
+    b.nodes = nlohmann::json::array({
+        compute_node(0, 0, "r10", "prefill", "r10_comp"),  // key absent
+        send,
+        recv,
+    });
+    b.watches = nlohmann::json::array({
+        prefill_watch("r10", {{"0", 1}, {"1", 0}}),
+    });
+    b.touched_ranks = nlohmann::json::array({0, 1});
+    b.has_touched_ranks = true;
+
+    expect(!f.committer.validate(delta, b).has_value(),
+           "H: hbm_charge batch validates clean");
+    if (const auto err = f.committer.validate(delta, b)) {
+        std::fprintf(stderr,
+                     "[graph_batch_committer_test] H validate error: %s\n",
+                     err->c_str());
+    }
+    f.committer.commit(delta, b);
+
+    const auto& ids = f.committer.store_ids();
+    const auto comp_view = f.sources[0]->lookup(ids.at(RankNodeKey{0, 0}));
+    expect(comp_view.has_value() && comp_view->comm.hbm_charge,
+           "H: absent comm.hbm_charge defaults to true");
+    const auto send_view = f.sources[0]->lookup(ids.at(RankNodeKey{0, 1}));
+    expect(send_view.has_value() && !send_view->comm.hbm_charge,
+           "H: comm.hbm_charge=false parsed into the NodeView");
+    const auto recv_view = f.sources[1]->lookup(ids.at(RankNodeKey{1, 0}));
+    expect(recv_view.has_value() && recv_view->comm.hbm_charge,
+           "H: legacy comm hbm-charge spelling no longer read (default true)");
+}
+
 }  // namespace
 
 int main() {
@@ -764,6 +828,7 @@ int main() {
     test_zero_node_batch(f);
     test_single_node_batch(f);
     test_empty_comm_compute_batch(f);
+    test_hbm_charge_key_parsing(f);
     if (g_ok) {
         std::printf("[graph_batch_committer_test] ALL PASS\n");
         return 0;

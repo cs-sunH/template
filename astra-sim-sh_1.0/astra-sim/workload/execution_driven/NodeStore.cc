@@ -279,6 +279,12 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             if (node->has_attr("tensor_size")) {
                 nv.compute.tensor_size = node->tensor_size<uint64_t>();
             }
+            // Local-HBM contention: the int attr "hbm-access-mode" marks the
+            // edge rank that is the local data endpoint of a remote-pool
+            // transfer (0/absent = no local HBM access). Same attr-read
+            // pattern as the sh_2.0 is_local_hbm_kv_restore precedent.
+            nv.compute.hbm_access_mode = static_cast<int>(
+                node->get_attr<uint64_t>("hbm-access-mode", 0));
             break;
         case NodeKind::CommSend:
         case NodeKind::CommRecv:
@@ -301,6 +307,11 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             if (node->has_attr("comm_tag")) {
                 nv.comm.tag = node->comm_tag<uint32_t>();
             }
+            // Local-HBM contention: bool attr "hbm-charge" (default true);
+            // false = this endpoint creates no local-HBM job (NoC<->SerDes
+            // pass-through on edge ranks).
+            nv.comm.hbm_charge =
+                node->get_attr<bool>("hbm-charge", true);
             break;
         case NodeKind::CommCollective:
             if (node->has_attr("comm_type")) {
@@ -389,22 +400,5 @@ bool ETFeederGraphSource::static_all_done() {
            resolver.get_ongoing_nodes().empty();
 }
 
-std::vector<std::string> NodeStore::debug_unfinished_names(
-    std::size_t limit) const {
-    std::vector<std::string> out;
-    for (int pass = 0; pass < 2 && out.size() < limit; ++pass) {
-        for (const auto& [id, rec] : nodes_) {
-            if (rec.finished) continue;
-            const bool inflight = rec.issued;
-            if ((pass == 0) != inflight) continue;
-            out.push_back((inflight ? "I:" : "F:") + std::to_string(id) +
-                          ":" + rec.node.name);
-            if (out.size() >= limit) break;
-        }
-    }
-    return out;
-}
-
 }  // namespace ExecutionDriven
 }  // namespace AstraSim
-

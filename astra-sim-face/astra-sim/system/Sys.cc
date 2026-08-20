@@ -174,6 +174,7 @@ Sys::Sys(int id,
     this->remote_mem->set_sys(id, this);
     this->local_mem_bw = 0;
     this->local_mem_latency = 0;
+    this->hbm_bandwidth_contention = false;
     this->remote_mem_bw = 0;
     this->remote_mem_latency = 0;
     this->pipeline_tile_fraction = 0;
@@ -413,6 +414,27 @@ bool Sys::initialize_sys(string name) {
     }
     if (j.contains("local-mem-latency")) {
         local_mem_latency = j["local-mem-latency"];  // ns
+    }
+    // Multi-user local-HBM bandwidth contention (LocalHbmBandwidthModel):
+    // enabled by default; accepted as bool or int.  A non-positive
+    // local-mem-bw would give the fluid model a zero full rate, which can
+    // never drain a job -- auto-fall back to the legacy closed-form
+    // behavior instead of stalling the simulation.
+    this->hbm_bandwidth_contention = true;
+    if (j.contains("hbm-bandwidth-contention")) {
+        const auto& contention = j["hbm-bandwidth-contention"];
+        if (contention.is_boolean()) {
+            this->hbm_bandwidth_contention = contention.get<bool>();
+        } else if (contention.is_number_integer() ||
+                   contention.is_number_unsigned()) {
+            this->hbm_bandwidth_contention =
+                contention.get<int64_t>() != 0;
+        } else {
+            sys_panic("hbm-bandwidth-contention must be boolean or integer");
+        }
+    }
+    if (this->local_mem_bw <= 0) {
+        this->hbm_bandwidth_contention = false;
     }
     if (j.contains("remote-mem-bw")) {
         remote_mem_bw = j["remote-mem-bw"];

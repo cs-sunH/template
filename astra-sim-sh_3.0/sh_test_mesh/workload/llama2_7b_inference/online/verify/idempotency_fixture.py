@@ -2,7 +2,7 @@
 """idempotency_fixture.py -- 阶段 4 §7.2 幂等 fixture(重放同一 delivery)。
 
 把一次真实运行(C++ 侧)产出的全部 request_<seq>.json(delta 序列)逐一喂给
-一个真实的 WscLlmOnlineScheduler,每个 delta 喂两次:
+一个真实的 Sh30OnlineScheduler,每个 delta 喂两次:
 
   1. 第一次 = 正常应用(delivery_sequence 单调 +1);
   2. 第二次(同一 delta 原样重放)= 幂等重放:必须返回与第一次逐字段相等的
@@ -27,6 +27,11 @@ last_applied_sequence;reply cache 覆盖最后一笔交付)。
 
 默认 strategy 模式(真实策略产图;§7.2 是基类级合同)。--limit 只喂前 N 个
 delta(快速冒烟),缺省全量。
+
+本文件自 astra-sim-face 同名夹具整文件分发(R2 修复 07;含 response 消费
+即删的 has_any_response 判定),仅调度器装配段按本仓 online_service.py
+适配:Sh30OnlineScheduler(与本仓 online_service.py 相同的关键字装配),
+其余与 face 版逐字一致。
 """
 
 import argparse
@@ -41,9 +46,9 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from generate_wsc_llm_trace import load_wsc_llm_trace_config  # noqa: E402
+from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
-from online.wsc_llm_online_scheduler import WscLlmOnlineScheduler  # noqa: E402
+from online.sh30_online_scheduler import Sh30OnlineScheduler  # noqa: E402
 
 
 class _CountingDigestSink:
@@ -84,7 +89,7 @@ def _snapshot(scheduler, sink):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="wscllm phase-4 §7.2 idempotency fixture")
+        description="sh_3.0 phase-4 §7.2 idempotency fixture")
     parser.add_argument("--bridge-dir", required=True,
                         help="真实运行的 bridge 目录(含 request_<seq>.json)")
     parser.add_argument("--plan-dir", required=True,
@@ -99,20 +104,25 @@ def main(argv=None) -> int:
     with open(manifest_path, "r", encoding="utf-8") as source:
         manifest = json.load(source)
     if args.config:
-        config = load_wsc_llm_trace_config(args.config)
+        config = load_face_trace_config(args.config)
     else:
-        config = load_wsc_llm_trace_config()
+        config = load_face_trace_config()
 
     # 真实 delta 序列:重读 C++ 运行产出的 request_<seq>.json,按 seq 升序。
     # 只取已获 response 的交付(运行尾 C++ 可能写出最后一笔 request 后即
     # 结束,该笔无 response/ack,Python 侧从未应用)。
     deltas = []
+    has_any_response = any(
+        name.startswith("response_") and name.endswith(".json")
+        for name in os.listdir(args.bridge_dir))
     for name in sorted(os.listdir(args.bridge_dir)):
         if name.startswith("request_") and name.endswith(".json"):
             seq = int(name[len("request_"):-len(".json")])
-            if not os.path.exists(os.path.join(
+            if has_any_response and not os.path.exists(os.path.join(
                     args.bridge_dir, "response_{}.json".format(seq))):
                 continue  # 运行尾未响应交付,Python 从未应用,不重放
+            # (阶段 7 §10.3 response 消费即删:成功运行的 bridge 无任何
+            #  response_*.json,此时全部 request_*.json 均为已应用交付。)
             with open(os.path.join(args.bridge_dir, name),
                       "r", encoding="utf-8") as source:
                 deltas.append((seq, json.load(source)))
@@ -125,7 +135,7 @@ def main(argv=None) -> int:
 
     sink = _CountingDigestSink()
     graph = GraphBatchBuilder(config)
-    scheduler = WscLlmOnlineScheduler(
+    scheduler = Sh30OnlineScheduler(
         manifest=manifest,
         config=config,
         graph=graph,

@@ -178,6 +178,7 @@ Sys::Sys(int id,
     this->remote_mem_latency = 0;
     this->pipeline_tile_fraction = 0;
     this->hbm_kv_restore_bandwidth_sharing = false;
+    this->hbm_bandwidth_contention = true;
 
     this->memBus = nullptr;
     this->inp_L = 0;
@@ -437,6 +438,27 @@ bool Sys::initialize_sys(string name) {
             sys_panic(
                 "hbm-kv-restore-bandwidth-sharing must be boolean or integer");
         }
+    }
+    // N-way equal-split HBM contention (code default true). true = the
+    // LocalHbmBandwidthModel owns every HBM user (COMP / restore / NoC comm
+    // endpoints / pool endpoints); false = the legacy behavior is fully
+    // preserved (the old flag above keeps its two-user 50/50 semantics for
+    // A/B). local-mem-bw <= 0 auto-disables: without a positive bus there is
+    // nothing to split.
+    if (j.contains("hbm-bandwidth-contention")) {
+        const auto& contention = j["hbm-bandwidth-contention"];
+        if (contention.is_boolean()) {
+            hbm_bandwidth_contention = contention.get<bool>();
+        } else if (contention.is_number_integer() ||
+                   contention.is_number_unsigned()) {
+            hbm_bandwidth_contention = contention.get<int64_t>() != 0;
+        } else {
+            sys_panic(
+                "hbm-bandwidth-contention must be boolean or integer");
+        }
+    }
+    if (local_mem_bw <= 0) {
+        hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {
         if (j["roofline-enabled"] != 0) {

@@ -174,6 +174,7 @@ Sys::Sys(int id,
     this->remote_mem->set_sys(id, this);
     this->local_mem_bw = 0;
     this->local_mem_latency = 0;
+    this->hbm_bandwidth_contention = true;
     this->remote_mem_bw = 0;
     this->remote_mem_latency = 0;
     this->pipeline_tile_fraction = 0;
@@ -431,6 +432,26 @@ bool Sys::initialize_sys(string name) {
             roofline_enabled = true;
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
+    }
+    // Multi-user local-HBM bandwidth contention (hbm-bandwidth-contention,
+    // bool/int, default true). Parsed after local-mem-bw so the zero-rate
+    // guard below sees the final bandwidth value.
+    if (j.contains("hbm-bandwidth-contention")) {
+        const auto& contention = j["hbm-bandwidth-contention"];
+        if (contention.is_boolean()) {
+            hbm_bandwidth_contention = contention.get<bool>();
+        } else if (contention.is_number_integer() ||
+                   contention.is_number_unsigned()) {
+            hbm_bandwidth_contention =
+                contention.get<int64_t>() != 0;
+        } else {
+            sys_panic("hbm-bandwidth-contention must be boolean or integer");
+        }
+    }
+    if (local_mem_bw <= 0) {
+        // Zero-rate guard: a fluid model over a zero local-mem-bw would
+        // never move a byte; fall back to the legacy behavior instead.
+        hbm_bandwidth_contention = false;
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {

@@ -62,7 +62,6 @@ from generate_trace import (  # noqa: E402
     COMP_NODE,
     MEM_LOAD_NODE,
     MEM_STORE_NODE,
-    quantize_timer_duration_ns,
     transformer_pass_aggregated,
 )
 
@@ -162,7 +161,7 @@ class OnlineTraceBuilder:
         """在线 timer gate：发射节点（runtime_ns=0，is_timer_op）。
 
         与离线 TraceBuilder.timer_gate（generate_trace.py:735-759）完全同构：
-          - quantize 后 duration == 0 → 直接返回 after_node_id，不发射节点
+          - duration == 0 → 直接返回 after_node_id，不发射节点
             （离线同款；interval==0 的 request 在离线 .et 中没有 interval
             gate 节点，在线也必须没有）；
           - 否则直接创建节点（不经 _new_node）——不链 previous_id、不消费
@@ -172,7 +171,10 @@ class OnlineTraceBuilder:
         alarm（future_alarms）替代——gate 只保留结构与依赖，保持时长会双重
         等待（蓝本步骤 1-8 设计分析，同样适用本仓）。
         """
-        duration_ns = quantize_timer_duration_ns(duration_ns)
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
         node = {
@@ -203,13 +205,20 @@ class OnlineTraceBuilder:
         self.node_count += 1
         return node["id"]
 
-    def mem_store(self, name: str, tensor_size: int) -> None:
+    def mem_store(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_STORE_NODE)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if hbm_access_mode:
+            # sh_2.0 N-way HBM contention pool endpoint charging（与离线
+            # TraceBuilder.mem_store 语义 parity：absent = 无本地 HBM 访问；
+            # 在线 snake 键驻留 compute 段，与离线 kebab ET attr 同义）。
+            node["compute"]["hbm_access_mode"] = int(hbm_access_mode)
 
-    def mem_load(self, name: str, tensor_size: int) -> None:
+    def mem_load(self, name: str, tensor_size: int, hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_LOAD_NODE)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if hbm_access_mode:
+            node["compute"]["hbm_access_mode"] = int(hbm_access_mode)
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
         """目标 HBM DMA 写（可与推理计算重叠）——sh_2.0 特有路由位。"""
@@ -234,20 +243,28 @@ class OnlineTraceBuilder:
         node["coll"]["involved_dim"] = [True, True]
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge: bool = True) -> None:
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        if not hbm_charge:
+            # sh_2.0 N-way HBM contention：直通流量不建本端 HBM 作业（默认
+            # true=发送端 HBM 读，absent = charged；与离线
+            # TraceBuilder.comm_send 语义 parity，在线 snake 键与离线
+            # kebab ET attr 同义）。
+            node["comm"]["hbm_charge"] = False
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge: bool = True) -> None:
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        if not hbm_charge:
+            node["comm"]["hbm_charge"] = False
 
     # ------------------------------------------------------------- 只读属性 --
 
@@ -901,7 +918,7 @@ class GraphBatchBuilder:
                           trigger_gate=completion_eviction_trigger)
 
         # ---- 下一 turn 的 interval gates（离线 :2790-2806 的在线复刻；
-        #      duration 保持离线同参（quantize 0 → 无节点，after_node_id
+        #      duration 保持离线同参（duration == 0 → 无节点，after_node_id
         #      直接作依赖），实际等待由 C++ arrival alarm 替代）----
         if following_plan is None:
             self.deferred_session_locations.pop(request_plan["session_id"], None)

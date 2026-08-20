@@ -77,6 +77,12 @@ struct CommAttrs {
     int src = 0;
     int dst = 0;
     uint32_t tag = 0;
+    // ET attribute "hbm-charge" (bool, default true): false = this endpoint
+    // creates no local-HBM job under hbm-bandwidth-contention (e.g. a pure
+    // control/signal transfer). All wscllm comm nodes are real data
+    // endpoints, so the generator never writes false; the field exists so
+    // the C++ side can honor an explicit opt-out.
+    bool hbm_charge = true;
 };
 
 /// Collective comm attributes (issue_coll_comm).

@@ -2,9 +2,10 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-event_queue_deferred_test.cc -- phase-1 step 1-1 unit tests for the list-version
-EventQueue tick-end closing and same-tick deferred channel, plus the
-FluidScheduler deferred-flush integration (post-commit comm emission).
+event_queue_deferred_test.cc -- phase-1 step 1-1 unit tests for the map-version
+(std::map<EventTime, EventList>) EventQueue tick-end closing and same-tick
+deferred channel, plus the FluidScheduler deferred-flush integration
+(post-commit comm emission) and the map-specific fail-fast proof (case E).
 
 Cases:
   A. tick-end callback is invoked exactly once per proceed(), after the
@@ -20,6 +21,7 @@ Cases:
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I extern/network_backend/analytical/include \
+      -I extern/network_backend/analytical/include/astra-network-analytical \
       astra-sim/workload/execution_driven/tests/event_queue_deferred_test.cc \
       extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
       extern/network_backend/analytical/common/event-queue/EventList.cpp \
@@ -29,7 +31,6 @@ Build (from template/astra-sim-wscllm):
       extern/network_backend/analytical/congestion_aware/fluid/FluidFlow.cpp \
       extern/network_backend/analytical/congestion_aware/fluid/FluidLinkState.cpp \
       extern/network_backend/analytical/congestion_aware/network/Link.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Chunk.cpp \
       extern/network_backend/analytical/congestion_aware/network/Device.cpp \
       -o /tmp/eq_test && /tmp/eq_test
 *******************************************************************************/
@@ -38,13 +39,15 @@ Build (from template/astra-sim-wscllm):
 #include <cstdio>
 #include <cstdlib>
 #include <list>
+#include <map>
 #include <memory>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <random>
 #include <utility>
 #include <vector>
 
 #include "common/EventQueue.h"
-#include "congestion_aware/Chunk.h"
 #include "congestion_aware/Link.h"
 #include "congestion_aware/fluid/FluidScheduler.h"
 
@@ -74,7 +77,8 @@ class ReferenceQueue {
 
     void proceed() noexcept {
         assert(!finished());
-        auto& front = event_queue.front();
+        auto begin_it = event_queue.begin();
+        auto& front = begin_it->second;
         assert(front.event_time > current_time);
         current_time = front.event_time;
         // mirror EventList::invoke_events: pop_front + invoke loop, so events
@@ -84,24 +88,21 @@ class ReferenceQueue {
             front.events.front().first(front.events.front().second);
             front.events.pop_front();
         }
-        event_queue.pop_front();
+        event_queue.erase(event_queue.begin());
     }
 
     void schedule_event(EventTime t, Callback cb, CallbackArg arg) noexcept {
+        // mirror the map-family schedule_event: try_emplace merges same-time
+        // events into the existing EventList (same-time merge semantics)
         assert(t >= current_time);
-        auto it = event_queue.begin();
-        while (it != event_queue.end() && it->event_time < t) {
-            ++it;
-        }
-        if (it == event_queue.end() || t < it->event_time) {
-            it = event_queue.insert(it, RefEventList{t, {}});
-        }
-        it->events.emplace_back(cb, arg);
+        auto [it, inserted] = event_queue.try_emplace(t, RefEventList{t, {}});
+        (void)inserted;
+        it->second.events.emplace_back(cb, arg);
     }
 
   private:
     EventTime current_time = 0;
-    std::list<RefEventList> event_queue;
+    std::map<EventTime, RefEventList> event_queue;
 };
 
 // ---------------------------------------------------------------------------
@@ -360,6 +361,73 @@ void run_fs_scenario(bool deferred_mode) {
                 deferred_mode ? "deferred" : "legacy");
 }
 
+// ---------------------------------------------------------------------------
+// case E (map family): fail-fast proof -- schedule_event(current_time) from a
+// tick-end callback inserts a current_time EventList into the main map and the
+// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :31);
+// schedule_event(future) from the callback lands in the map normally.
+// ---------------------------------------------------------------------------
+
+struct CaseECtx {
+    EventQueue* eq = nullptr;
+    bool bad = false;   // true -> schedule_event(current_time) in tick-end
+    bool fired = false; // schedule from the tick-end callback only once
+};
+
+void case_e_tick_end(void* v) {
+    auto* c = static_cast<CaseECtx*>(v);
+    if (c->fired) {
+        return;
+    }
+    c->fired = true;
+    if (c->bad) {
+        // hard-rule violation: same-tick event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time(), noop_handler, nullptr);
+    } else {
+        // legal: strictly future event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time() + 5, noop_handler, nullptr);
+    }
+}
+
+bool run_case_e_child(bool bad) {
+    EventQueue eq;
+    CaseECtx ctx;
+    ctx.eq = &eq;
+    ctx.bad = bad;
+    eq.set_tick_end_callback(case_e_tick_end, &ctx);
+    eq.schedule_event(10, noop_handler, nullptr);
+    eq.proceed();
+    if (bad) {
+        // the next proceed must abort on the strict-increase assert
+        eq.proceed();
+        return false;  // should not reach here in a failing build
+    }
+    // legal path: the future event is in the map and executes at t=15
+    assert(eq.get_current_time() == 10);
+    assert(!eq.finished());
+    eq.proceed();
+    assert(eq.get_current_time() == 15);
+    assert(eq.finished());
+    return true;
+}
+
+void test_case_e() {
+    // legal variant runs in-process
+    assert(run_case_e_child(/*bad=*/false));
+    // violating variant must abort (assert) -- verify in a forked child
+    pid_t pid = fork();
+    if (pid == 0) {
+        const bool reached_end = run_case_e_child(/*bad=*/true);
+        std::_Exit(reached_end ? 0 : 0);  // child exits 0 only if no abort AND completed
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    // the child must have died from the assert (SIGABRT), not exited cleanly
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
+                "current_time) trips :31 on next proceed; future event OK\n");
+}
+
 }  // namespace
 
 int main() {
@@ -368,6 +436,7 @@ int main() {
     test_case_c();
     run_fs_scenario(/*deferred_mode=*/true);
     run_fs_scenario(/*deferred_mode=*/false);
+    test_case_e();
     std::printf("ALL TESTS PASSED\n");
     return 0;
 }

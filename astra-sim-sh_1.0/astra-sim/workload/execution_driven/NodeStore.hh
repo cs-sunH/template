@@ -147,12 +147,6 @@ class NodeStore {
 
     uint64_t next_id_ = 1;
     std::unordered_map<uint64_t, NodeRecord> nodes_;
-
-  public:
-    /// TEMP sh_1.0 deadlock diagnostics: names of unfinished nodes
-    /// (in-flight first), bounded to the first `limit` entries.
-    std::vector<std::string> debug_unfinished_names(
-        std::size_t limit = 24) const;
     std::set<uint64_t> free_ids_;
 };
 

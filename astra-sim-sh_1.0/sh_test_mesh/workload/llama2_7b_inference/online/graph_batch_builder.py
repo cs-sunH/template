@@ -29,13 +29,21 @@ transfer_order_per_request 十段 manifest 的三次分组):
   - timer gate 始终发射节点(结构保留)但 runtime_ns=0:到达/间隔时刻由 C++
     arrival alarm(future_alarms)替代,gate 不再等待;
   - 每段发射后按 (request_id, rank) 记录块末 previous_id(_block_ends 账本,
-    emitted-ranks-only 语义),下一段发射前恢复——仅段首节点消费恢复值;
+    emitted-ranks-only 语义),供后续段的触发门与 watch 锚点使用,不回灌
+    builders(2026-08-15 的段间恢复裁决已于 2026-08-19 废止,见
+    emit_prefill_batch 的 frontier 接续裁决块);
   - strategy 保持物理跨 request 链(无条件接续 frontier);
-  - watch 锚点:PREFILL_DRAIN = prefill 段每 rank 末节点(= 离线
-    prefill_completion_nodes,亦作 decode_evictions 触发门);
-    DECODE_COMPLETION = decode 段每 rank 末节点(= decode_completion_nodes);
-    REQUEST_COMPLETE = completion_evictions 段每 rank 末节点(无
-    completion_evictions 时 = decode 段末节点,该口径由调用方显式记录)。
+  - watch 锚点与离线 metrics 锚点一致(2026-08-20 五仓统一,R2-2):
+    PREFILL_DRAIN = 每 rank 末个真实 prefill 计算节点(end barrier 之前,
+    与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier);
+    DECODE_COMPLETION = end barrier 前每 rank 的 decode 末节点(离线
+    EVENT_DECODE_END 口径);REQUEST_COMPLETE = completion_evictions 段
+    每 rank 末节点(无 completion_evictions 时 = 调用方显式记录的段 2
+    decode 块末)。触发门角色(decode_evictions/completion_evictions 的
+    node_gates、下一 turn interval gate 的 after_node_id、_block_ends
+    账本)仍用 post-barrier 节点(五仓一致口径,不随 watch 锚点变化)。
+    决策边界因此比 post-barrier 口径早一个 all_reduce——这是五仓统一的
+    预期时间线变化。
 
 离线账本在线复刻:pending_history(request_id -> PendingHistoryGate 等价
 dict)/pending_request_by_session/deferred_remote_sessions
@@ -89,12 +97,9 @@ class OnlineTraceBuilder:
     与离线 :711-712 同款跳过节点(返回 after_node_id)。
     """
 
-    def __init__(self, rank: int, *, remote_operand_loads: bool,
-                 standalone_backchannel_recv: bool = False):
+    def __init__(self, rank: int, *, remote_operand_loads: bool):
         self.rank = rank
         self.remote_operand_loads = remote_operand_loads
-        # strategy 模式回程 recv 独立发射(见 comm_recv 注释)。
-        self.standalone_backchannel_recv = standalone_backchannel_recv
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
@@ -187,6 +192,10 @@ class OnlineTraceBuilder:
         pending_extra_dependencies、不更新 previous_id;仅 after_node_id 依赖)。
         离线语义(duration = 到达/interval,gate 等待)由 C++ arrival alarm
         替代——gate 只保留结构与依赖,保持时长会双重等待。"""
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
         node = {
@@ -234,37 +243,52 @@ class OnlineTraceBuilder:
         node["coll"]["involved_dim"] = [True, True]
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge: bool = True) -> None:
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        # Local-HBM contention: only carried when opting OUT (C++ default
+        # true), keeping the offline ET attr encoding (absent = charged) and
+        # the online node JSON identical in meaning.
+        if not hbm_charge:
+            node["comm"]["hbm_charge"] = False
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
-        # strategy 真实网络下的回程 recv(noc_migrate ack_from / remote_store
-        # ack_from_edge / remote_load request_from_rank)是环风险边:这些
-        # recv 的配对 send 在对端排在 data recv 之后,而本端后续 send 又
-        # 链在该 recv 之后(离线全局发射序保证无环;在线决策序无此保证,
-        # 对向迁移并发即死锁——实测 delivery 156 后 EventQueue 排空)。
-        # strategy 模式将回程 recv 独立发射(不链 previous_id、不阻塞本
-        # rank 后续节点):节点集合/名称/属性与离线一致,仅去掉成环串行
-        # 边(差分归因类别②,sh_1.0改造执行实录.md §15.1 登记);跨 request
-        # 模式(comm 即时完成)保持离线精确链。
+                  comm_tag: int, hbm_charge: bool = True) -> None:
+        # 回程 recv(noc_migrate ack_from / remote_store ack_from_edge /
+        # remote_load request_from_rank)与其他节点一样经 _new_node 链式
+        # 发射:frontier 接续裁决(2026-08-19,见 emit_prefill_batch 注释块)
+        # 保证 per-rank 发行序 = 全局发射序,跨实例 P2P 参与序不可能反转
+        # 成环,无需额外断链。历史备注:frontier 统一前曾以"回程 recv
+        # 独立发射(不链 previous_id)"规避对向迁移并发死锁(实测 delivery
+        # 156 后 EventQueue 排空;差分归因类别②,sh_1.0改造执行实录.md
+        # §15.1 登记),该机制连同死开关 standalone_backchannel_recv 已于
+        # 2026-08-20 随本注释清理移除。
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        if not hbm_charge:
+            node["comm"]["hbm_charge"] = False
 
-    def mem_store(self, name: str, tensor_size: int) -> None:
+    def mem_store(self, name: str, tensor_size: int,
+                  hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_STORE_NODE)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        # Local-HBM contention: 1 = read job, 2 = write job (absent = no
+        # local HBM access) -- same rule as the offline ET attr.
+        if hbm_access_mode:
+            node["compute"]["hbm_access_mode"] = int(hbm_access_mode)
 
-    def mem_load(self, name: str, tensor_size: int) -> None:
+    def mem_load(self, name: str, tensor_size: int,
+                 hbm_access_mode: int = 0) -> None:
         node = self._new_node(name, MEM_LOAD_NODE)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
+        if hbm_access_mode:
+            node["compute"]["hbm_access_mode"] = int(hbm_access_mode)
 
     # ------------------------------------------------------------- 只读属性 --
 
@@ -319,8 +343,7 @@ class GraphBatchBuilder:
         self.builders = {
             rank: OnlineTraceBuilder(
                 rank,
-                remote_operand_loads=config.remote_operand_loads,
-                standalone_backchannel_recv=False)
+                remote_operand_loads=config.remote_operand_loads)
             for rank in range(config.npus_count)
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
@@ -332,8 +355,12 @@ class GraphBatchBuilder:
         self.pending_request_by_session = {}
         self.deferred_remote_sessions = set()
         # request_id -> {"seg1": {rank: id|None}, "seg2": {rank: id|None}}
-        # 段间 previous_id 恢复账本(emitted-ranks-only:只记实际发射了节点
-        # 的 rank 的实际值,其余 None——蓝本裁决 7/9 最终语义)。
+        # 段块末账本(emitted-ranks-only:只记实际发射了节点的 rank 的实际
+        # 值,其余 None——蓝本裁决 7/9 语义);不作段间恢复,仅供段间触发门
+        # (decode_evictions/completion_evictions 的 node_gates、下一 turn
+        # interval gate 的 after_node_id)使用——post-barrier 口径(五仓
+        # 一致,不随 watch 锚点变化)。PREFILL_DRAIN/DECODE_COMPLETION
+        # watch 锚点自 2026-08-20(R2-2)起改用 barrier 前末节点,不经本账本。
         self._block_ends = {}
         # request_id -> 连续 action 计数(离线 write_face_trace 的
         # per-request action_sequence:2057 计数跨全部 stage 连续;在线三段
@@ -372,9 +399,9 @@ class GraphBatchBuilder:
                         before: dict = None) -> None:
         # emitted-ranks-only(蓝本裁决 7/9 语义):只对本段实际发射了节点的
         # rank 记实际块末 previous_id;其余 rank 记 None——否则会把该 rank
-        # 上其他 request 的链尾误当本段块末(stale 跨 request 边,压缩到
-        # 下一段的恢复值里)。before = 段发射前的 per-rank node_count 快照
-        # (_mark() 的 node 分量)。
+        # 上其他 request 的链尾误当本段块末(stale 跨 request 边,污染
+        # _block_ends 账本,进而被后续段误作触发门/watch 锚点)。
+        # before = 段发射前的 per-rank node_count 快照(_mark() 的 node 分量)。
         ends = self._block_ends.setdefault(request_id, {})
         ends[seg] = {
             rank: (self.builders[rank].previous_id
@@ -397,23 +424,29 @@ class GraphBatchBuilder:
 
     def emit_prefill_batch(self, request_plan: dict) -> dict:
         """段 1(ARRIVAL 边界):返回 PREFILL_DRAIN watch 成员
-        {rank: prefill 段末节点 id}(= 离线 prefill_completion_nodes)。"""
+        {rank: 末个真实 prefill 节点 id}(end barrier 之前捕获,与离线
+        EVENT_PREFILL_END 锚点一致,排除 end barrier;四仓统一口径)。
+        decode_evictions 触发门不经返回值,仍用 _block_ends["seg1"] 的
+        post-barrier 块末。"""
         self._set_context(request_plan, "prefill", 0)
         prefill_group = self.group_by_index[
             request_plan["prefill_instance_index"]]
-        # 蓝本裁决 4③(两模式统一,sh_1.0 实测修订):段 1 发射开始清空
-        # prefill 组 previous_id(prefill 链首只依赖自身 arrival/interval
-        # timer gate);保留 within-request 串行化、段间 own-block-end 恢复、
-        # 同 session interval gate(after_node_id 显式编码,不受影响)。
-        # strategy 模式不再保留跨 request 偶发串行边:sh_1.0 的 KV transfer
-        # 节点(noc_migrate/remote_store/remote_load 的跨 rank send/recv 对)
-        # 分布在共享 edge rank 上,偶发跨 request 链与收发对的 issue 顺序
-        # 可构成环(recv 等待配对 send,send 链在本 rank 排在 recv 之后),
-        # strategy 真实网络下死锁(实测 delivery 142 后 EventQueue 排空、
-        # 每 rank 1-2 个 in-flight recv)。跨 request 偶发串行边登记为
-        # 差分归因类别②(刻意差异;同 session 串行化由 interval gate 显式
-        # 保留),sh_1.0改造执行实录.md §15.1 记录。
-        # [frontier 接续裁决(sh_2.0 修复移植)] strategy 无条件接续 frontier(全局发射序)。
+        # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,移植 sh_2.0
+        # 已验证修复,主控指令 2026-08-16)] strategy **不做任何块末恢复/段内
+        # 清链**:段 1 亦不例外——per-rank previous_id 无条件接续当前
+        # frontier(= 离线 writer 跨 request 物理链同构),per-rank 发行序 =
+        # 全局发射序,跨实例 P2P 与 collective 参与序不可能反转成环。
+        # sh_1.0 的 KV transfer 节点(noc_migrate/remote_store/remote_load
+        # 的跨 rank send/recv 对)分布在共享 edge rank 上,收发配对序一旦
+        # 反转即成环(recv 等待配对 send,send 链在本 rank 排在 recv 之后)
+        # ——strategy 真实网络下实测死锁(delivery 142 后 EventQueue 排空、
+        # 每 rank 1-2 个 in-flight recv),2026-08-15 的"段 1 清空 prefill
+        # 组 previous_id / 段间 own-block-end 恢复"规避裁决自此废止;
+        # 同 session 串行化由 interval gate(after_node_id 显式编码)保留,
+        # 段 1 块末账本(post-barrier)仅作 decode_evictions 触发门,
+        # 不回灌 builders;PREFILL_DRAIN watch 成员自 R2-2(2026-08-20)起
+        # 由返回值携带 barrier 前末节点,不经块末账本。
+        # sh_1.0改造执行实录.md §15.1 记录。
         marker = self._mark()
         self._seg1_before = {r: marker[r][0] for r in marker}
         if (request_plan["turn_index"] == 0
@@ -427,7 +460,10 @@ class GraphBatchBuilder:
 
     def emit_decode_batch(self, request_plan: dict) -> dict:
         """段 2(PREFILL_DRAIN 边界):返回 DECODE_COMPLETION watch 成员
-        {rank: decode 段末节点 id}(= 离线 decode_completion_nodes)。"""
+        {rank: end barrier 前的 decode 末节点 id}(与离线 EVENT_DECODE_END
+        锚点一致,排除 end barrier;四仓统一口径)。completion_evictions
+        触发门与下一 turn interval gate 的 after_node_id 仍用
+        _block_ends["seg2"] 的 post-barrier 块末。"""
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         self._seg2_before = {r: marker[r][0] for r in marker}
@@ -438,8 +474,10 @@ class GraphBatchBuilder:
     def emit_completion_batch(self, request_plan: dict) -> dict:
         """段 3(REQUEST_COMPLETE 边界):completion_evictions + 下一 turn 的
         interval timer gates。返回 REQUEST_COMPLETE watch 成员
-        {rank: 段内末节点 id};无 completion_evictions 时成员 = 段 2 的
-        decode 段末节点(调用方按该口径记录)。"""
+        {rank: 段内末节点 id}(本段无 end barrier,成员即段内真实末节点);
+        无 completion_evictions 时成员 = 段 2 的 decode 块末(调用方按
+        _block_ends["seg2"] 的 post-barrier 口径显式记录;REQUEST_COMPLETE
+        无独立 watch 注册,decode watch fire 同时推送两条决策)。"""
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
         self._seg3_before = {r: marker[r][0] for r in marker}
@@ -455,7 +493,6 @@ class GraphBatchBuilder:
         decode_group = self.group_by_index[
             request_plan["decode_instance_index"]]
         prefix = _prefix_of(request_plan)
-        request = self.config.request_queue[request_plan["queue_index"]]
 
         pending_gate = self.pending_history.pop(request_plan["request_id"], None)
         if pending_gate is None:
@@ -531,17 +568,29 @@ class GraphBatchBuilder:
             name=f"{prefix}_prefill_kv_ready_barrier",
         )
 
-        # prefill 整段(request-aggregated;span 与离线 :2185-2197 同款)。
+        # prefill 整段(request-aggregated;span 与离线 :2103-2163 同款)。
+        # Context sidecar:按实际工作量发射。recompute 口径下
+        # context - history == request.prefill_length;sidecar_restore 口径
+        # 下 = input_tokens_total - min(prefix, 账本)(turn-0 prefix 计入,
+        # 复用部分剔除),kv span 仍 = history + processed + chunk。
         prefill_spans: list[tuple[int, int]] = []
         processed = 0
-        prefill_length = int(request.prefill_length)
-        while processed < prefill_length:
-            chunk_tokens = min(self.p_chunk, prefill_length - processed)
+        prefill_work_tokens = (
+            int(request_plan["prefill_context_tokens"])
+            - int(request_plan["history_tokens_before"])
+        )
+        if prefill_work_tokens <= 0:
+            raise ValueError(
+                f"request {request_plan['request_id']} has no Prefill work tokens"
+            )
+        while processed < prefill_work_tokens:
+            chunk_tokens = min(self.p_chunk, prefill_work_tokens - processed)
             prefill_spans.append(
                 (chunk_tokens,
                  request_plan["history_tokens_before"] + processed + chunk_tokens))
             processed += chunk_tokens
         tensor_parallel = len(prefill_group.ranks)
+        prefill_last_node_by_rank = {}
         for relative_rank, rank in enumerate(prefill_group.ranks):
             transformer_pass_aggregated(
                 builders[rank],
@@ -558,11 +607,20 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
             )
+            # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
+            # (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier——五仓
+            # 统一口径,R2-2,2026-08-20;sh_2.0/sh_3.0 同款拆分形态)。
+            # 捕获点 = 最后一个 prefill 计算节点之后、end barrier 之前。
+            prefill_last_node_by_rank[rank] = builders[rank].previous_id
             builders[rank].all_reduce(
                 f"{prefix}_prefill_chunks_aggregated_end_barrier",
                 len(prefill_spans),
                 prefill_group.pg_name,
             )
+        # post-barrier 块末(= end barrier 节点)仅承载触发门角色:段 1
+        # 块末账本(_block_ends["seg1"])是段 2 decode_evictions 触发门的
+        # node_gates 来源,保持 post-barrier(五仓一致口径,不随 watch
+        # 锚点变化)。
         prefill_completion_nodes = tuple(
             builders[rank].previous_id for rank in prefill_group.ranks)
         if any(node_id is None for node_id in prefill_completion_nodes):
@@ -574,12 +632,9 @@ class GraphBatchBuilder:
             request_plan["request_id"], "seg1",
             sorted(set(prefill_group.ranks) | set(decode_group.ranks)),
             before=self._seg1_before)
-        # 段 1 块末同时是 decode_evictions 触发门与 PREFILL_DRAIN 成员。
-        return {
-            rank: node_id
-            for rank, node_id in zip(prefill_group.ranks,
-                                      prefill_completion_nodes)
-        }
+        # watch 角色(barrier 前末节点)与触发门角色(post-barrier 块末)
+        # 至此拆分:返回值只承载 PREFILL_DRAIN watch 成员。
+        return dict(prefill_last_node_by_rank)
 
     def _emit_segment2(self, request_plan: dict) -> dict:
         """离线主循环的段 2 部分(:2241-2360 的在线复刻)。"""
@@ -653,6 +708,7 @@ class GraphBatchBuilder:
             (1, request_plan["prefill_context_tokens"] + step + 1)
             for step in range(int(request.decode_length))
         )
+        decode_last_node_by_rank = {}
         for relative_rank, rank in enumerate(decode_group.ranks):
             transformer_pass_aggregated(
                 builders[rank],
@@ -669,11 +725,21 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
             )
+            # DECODE_COMPLETION watch 成员 = end barrier 前每 rank 的
+            # decode 末节点(与离线 EVENT_DECODE_END 锚点一致,排除 end
+            # barrier——五仓统一口径,R2-2,2026-08-20;sh_2.0/sh_3.0
+            # 同款拆分形态)。捕获点 = 最后一个 decode 计算节点之后、
+            # end barrier 之前。
+            decode_last_node_by_rank[rank] = builders[rank].previous_id
             builders[rank].all_reduce(
                 f"{prefix}_decode_request_end_barrier",
                 1,
                 decode_group.pg_name,
             )
+        # post-barrier 块末(= end barrier 节点)仅承载触发门角色:
+        # _block_ends["seg2"] 是段 3 completion_evictions 触发门与下一
+        # turn interval gate after_node_id 的来源,保持 post-barrier
+        # (五仓一致口径,不随 watch 锚点变化)。
         decode_completion_nodes = tuple(
             builders[rank].previous_id for rank in decode_group.ranks)
         if any(node_id is None for node_id in decode_completion_nodes):
@@ -682,10 +748,7 @@ class GraphBatchBuilder:
         self._mark_block_end(request_plan["request_id"], "seg2",
                              sorted(set(decode_group.ranks)),
                              before=self._seg2_before)
-        return {
-            rank: node_id
-            for rank, node_id in zip(decode_group.ranks, decode_completion_nodes)
-        }
+        return dict(decode_last_node_by_rank)
 
     def _emit_arrival_gate(self, request_plan: dict) -> None:
         """turn-0 request 的到达 timer gates(离线 :1961-1987 预发射的在线

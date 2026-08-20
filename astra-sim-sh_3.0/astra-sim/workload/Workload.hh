@@ -24,6 +24,7 @@ namespace AstraSim {
 class Sys;
 class DataSet;
 class LocalHbmBandwidthModel;
+class WorkloadLayerHandlerData;
 
 class Workload : public Callable {
   public:
@@ -86,12 +87,6 @@ class Workload : public Callable {
     // injected at Sys creation (NodeStore-backed implementation in step 1-4).
     ExecutionDriven::ExecutionMode execution_mode_;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_;
-    // step-1-8 (main ruling 2026-08-15): replay-clock scope flag. ONLY
-    // --online-mode replay runs the LUT-clock semantics (calibrated COMP
-    // chains run concurrently past the single-slot gate; comm nodes complete
-    // instantly). strategy mode keeps real physics (serial compute + real
-    // network + real queuing, §6.1) -- the flag is false there. The static
-    // path never sets it.
     // Path-2 removal (2026-08-18): the replay-clock scope flag was deleted
     // with the replay route; strategy mode always keeps real physics.
 
@@ -100,6 +95,47 @@ class Workload : public Callable {
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
     CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
+
+    // ---------------------------------------------------------------
+    // N-way HBM contention endpoint join (system key
+    // "hbm-bandwidth-contention"). A charged p2p comm node completes on the
+    // join of (network-side completion, local-HBM COMM_READ/COMM_WRITE job
+    // completion); a charged pool MEM node completes on the join of
+    // (remote-memory port transaction, local-HBM POOL_READ/POOL_WRITE job).
+    // Implemented entirely inside Workload: each side carries its own
+    // WorkloadLayerHandlerData whose pointer identifies the side; the node
+    // terminal path runs exactly once, after both sides fired (idempotent by
+    // map erasure). The network / remote-memory APIs are untouched.
+    // ---------------------------------------------------------------
+    enum class HbmJoinSide { NetworkPort, LocalHbm };
+    struct HbmJoinState {
+        uint64_t node_id = 0;
+        EventType terminal_event = EventType::General;
+        bool network_done = false;
+        bool local_hbm_done = false;
+    };
+    // True when this rank must create endpoint HBM jobs for comm / pool
+    // nodes (flag on, model alive; per-node opt-outs like hbm-charge=false
+    // or zero bytes are checked by the callers).
+    bool hbm_endpoint_charge_active() const;
+    // Registers the network/port-side wlhd of a joined node and creates a
+    // fresh local-HBM-side wlhd (returned; the caller feeds it to the
+    // LocalHbmBandwidthModel issue_* call).
+    WorkloadLayerHandlerData* begin_hbm_join(
+        uint64_t node_id, WorkloadLayerHandlerData* network_side_wlhd,
+        EventType terminal_event);
+    // Workload::call entry for wlhd-carrying events: returns true when the
+    // event was one side of a pending join (already accounted; possibly the
+    // terminal completion ran). The caller must then skip the normal
+    // terminal path.
+    bool consume_hbm_join_event(WorkloadLayerHandlerData* wlhd);
+    // The shared wlhd-branch terminal body (release / stats / metrics /
+    // node-terminal record / dependency release / static auto-advance).
+    void finish_general_node(uint64_t node_id, EventType event);
+
+    std::unordered_map<uint64_t, HbmJoinState> hbm_join_pending_;
+    std::unordered_map<WorkloadLayerHandlerData*, HbmJoinSide>
+        hbm_join_wlhd_sides_;
 };
 
 }  // namespace AstraSim

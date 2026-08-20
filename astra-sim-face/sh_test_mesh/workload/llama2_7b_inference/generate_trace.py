@@ -2051,9 +2051,8 @@ def main() -> None:
     """fail-closed 拒绝桩(2026-08-18 起生效):离线静态 ET 生成入口已删除。
 
     本模块保留的是③④在线路径只读 import 的符号库(Chakra 常量/
-    TraceBuilder/transformer_pass(_aggregated)/RequestSpec 等,见
-    《路径功能代码对应说明.md》§4-a)。③④ 的输入物化入口是
-    plan_materializer.py;静态 ET 生成入口不再存在。
+    TraceBuilder/transformer_pass(_aggregated)/RequestSpec 等)。
+    ③④ 的输入物化入口是 plan_materializer.py;静态 ET 生成入口不再存在。
     """
     raise SystemExit(
         "path-1 (offline static full pipeline) was removed on 2026-08-18; "

@@ -107,12 +107,17 @@ def main(argv=None) -> int:
     # 只取已获 response 的交付(运行尾 C++ 可能写出最后一笔 request 后即
     # 结束,该笔无 response/ack,Python 侧从未应用)。
     deltas = []
+    has_any_response = any(
+        name.startswith("response_") and name.endswith(".json")
+        for name in os.listdir(args.bridge_dir))
     for name in sorted(os.listdir(args.bridge_dir)):
         if name.startswith("request_") and name.endswith(".json"):
             seq = int(name[len("request_"):-len(".json")])
-            if not os.path.exists(os.path.join(
+            if has_any_response and not os.path.exists(os.path.join(
                     args.bridge_dir, "response_{}.json".format(seq))):
                 continue  # 运行尾未响应交付,Python 从未应用,不重放
+            # (阶段 7 §10.3 response 消费即删:成功运行的 bridge 无任何
+            #  response_*.json,此时全部 request_*.json 均为已应用交付。)
             with open(os.path.join(args.bridge_dir, name),
                       "r", encoding="utf-8") as source:
                 deltas.append((seq, json.load(source)))

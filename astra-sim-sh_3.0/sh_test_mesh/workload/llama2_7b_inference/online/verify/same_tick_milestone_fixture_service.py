@@ -173,7 +173,7 @@ class SameTickMilestoneHandler:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="wscllm step-1-11 same-tick milestone fixture "
+        description="sh_3.0 step-1-11 same-tick milestone fixture "
                     "decision service")
     parser.add_argument("--bridge-dir", required=True,
                         help="bridge FIFO/request-response 目录(与 C++ 共享)")

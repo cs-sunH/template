@@ -48,6 +48,7 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _path)
 
 from face_scheduler import (  # noqa: E402  (红线:只读 import)
+    DecodeTieCounter,
     FaceLut,
     FaceLutEntry,
     KVCacheManager,
@@ -137,6 +138,10 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             _InstanceState(index=index)
             for index in range(len(self.topology.instances))
         ]
+        # offline: plan_face_requests 起点的 decode_tie_counter —— decode 平局
+        # 轮流裁决计数器（中-1 裁决 2026-08-20）：调度器生命周期持有一个，
+        # 仅真实平局（HBM 可行集内 per_die_delta_ns 精确相等 ≥2）时前进。
+        self._decode_tie_counter = DecodeTieCounter()
         # 在线增量累积账本(合同⑨:per-session 上下文按到达增量累积,
         # turn k 只依赖已到达 turn 0..k-1;替代离线全量
         # _validate_and_expand_requests :2716-2757)。
@@ -205,17 +210,44 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 f"session {session_id} turn indexes must be contiguous "
                 f"from zero (got turn {spec.turn_index} after {last_turn})")
         history = self._session_history.get(session_id, 0)
-        prefill_context = history + spec.prefill_length
+        # Context sidecar(离线 _validate_and_expand_requests :2845-2866 的
+        # 逐到达等价):recompute 口径 prefill 工作 = 队列 prefill_length;
+        # sidecar_restore 口径只复用账本内实际存在的前缀(min(prefix,
+        # 上一轮 final)),prefill_context = input_tokens_total,工作量 =
+        # context - history(turn-0 账本为 0,prefix 全量进 prefill 算力)。
+        if spec.prefix_tokens is None:
+            prefill_tokens_to_process = spec.prefill_length
+            prefill_context = history + prefill_tokens_to_process
+        else:
+            history = min(spec.prefix_tokens, history)
+            assert spec.input_tokens_total is not None
+            prefill_context = spec.input_tokens_total
+            prefill_tokens_to_process = prefill_context - history
+            if prefill_tokens_to_process <= 0:
+                raise ValueError(
+                    f"session {session_id} request {request_id} has no "
+                    "Prefill work after prefix reuse"
+                )
         final_context = prefill_context + spec.decode_length
         runtime = _OnlineRuntime(
             request=spec,
             queue_index=queue_index,
             history_tokens_before=history,
+            prefill_tokens_to_process=prefill_tokens_to_process,
             prefill_context_tokens=prefill_context,
             final_context_tokens=final_context,
-            remaining_chunks=math.ceil(spec.prefill_length / self.p_chunk),
+            remaining_chunks=math.ceil(prefill_tokens_to_process / self.p_chunk),
         )
         runtime.estimated_arrival_ns = tick  # offline: :3130
+        # Context sidecar:arrival 时把 session KV 账本截到 sidecar 声明的
+        # 历史前缀(workload context-window 丢弃语义),使 prepare_prefill
+        # 的严格相等校验成立(离线 :3257-3265 同款;recompute 口径下
+        # history == 上一轮 final,恒为 no-op;turn-0 新会话返回 0)。
+        runtime.history_tokens_discarded = self.kv_manager.truncate_history(
+            session_id,
+            history,
+            trigger_request_id=request_id,
+        )
         self._session_turn[session_id] = spec.turn_index
         self._session_history[session_id] = final_context
         self._runtimes[request_id] = runtime
@@ -313,7 +345,9 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         runtime = self._runtimes[request_id]
         state_index = runtime.prefill_instance_index
         state = self.instances[state_index]
-        runtime.prompt_tokens_processed = runtime.request.prefill_length
+        # Context sidecar:drain 记实际 prefill 工作量(recompute 口径 ==
+        # request.prefill_length;离线 :3109 chunk 累计的整段等价)。
+        runtime.prompt_tokens_processed = runtime.prefill_tokens_to_process
         runtime.remaining_chunks = 0
         # offline: :2989-2991 FCFS qp popleft(离线 iteration 串行化保证
         # drain 序 = FCFS 序)。在线 request-aggregated 构图无 iteration
@@ -354,6 +388,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                     reservation_request_id=request_id,
                 )
             ),
+            tie_counter=self._decode_tie_counter,
         )
         runtime.decode_instance_index = selected
         runtime.decode_candidates = costs
@@ -663,14 +698,23 @@ class _OnlineRuntime:
 
     def __init__(self, *, request, queue_index, history_tokens_before,
                  prefill_context_tokens, final_context_tokens,
-                 remaining_chunks):
+                 remaining_chunks, prefill_tokens_to_process=None):
         self.request = request
         self.queue_index = queue_index
         self.history_tokens_before = history_tokens_before
+        # Context sidecar:实际 prefill 工作量(recompute 口径 ==
+        # request.prefill_length;sidecar_restore 口径 = context - history,
+        # 离线 _RequestRuntime.prefill_tokens_to_process :2776 同款)。
+        if prefill_tokens_to_process is None:
+            prefill_tokens_to_process = request.prefill_length
+        self.prefill_tokens_to_process = prefill_tokens_to_process
         self.prefill_context_tokens = prefill_context_tokens
         self.final_context_tokens = final_context_tokens
         self.remaining_chunks = remaining_chunks
         self.prompt_tokens_processed = 0
+        # Context sidecar:arrival 时 truncate_history 丢弃的旧 KV token 数
+        # (recompute 口径恒 0)。
+        self.history_tokens_discarded = 0
         self.current_decode_token = prefill_context_tokens
         self.estimated_arrival_ns = None
         self.admission_time_ns = None
@@ -713,8 +757,8 @@ def _default_frozen_lut_path(config) -> Path:
     缺省解析 = sh_test_mesh/generated/ 下唯一 llama2_7b_inference_54npus_*
     目录内的 face_lut.csv(该文件由 generate_trace.py 随 ET 一起再生,目录名
     编码窗口与 config digest——与在线 runner 的 ET 解析同款动态规则);
-    解析失败/不存在 = fail-closed(调用方先物化输入并生成,见
-    traces/PROVENANCE.md)。"""
+    解析失败/不存在 = fail-closed(调用方先物化输入并生成,物化入口 =
+    traces/derive_20_first_30_seconds.py)。"""
     workload_dir = Path(_WORKLOAD_DIR)
     generated_root = workload_dir.parent.parent / "generated"
     if generated_root.is_dir():

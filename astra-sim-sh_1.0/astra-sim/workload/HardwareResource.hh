@@ -18,10 +18,6 @@ namespace AstraSim {
 
 class HardwareResource {
   public:
-    // sh_1.0: online-mode collective occupancy is count-based (see .cc);
-    // set by the online construction path only, default static semantics.
-    void set_online_mode(bool online) { online_mode_ = online; }
-
     HardwareResource(uint32_t num_npus, int sys_id = -1);
     ~HardwareResource() {
         auto logger = LoggerFactory::get_logger("HardwareResource");
@@ -74,7 +70,7 @@ class HardwareResource {
     uint64_t tics_cpu_ops;
     uint64_t tics_gpu_ops;
     uint64_t tics_gpu_comms;
-    bool online_mode_ = false;
+    uint64_t tics_hbm_dma_ops;
 };
 
 }  // namespace AstraSim

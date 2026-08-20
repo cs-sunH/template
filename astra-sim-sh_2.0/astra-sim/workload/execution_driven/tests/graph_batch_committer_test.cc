@@ -485,14 +485,9 @@ void test_negative_cases(Fixture& f) {
         expect_reject(f, delta, b, "B: duplicate alarm request_id");
     }
     {
-        // sh_2.0 alignment-extension update: an alarm for an in-flight but
-        // NOT-yet-drained request is now LEGAL (replay emission alignment to
-        // the offline admission tick); the reject case moves to a request
-        // whose prefill already drained (see D).
         GraphBatch b = base;
         b.future_alarms[0]["envelope"]["request_id"] = "r1";  // in-flight
-        expect_accept(f, delta, b, "B: alignment alarm for an in-flight "
-                                   "request accepted (sh_2.0 extension)");
+        expect_reject(f, delta, b, "B: alarm for an in-flight request");
     }
     {
         GraphBatch b = base;
@@ -599,13 +594,10 @@ void test_post_commit_negatives(Fixture& f) {
     const StateDelta delta = baseline_delta();
     const GraphBatch base = baseline_batch();
     {
-        // sh_2.0 alignment-extension update: in-flight-but-undrained requests
-        // may receive an alignment alarm; the rejected case is a request
-        // whose prefill already drained (no further arrival may be armed).
         GraphBatch b = base;
         b.future_alarms[0]["envelope"]["request_id"] = "r1";  // in-flight NOW
-        expect_accept(f, delta, b,
-                      "D: alignment alarm for an in-flight request accepted");
+        expect_reject(f, delta, b,
+                      "D: alarm for a now in-flight request rejected");
     }
     {
         GraphBatch b = base;
@@ -772,6 +764,80 @@ void test_empty_comm_compute_batch(Fixture& f) {
            "G: graph_batch_count == 4");
 }
 
+// ----------------------------------------------------------- Part H ------
+// Online HBM key unification nails (低-2): the snake_case section keys
+// comm.hbm_charge / compute.hbm_access_mode are parsed into the TOP-LEVEL
+// NodeView fields (the struct layout is unchanged); validate() rejects
+// malformed values fail-closed; the legacy top-level kebab keys
+// node["hbm-charge"] / node["hbm-access-mode"] are inert.
+void test_hbm_key_parsing(Fixture& f) {
+    StateDelta delta;
+    delta.delivery_sequence = 4;
+    delta.delivery_epoch = 4;
+    delta.tick = 400;
+    DecisionEvent arrival;
+    arrival.reason = DecisionReason::ARRIVAL;
+    arrival.request_id = "r10";
+    arrival.stage = "prefill";
+    arrival.payload.session_id = "s1";
+    arrival.payload.prefill_length = 10;
+    arrival.payload.decode_length = 1;
+    delta.events.push_back(arrival);
+
+    const auto hbm_batch = [] {
+        // comm_node() hardcodes request_id "r1" -- retarget the pair to
+        // this batch's request so node/watch (request, stage) coverage
+        // matches.
+        auto comp = compute_node(0, 0, "r10", "prefill", "r10_comp");
+        comp["compute"]["hbm_access_mode"] = 2;
+        auto send = comm_node(0, 1, 5, 0, 1, 7);
+        send["request_id"] = "r10";
+        send["comm"]["hbm_charge"] = false;
+        auto recv = comm_node(1, 0, 6, 0, 1, 7);
+        recv["request_id"] = "r10";
+        recv["hbm-charge"] = false;  // legacy top-level kebab key: inert
+        GraphBatch b;
+        b.batch_id = 4;
+        b.source_delivery_sequence = 4;
+        b.nodes = nlohmann::json::array({comp, send, recv});
+        b.watches = nlohmann::json::array({
+            prefill_watch("r10", {{"0", 1}, {"1", 0}}),
+        });
+        b.touched_ranks = nlohmann::json::array({0, 1});
+        b.has_touched_ranks = true;
+        return b;
+    };
+
+    {
+        GraphBatch b = hbm_batch();
+        b.nodes[1]["comm"]["hbm_charge"] = "x";
+        expect_reject(f, delta, b,
+                      "H: comm.hbm_charge non-boolean rejected");
+    }
+    {
+        GraphBatch b = hbm_batch();
+        b.nodes[0]["compute"]["hbm_access_mode"] = -1;
+        expect_reject(f, delta, b,
+                      "H: negative compute.hbm_access_mode rejected");
+    }
+
+    const GraphBatch b = hbm_batch();
+    expect_accept(f, delta, b, "H: hbm batch validates clean");
+    f.committer.commit(delta, b);
+
+    const auto& ids = f.committer.store_ids();
+    const auto comp_view = f.sources[0]->lookup(ids.at(RankNodeKey{0, 0}));
+    expect(comp_view.has_value() && comp_view->hbm_access_mode == 2,
+           "H: compute.hbm_access_mode=2 parsed into the NodeView");
+    const auto send_view = f.sources[0]->lookup(ids.at(RankNodeKey{0, 1}));
+    expect(send_view.has_value() && !send_view->hbm_charge,
+           "H: comm.hbm_charge=false parsed into the NodeView");
+    const auto recv_view = f.sources[1]->lookup(ids.at(RankNodeKey{1, 0}));
+    expect(recv_view.has_value() && recv_view->hbm_charge &&
+               recv_view->hbm_access_mode == 0,
+           "H: legacy top-level hbm-charge inert (defaults kept)");
+}
+
 }  // namespace
 
 int main() {
@@ -783,6 +849,7 @@ int main() {
     test_zero_node_batch(f);
     test_single_node_batch(f);
     test_empty_comm_compute_batch(f);
+    test_hbm_key_parsing(f);
     if (g_ok) {
         std::printf("[graph_batch_committer_test] ALL PASS\n");
         return 0;

@@ -771,6 +771,16 @@ class DecodeCandidateCost:
     per_die_delta_ns: float
 
 
+class DecodeTieCounter:
+    """decode 平局轮流裁决计数器（中-1 裁决 2026-08-20）：仅当候选集中
+    ≥2 个 per_die_delta_ns 精确相等（真实平局）时前进；tied 集按
+    instance_index 升序，取 counter % len(tied)。同一决策序列下确定可
+    重放；不传入计数器时保持旧"最小 instance_index"行为。"""
+
+    def __init__(self) -> None:
+        self.value = 0
+
+
 def select_decode_instance(
     *,
     topology: FaceTopology,
@@ -782,7 +792,13 @@ def select_decode_instance(
     decode_token_lengths: Sequence[Sequence[int]],
     new_request_token_length: int,
     hbm_feasible_instances: Optional[Sequence[bool]] = None,
+    tie_counter: Optional[DecodeTieCounter] = None,
 ) -> tuple[int, tuple[DecodeCandidateCost, ...]]:
+    """按 per_die_delta_ns 最小选取 decode 实例（HBM 可行性过滤后的集合）。
+
+    平局规则（中-1 裁决 2026-08-20）：min 并列 ≥2 个候选时按
+    instance_index 升序经 tie_counter 轮流选取；不传入计数器时保持旧
+    “最小 instance_index”行为。"""
     if len(has_prefill_work) != len(topology.instances):
         raise ValueError("has_prefill_work length must match instances")
     if len(decode_token_lengths) != len(topology.instances):
@@ -835,10 +851,16 @@ def select_decode_instance(
     ]
     if not feasible_costs:
         raise ValueError("no schedulable Decode instance has reclaimable per-rank HBM")
-    selected = min(
-        feasible_costs,
-        key=lambda cost: (cost.per_die_delta_ns, cost.instance_index),
+    min_delta = min(cost.per_die_delta_ns for cost in feasible_costs)
+    tied = sorted(
+        (cost for cost in feasible_costs if cost.per_die_delta_ns == min_delta),
+        key=lambda cost: cost.instance_index,
     )
+    if len(tied) > 1 and tie_counter is not None:
+        selected = tied[tie_counter.value % len(tied)]
+        tie_counter.value += 1
+    else:
+        selected = tied[0]
     return selected.instance_index, tuple(costs)
 
 
@@ -1533,6 +1555,73 @@ class KVCacheManager:
 
     def session_snapshots(self) -> tuple[SessionKVSnapshot, ...]:
         return tuple(self.session_snapshot(session_id) for session_id in self.session_ids)
+
+    def truncate_history(
+        self,
+        session_id: str,
+        history_tokens: int,
+        *,
+        trigger_request_id: Optional[str] = None,
+    ) -> int:
+        """Discard KV tokens removed by the workload's context-window policy.
+
+        Context sidecar (sidecar_restore 口径, sh_1.0 2026-08-19 改造; sh_3.0
+        face_scheduler.py:1955-2054 的两态简化版): 把 session 的 KV 账本截到
+        sidecar 声明的历史前缀长度。LOCAL_HBM 态先回收本地 shard 字节再改
+        记账; REMOTE_MEMORY 态只改逻辑记账(远端池无本地容量账; sh_1.0 无
+        sh_3.0 的 PARTIAL_HBM_REMOTE/按层切分态)。``trigger_request_id`` 仅
+        作观测锚点, 不影响丢弃内容。metrics: truncate 属移除语义, 本仓
+        metrics 观测面按最小改动不记账(与调度决策无反馈关系)。
+
+        Returns the number of discarded KV tokens.
+        """
+
+        if (
+            isinstance(history_tokens, bool)
+            or not isinstance(history_tokens, int)
+            or history_tokens < 0
+        ):
+            raise ValueError("history_tokens must be a non-negative integer")
+        if session_id not in self._sessions:
+            if history_tokens != 0:
+                raise ValueError(
+                    f"new session {session_id} cannot start with historical KV"
+                )
+            return 0
+        session = self._sessions[session_id]
+        if session.active:
+            raise RuntimeError("active session history cannot be truncated")
+        if history_tokens > session.context_tokens:
+            raise ValueError(
+                f"session {session_id} prefix exceeds its stored KV context"
+            )
+        discarded_tokens = session.context_tokens - history_tokens
+        if discarded_tokens == 0:
+            return 0
+
+        new_shards = kv_cache_shard_bytes_for_tokens(
+            self.model,
+            history_tokens,
+            self.tp_degree,
+        )
+        if session.location == self.LOCAL_HBM:
+            if session.instance_index is None:
+                raise RuntimeError("resident KV session has no instance")
+            self._remove_local_shards(
+                session.instance_index,
+                tuple(
+                    old_bytes - new_bytes
+                    for old_bytes, new_bytes in zip(
+                        session.shard_bytes,
+                        new_shards,
+                    )
+                ),
+            )
+        session.context_tokens = history_tokens
+        session.total_bytes = sum(new_shards)
+        session.shard_bytes = new_shards
+        self._check_invariants()
+        return discarded_tokens
 
     def nearest_edge(self, rank: int) -> int:
         return nearest_edge_rank(
@@ -2580,6 +2669,10 @@ class FaceRequest:
     decode_length: int
     session_arrival_time_ns: Optional[int]
     inter_request_interval_ns: Optional[int]
+    # Context sidecar (sidecar_restore 口径, sh_1.0 2026-08-19 改造):
+    # 成对提供(load_request_prefix_tokens 富集)或同时为 None(recompute)。
+    prefix_tokens: Optional[int] = None
+    input_tokens_total: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.queue_index < 0 or self.turn_index < 0:
@@ -2588,6 +2681,29 @@ class FaceRequest:
             raise ValueError("session_id and request_id must not be empty")
         if self.prefill_length <= 0 or self.decode_length <= 0:
             raise ValueError("prefill_length and decode_length must be positive")
+        if self.prefix_tokens is not None and (
+            isinstance(self.prefix_tokens, bool)
+            or not isinstance(self.prefix_tokens, int)
+            or self.prefix_tokens < 0
+        ):
+            raise ValueError("prefix_tokens must be None or a non-negative integer")
+        if self.input_tokens_total is not None and (
+            isinstance(self.input_tokens_total, bool)
+            or not isinstance(self.input_tokens_total, int)
+            or self.input_tokens_total <= 0
+        ):
+            raise ValueError("input_tokens_total must be None or a positive integer")
+        if (self.prefix_tokens is None) != (self.input_tokens_total is None):
+            raise ValueError(
+                "prefix_tokens and input_tokens_total must be provided together"
+            )
+        if (
+            self.input_tokens_total is not None
+            and self.input_tokens_total != self.prefix_tokens + self.prefill_length
+        ):
+            raise ValueError(
+                "input_tokens_total must equal prefix_tokens + prefill_length"
+            )
         if self.turn_index == 0:
             if self.session_arrival_time_ns is None or self.session_arrival_time_ns < 0:
                 raise ValueError("first turn requires a non-negative session arrival")
@@ -2638,6 +2754,9 @@ class FaceRequestPlan:
     kv_allocation: KVAllocation
     history_source_instance_index: Optional[int]
     history_transfer_bytes: int
+    # Context sidecar: arrival 时 truncate_history 丢弃的旧 KV token 数
+    # (workload context-window 丢弃语义; recompute 口径恒 0)。
+    history_tokens_discarded: int = 0
     history_location_before: Optional[SessionKVSnapshot] = None
     history_transfer: Optional[KVTransfer] = None
     history_evictions: tuple[KVTransfer, ...] = ()
@@ -2674,6 +2793,11 @@ class _RequestRuntime:
     prefill_context_tokens: int
     final_context_tokens: int
     remaining_chunks: int
+    # Context sidecar: 本请求 prefill 段实际要处理的 token 数
+    # (recompute 口径 = request.prefill_length; sidecar_restore 口径 =
+    # input_tokens_total - min(prefix_tokens, 上一轮 final))。
+    prefill_tokens_to_process: int = 0
+    history_tokens_discarded: int = 0
     prompt_tokens_processed: int = 0
     decode_steps_remaining: int = 0
     current_decode_token: int = 0
@@ -2740,14 +2864,36 @@ def _validate_and_expand_requests(
         history = 0
         for position, index in enumerate(ordered):
             request = requests[index]
-            prefill_context = history + request.prefill_length
+            if request.prefix_tokens is None:
+                # recompute 口径: history = 上一轮 final 上下文(账本全量
+                # 复用), prefill 工作量 = 队列 prefill_length(turn-0 已
+                # 折入 prefix)。
+                prefill_tokens_to_process = request.prefill_length
+                prefill_context = history + prefill_tokens_to_process
+            else:
+                # sidecar_restore 口径(sh_3.0 face_scheduler.py:3574-3586
+                # 同式): 只复用账本内实际存在的前缀; 源 prefix 超出账本的
+                # 部分随本轮新 token 一起重算, 低于账本的部分由
+                # truncate_history 在 arrival 时丢弃。turn-0 账本为 0,
+                # prefix 全量进 prefill 算力(与 recompute 的 turn-0 算力
+                # 相同)。
+                history = min(request.prefix_tokens, history)
+                assert request.input_tokens_total is not None
+                prefill_context = request.input_tokens_total
+                prefill_tokens_to_process = prefill_context - history
+                if prefill_tokens_to_process <= 0:
+                    raise ValueError(
+                        f"session {session_id} request {request.request_id} has no "
+                        "Prefill work after prefix reuse"
+                    )
             final_context = prefill_context + request.decode_length
             runtimes[index] = _RequestRuntime(
                 request=request,
                 history_tokens_before=history,
+                prefill_tokens_to_process=prefill_tokens_to_process,
                 prefill_context_tokens=prefill_context,
                 final_context_tokens=final_context,
-                remaining_chunks=math.ceil(request.prefill_length / p_chunk),
+                remaining_chunks=math.ceil(prefill_tokens_to_process / p_chunk),
                 decode_steps_remaining=request.decode_length,
                 current_decode_token=prefill_context,
             )
@@ -2803,6 +2949,10 @@ def plan_face_requests(
         reserve_context_tokens=reserve_context_tokens,
     )
     instances = [_InstanceRuntime(index=i) for i in range(len(topology.instances))]
+    # decode 平局轮流裁决计数器（中-1 裁决 2026-08-20）：每次 plan 调用
+    # 独立持有，仅真实平局（HBM 可行集内 per_die_delta_ns 精确相等 ≥2）
+    # 时前进。
+    decode_tie_counter = DecodeTieCounter()
 
     # Event tuple: (time_ns, priority, sequence, kind, payload).  All events at
     # one timestamp are drained before starting new iterations.  Completion has
@@ -2917,9 +3067,11 @@ def plan_face_requests(
             chunk_tokens = 0
             if prefill_index is not None:
                 runtime = runtimes[prefill_index]
+                # Context sidecar: chunk 按实际 prefill 工作量推进
+                # (recompute 口径下 == request.prefill_length)。
                 chunk_tokens = min(
                     p_chunk,
-                    runtime.request.prefill_length - runtime.prompt_tokens_processed,
+                    runtime.prefill_tokens_to_process - runtime.prompt_tokens_processed,
                 )
                 if runtime.prefill_start_ns is None:
                     runtime.prefill_start_ns = now_ns
@@ -3019,6 +3171,7 @@ def plan_face_requests(
                                 reservation_request_id=runtime.request.request_id,
                             )
                         ),
+                        tie_counter=decode_tie_counter,
                     )
                     runtime.decode_instance_index = selected
                     runtime.decode_candidates = costs
@@ -3128,6 +3281,15 @@ def plan_face_requests(
             if runtime.estimated_arrival_ns is not None:
                 raise RuntimeError("request arrival was delivered more than once")
             runtime.estimated_arrival_ns = now_ns
+            # Context sidecar: arrival 时把 session KV 账本截到 sidecar 声明
+            # 的历史前缀(workload context-window 丢弃语义), 使后续
+            # prepare_prefill 的严格相等校验成立(sh_3.0 :4167-4171 同款;
+            # recompute 口径下 history == 上一轮 final, 恒为 no-op)。
+            runtime.history_tokens_discarded = kv_manager.truncate_history(
+                runtime.request.session_id,
+                runtime.history_tokens_before,
+                trigger_request_id=runtime.request.request_id,
+            )
             pending_admissions.append(request_index)
             retry_admissions = True
 
@@ -3198,6 +3360,7 @@ def plan_face_requests(
                 kv_allocation=runtime.kv_allocation,
                 history_source_instance_index=runtime.history_source_instance_index,
                 history_transfer_bytes=runtime.history_transfer_bytes,
+                history_tokens_discarded=runtime.history_tokens_discarded,
                 history_location_before=runtime.history_location_before,
                 history_transfer=runtime.history_transfer,
                 history_evictions=runtime.history_evictions,

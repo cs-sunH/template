@@ -4,6 +4,8 @@
 方案.md §3 步骤 0-4 与 §12；总体方案 §5.7。**九项合同逐项审查通过是
 阶段 1 开工硬门槛**。
 
+> 注：合同本体文件（`nine_contracts/contract_01~09.md`）与 `traces/PROVENANCE.md` 已于 2026-08-20 按用户指示删除；下表路径仅作条款标识，本 README 的摘要描述即为现存权威记录。
+
 | # | 文件 | 主题 |
 |---|---|---|
 | ① | contract_01_dynamic_graph.md | NodeStore/GraphSource/释放唯一所有者/is_local_hbm_kv_restore 位 |

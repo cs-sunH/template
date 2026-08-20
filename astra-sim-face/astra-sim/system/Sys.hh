@@ -285,6 +285,13 @@ class Sys : public Callable {
     std::string local_mem_trace_filename;
     double local_mem_bw;
     uint64_t local_mem_latency;
+    // Multi-user local-HBM bandwidth contention ("hbm-bandwidth-contention"
+    // in the system configuration): COMP roofline traffic and p2p comm
+    // endpoints share the single local-mem-bw scalar with event-driven
+    // equal-split arbitration (LocalHbmBandwidthModel, one instance per
+    // Workload).  Auto-false when local_mem_bw <= 0 (a zero-rate fluid
+    // model could never drain).
+    bool hbm_bandwidth_contention;
     double remote_mem_bw;
     uint64_t remote_mem_latency;
     double pipeline_tile_fraction;

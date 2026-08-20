@@ -689,6 +689,11 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         node.comm.src = comm.value("src", 0);
         node.comm.dst = comm.value("dst", 0);
         node.comm.tag = comm.value("tag", uint32_t{0});
+        // "hbm_charge" (bool, default true): false = this endpoint creates no
+        // local-HBM job under hbm-bandwidth-contention. The Python builder never
+        // writes it (recompute-only design has no pass-through endpoints), so the
+        // default keeps every endpoint charged.
+        node.comm.hbm_charge = comm.value("hbm_charge", true);
         const auto& coll = node_json.value("coll", nlohmann::json::object());
         node.coll.comm_type = coll.value("comm_type", uint64_t{0});
         node.coll.bytes = coll.value("bytes", uint64_t{0});

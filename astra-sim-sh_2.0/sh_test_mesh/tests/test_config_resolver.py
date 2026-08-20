@@ -82,6 +82,7 @@ class ConfigResolverTests(unittest.TestCase):
             self.assertEqual(system["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(system["peak-perf"], self.source["compute"]["peak-perf-tflops"])
             self.assertEqual(system["hbm-kv-restore-bandwidth-sharing"], 1)
+            self.assertEqual(system["hbm-bandwidth-contention"], 1)
 
             remote = json.loads(paths.remote_memory.read_text(encoding="utf-8"))
             self.assertEqual(remote["memory-type"], "PER_NPU_MEMORY_EXPANSION")

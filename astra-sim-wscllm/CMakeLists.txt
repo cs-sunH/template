@@ -20,18 +20,28 @@ endif()
 # Setup project
 project(AstraSim)
 
-# Add libraries.
-include(FetchContent)
-
+# Build only the vendored dependency targets needed by the simulator. Keeping
+# yaml-cpp in-tree makes a clean checkout reproducible without a configure-time
+# network download.
+set(FMT_DOC OFF CACHE BOOL "" FORCE)
+set(FMT_TEST OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/fmt")
-option(SPDLOG_FMT_EXTERNAL ON) # override default option for spdlog.
+
+# spdlog 1.14.1 is not source-compatible with this repository's customized
+# fmt 11 headers when SPDLOG_FMT_EXTERNAL is enabled. Use spdlog's bundled fmt,
+# matching the known-good build configuration in astra-sim-sh_old.
+set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_EXAMPLE_HO OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS_HO OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/spdlog")
-FetchContent_Declare(
-    yaml-cpp
-    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-    GIT_TAG a83cd31 # Current as of 2025-10-01
-)
-FetchContent_MakeAvailable(yaml-cpp)
+
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/extern/helper/yaml-cpp")
 
 
 # Find Protobuf

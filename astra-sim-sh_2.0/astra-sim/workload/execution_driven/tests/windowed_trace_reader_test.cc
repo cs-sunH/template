@@ -17,16 +17,6 @@ network simulation, no baseline artifacts touched:
           data rows and pump() == false.
   Part C  Out-of-range rejection: a turn-0 arrival beyond max_arrival_ns is
           rejected (never submitted, counted); in-range rows still submit.
-  Part G  Backport fix 2026-08-16 (对比报告 §5.1) fail-closed window
-          semantics, synthetic fixture (no 4-tier csv needed; the synthetic
-          envelopes may use ANY arrival window): (i) with the DEFAULT
-          arrival bound (now 0 = unbounded) every turn-0 row is accepted,
-          however far out its arrival is; (ii) with an EXPLICIT small window
-          the out-of-range rows are rejected AND counted, the rejected rows
-          are consumed at reject time (the window does not clog: EOF is
-          still reached, so the run-end completion audit denominator stays
-          the materialized input's total row count and main_online's
-          input-window audit fails the run on the nonzero rejection).
   Part D  Late-arrival clamp counter (RequestIngress): an arrival alarm whose
           target tick is already past is clamped to current+1 and counted.
   Part E  Request-neutral no-CSV path: an empty path constructs an
@@ -36,6 +26,14 @@ network simulation, no baseline artifacts touched:
           from its open file position); missing file -> false; corrupt file
           -> false with state untouched (fail-closed); configuration
           mismatch (different high_water) -> false.
+  Part G  Backport fix (2026-08-16, sh_2.0测试 §5.1) -- DEFAULT UNBOUNDED
+          arrival window: synthetic envelopes at arbitrary (well beyond
+          30 s) arrivals are ALL accepted under the 0 default (constructor
+          default and CLI default); no csv-derived input is involved.
+  Part H  Backport fix cont. (unified 2026-08-20 中-3) -- explicit window:
+          drops visible AND consumed at reject time (the window flows to
+          EOF with no stall and no tail scan), audit_completion()
+          fail-closes every bad combination.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
 Run (from template/astra-sim-wscllm):
@@ -45,11 +43,13 @@ Run (from template/astra-sim-wscllm):
 
 #include <cassert>
 #include <cstdio>
+#include <unistd.h>
 #include <fstream>
 #include <string>
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+#include "astra-sim/workload/execution_driven/OnlineCli.hh"
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
@@ -59,6 +59,14 @@ using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
 
 namespace {
+
+static std::string fixture_path(const char* base, const char* ext = ".csv") {
+    // Parallel-reader validation (phase 5-6): per-process fixture paths so
+    // concurrent instances do not race on shared /tmp files (fixture-only;
+    // same fix as the sh_3.0 validation round).
+    return std::string("/tmp/") + base + "_" + std::to_string(::getpid()) + ext;
+}
+
 
 bool g_ok = true;
 
@@ -93,7 +101,7 @@ std::vector<std::string> sample_rows() {
 }
 
 void test_window_topping() {
-    const std::string csv = "/tmp/windowed_reader_test_window.csv";
+    const std::string csv = fixture_path("windowed_reader_test_window");
     write_csv(csv, sample_rows());
 
     EventQueue eq;
@@ -145,7 +153,7 @@ void test_window_topping() {
 }
 
 void test_row_semantics() {
-    const std::string csv = "/tmp/windowed_reader_test_semantics.csv";
+    const std::string csv = fixture_path("windowed_reader_test_semantics");
     write_csv(csv, sample_rows());
 
     EventQueue eq;
@@ -168,7 +176,7 @@ void test_row_semantics() {
 }
 
 void test_out_of_range_rejection() {
-    const std::string csv = "/tmp/windowed_reader_test_reject.csv";
+    const std::string csv = fixture_path("windowed_reader_test_reject");
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,20000000000,,d",
         "session_1,0,session_1_request_0,100,50,40000000000,,d",
@@ -250,9 +258,9 @@ void test_late_arrival_clamp_counter() {
 }
 
 void test_checkpoint_roundtrip() {
-    const std::string csv = "/tmp/windowed_reader_test_checkpoint.csv";
+    const std::string csv = fixture_path("windowed_reader_test_checkpoint");
     write_csv(csv, sample_rows());
-    const std::string cp = "/tmp/windowed_reader_test_checkpoint.json";
+    const std::string cp = fixture_path("windowed_reader_test_checkpoint", ".json");
 
     // Build a reader, read 6 rows (consumed 0..3), checkpoint it.
     {
@@ -321,14 +329,14 @@ void test_checkpoint_roundtrip() {
         ingress.bind(&eq, &mailbox, &svc);
         WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
         {
-            std::ofstream bad("/tmp/windowed_reader_test_bad_cp.json");
+            std::ofstream bad(fixture_path("windowed_reader_test_bad_cp", ".json").c_str());
             bad << "{ not json\n";
         }
         expect(!reader.read_checkpoint(
-                   "/tmp/windowed_reader_test_bad_cp.json"),
+                   fixture_path("windowed_reader_test_bad_cp", ".json").c_str()),
                "corrupt checkpoint returns false");
         expect(reader.rows_read() == 0, "corrupt checkpoint leaves state");
-        std::remove("/tmp/windowed_reader_test_bad_cp.json");
+        std::remove(fixture_path("windowed_reader_test_bad_cp", ".json").c_str());
     }
 
     // Configuration mismatch (different high_water) -> false, state
@@ -377,78 +385,136 @@ void test_no_csv_path() {
     std::printf("[fixture] part E PASS: request-neutral no-CSV path\n");
 }
 
-// Part G (backport fix 2026-08-16, 对比报告 §5.1): fail-closed window
-// semantics on a synthetic queue -- arrivals far beyond any acceptance
-// window (40 s / 60 s / 90 s) so the fixture does not depend on the 4-tier
-// csv inputs.
-void test_backport_window_fail_closed() {
-    const std::string csv = "/tmp/windowed_reader_test_backport.csv";
+// Backport fix (2026-08-16, sh_2.0测试 §5.1): the DEFAULT arrival window is
+// UNBOUNDED. Synthetic envelopes at arbitrary arrivals (far beyond the old
+// 30 s default; no materialized csv involved) must ALL be accepted.
+void test_default_unbounded_window() {
+    const std::string csv = fixture_path("windowed_reader_test_unbounded");
+    // 3 turn-0 rows at 20 s / 40 s / 180 s (the 180 s row is exactly the
+    // 3-minute comparison window that exposed the defect) + 1 turn>0 row.
     write_csv(csv, {
-        "session_0,0,session_0_request_0,100,50,40000000000,,d",
+        "session_0,0,session_0_request_0,100,50,20000000000,,d",
+        "session_1,0,session_1_request_0,100,50,40000000000,,d",
+        "session_2,0,session_2_request_0,100,50,180000000000,,d",
         "session_0,1,session_0_request_1,100,50,,5000000000,d",
-        "session_1,0,session_1_request_0,100,50,60000000000,,d",
-        "session_2,0,session_2_request_0,100,50,90000000000,,d",
     });
 
-    // (i) DEFAULT arrival bound (0 = unbounded): every turn-0 row accepted,
-    // however far out its arrival; zero rejections; EOF in one pump.
+    // Constructor default (max_arrival_ns omitted): unbounded.
     {
         EventQueue eq;
         DecisionMailbox mailbox;
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/2);
-        // Default-constructed bound: no max_arrival_ns argument. Bounded
-        // window exercises the pump/consume path while all 3 turn-0 rows
-        // (40 s / 60 s / 90 s) sit far beyond the old 30e9 default.
-        while (reader.pump()) {
-            for (int64_t i = 0;
-                 i < static_cast<int64_t>(reader.rows_read()); ++i) {
-                reader.notify_consumed(i);
-            }
-        }
-        expect(reader.eof(), "default unbounded: EOF reached");
+        WindowedTraceReader reader(csv, ingress, /*high_water=*/0);
+        reader.pump();
         expect(reader.rejected_out_of_range() == 0,
-               "default unbounded: zero rejections (no silent window)");
-        expect(reader.data_rows() == 4, "default unbounded: all rows read");
+               "default window is unbounded: nothing rejected");
         expect(ingress.pending_command_count() == 3,
-               "default unbounded: every turn-0 row submitted");
+               "default window accepts every turn-0 row, 180 s included");
+        expect(reader.data_rows() == 4 && reader.total_data_rows() == 4,
+               "all rows counted (no tail scan needed at EOF)");
     }
 
-    // (ii) EXPLICIT small window (30 s): 3 turn-0 rows are out of range.
+    // CLI default (parse_online_cli with no --request-max-arrival-ns): 0.
     {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/2,
-                                   /*max_arrival_ns=*/30000000000ULL);
-        // One pump, no alarm ever fired: the rejected rows are consumed at
-        // reject time, so even with high_water=2 the reader reads straight
-        // through to EOF (the pre-backport clog stopped the window at 2
-        // un-consumed rows and EOF was NEVER reached -- expected_requests
-        // stayed 0 and the run-end audit was silently skipped).
-        reader.pump();
-        expect(reader.eof(),
-               "explicit window: EOF still reached (rejected rows consumed "
-               "at reject time; window never clogs)");
-        expect(reader.rejected_out_of_range() == 3,
-               "explicit window: all 3 out-of-range turn-0 rows counted");
-        expect(reader.data_rows() == 4,
-               "audit denominator: data_rows == materialized total rows "
-               "(rejected rows included)");
-        expect(reader.rows_read() == 4,
-               "audit denominator: rows_read == materialized total rows");
-        expect(ingress.pending_command_count() == 0,
-               "explicit window: no turn-0 row in range -> nothing "
-               "submitted (the nonzero rejection + un-drained run state is "
-               "what main_online's input-window audit fails the run on)");
+        char arg0[] = "fake_online_bin";
+        char arg1[] = "--online-mode=strategy";
+        char* argv[] = {arg0, arg1};
+        OnlineCliOptions cli;
+        std::string err;
+        expect(parse_online_cli(2, argv, cli, err),
+               "minimal CLI parses (unbounded-default check)");
+        expect(cli.request_max_arrival_ns == 0,
+               "CLI default --request-max-arrival-ns == 0 (unbounded)");
     }
-    std::printf("[fixture] part G PASS: backport fail-closed window "
-                "(default unbounded accepts all; explicit window counts "
-                "drops, EOF reachable, denominator = total rows)\n");
+    std::printf("[fixture] part G PASS: default unbounded arrival window "
+                "(constructor + CLI defaults)\n");
+}
+
+// Backport fix cont. (unified 2026-08-20, 中-3): explicit small window ->
+// drops VISIBLE (counter) and CONSUMED AT REJECT TIME, so the window flows
+// to EOF naturally (no stall, no tail scan) and data_rows()/total_data_rows()
+// ARE the whole-file denominators; audit_completion() fail-closes every
+// dropping/unbalanced/incomplete combination.
+void test_explicit_window_fail_closed() {
+    const std::string csv = fixture_path("windowed_reader_test_failclosed");
+    // 5 turn-0 rows: arrivals 10 s .. 90 s (the 25 s window admits only the
+    // 10 s row; 30/50/70/90 s are rejected = 4 drops) + 2 turn>0 rows
+    // (empty arrival): total = 7, turn0 = 5.
+    write_csv(csv, {
+        "session_0,0,session_0_request_0,100,50,10000000000,,d",
+        "session_1,0,session_1_request_0,100,50,30000000000,,d",
+        "session_2,0,session_2_request_0,100,50,50000000000,,d",
+        "session_3,0,session_3_request_0,100,50,70000000000,,d",
+        "session_4,0,session_4_request_0,100,50,90000000000,,d",
+        "session_0,1,session_0_request_1,100,50,,5000000000,d",
+        "session_1,1,session_1_request_1,100,50,,5000000000,d",
+    });
+
+    // Explicit small window with a bounded reader. Nothing consumes rows in
+    // this fixture except the reader itself: the 4 rejected rows are
+    // consumed AT REJECT TIME, so only the 1 accepted + 2 turn>0 rows count
+    // toward occupancy and high_water=2 still binds -- the fixture's
+    // notify_consumed loop stands in for the production consumption path
+    // (turn-0 arrival alarm / turn>0 future alarm firing).
+    EventQueue eq;
+    DecisionMailbox mailbox;
+    ServiceCoordinator svc;
+    RequestIngress ingress;
+    ingress.bind(&eq, &mailbox, &svc);
+    WindowedTraceReader reader(csv, ingress, /*high_water=*/2,
+                               /*max_arrival_ns=*/25000000000ULL);
+    while (reader.pump()) {
+        for (int64_t i = 0;
+             i < static_cast<int64_t>(reader.rows_read()); ++i) {
+            reader.notify_consumed(i);
+        }
+    }
+    expect(reader.eof(),
+           "consume-at-reject: EOF reached naturally, no tail scan");
+    expect(reader.rows_read() == 7,
+           "the whole file was read: rejects never stalled the window");
+    expect(reader.rejected_out_of_range() == 4,
+           "explicit small window rejects visibly (4 of 5 turn-0 rows)");
+    expect(reader.total_data_rows() == 7,
+           "whole-file denominator == data_rows at EOF");
+    expect(reader.turn0_data_rows() == 5,
+           "turn-0 whole-file count");
+    expect(ingress.pending_command_count() == 1,
+           "only the in-range row was submitted");
+
+    // The run-end audit arithmetic (audit_completion). Field order:
+    // {total, turn0, accepted, completed, dropped}. Official-run shape
+    // (20.csv 30s input): accepted counts ONLY turn-0 submissions (112);
+    // turn>0 requests are covered by completed vs total.
+    expect(audit_completion({1177, 112, 112, 1177, 0}) ==
+               CompletionAuditVerdict::Ok,
+           "audit: official-run shape passes (accepted==turn0, "
+           "completed==total)");
+    expect(audit_completion({7, 5, 5, 7, 0}) == CompletionAuditVerdict::Ok,
+           "audit: clean synthetic run passes");
+    expect(audit_completion({2091, 136, 112, 1830, 261}) ==
+               CompletionAuditVerdict::Dropped,
+           "audit: the sh_2.0 strategy-20 shape (2091 input, 1830 "
+           "completed, 261 dropped, old audit PASSED) is Dropped");
+    // An unbalanced turn-0 ledger with no recorded drop: AccountMismatch
+    // (e.g. Submit commands lost to an ingress overflow).
+    expect(audit_completion({7, 5, 4, 7, 0}) ==
+               CompletionAuditVerdict::AccountMismatch,
+           "audit: accepted + dropped != turn0 -> AccountMismatch");
+    // Requests missing from the run (never-read tail rows behind a stall /
+    // un-fired future alarms / unfinished requests): Incomplete.
+    expect(audit_completion({7, 5, 5, 6, 0}) ==
+               CompletionAuditVerdict::Incomplete,
+           "audit: completed + dropped != total -> Incomplete");
+    // The unified fixture's own shape: 4 drops, only the in-range row
+    // accepted+completed, the 2 turn>0 orphans never scheduled -> both the
+    // Dropped-first ordering and the completed shortfall must fail-closed.
+    expect(audit_completion({7, 5, 1, 1, 4}) == CompletionAuditVerdict::Dropped,
+           "audit: this fixture's run-end shape is Dropped (drops first)");
+    std::printf("[fixture] part H PASS: explicit window drops visible + "
+                "consumed-at-reject EOF + fail-closed completion audit\n");
 }
 
 }  // namespace
@@ -460,7 +526,8 @@ int main(int /*argc*/, char* /*argv*/[]) {
     test_late_arrival_clamp_counter();
     test_checkpoint_roundtrip();
     test_no_csv_path();
-    test_backport_window_fail_closed();
+    test_default_unbounded_window();
+    test_explicit_window_fail_closed();
 
     if (!g_ok) {
         std::fprintf(stderr, "[windowed_reader_test] FAIL: see messages "
@@ -469,7 +536,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     }
     std::printf("[windowed_reader_test] ALL PASS: window topping / row "
                 "semantics / out-of-range rejection / late clamp counter / "
-                "checkpoint roundtrip / no-CSV path / backport fail-closed "
-                "window\n");
+                "checkpoint roundtrip / no-CSV path / default unbounded "
+                "window / explicit-window fail-closed audit\n");
     return 0;
 }

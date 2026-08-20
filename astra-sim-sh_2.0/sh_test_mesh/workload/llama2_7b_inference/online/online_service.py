@@ -6,17 +6,16 @@ CLI：
         --plan-dir <manifest 目录>
 
 流程：
-  1. 载入 trace_config（load_face_trace_config；--config 可覆盖）；
+  1. 载入 plan-dir/manifest.json（plan_materializer 冻结产物，五仓同源）与
+     trace_config（load_face_trace_config；--config 可覆盖）；
   2. strategy 模式：GraphBatchBuilder + Sh20OnlineScheduler；
-     manifest["requests"] 由 trace_config 队列派生；
   3. BridgeServer.serve_forever（阻塞读 req_notify.fifo，零 polling；
      决策异常 => error response + exit 1，fail-closed）；
   4. EOF（C++ 关闭写端）= 运行结束：verify_run_end + 日志消费完整性校验，
      写 graph_batch_digests.jsonl / online_decision_log.jsonl 到 bridge_dir。
 
 strategy 模式（步骤 1-9 的 Sh20OnlineScheduler）：真实策略（关感知）在
-在线骨架中运行；manifest["requests"] 由 config.request_queue 经
-_to_scheduler_requests + _validate_and_expand_requests（离线同源推导）构造。
+在线骨架中运行。
 """
 
 import argparse
@@ -31,11 +30,7 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from face_scheduler import PREFILL_CHUNK_SIZE  # noqa: E402
-from generate_face_trace import (  # noqa: E402
-    _to_scheduler_requests,
-    load_face_trace_config,
-)
+from generate_face_trace import load_face_trace_config  # noqa: E402
 from online.decision_bridge import BridgeServer  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 from online.sh20_online_scheduler import Sh20OnlineScheduler  # noqa: E402
@@ -67,41 +62,12 @@ def _write_jsonl(path: str, rows: list) -> None:
             output.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def _manifest_from_config(config) -> dict:
-    """strategy 模式：config.request_queue 经离线同源推导构造 manifest。"""
-    from face_scheduler import _validate_and_expand_requests  # noqa: E402
-    requests = _to_scheduler_requests(config.request_queue)
-    runtimes, _ = _validate_and_expand_requests(requests, PREFILL_CHUNK_SIZE)
-    records = []
-    for runtime in runtimes:
-        records.append({
-            "queue_index": runtime.request.queue_index,
-            "session_id": runtime.request.session_id,
-            "turn_index": runtime.request.turn_index,
-            "request_id": runtime.request.request_id,
-            "prefill_length": runtime.request.prefill_length,
-            "decode_length": runtime.request.decode_length,
-            "prefix_tokens": runtime.request.prefix_tokens,
-            "input_tokens_total": runtime.request.input_tokens_total,
-            "session_arrival_time_ns": runtime.request.session_arrival_time_ns,
-            "inter_request_interval_ns": (
-                runtime.request.inter_request_interval_ns),
-            "history_tokens_before": runtime.history_tokens_before,
-            "prefill_tokens_to_process": runtime.prefill_tokens_to_process,
-            "prefill_context_tokens": runtime.prefill_context_tokens,
-            "final_context_tokens": runtime.final_context_tokens,
-            "remaining_chunks": max(
-                0, -(-runtime.prefill_tokens_to_process // PREFILL_CHUNK_SIZE)),
-        })
-    return {"requests": records}
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_2.0 online decision service")
     parser.add_argument("--bridge-dir", required=True)
     parser.add_argument("--mode", default="strategy", choices=("strategy",))
     parser.add_argument("--plan-dir", required=True,
-                        help="manifest 目录（含 manifest.json；存在性凭据）")
+                        help="manifest 目录（含 manifest.json）")
     parser.add_argument("--config", default=None,
                         help="trace_config.csv 路径（缺省用 workload 默认）")
     parser.add_argument("--sensing", action="store_true", default=False,
@@ -109,10 +75,9 @@ def main(argv=None) -> int:
                              "两层剩余负载查询；查询/审计输入，不进策略判据")
     args = parser.parse_args(argv)
 
-    # plan-dir 存在性校验（fail-closed；strategy 的 request 事实由
-    # trace_config 队列派生，manifest.json 仅作存在性凭据）。
-    if not os.path.isfile(os.path.join(args.plan_dir, "manifest.json")):
-        parser.error(f"plan-dir 缺少 manifest.json: {args.plan_dir}")
+    manifest_path = os.path.join(args.plan_dir, "manifest.json")
+    with open(manifest_path, "r", encoding="utf-8") as source:
+        manifest = json.load(source)
 
     if args.config:
         config = load_face_trace_config(Path(args.config))
@@ -121,7 +86,6 @@ def main(argv=None) -> int:
 
     graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    manifest = _manifest_from_config(config)
     scheduler = Sh20OnlineScheduler(
         manifest=manifest,
         config=config,

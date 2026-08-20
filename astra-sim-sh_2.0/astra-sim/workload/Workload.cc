@@ -103,9 +103,15 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                 this->et_feeder, sys->id);
     }
     this->sys = sys;
-    if (sys->hbm_kv_restore_bandwidth_sharing) {
-        // sh_2.0: HBM 50/50 fluid sharing is a preserved execution model
+    if (sys->hbm_bandwidth_contention || sys->hbm_kv_restore_bandwidth_sharing) {
+        // sh_2.0: the LocalHbmBandwidthModel is a preserved execution model
         // (contract B11) -- assembled in BOTH modes, identical timing/params.
+        // With hbm-bandwidth-contention (default) it runs the N-way
+        // equal-split policy over every HBM user (COMP, KV restore, NoC p2p
+        // comm endpoints, pool endpoints); with only the legacy
+        // hbm-kv-restore-bandwidth-sharing flag (contention off) no comm/pool
+        // jobs are ever issued, so the model degenerates to the historical
+        // one-COMP-plus-one-restore 50/50 behavior (A/B baseline).
         this->local_hbm_bandwidth_model =
             std::make_unique<LocalHbmBandwidthModel>(sys, this);
     }
@@ -355,6 +361,23 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
     wlhd->sys_id = sys->id;
     wlhd->workload = this;
     wlhd->node_id = node.global_id;
+    // sh_2.0 N-way HBM contention: a MEM node marked hbm-access-mode (1 =
+    // local HBM read, 2 = local HBM write; bytes = tensor_size) is a pool
+    // traffic endpoint -- its local HBM job competes in the N-way model and
+    // the node completes as the join of the port FIFO transaction and the
+    // HBM job (hbm_endpoint_joins_ latch, see Workload::call).
+    if (sys->hbm_bandwidth_contention &&
+        local_hbm_bandwidth_model != nullptr &&
+        node.hbm_access_mode > 0 && node.compute.tensor_size > 0) {
+        hbm_endpoint_joins_[node.global_id] = HbmEndpointJoinState{};
+        if (node.hbm_access_mode == 1) {
+            local_hbm_bandwidth_model->issue_pool_read(
+                node.compute.tensor_size, wlhd);
+        } else {
+            local_hbm_bandwidth_model->issue_pool_write(
+                node.compute.tensor_size, wlhd);
+        }
+    }
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) remote MEM
     // completion branch was deleted with the replay route; strategy/static
     // keep the real remote FIFO physics.
@@ -603,14 +626,36 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     stats->get_operator_statistics(node.global_id).comm_size = size;
     const auto tag = node.comm.tag;
 
+    // sh_2.0 N-way HBM contention: the p2p sender is a data endpoint of its
+    // own HBM (reads comm bytes out of local HBM). hbm-charge=false marks
+    // pass-through traffic (NoC<->SerDes relay at an edge rank); multi-hop
+    // transit never issues a node on the passed-through rank at all. The
+    // node completes as the join of the network packet event and the local
+    // HBM job (hbm_endpoint_joins_ latch, see Workload::call).
+    WorkloadLayerHandlerData* wlhd = nullptr;
+    if (sys->hbm_bandwidth_contention &&
+        local_hbm_bandwidth_model != nullptr && size > 0 && node.hbm_charge) {
+        wlhd = new WorkloadLayerHandlerData;
+        wlhd->sys_id = sys->id;
+        wlhd->workload = this;
+        wlhd->node_id = node.global_id;
+        hbm_endpoint_joins_[node.global_id] = HbmEndpointJoinState{};
+        hbm_endpoint_joins_[node.global_id].completion_event =
+            EventType::PacketSent;
+        local_hbm_bandwidth_model->issue_comm_read(size, wlhd);
+    }
+
     sim_request snd_req;
     snd_req.srcRank = src;
     snd_req.dstRank = dst;
     snd_req.reqType = UINT8;
     SendPacketEventHandlerData* sehd = new SendPacketEventHandlerData;
     sehd->callable = this;
-    sehd->wlhd = new WorkloadLayerHandlerData;
-    sehd->wlhd->node_id = node.global_id;
+    if (wlhd == nullptr) {
+        wlhd = new WorkloadLayerHandlerData;
+        wlhd->node_id = node.global_id;
+    }
+    sehd->wlhd = wlhd;
     sehd->event = EventType::PacketSent;
     sys->front_end_sim_send(0, Sys::dummy_data, size, UINT8, dst, tag, &snd_req,
                             Sys::FrontEndSendRecvType::NATIVE,
@@ -628,10 +673,31 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     stats->get_operator_statistics(node.global_id).comm_size = size;
     const auto tag = node.comm.tag;
 
+    // sh_2.0 N-way HBM contention: the p2p receiver is a data endpoint of
+    // its own HBM (writes comm bytes into local HBM). hbm-charge=false marks
+    // pass-through (NoC->SerDes relay at an edge rank) or the remote-load
+    // target whose HBM write is already carried by the serially-following
+    // restore node (single charge per byte flow).
+    WorkloadLayerHandlerData* wlhd = nullptr;
+    if (sys->hbm_bandwidth_contention &&
+        local_hbm_bandwidth_model != nullptr && size > 0 && node.hbm_charge) {
+        wlhd = new WorkloadLayerHandlerData;
+        wlhd->sys_id = sys->id;
+        wlhd->workload = this;
+        wlhd->node_id = node.global_id;
+        hbm_endpoint_joins_[node.global_id] = HbmEndpointJoinState{};
+        hbm_endpoint_joins_[node.global_id].completion_event =
+            EventType::PacketReceived;
+        local_hbm_bandwidth_model->issue_comm_write(size, wlhd);
+    }
+
     sim_request rcv_req;
     RecvPacketEventHandlerData* rcehd = new RecvPacketEventHandlerData;
-    rcehd->wlhd = new WorkloadLayerHandlerData;
-    rcehd->wlhd->node_id = node.global_id;
+    if (wlhd == nullptr) {
+        wlhd = new WorkloadLayerHandlerData;
+        wlhd->node_id = node.global_id;
+    }
+    rcehd->wlhd = wlhd;
     rcehd->workload = this;
     rcehd->event = EventType::PacketReceived;
     sys->front_end_sim_recv(0, Sys::dummy_data, size, UINT8, src, tag, &rcv_req,
@@ -685,6 +751,9 @@ void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::call(EventType event, CallData* data) {
+    if (is_finished) {
+        return;
+    }
 
     if (event == EventType::CollectiveCommunicationFinished) {
         IntData* int_data = (IntData*)data;
@@ -789,6 +858,28 @@ void Workload::call(EventType event, CallData* data) {
             issue_dep_free_nodes();
         } else {
             WorkloadLayerHandlerData* wlhd = (WorkloadLayerHandlerData*)data;
+            // sh_2.0 N-way HBM contention endpoint join: a comm send/recv or
+            // pool MEM node carrying a local HBM job completes only when BOTH
+            // async sides have called back (network packet / remote-mem FIFO
+            // event AND the LocalHbmBandwidthModel job). The first arrival
+            // only decrements the latch and returns: the node stays in
+            // flight (no release / record_end / finish_node / wlhd delete),
+            // and the second arrival runs the terminal handling below
+            // exactly once (idempotent per arrival, either order). The early
+            // return also skips the trailing static finish check -- safe
+            // because this node has not been finish_node'd yet, so
+            // static_all_done() is necessarily false here.
+            auto join_it = hbm_endpoint_joins_.find(wlhd->node_id);
+            bool hbm_joined = false;
+            EventType hbm_join_event = EventType::General;
+            if (join_it != hbm_endpoint_joins_.end()) {
+                hbm_joined = true;
+                hbm_join_event = join_it->second.completion_event;
+                if (--join_it->second.pending_completions > 0) {
+                    return;
+                }
+                hbm_endpoint_joins_.erase(join_it);
+            }
             // Step 1-8: online mode has no ETFeederNode handle (et_node ==
             // nullptr); the online branch releases / records through the
             // NodeView. The static branch below stays byte-identical.
@@ -836,8 +927,14 @@ void Workload::call(EventType event, CallData* data) {
             }
 
             // Calculate network bandwidth for point-to-point communications
-            if (event == EventType::PacketSent ||
-                event == EventType::PacketReceived) {
+            // (中-4①: joined nodes use the deterministic network event kept
+            // in the join entry -- the later-arriving HBM-side General
+            // callback must not skip the stat; face :890-893 semantics:
+            // bandwidth = bytes / (join completion - start), contention-aware)
+            const EventType effective_event =
+                hbm_joined ? hbm_join_event : event;
+            if (effective_event == EventType::PacketSent ||
+                effective_event == EventType::PacketReceived) {
                 auto& op_stat = stats->get_operator_statistics(wlhd->node_id);
                 Tick execution_time =
                     stats->get_operator_statistics(wlhd->node_id).end_time -
@@ -887,6 +984,14 @@ void Workload::call(EventType event, CallData* data) {
             (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
             (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
             (hw_resource->num_in_flight_hbm_dma_ops == 0) &&
+            // Local-HBM contention: a still-active local-HBM job always
+            // belongs to a node that has not completed, so the slot counters
+            // above already cover it; the explicit has_active_jobs() check
+            // is a belt-and-braces guard -- a drained resolver with pending
+            // endpoint jobs must keep waiting for the model's completion
+            // callbacks (they re-enter Workload::call and finish the nodes).
+            // (num_in_flight_hbm_dma_ops above: sh-family local-HBM
+            // KV-tiering DMA occupies dedicated hardware slots.)
             (local_hbm_bandwidth_model == nullptr ||
              !local_hbm_bandwidth_model->has_active_jobs())) {
             report();

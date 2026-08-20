@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wscllm phase-1 step-1-11(CORE)same-tick milestone fixture(方案 step 1-11
+# sh_2.0 phase-1 step-1-11(CORE)same-tick milestone fixture(方案 step 1-11
 # / 仿真加速分析.md §4.3 最高优先级专门 fixture)。
 #
 # 场景:一个 request 的 prefill 阶段末尾含一个真实同步完成的控制节点
@@ -28,9 +28,17 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
-RUN_ROOT=${1:-/tmp/wscllm_same_tick_milestone}
+RUN_ROOT=${1:-/tmp/sh20_same_tick_milestone}
 
-ET_PREFIX=${PROJECT}/sh_test_mesh/generated/llama2_7b_inference_54npus_face_case5_config_c_hbm160_kvsuffixhalf_r1000000_9inst_tp6_112sess_1177req_pc512_p3-53924_d1-13812_grequest_aggregated_qe4a1f7fa_c0441ce42/llama2_7b_inference
+# ET 目录动态解析(阶段 7 官方 runner 同款;2026-08-16 缺陷修复2同步轮补齐——
+# 本 fixture runner 曾硬编码旧 label 后缀 digest 目录名,配置字节变化即必断)。
+GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
+if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
+  echo "[fixture] expected exactly one generated dir under sh_test_mesh/generated (regenerate via plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
+  exit 1
+fi
+ET_DIR=${GEN_MATCH[0]}
+ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 FIXTURE_SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/same_tick_milestone_fixture_service.py

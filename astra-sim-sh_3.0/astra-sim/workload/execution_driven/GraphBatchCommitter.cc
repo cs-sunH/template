@@ -198,6 +198,7 @@ std::optional<std::string> GraphBatchCommitter::validate(
             const auto& mem = node.value("mem", nlohmann::json::object());
             (void)mem.value("tensor_size", uint64_t{0});
             (void)mem.value("is_local_hbm_kv_restore", false);
+            (void)mem.value("hbm_access_mode", int{0});
             const auto& comm = node.value("comm", nlohmann::json::object());
             if (!comm.is_object()) {
                 return "node[" + std::to_string(node_index) +
@@ -708,11 +709,14 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         node.mem.tensor_size = mem.value("tensor_size", uint64_t{0});
         node.mem.is_local_hbm_kv_restore =
             mem.value("is_local_hbm_kv_restore", false);
+        node.mem.hbm_access_mode =
+            mem.value("hbm_access_mode", int{0});
         const auto& comm = node_json.value("comm", nlohmann::json::object());
         node.comm.bytes = comm.value("bytes", uint64_t{0});
         node.comm.src = comm.value("src", 0);
         node.comm.dst = comm.value("dst", 0);
         node.comm.tag = comm.value("tag", uint32_t{0});
+        node.comm.hbm_charge = comm.value("hbm_charge", true);
         const auto& coll = node_json.value("coll", nlohmann::json::object());
         node.coll.comm_type = coll.value("comm_type", uint64_t{0});
         node.coll.bytes = coll.value("bytes", uint64_t{0});

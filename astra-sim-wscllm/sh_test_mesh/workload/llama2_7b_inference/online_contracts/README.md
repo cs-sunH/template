@@ -6,6 +6,8 @@
 
 ## 清单
 
+> 注：合同本体文件（`nine_contracts/contract_01~09.md`）与 `traces/PROVENANCE.md` 已于 2026-08-20 按用户指示删除；下表路径仅作条款标识，本 README 的摘要描述即为现存权威记录。
+
 | # | 文件 | 主题 |
 |---|---|---|
 | ① | `nine_contracts/contract_01_dynamic_graph.md` | NodeStore/DynamicGraph:节点 ID 作用域(run 级唯一)、依赖类型(data/control/enabled)、动态 collective 元数据、释放时机、静态 ET 自动推进边界 |

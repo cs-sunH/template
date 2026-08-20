@@ -24,7 +24,9 @@ Contract (mirrors the phase-1 full loader, byte-for-byte request semantics):
     --request-max-arrival-ns experiment knob) is REJECTED: counted in
     rejected_out_of_range(), logged once at report time, never submitted --
     the row still gets its queue_index registered and its metrics request
-    registered (conservative: "every data row registered" stays true). Any
+    registered (conservative: "every data row registered" stays true). The
+    rejected row is marked consumed at reject time (a rejected row
+    never fires an arrival alarm, so it must not clog the window). Any
     rejection fail-closes the run-end completion audit (the drop is never
     silent; see audit_completion below).
   - rows with an EMPTY arrival (turn>0) are never submitted directly; their
@@ -37,11 +39,11 @@ Contract (mirrors the phase-1 full loader, byte-for-byte request semantics):
     lowered the occupancy and triggered the read of the following rows).
   - ALL data rows are counted toward the run-end completion assertion
     (completed_request_count == data_rows; 1177 for the 20.csv first-30s
-    input), exactly like the full loader. Backport fix (2026-08-16): the
-    assertion denominator is the file's TOTAL data rows (total_data_rows()
-    = data_rows() + the count-only tail scan count_remaining_data_rows()),
-    so a window stalled by unconsumable rejected rows can never shrink the
-    audit to the rows it happened to read.
+    input), exactly like the full loader. Backport fix (2026-08-16,
+    unified 2026-08-20 中-3): the assertion denominator is the file's
+    TOTAL data rows. A rejected row is consumed at reject time, so the
+    window always flows to EOF and total_data_rows() at run end IS the
+    whole-file count (no tail scan needed).
 
 Zero decision-sequence perturbation by construction: the same CSV rows are
 read in the same order and submitted through the same RequestIngress; the
@@ -118,30 +120,20 @@ class WindowedTraceReader {
     /// assertion target: 1177 for the 20.csv first-30-seconds input).
     uint64_t data_rows() const { return data_rows_; }
     /// Backport fix (2026-08-16): turn-0 data rows (arrival column
-    /// non-empty), read + count-only tail. The accepted-request accounting
+    /// non-empty), read by read_one_row. The accepted-request accounting
     /// invariant of the run-end completion audit (accepted + dropped ==
     /// turn-0 rows: every turn-0 row was either submitted to the service
     /// or rejected out-of-window; turn>0 rows arrive via the future-alarm
     /// path and are covered by the completed == total - dropped check).
-    uint64_t turn0_data_rows() const { return turn0_rows_ + tail_turn0_rows_; }
+    uint64_t turn0_data_rows() const { return turn0_rows_; }
     /// True once the file was fully read.
     bool eof() const { return eof_; }
     /// Turn-0 rows rejected because arrival > max_arrival_ns.
     size_t rejected_out_of_range() const { return rejected_out_of_range_; }
-    /// Backport fix (2026-08-16, sh_2.0测试 §5.1): count-only tail scan to
-    /// EOF. A rejected row is never consumed, so a drop-laden run can stall
-    /// the window before EOF (occupancy pinned at high_water by
-    /// un-consumable rows). The run-end completion audit needs the file's
-    /// TOTAL data rows as its denominator, so the reader counts the
-    /// remaining rows WITHOUT reading them into the window: no Submit
-    /// commands, no queue_index/metrics registration -- counting only.
-    /// Idempotent (no-op at EOF); after the call eof() is true and
-    /// total_data_rows() is the whole-file data-row count.
-    uint64_t count_remaining_data_rows();
-    /// The whole-file data-row count: rows read + the count-only tail.
-    /// Equals data_rows() once EOF was reached (normally or via the tail
-    /// scan). The run-end completion audit denominator (backport fix).
-    uint64_t total_data_rows() const { return data_rows_ + tail_rows_; }
+    /// The whole-file data-row count. Equals data_rows() once EOF was
+    /// reached (consume-at-reject guarantees EOF under any explicit
+    /// window). The run-end completion audit denominator (backport fix).
+    uint64_t total_data_rows() const { return data_rows_; }
     /// Number of pump calls that actually read at least one row.
     size_t read_pumps() const { return read_pumps_; }
     /// Accumulated wall time spent reading/parsing rows.
@@ -197,13 +189,8 @@ class WindowedTraceReader {
     size_t occupancy() const;
     void read_one_row();
 
-    // Count-only tail rows (count_remaining_data_rows); 0 until that scan
-    // runs (and always 0 on the normal EOF path).
-    uint64_t tail_rows_ = 0;
-    // Turn-0 rows (arrival non-empty): read by read_one_row ...
+    // Turn-0 rows (arrival non-empty): read by read_one_row.
     uint64_t turn0_rows_ = 0;
-    // ... and counted (arrival field non-empty) by the tail scan.
-    uint64_t tail_turn0_rows_ = 0;
 };
 
 /// Backport fix (2026-08-16, sh_2.0测试 §5.1): the run-end completion-audit

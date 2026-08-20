@@ -298,9 +298,6 @@ class MetricCollector {
     std::optional<std::string> trace_digest_;
     std::optional<std::string> request_mapping_digest_;
     std::optional<std::string> kv_event_digest_;
-    // Doc sec.9.2 (WSC-LLM): the real KV policy is read from the manifest
-    // (generator config), never parsed from the scenario banner.
-    std::optional<std::string> kv_policy_;
 
     std::vector<RequestMetricState> requests_;
     std::unordered_map<int64_t, size_t> request_index_by_queue_index_;

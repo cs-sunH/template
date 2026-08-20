@@ -3,8 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 service_vacuum_test.cc -- defect-A regression fixture (2026-08-16,
-synced from face-defectfix2-done; source analysis: face主动测试错误分析.md
-缺陷 A: 服务终判 finished() 的计数真空).
+face主动测试错误分析.md 缺陷 A: 服务终判 finished() 的计数真空).
 
 Reproduces, deterministically and unit-level, the F2/F3/F4 race window:
 the online main loop's OLD order was
@@ -94,12 +93,7 @@ struct RunResult {
     uint64_t total_rows = 0;
     bool eof = false;
     size_t queued_at_break = 0;
-    // sh_3.0 adaptation: this repo's run-end audit lives in main_online
-    // (completed_request_count != data_rows => Error + EXIT_FAILURE), not
-    // as a WindowedTraceReader audit_completion API (that is the
-    // wscllm/sh_1.0 fork's shape). The fixture reproduces the repo's own
-    // verdict: completed == rows read at break.
-    bool audit_ok = false;
+    CompletionAuditVerdict verdict = CompletionAuditVerdict::Ok;
 };
 
 // One main-loop replica. `fixed_order` selects drain-after-pump (the fix).
@@ -150,16 +144,19 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     }
     res.completed = svc.completed_request_count();
     res.total_rows = reader.data_rows();
-    // sh_3.0 repo audit semantics (main_online run-end gate):
-    // completed == expected == data_rows, else the run FAILs.
-    res.audit_ok = (res.completed == res.total_rows);
+    const CompletionAuditCounts counts{reader.total_data_rows(),
+                                       reader.turn0_data_rows(),
+                                       svc.accepted_request_count(),
+                                       svc.completed_request_count(),
+                                       reader.rejected_out_of_range()};
+    res.verdict = audit_completion(counts);
     return res;
 }
 
 }  // namespace
 
 int main() {
-    const std::string root = "/tmp/sh30_service_vacuum_" +
+    const std::string root = "/tmp/service_vacuum_" +
                              std::to_string(::getpid());
     if (::mkdir(root.c_str(), 0755) != 0) {
         std::perror("mkdir");
@@ -177,9 +174,9 @@ int main() {
     expect(legacy.completed == 10 && legacy.total_rows == 20,
            "legacy order completes 10 with only 20/30 rows read (the "
            "undelivered tail)");
-    expect(!legacy.audit_ok,
-           "legacy order audit FAIL (completed != data rows read: the "
-           "undelivered tail -- this repo's main_online run-end gate)");
+    expect(legacy.verdict != CompletionAuditVerdict::Ok,
+           "legacy order audit verdict fail-closed (AccountMismatch or "
+           "Incomplete: rows read but neither accepted nor completed)");
     std::printf("[service_vacuum_test] legacy order: VACUUM reproduced "
                 "(break at completed=%llu/%llu, queued=%zu, eof=%d)\n",
                 static_cast<unsigned long long>(legacy.completed),
@@ -194,8 +191,8 @@ int main() {
            "fixed order: nothing queued-but-undrained at break");
     expect(fixed.completed == 30 && fixed.total_rows == 30,
            "fixed order completes 30/30 (末笔交付前全部登记)");
-    expect(fixed.audit_ok,
-           "fixed order audit Ok (completed == data rows)");
+    expect(fixed.verdict == CompletionAuditVerdict::Ok,
+           "fixed order audit verdict Ok");
     std::printf("[service_vacuum_test] fixed order: green "
                 "(completed=%llu/%llu, queued=%zu, eof=%d)\n",
                 static_cast<unsigned long long>(fixed.completed),

@@ -27,6 +27,7 @@ HardwareResource::HardwareResource(uint32_t num_npus, int sys_id)
     tics_cpu_ops = 0;
     tics_gpu_ops = 0;
     tics_gpu_comms = 0;
+    tics_hbm_dma_ops = 0;
 
     // cpu_ops_node = NULL;
     // gpu_ops_node = NULL;
@@ -205,4 +206,5 @@ void HardwareResource::report() {
     cout << "tics_cpu_ops: " << tics_cpu_ops << endl;
     cout << "tics_gpu_ops: " << tics_gpu_ops << endl;
     cout << "tics_gpu_comms: " << tics_gpu_comms << endl;
+    cout << "tics_hbm_dma_ops: " << tics_hbm_dma_ops << endl;
 }

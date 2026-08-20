@@ -17,7 +17,7 @@ import shutil
 import sys
 import tempfile
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import BinaryIO, Optional, Sequence
 
@@ -117,6 +117,11 @@ REQUIRED_CONFIG_KEYS = (
 OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
+    # Context sidecar (sidecar_restore 口径, sh_1.0 2026-08-19 改造): 空 =
+    # OFF(不加载, recompute 口径, 行为与改造前完全一致); 指向
+    # *_request_context.csv = ON(load_request_prefix_tokens 富集
+    # RequestSpec.prefix_tokens/input_tokens_total)。
+    "request_queue_context_csv": "",
 }
 SUPPORTED_CONFIG_KEYS = set(REQUIRED_CONFIG_KEYS) | set(OPTIONAL_CONFIG_DEFAULTS)
 INT_CONFIG_KEYS = {
@@ -132,6 +137,7 @@ INT_CONFIG_KEYS = {
 PATH_CONFIG_KEYS = {
     "output_dir",
     "request_queue_csv",
+    "request_queue_context_csv",
     "hardware_config",
     "system_template",
 }
@@ -533,7 +539,7 @@ def _parse_config_value(key: str, value: str) -> object:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
         return value
     if key in PATH_CONFIG_KEYS:
-        if key == "output_dir" and not value:
+        if key in {"output_dir", "request_queue_context_csv"} and not value:
             return None
         if not value:
             raise ValueError(f"config key {key} must not be empty")
@@ -593,6 +599,114 @@ def select_first_session_requests(
         request for request in requests if request.session_id in selected_set
     )
     return selected_requests, selected_session_ids
+
+
+def load_request_prefix_tokens(
+    context_csv: Path,
+    requests: Sequence[RequestSpec],
+) -> tuple[RequestSpec, ...]:
+    """Attach exact per-request historical-prefix lengths from a sidecar CSV.
+
+    Context sidecar (sidecar_restore 口径, sh_1.0 2026-08-19 改造; 与 sh_2.0/
+    sh_3.0 的同名函数同款契约): 逐请求富集 RequestSpec.prefix_tokens /
+    input_tokens_total。fail-closed: 列缺失、身份字段为空、重复键、
+    input_tokens_total != prefix_tokens + prefill_length、sidecar 含队列外
+    请求、队列请求无 sidecar 元数据均报错。
+    """
+
+    if not context_csv.is_file():
+        raise FileNotFoundError(
+            f"request queue context CSV not found: {context_csv}"
+        )
+    required_columns = {
+        "session_id",
+        "turn_index",
+        "request_id",
+        "prefix_tokens",
+        "input_tokens_total",
+    }
+    metadata: dict[tuple[str, int, str], tuple[int, int]] = {}
+    with context_csv.open(newline="", encoding="utf-8-sig") as source:
+        reader = csv.DictReader(source)
+        if reader.fieldnames is None:
+            raise ValueError(f"request context CSV is empty: {context_csv}")
+        columns = {str(column).strip() for column in reader.fieldnames}
+        missing = sorted(required_columns - columns)
+        if missing:
+            raise ValueError(
+                "request context CSV is missing columns: " + ", ".join(missing)
+            )
+        for line_number, row in enumerate(reader, start=2):
+            session_id = str(row.get("session_id", "")).strip()
+            request_id = str(row.get("request_id", "")).strip()
+            turn_text = str(row.get("turn_index", "")).strip()
+            prefix_text = str(row.get("prefix_tokens", "")).strip()
+            input_text = str(row.get("input_tokens_total", "")).strip()
+            if not all((session_id, request_id, turn_text, prefix_text, input_text)):
+                raise ValueError(
+                    f"request context CSV line {line_number} has empty identity/context fields"
+                )
+            turn_index = parse_nonnegative_int(turn_text, "turn_index")
+            prefix_tokens = parse_nonnegative_int(prefix_text, "prefix_tokens")
+            input_tokens_total = parse_int(input_text, "input_tokens_total")
+            key = (session_id, turn_index, request_id)
+            if key in metadata:
+                raise ValueError(
+                    f"duplicate request context metadata for {request_id}"
+                )
+            metadata[key] = (prefix_tokens, input_tokens_total)
+
+    enriched: list[RequestSpec] = []
+    used_keys: set[tuple[str, int, str]] = set()
+    for request in requests:
+        key = (request.session_id, request.turn_index, request.request_id)
+        if key not in metadata:
+            raise ValueError(
+                f"request context CSV has no metadata for {request.request_id}"
+            )
+        prefix_tokens, input_tokens_total = metadata[key]
+        if input_tokens_total != prefix_tokens + request.prefill_length:
+            raise ValueError(
+                f"request {request.request_id} input_tokens_total does not equal "
+                "prefix_tokens + prefill_length"
+            )
+        enriched.append(
+            replace(
+                request,
+                prefix_tokens=prefix_tokens,
+                input_tokens_total=input_tokens_total,
+            )
+        )
+        used_keys.add(key)
+    extra_keys = set(metadata) - used_keys
+    if extra_keys:
+        raise ValueError(
+            "request context CSV contains requests absent from the ASTRA queue"
+        )
+    return tuple(enriched)
+
+
+def _require_sidecar_wiring(queue_csv: Path, context_csv) -> None:
+    """fail-closed（排查报告高-4①，2026-08-20）：sidecar_restore 物化的
+    plain 队列（伴生 *_request_context.csv 存在）必须接线
+    request_queue_context_csv，否则 turn-0 前缀既不重算也不恢复——静默
+    丢失（20 档口径 79 行、单行最大 169,395 token）。recompute 队列
+    （*_request_queue_recompute.csv，前缀已折入 prefill）与无伴生
+    context 的合成/测试队列不适用本守卫。"""
+    name = queue_csv.name
+    if name.endswith("_request_queue_recompute.csv"):
+        return
+    if not name.endswith("_request_queue.csv"):
+        return
+    sibling = queue_csv.with_name(
+        name[: -len("_request_queue.csv")] + "_request_context.csv")
+    if sibling.is_file() and not context_csv:
+        raise SystemExit(
+            "[fail-closed] 队列 {} 为 sidecar_restore 物化产物（伴生 {} 存在），"
+            "但 request_queue_context_csv 为空：turn-0 前缀将既不重算也不恢复"
+            "（静默丢失）。请将 trace_config 的 request_queue_context_csv 指向 "
+            "{}，或改用 *_request_queue_recompute.csv（recompute 口径）。".format(
+                name, sibling.name, sibling))
 
 
 def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfig:
@@ -660,9 +774,23 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
     if not request_queue_csv.exists():
         sys.exit(
             f"missing request queue: {request_queue_csv}；"
-            "请按 traces/PROVENANCE.md / derive_20_first_30_seconds.py 物化输入"
+            "请按 traces/derive_20_first_30_seconds.py 物化输入(运行 stdout 即权威 provenance 记录)"
         )
     source_request_queue = load_request_queue(request_queue_csv)
+    # Context sidecar (sidecar_restore): request_queue_context_csv 非空时
+    # 对源队列富集 prefix_tokens/input_tokens_total(在 session 截取之前,
+    # 保证 sidecar 与全量队列一一对应; sh_3.0 generate_face_trace.py
+    # :451-459 同款)。空 = OFF, 走 recompute 口径(行为与改造前一致)。
+    request_queue_context_csv = parsed["request_queue_context_csv"]
+    _require_sidecar_wiring(request_queue_csv, request_queue_context_csv)
+    if request_queue_context_csv is not None:
+        request_queue_context_csv = _resolve_request_queue(
+            request_queue_context_csv
+        )
+        source_request_queue = load_request_prefix_tokens(
+            request_queue_context_csv,
+            source_request_queue,
+        )
     request_queue, selected_session_ids = select_first_session_requests(
         source_request_queue,
         int(parsed["request_queue_session_limit"]),
@@ -700,13 +828,15 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         npus_count,
         mesh_shape=(hardware.mesh_rows, hardware.mesh_cols),
     )
-    configuration_digest = _configuration_digest(
-        (
+    digest_paths = [
             config_csv.resolve(),
+            request_queue_csv,
             hardware_path,
             system_template,
-        )
-    )
+    ]
+    if request_queue_context_csv is not None:
+        digest_paths.append(request_queue_context_csv)
+    configuration_digest = _configuration_digest(tuple(digest_paths))
 
     return FaceTraceConfig(
         config_csv=config_csv.resolve(),
@@ -756,6 +886,8 @@ def _to_scheduler_requests(requests: Sequence[RequestSpec]) -> tuple[FaceRequest
             decode_length=request.decode_length,
             session_arrival_time_ns=request.session_arrival_time_ns,
             inter_request_interval_ns=request.inter_request_interval_ns,
+            prefix_tokens=request.prefix_tokens,
+            input_tokens_total=request.input_tokens_total,
         )
         for index, request in enumerate(requests)
     )
@@ -1249,9 +1381,14 @@ def _emit_kv_transfer(
                 )
             )
             if source_rank == edge_rank:
+                # HBM endpoint accounting (rule a): the edge rank IS the
+                # data endpoint of this pool store -- its local HBM read
+                # (bytes leaving the die) is charged once here
+                # (hbm-access-mode 1); no NoC segment exists.
                 builders[edge_rank].mem_store(
                     f"{action_name}_shard{shard_index}_edge_store",
                     shard.bytes,
+                    hbm_access_mode=1,
                 )
                 record.update(
                     {
@@ -1262,6 +1399,8 @@ def _emit_kv_transfer(
             else:
                 data_tag = tag_allocator.take()
                 ack_tag = tag_allocator.take()
+                # S is a real data endpoint: its comm_send is auto-charged
+                # (COMM_READ) by the C++ HBM contention model.
                 builders[source_rank].comm_send(
                     f"{action_name}_shard{shard_index}_send_to_edge{edge_rank}",
                     src=source_rank,
@@ -1269,12 +1408,17 @@ def _emit_kv_transfer(
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
                 )
+                # HBM endpoint accounting (rule b): the edge rank only
+                # passes NoC->SerDes through here (hbm-charge false -- its
+                # HBM is not touched); the following mem_store is likewise
+                # unmarked (the pool-side byte stream is charged at S).
                 builders[edge_rank].comm_recv(
                     f"{action_name}_shard{shard_index}_recv_from_rank{source_rank}",
                     src=source_rank,
                     dst=edge_rank,
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
+                    hbm_charge=False,
                 )
                 builders[edge_rank].mem_store(
                     f"{action_name}_shard{shard_index}_remote_store",
@@ -1336,20 +1480,32 @@ def _emit_kv_transfer(
                     comm_size=1,
                     comm_tag=request_tag,
                 )
+            # HBM endpoint accounting (rules c/d): when the edge rank IS the
+            # target, it is the data endpoint of this pool load -- its local
+            # HBM write is charged once here (hbm-access-mode 2). Otherwise
+            # the edge rank only passes SerDes->NoC through (mem_load
+            # unmarked; the data comm_send below is hbm-charge false), and
+            # the target's comm_recv is auto-charged (COMM_WRITE) as the
+            # real data endpoint.
             builders[edge_rank].mem_load(
                 f"{action_name}_shard{shard_index}_remote_load",
                 shard.bytes,
+                hbm_access_mode=2 if edge_rank == target_rank else 0,
             )
             data_tag: Optional[int] = None
             if edge_rank != target_rank:
                 data_tag = tag_allocator.take()
+                # Rule d: NoC->on-die pass-through for the edge rank -- its
+                # HBM is not touched for this byte stream.
                 builders[edge_rank].comm_send(
                     f"{action_name}_shard{shard_index}_send_to_rank{target_rank}",
                     src=edge_rank,
                     dst=target_rank,
                     comm_size=shard.bytes,
                     comm_tag=data_tag,
+                    hbm_charge=False,
                 )
+                # T is the real data endpoint: auto-charged COMM_WRITE.
                 builders[target_rank].comm_recv(
                     f"{action_name}_shard{shard_index}_recv_from_edge{edge_rank}",
                     src=edge_rank,
@@ -1592,10 +1748,23 @@ def _request_plan_dict(
         "request_id": request_plan.request_id,
         "prefill_length": request.prefill_length,
         "decode_length": request.decode_length,
+        # Context sidecar 审计字段: prefix_tokens/input_tokens_total 为源
+        # 声明(None = recompute 口径未加载); prefill_work_tokens 为本请求
+        # prefill 段实际发射工作量(= prefill_context_tokens -
+        # history_tokens_before, 与发射循环同式)。
+        "prefix_tokens": request.prefix_tokens,
+        "input_tokens_total": request.input_tokens_total,
+        "prefill_work_tokens": (
+            request_plan.prefill_context_tokens
+            - request_plan.history_tokens_before
+        ),
+        "history_tokens_discarded": request_plan.history_tokens_discarded,
         "trace_representation": {
             "granularity": trace_granularity,
             "prefill_chunk_count_represented": (
-                request.prefill_length + plan.p_chunk - 1
+                request_plan.prefill_context_tokens
+                - request_plan.history_tokens_before
+                + plan.p_chunk - 1
             )
             // plan.p_chunk,
             "decode_step_count_represented": request.decode_length,
@@ -1957,11 +2126,23 @@ def write_face_trace(
         # the emitted nodes are unchanged.
         prefill_first_nodes: dict[int, int] = {}
         prefill_last_nodes: dict[int, int] = {}
+        # Context sidecar: prefill 段按实际工作量发射。recompute 口径下
+        # work == request.prefill_length(队列已折前缀/或后续 turn 新 token),
+        # sidecar_restore 口径下 work = prefill_context - history(turn-0
+        # prefix 计入, 复用部分剔除), kv span 仍 = history + processed + chunk。
+        prefill_work_tokens = (
+            request_plan.prefill_context_tokens
+            - request_plan.history_tokens_before
+        )
+        if prefill_work_tokens <= 0:
+            raise ValueError(
+                f"request {request_plan.request_id} has no Prefill work tokens"
+            )
         if config.trace_granularity == "token_expanded":
             processed = 0
             chunk_index = 0
-            while processed < request.prefill_length:
-                chunk_tokens = min(plan.p_chunk, request.prefill_length - processed)
+            while processed < prefill_work_tokens:
+                chunk_tokens = min(plan.p_chunk, prefill_work_tokens - processed)
                 kv_length = (
                     request_plan.history_tokens_before + processed + chunk_tokens
                 )
@@ -1995,8 +2176,8 @@ def write_face_trace(
         else:
             prefill_spans: list[tuple[int, int]] = []
             processed = 0
-            while processed < request.prefill_length:
-                chunk_tokens = min(plan.p_chunk, request.prefill_length - processed)
+            while processed < prefill_work_tokens:
+                chunk_tokens = min(plan.p_chunk, prefill_work_tokens - processed)
                 prefill_spans.append(
                     (
                         chunk_tokens,
@@ -2492,7 +2673,7 @@ def main(argv=None) -> None:  # noqa: ARG001
     """fail-closed 拒绝桩(2026-08-18 起生效):离线静态全管线入口已删除。
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
-    估算函数,见《路径功能代码对应说明.md》§4-a)。③④ 的输入物化入口是
+    估算函数)。③④ 的输入物化入口是
     plan_materializer.py(manifest/metrics/runtime_config/face_lut);
     静态 ET 生成入口不再存在。
     """

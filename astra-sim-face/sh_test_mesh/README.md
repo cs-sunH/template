@@ -12,8 +12,9 @@ parameters are authored once in this repository:
 
 `@astra-sim-face/sh_test_mesh/hardware/face_case5_config_c.json`
 
-The FACE trace CSV selects the `validation-160gib` capacity profile and the
-repository-local no-memory-expansion source. NPU count is derived from the mesh, while the
+The FACE trace CSV selects the `validation-160gib` capacity profile. The
+no-memory-expansion remote-memory setting is embedded in the hardware source
+above. NPU count is derived from the mesh, while the
 ASTRA-Sim-native files are generated automatically in:
 
 `@astra-sim-face/sh_test_mesh/generated/runtime_config`
@@ -46,7 +47,7 @@ increased weighted-distance edges during long multi-session workloads.
 Equal instance sizes let the online graph emitter pair KV shards by relative
 rank when a request moves between instances.
 
-## Default workload: all requests in the normalized first three minutes
+## Default workload: materialized first-30-seconds window
 
 The simulated model is Meta LLaMA 2 7B: 32 decoder layers, hidden size 4096,
 32 attention heads (128 dimensions per head), SwiGLU intermediate size 11008,
@@ -55,15 +56,13 @@ not divide 4096, 11008, 32000, or 32, so ET generation assigns whole heads
 unevenly (two ranks own six heads; four ranks own five) and exactly partitions
 the remaining model dimensions. No model padding is introduced.
 
-The default queue is the validated request-level window `0 <= derived arrival
-<= 180s`: 678 sessions and 9,179 requests. `request_queue_session_limit=0`
-means all of these sessions are used. Each session's first visible request is
-turn zero with zero history, even if the source trace recorded an earlier
-`prefix_len`; only prompt and decode tokens completed inside this window form
-later context. Prefill ranges from 1 to 161,734 tokens, Decode from 1 to
-32,000 tokens, and every window-local final context is below 1,000,000 tokens.
+This bare template repository ships no checked-in request queue (placeholder
+state); the online runner fails closed on a missing `--request-queue-csv`
+input. The only allowed source trace is
+`agent-traces/tracelab/astra_compute_20.csv`, and the official input is its
+first-30-seconds window, materialized by the traces/ script:
 
-`@agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_80_100_120_v1/derived/compute_100_trunc1M_first_3_minutes/astra_compute_100_trunc1M_first_3_minutes_request_queue.csv`
+`@astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py`
 
 ## FACE mapping implemented by the planner
 
@@ -154,17 +153,18 @@ Hardware-free system template:
 
 `@astra-sim-face/sh_test_mesh/system/llama2_7b_roofline_template.json`
 
-Repository-local no-memory-expansion source:
-
-`@astra-sim-face/sh_test_mesh/remote_memory/no_memory_expansion.json`
+Remote memory configuration: embedded in the single hardware source above
+(`remote-memory` section of `face_case5_config_c.json`; the config resolver
+reads it directly -- there is no standalone remote-memory source file).
 
 Scenario and inference-group selection:
 
 `@astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
 
-Request queue:
-
-`@astra-sim-face/sh_test_mesh/workload/workload_request_queue_tracelab.csv`
+Request queue: none is checked in (placeholder state) -- materialize the
+official first-30-seconds window of
+`agent-traces/tracelab/astra_compute_20.csv` via the traces/ script in the
+`Default workload` section above and pass the produced CSV to the run scripts.
 
 Generated runtime files (do not edit):
 
@@ -173,14 +173,15 @@ Generated runtime files (do not edit):
 ## Run and validate
 
 The online strategy routes are the supported pipeline (route 3 = strategy,
-route 4 = strategy + sensing). Inputs are materialized per
-`traces/PROVENANCE.md` (the only allowed source is
-`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+route 4 = strategy + sensing). Inputs are materialized by running
+`traces/derive_20_first_30_seconds.py` (the only allowed source is
+`agent-traces/tracelab/astra_compute_20.csv`; its stdout is the
+authoritative provenance record), then the plan directory is
 produced by the materializer:
 
 ```bash
 cd sh_test_mesh/workload/llama2_7b_inference
-# 1. materialize the request-queue input (rules: traces/PROVENANCE.md)
+# 1. materialize the request-queue input (traces/derive_20_first_30_seconds.py)
 # 2. materialize the plan directory + runtime_config four-piece set
 python3 plan_materializer.py
 cd ../../..
@@ -196,7 +197,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 Unit tests (workload layer + sh_test_mesh contracts):
 
 ```bash
-cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py -q
 cd ../.. && python3 -m pytest tests/ -q
 ```
 

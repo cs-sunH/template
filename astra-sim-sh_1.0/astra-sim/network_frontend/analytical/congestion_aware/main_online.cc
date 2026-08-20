@@ -90,11 +90,8 @@ Step 1-10 (runners + IDLE fixture):
     behavior is unchanged.
 *******************************************************************************/
 
-#include <execinfo.h>
-#include <csignal>
 #include <thread>
 #include <chrono>
-#include <unistd.h>
 #include <cstdlib>
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
@@ -683,32 +680,6 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    // TEMP sh_1.0 debug watchdog: SIGUSR1 handler prints the main-thread
-    // backtrace (a signal interrupts even a non-returning loop); a helper
-    // thread fires it after 120s wall if SH10_DEBUG_ISSUE is set.
-    if (std::getenv("SH10_DEBUG_ISSUE")) {
-        struct sigaction sa;
-        sa.sa_handler = [](int) {
-            void* frames[32];
-            int n = backtrace(frames, 32);
-            backtrace_symbols_fd(frames, n, 2);
-        };
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = 0;
-        sigaction(SIGUSR1, &sa, nullptr);
-        std::thread([] {
-            auto t0 = std::chrono::steady_clock::now();
-            pid_t self = getpid();
-            while (true) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                if (std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now() - t0).count() > 120) {
-                    kill(self, SIGUSR1);
-                    return;
-                }
-            }
-        }).detach();
-    }
     // Phase 7 (方案 §10.3): forced-flush governance. Make stdout fully
     // unbuffered so every log line lands in cpp.log immediately -- a crash
     // or kill never loses the buffered tail, and std::cout lines interleave
@@ -724,9 +695,10 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         return EXIT_FAILURE;
     }
-    // Step 1-8/1-9 mode gates: both --online-mode tokens (replay/strategy)
-    // share this binary; replay freezes the offline LUT clock (decision log),
-    // strategy runs real physics. Both modes require the decision bridge.
+    // Mode gate (step 1-8/1-9): strategy is the only --online-mode token --
+    // replay was deleted with the replay route (Path-2 removal, 2026-08-18;
+    // see OnlineCli.cc, which rejects every other value) -- and it always
+    // runs real physics. The mode requires the decision bridge.
     // --request-queue-csv is optional (合同② request-neutral default, step
     // 1-10): when absent the service starts IDLE and reads no pre-loaded
     // queue -- it never falls back to a preset/stub queue (fail-closed).
@@ -782,7 +754,6 @@ int main(int argc, char* argv[]) {
 
     // Instantiate event queue
     const auto event_queue = std::make_shared<EventQueue>();
-    Topology::set_event_queue(event_queue);
 
     // Generate topology
     const auto network_parser = NetworkParser(network_configuration);
@@ -1248,36 +1219,13 @@ int main(int argc, char* argv[]) {
                 // same family (终判计数不覆盖在途工作 / 队列排空而服务未
                 // 完的死端), but immediate (no 30s grace window) and covering
                 // the pending_alarm-lost shape too (active>0 OR
-                // pending_alarm>0 both land here). The per-rank store dump
-                // diagnostics of the old guard are kept (below), so the
-                // converged mechanism has the strongest diagnostics of both.
+                // pending_alarm>0 both land here). R2-11 (2026-08-20) dropped
+                // the TEMP per-rank store dump the old guard carried -- the
+                // branch is back to the face form: counter-only fail-closed
+                // (active/pending_alarm/deferred).
                 // The IDLE fixture contract is untouched: with the input
                 // still OPEN the branch below keeps blocking for external
                 // injection.
-                for (int rank = 0;
-                     rank < static_cast<int>(graph_sources.size()); ++rank) {
-                    const auto summary = graph_sources[rank]->store()
-                                             .injected_unfinished_summary(
-                                                 rank);
-                    if (summary.node_count == 0) continue;
-                    std::fprintf(stderr,
-                        "[online-deadlock] rank=%d unfinished=%llu "
-                        "in_flight=%llu gpu=%llu\n", rank,
-                        (unsigned long long)summary.node_count,
-                        (unsigned long long)summary.in_flight_node_count,
-                        (unsigned long long)summary.in_flight_gpu_ops);
-                }
-                std::fprintf(stderr, "[online-deadlock] stale watches=%zu\n",
-                             watch_registry.stale_count());
-                for (int rank = 0;
-                     rank < static_cast<int>(graph_sources.size()); ++rank) {
-                    for (const auto& name : graph_sources[rank]->store()
-                                                 .debug_unfinished_names()) {
-                        std::fprintf(stderr,
-                                     "[online-deadlock] rank=%d %s\n",
-                                     rank, name.c_str());
-                    }
-                }
                 online_fatal(
                     "lost-wakeup dead end: queue+mailbox empty but service "
                     "not finished (active=" +
@@ -1295,16 +1243,6 @@ int main(int argc, char* argv[]) {
                 svc.wait_for_work();
             }
         } else {
-            static uint64_t proceed_probe = 0;
-            if (std::getenv("SH10_DEBUG_ISSUE") &&
-                (proceed_probe++ & 0xFFFFF) == 0) {
-                std::fprintf(stderr,
-                             "[dbg-loop] proceed=%llu tick=%llu eq_empty=%d\n",
-                             (unsigned long long)proceed_probe,
-                             (unsigned long long)event_queue
-                                 ->get_current_time(),
-                             (int)event_queue->finished());
-            }
             event_queue->proceed();
         }
         // Guard convergence (2026-08-16, synced from face-defectfix2-done):
@@ -1313,32 +1251,15 @@ int main(int argc, char* argv[]) {
         // active>0 held for >=30s wall -> per-rank dump + abort) was REMOVED
         // -- its trigger state now lands in the immediate lost-wakeup
         // dead-end fail-closed in the empty-queue branch above (input
-        // closed + queue/mailbox empty + !finished), which keeps this
-        // guard's per-rank NodeStore diagnostics (injected_unfinished_
-        // summary / debug_unfinished_names / stale watches) and adds the
-        // active/pending_alarm/deferred counters. One unified mechanism,
-        // no grace window: the dead end is reported on first observation
-        // instead of after 30s of re-checks.
+        // closed + queue/mailbox empty + !finished), in the face form:
+        // counter-only (active/pending_alarm/deferred). One unified
+        // mechanism, no grace window: the dead end is reported on first
+        // observation instead of after 30s of re-checks.
     }
 
     // Emit all metric records after the event loop, while Statistics are
     // still alive; no-op when metrics are disabled (doc sec.5.6).
     MetricCollector::instance().finalize(systems, Sys::boostedTick());
-
-    // Backport fix (2026-08-16, sh_2.0测试 §5.1; same wiring as wscllm/face):
-    // the completion audit's denominator must be the CSV's TOTAL data rows. A
-    // rejected (out-of-window) row is never consumed, so a dropping run can
-    // pin the window occupancy at high_water and stall pump() before EOF --
-    // the mid-loop EOF bookkeeping above then never fires, expected_requests
-    // stays 0, and the OLD audit was skipped entirely (the silent-PASS
-    // hole). The count-only tail scan closes it: no submits, no
-    // registration, just the whole-file row count.
-    if (!online_cli.request_queue_csv.empty()) {
-        windowed.count_remaining_data_rows();
-        if (expected_requests == 0) {
-            expected_requests = windowed.total_data_rows();
-        }
-    }
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
@@ -1511,12 +1432,14 @@ int main(int argc, char* argv[]) {
     // (--command-fifo, no --request-queue-csv) complete requests that the
     // CSV never saw -- the IDLE fixture's scenario 2 -- so expected_requests
     // == 0 skips the audit; the fixture script asserts the counts instead.
-    // Backport fix (2026-08-16, sh_2.0测试 §5.1; same wiring as wscllm/face):
-    // the audit is now the fail-closed audit_completion() -- denominator =
-    // the CSV's TOTAL data rows (tail-scanned above, so a stalled window
-    // cannot shrink it), any explicit-window drop is itself a failure with
-    // its count, and the accepted+dropped accounting must balance. The old
-    // completed==rows-the-window-read form silently PASSED dropping runs.
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1; unified 2026-08-20 中-3):
+    // the audit is the fail-closed audit_completion() -- denominator = the
+    // CSV's TOTAL data rows (a rejected row is consumed at reject time, so
+    // the window always flows to EOF and total_data_rows() at run end IS
+    // the whole-file count), any explicit-window drop is itself a failure
+    // with its count, and the accepted+dropped accounting must balance.
+    // The old completed==rows-the-window-read form silently PASSED
+    // dropping runs.
     if (expected_requests > 0) {
         const CompletionAuditCounts audit_counts{
             windowed.total_data_rows(),

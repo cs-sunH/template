@@ -159,7 +159,7 @@ class BridgeServer:
         C++ 侧新开读端的 poll_wait 恰逢写端 1→0 关闭转移且缓冲空 → POLLHUP +
         read()==0 的"Python 已崩"误检(F1),以及同族的握手楔死(F7 形态)。
         长连接下双端 run 期无 fd 开关转移:写端 BrokenPipeError 只能是 C++
-        进程已死(fail-closed,异常向上传播由 online_service 顶层捕获留痕)。
+        进程已死(fail-closed,异常向上传播由 serve 循环捕获留痕)。
 
         写阻塞时间计入 gil_wait_ns(等待 C++ 进程消费)。
         """

@@ -26,11 +26,13 @@ generated in:
 
 These generated files must not be edited.
 
-Repository-local system and no-memory-expansion sources:
+Repository-local system template:
 
 `@astra-sim-wscllm/sh_test_mesh/system/llama2_7b_roofline_template.json`
 
-`@astra-sim-wscllm/sh_test_mesh/remote_memory/no_memory_expansion.json`
+The no-memory-expansion remote-memory setting is embedded in the
+`remote-memory` section of the hardware source above (the config resolver
+reads it directly -- there is no standalone remote-memory source file).
 
 ## Dedicated 6P/3D instance layout
 
@@ -94,12 +96,13 @@ set.
 
 ## Runtime queue and phase behavior
 
-## Three-minute KV lifecycle override
+## KV lifecycle override
 
-The default workload uses all 9,179 normalized requests from 678 sessions in
-the derived `[0,180s]` input window. The first visible request of every session
-starts with zero history; no source prefix-context sidecar is loaded. Prefill
-and history recompute chunks are fixed at 512 tokens.
+The request-queue input is the materialized first-30-seconds recompute window
+of `agent-traces/tracelab/astra_compute_20.csv` (placeholder state; nothing is
+checked in). The first visible request of every session starts with zero
+history; no source prefix-context sidecar is loaded. Prefill and history
+recompute chunks are fixed at 512 tokens.
 
 Completed KV remains on the static Decode target; terminal sessions are not
 automatically released. Every physical TP rank reserves the exact whole-head
@@ -147,9 +150,9 @@ legacy-policy implementation. It is not selected by the checked-in workload,
 does not model the default session lifecycle, and must not be used to spill a
 default session across P/D instances.
 
-No off-chip expansion is used:
-
-`@astra-sim-wscllm/sh_test_mesh/remote_memory/no_memory_expansion.json`
+No off-chip expansion is used: the `remote-memory` section of the hardware
+source selects `NO_MEMORY_EXPANSION` (embedded there; no standalone
+remote-memory source file exists).
 
 ## Model, requests, and ET boundary
 
@@ -159,11 +162,12 @@ unchanged. Whole heads are distributed exactly (two ranks receive six heads and
 four receive five), while other dimensions use exact uneven shards without
 model padding.
 
-The request source is the normalized closed `[0,180s]` derived queue: all 9,179
-requests from 678 sessions. Window-visible turn zero always starts at zero
-history, and the explicit Prefill/history-recompute chunk size is 512.
-
-`@astra-sim-wscllm/sh_test_mesh/workload/workload_request_queue_tracelab.csv`
+The request-queue input is not checked in (request-neutral bare repo): the
+caller materializes the official first-30-seconds window of
+`agent-traces/tracelab/astra_compute_20.csv` (recompute variant) via the
+traces/ script and passes it in explicitly. Window-visible turn zero always
+starts at zero history, and the explicit Prefill/history-recompute chunk size
+is 512.
 
 All Prefill operators are emitted on the selected Prefill instance's six ranks;
 all Decode operators are emitted on its fixed Decode instance's six ranks. KV
@@ -207,7 +211,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 Unit tests (workload layer + sh_test_mesh contracts):
 
 ```bash
-cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_wsc_llm_scheduler.py test_wsc_llm_legacy_online_scheduler.py test_checkpointing.py -q
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_wsc_llm_scheduler.py test_wsc_llm_legacy_online_scheduler.py -q
 cd ../.. && python3 -m pytest tests/ -q
 ```
 

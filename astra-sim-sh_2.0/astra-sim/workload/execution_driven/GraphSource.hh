@@ -107,6 +107,17 @@ struct OnlineNode {
     // FIFO. The ETFeederGraphSource reads the attr; the online GraphBatch
     // carries it explicitly.
     bool is_local_hbm_kv_restore = false;
+    // sh_2.0 N-way HBM contention: MEM_LOAD/MEM_STORE endpoint charging mode
+    // (attr "hbm-access-mode", 0/absent = none, 1 = local HBM read, 2 = local
+    // HBM write, bytes = tensor_size). The port transaction and the HBM job
+    // complete as a join (Workload hbm_endpoint_joins_).
+    int hbm_access_mode = 0;
+    // sh_2.0 N-way HBM contention: COMM_SEND/COMM_RECV endpoint charging
+    // (attr "hbm-charge", default true). true: the p2p data endpoint creates
+    // a COMM_READ (send) / COMM_WRITE (recv) HBM job; false: pass-through
+    // traffic (NoC<->SerDes relay or restore-covered target write) is not
+    // charged. Collective comm is never charged (out of scope).
+    bool hbm_charge = true;
     std::string inputs_values;  // metadata pg info (issue_pytorch_pg_metadata)
     // Reverse index (online mode; static mode leaves them empty/0):
     std::string request_id;

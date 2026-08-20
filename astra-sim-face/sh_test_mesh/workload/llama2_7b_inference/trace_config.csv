@@ -28,4 +28,4 @@ inference_group,,,face_instance_4_rows_6_8_cols_2_3_tp6,5,"38-39,44-45,50-51",Un
 inference_group,,,face_instance_5_rows_0_2_cols_0_1_tp6,6,"0-1,6-7,12-13",Unified Prefill+Decode northwest instance covering rows 0 through 2 and columns 0 through 1
 inference_group,,,face_instance_6_rows_0_2_cols_4_5_tp6,7,"4-5,10-11,16-17",Unified Prefill+Decode northeast instance covering rows 0 through 2 and columns 4 through 5
 inference_group,,,face_instance_7_rows_6_8_cols_0_1_tp6,8,"36-37,42-43,48-49",Unified Prefill+Decode southwest instance covering rows 6 through 8 and columns 0 through 1
-inference_group,,,face_instance_8_rows_6_8_cols_4_5_tp6,9,"40-41,46-47,52-53",Unified Prefill+Decode instance covering rows 6 through 8 and columns 4 through 5
+inference_group,,,face_instance_8_rows_6_8_cols_4_5_tp6,9,"40-41,46-47,52-53",Unified Prefill+Decode southeast instance covering rows 6 through 8 and columns 4 through 5

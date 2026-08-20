@@ -178,6 +178,7 @@ Sys::Sys(int id,
     this->remote_mem_latency = 0;
     this->pipeline_tile_fraction = 0;
     this->hbm_kv_restore_bandwidth_sharing = false;
+    this->hbm_bandwidth_contention = true;
 
     this->memBus = nullptr;
     this->inp_L = 0;
@@ -437,6 +438,24 @@ bool Sys::initialize_sys(string name) {
             sys_panic(
                 "hbm-kv-restore-bandwidth-sharing must be boolean or integer");
         }
+    }
+    // N-way HBM contention master switch (default true). Parsed after
+    // local-mem-bw so the <=0 auto-disable applies to the final value.
+    if (j.contains("hbm-bandwidth-contention")) {
+        const auto& contention = j["hbm-bandwidth-contention"];
+        if (contention.is_boolean()) {
+            hbm_bandwidth_contention = contention.get<bool>();
+        } else if (contention.is_number_integer() ||
+                   contention.is_number_unsigned()) {
+            hbm_bandwidth_contention = contention.get<int64_t>() != 0;
+        } else {
+            sys_panic(
+                "hbm-bandwidth-contention must be boolean or integer");
+        }
+    }
+    if (local_mem_bw <= 0) {
+        // No local HBM bandwidth to share: the N-way model cannot run.
+        hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {
         if (j["roofline-enabled"] != 0) {

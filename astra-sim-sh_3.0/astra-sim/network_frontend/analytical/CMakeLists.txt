@@ -145,6 +145,17 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/service_vacuum_test.cc
             ${srcs_execution_driven})
 
+    # N-way HBM contention fixture (test-only): end-to-end static-ET run of
+    # the equal-split LocalHbmBandwidthModel over the synthetic 2-rank graph
+    # (make_hbm_nway_fixture.py) -- 3-way/4-way numeric rate assertions,
+    # comm/pool endpoint joins firing exactly once, hbm-charge=false
+    # pass-through, and the contention-off legacy A/B; never part of the
+    # baseline gates.
+    add_executable(AstraSim_Analytical_Congestion_Aware_HbmNwayTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/hbm_nway_test.cc
+            ${srcs_execution_driven})
+
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
@@ -164,6 +175,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmNwayTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_HbmNwayTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -193,6 +206,9 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_HbmNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -249,6 +265,13 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # binary landed in AstraSim_Analytical/ instead of bin/ (port gap).
     set_target_properties(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
+            PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_HbmNwayTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_HbmNwayTest
             PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/

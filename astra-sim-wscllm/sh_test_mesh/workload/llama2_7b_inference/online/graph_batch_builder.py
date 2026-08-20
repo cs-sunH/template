@@ -148,6 +148,10 @@ class OnlineTraceBuilder:
         alarm(future_alarms)替代——gate 只保留结构与依赖,保持时长会双重
         等待(见步骤 1-8 设计分析)。
         """
+        if duration_ns < 0 or duration_ns % 1000 != 0:
+            raise ValueError(
+                "timer duration must be a non-negative whole number of microseconds"
+            )
         if duration_ns == 0:
             return after_node_id
         node = {
@@ -234,15 +238,6 @@ class GraphBatchBuilder:
         # 与离线 writer 的 completion_gates 账本同构(interval gate 的
         # after_node_id 来源)。
         self.completion_gates = {}
-        # request_id -> {rank: prefill 块末 previous_id}。在线两阶段发射:
-        # decode 段(PREFILL_DRAIN)发射时,prefill 段之后可能已插入其他 request
-        # 的节点,transfer3000 首节点的 previous_id 依赖会串到别的 request。
-        # 离线 writer 逐 request 连续发射,transfer3000 首节点依赖是本 request
-        # 的 prefill 末节点(end barrier / interval gate 等)。本账本在 decode 段
-        # 发射前恢复 per-rank previous_id,使 within-request 依赖与本 request
-        # 的 prefill 块末一致(主控裁决 2026-08-15 批准;恢复值在
-        # PREFILL_DRAIN 边界触发时必已发射,无死锁风险)。
-        self._prefill_block_ends = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
     # ------------------------------------------------------------- 批次 --
@@ -284,8 +279,8 @@ class GraphBatchBuilder:
         # strategy 模式保持物理跨 request 链(根因 #5 裁决):prefill 组各
         # rank 的 previous_id 不清空,本 request 的 prefill 链首可链上一
         # request 在本 rank 的链尾(共享 rank 上的链串行化)。
-        # 保留:within-request 串行化;decode 段 own-prefill-end 恢复(previous_id 链);
-        # 同 session interval gate。
+        # 保留:within-request 串行化;decode 段 frontier 接续(2026-08-19
+        # 统一,见 _emit_decode);同 session interval gate。
         marker = self._mark()
         members = self._emit_prelim(request_plan)
         self._collect(marker)
@@ -402,28 +397,6 @@ class GraphBatchBuilder:
         # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
         # (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier)。
         members = {rank: bounds[1] for rank, bounds in prefill_bounds.items()}
-        # [previous_id 链修复] 记录本 request 的 per-rank prefill 块末 previous_id。
-        # transfer3000 的 comm_send 在 prefill rank 上发射、comm_recv 在
-        # decode rank 上发射。prefill 侧首节点(send)链本块末节点(离线同款,
-        # 实测 .et send data_deps=[本 request prefill 末节点]);decode 侧首
-        # 节点(recv)在离线 .et 中链"上一完整 request 块末"(跨 request 串行
-        # 化边,方案 §4 步骤 1-8 裁决明言不可复现、差分归因)——本 request 的
-        # prefill 块在 decode 组 rank 上没有发射任何节点,块末 = None:
-        # 恢复 None 使 recv 无父(与离线首个 decode 的 recv 同构,实测 .et
-        # session_0 recv data_deps=[]),decode 块即到即跑,不串行等待上一
-        # request 的 decode 段(实测 2026-08-15:若把 stale 的跨 request
-        # previous_id 记入,recv 会等待上一 decode 的 end barrier——该 barrier
-        # 在 PREFILL_DRAIN 触发时仍在执行,与方案 :1148 的"恢复值彼时必然
-        # 已完成"断言相悖,rank 上 decode 全部串行化,完成边界被整体推后)。恢复值
-        # 只作用于 transfer 首节点,块内其余节点正常续链。
-        decode_group = self.group_by_index[
-            request_plan["decode_instance_index"]]
-        self._prefill_block_ends[request_plan["request_id"]] = {
-            rank: (builders[rank].previous_id if rank in prefill_group.ranks
-                   else None)
-            for rank in sorted(
-                set(prefill_group.ranks) | set(decode_group.ranks))
-        }
         return members
 
     def _emit_decode(self, request_plan: dict) -> dict:
@@ -433,13 +406,17 @@ class GraphBatchBuilder:
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
         decode_group = self.group_by_index[request_plan["decode_instance_index"]]
         prefix = _prefix_of(request_plan)
-        # [previous_id 链修复] 恢复 prefill 块末 per-rank previous_id,使 transfer3000 /
-        # decode 块的首节点依赖与离线逐边一致(own end barrier / own interval
-        # gate)。仅恢复本 request 覆盖的 rank;restore 后本块内部继续自然链式。
-        block_ends = self._prefill_block_ends.get(request_plan["request_id"])
-        if block_ends is not None:
-            for rank, end_id in block_ends.items():
-                builders[rank].previous_id = end_id
+        # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,对齐 sh_1.0/
+        # sh_2.0)] strategy **不做任何块末恢复/段内清链**:per-rank
+        # previous_id 无条件接续当前 frontier(= 离线 writer 跨 request
+        # 物理链同构),per-rank 发行序 = 全局发射序——任意两个发射段在
+        # 所有共享 rank 上的相对次序一致,跨请求 P2P(send/recv tag 匹配)
+        # 与 collective 参与序不可能反转成环。transfer3000 的 comm_send
+        # (prefill rank)链当前 frontier(经 per-rank 全序传递性仍包含本
+        # request 的 prefill 块末);comm_recv(decode rank)链当前 frontier
+        # (跨 request 边,含上一 request 的 decode end barrier),与离线
+        # .et 的 recv 链"上一完整 request 块末"同构。(2026-08-15 的
+        # own-prefill-end 恢复 / None-restore 裁决自此废止。)
         _paired_transfer(
             config=self.config, builders=builders,
             queue_index=request_plan["queue_index"], category=3000,

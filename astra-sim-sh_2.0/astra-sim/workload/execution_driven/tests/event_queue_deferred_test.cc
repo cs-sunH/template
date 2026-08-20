@@ -21,6 +21,7 @@ Cases:
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I extern/network_backend/analytical/include \
+      -I extern/network_backend/analytical/include/astra-network-analytical \
       astra-sim/workload/execution_driven/tests/event_queue_deferred_test.cc \
       extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
       extern/network_backend/analytical/common/event-queue/EventList.cpp \
@@ -30,7 +31,6 @@ Build (from template/astra-sim-wscllm):
       extern/network_backend/analytical/congestion_aware/fluid/FluidFlow.cpp \
       extern/network_backend/analytical/congestion_aware/fluid/FluidLinkState.cpp \
       extern/network_backend/analytical/congestion_aware/network/Link.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Chunk.cpp \
       extern/network_backend/analytical/congestion_aware/network/Device.cpp \
       -o /tmp/eq_test && /tmp/eq_test
 *******************************************************************************/
@@ -48,7 +48,6 @@ Build (from template/astra-sim-wscllm):
 #include <vector>
 
 #include "common/EventQueue.h"
-#include "congestion_aware/Chunk.h"
 #include "congestion_aware/Link.h"
 #include "congestion_aware/fluid/FluidScheduler.h"
 

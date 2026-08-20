@@ -19,10 +19,10 @@ RUN_DIR=$1
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 wscllm仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
 
 # ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
-# 见 traces/PROVENANCE.md 与《路径功能代码对应说明.md》)。
+# 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after materializing the input; see traces/PROVENANCE.md), found: ${GEN_MATCH[*]}" >&2
+  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}
@@ -79,7 +79,7 @@ if [[ ${PY_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/python.log" >&2
 fi
 if [[ ${CPP_EXIT} -ne 0 || ${PY_EXIT} -ne 0 ]]; then
-  echo "[run_online_strategy_sensing] FAIL: bridge retained for debugging (request=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l), jsonl=$(ls "${RUN_DIR}/bridge/"*.jsonl 2>/dev/null | wc -l)); next run rm -rf clears it" >&2
+  echo "[run_online_strategy_sensing] FAIL: bridge retained for debugging (request=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l), jsonl=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l)); next run rm -rf clears it" >&2
 fi
 [[ ${CPP_EXIT} -eq 0 && ${PY_EXIT} -eq 0 ]] || exit 1
 
@@ -109,10 +109,9 @@ for j in online_decision_log graph_batch_digests ledger online_stats profile sen
     ARCHIVED=$((ARCHIVED + 1))
   fi
 done
-CP_COUNT=$(ls "${RUN_DIR}/bridge/checkpoints/"*.json 2>/dev/null | wc -l)
-# Backport fix (2026-08-16, sh_2.0测试 §5.3): ls with a >2e4-entry glob
-# exceeds ARG_MAX (E2BIG -> exit 126 under set -e -o pipefail); count
-# via find -maxdepth 1 instead (same diagnostic value).
+CP_COUNT=$(find "${RUN_DIR}/bridge/checkpoints" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
+# Backport 2026-08-16 (对比报告 §5.3): ls with a >2e4-entry glob exceeds
+# ARG_MAX (E2BIG, exit 126 under set -e) -- count via find instead.
 REQ_COUNT=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l)
 echo "[run_online_strategy_sensing] artifacts: ${ARCHIVED} jsonl archived -> results/; checkpoints=${CP_COUNT}; request retained=${REQ_COUNT}"
 echo "[run_online_strategy_sensing] PASS: ${RUN_DIR}"

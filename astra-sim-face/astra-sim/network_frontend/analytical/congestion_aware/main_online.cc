@@ -706,7 +706,6 @@ int main(int argc, char* argv[]) {
 
     // Instantiate event queue
     const auto event_queue = std::make_shared<EventQueue>();
-    Topology::set_event_queue(event_queue);
 
     // Generate topology
     const auto network_parser = NetworkParser(network_configuration);
@@ -1156,21 +1155,6 @@ int main(int argc, char* argv[]) {
     // still alive; no-op when metrics are disabled (doc sec.5.6).
     MetricCollector::instance().finalize(systems, Sys::boostedTick());
 
-    // Backport fix (2026-08-16, sh_2.0测试 §5.1): the completion audit's
-    // denominator must be the CSV's TOTAL data rows. A rejected
-    // (out-of-window) row is never consumed, so a dropping run can pin the
-    // window occupancy at high_water and stall pump() before EOF -- the
-    // mid-loop EOF bookkeeping above then never fires, expected_requests
-    // stays 0, and the OLD audit was skipped entirely (the silent-PASS
-    // hole). The count-only tail scan closes it: no submits, no
-    // registration, just the whole-file row count.
-    if (!online_cli.request_queue_csv.empty()) {
-        windowed.count_remaining_data_rows();
-        if (expected_requests == 0) {
-            expected_requests = windowed.total_data_rows();
-        }
-    }
-
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
     // first-30-seconds input; the offline replay equivalent of
@@ -1298,12 +1282,14 @@ int main(int argc, char* argv[]) {
     // (--command-fifo, no --request-queue-csv) complete requests that the
     // CSV never saw -- the IDLE fixture's scenario 2 -- so expected_requests
     // == 0 skips the audit; the fixture script asserts the counts instead.
-    // Backport fix (2026-08-16, sh_2.0测试 §5.1): the audit is now the
-    // fail-closed audit_completion() -- denominator = the CSV's TOTAL data
-    // rows (tail-scanned above, so a stalled window cannot shrink it), any
-    // explicit-window drop is itself a failure with its count, and the
-    // accepted+dropped accounting must balance. The old
-    // completed==rows-the-window-read form silently PASSED dropping runs.
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1; unified 2026-08-20 中-3):
+    // the audit is the fail-closed audit_completion() -- denominator = the
+    // CSV's TOTAL data rows (a rejected row is consumed at reject time, so
+    // the window always flows to EOF and total_data_rows() at run end IS
+    // the whole-file count), any explicit-window drop is itself a failure
+    // with its count, and the accepted+dropped accounting must balance.
+    // The old completed==rows-the-window-read form silently PASSED
+    // dropping runs.
     if (expected_requests > 0) {
         const CompletionAuditCounts audit_counts{
             windowed.total_data_rows(),

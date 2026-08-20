@@ -15,6 +15,7 @@ if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
 from face_scheduler import (  # noqa: E402
+    DecodeTieCounter,
     FaceHardware,
     FaceInstanceSpec,
     FaceLut,
@@ -437,6 +438,89 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual([cost.instance_index for cost in costs], [0, 1, 2])
         self.assertGreater(costs[0].per_die_delta_ns, costs[1].per_die_delta_ns)
         self.assertEqual(costs[1].per_die_delta_ns, costs[2].per_die_delta_ns)
+
+    def _decode_tie_fixture(self):
+        """平局集 {1,2} 的 select_decode_instance fixture(与既有 tie 测试
+        同款:实例 0 的 per-die 增量严格更大,实例 1/2 精确并列)。"""
+        _, topology = line_topology()
+        graph = WeightedInstanceGraph(topology)
+        lut = FaceLut(
+            (
+                FaceLutEntry(2, 0, 0, 0, 0),
+                FaceLutEntry(2, 0, 1, 256, 100),
+                FaceLutEntry(2, 0, 2, 256, 300),
+            )
+        )
+        return topology, graph, lut
+
+    def test_decode_tie_round_robin_rotation(self) -> None:
+        # 中-1 裁决(2026-08-20):真实平局下共享 counter 轮流取 tied 元素。
+        topology, graph, lut = self._decode_tie_fixture()
+        counter = DecodeTieCounter()
+        picks = []
+        for _ in range(4):
+            selected, _ = select_decode_instance(
+                topology=topology,
+                graph=graph,
+                lut=lut,
+                fixed_p_chunk=64,
+                prefill_instance_index=1,
+                has_prefill_work=(False, False, False),
+                decode_token_lengths=((256,), (), ()),
+                new_request_token_length=256,
+                tie_counter=counter,
+            )
+            picks.append(selected)
+        self.assertEqual(picks, [1, 2, 1, 2])
+
+    def test_decode_tie_counter_not_advanced_on_unique_min(self) -> None:
+        # 唯一最小时 counter 不前进;随后的首次平局仍取 tied[0]。
+        topology, graph, lut = self._decode_tie_fixture()
+        counter = DecodeTieCounter()
+        selected, _ = select_decode_instance(
+            topology=topology,
+            graph=graph,
+            lut=lut,
+            fixed_p_chunk=64,
+            prefill_instance_index=1,
+            has_prefill_work=(False, False, False),
+            decode_token_lengths=((), (256,), (256,)),
+            new_request_token_length=256,
+            tie_counter=counter,
+        )
+        self.assertEqual(selected, 0)
+        self.assertEqual(counter.value, 0)
+        selected, _ = select_decode_instance(
+            topology=topology,
+            graph=graph,
+            lut=lut,
+            fixed_p_chunk=64,
+            prefill_instance_index=1,
+            has_prefill_work=(False, False, False),
+            decode_token_lengths=((256,), (), ()),
+            new_request_token_length=256,
+            tie_counter=counter,
+        )
+        self.assertEqual(selected, 1)
+        self.assertEqual(counter.value, 1)
+
+    def test_decode_tie_without_counter_keeps_config_order(self) -> None:
+        # 不传 counter:单次调用完全旧行为,连调两次均取 tied[0]。
+        topology, graph, lut = self._decode_tie_fixture()
+        picks = []
+        for _ in range(2):
+            selected, _ = select_decode_instance(
+                topology=topology,
+                graph=graph,
+                lut=lut,
+                fixed_p_chunk=64,
+                prefill_instance_index=1,
+                has_prefill_work=(False, False, False),
+                decode_token_lengths=((256,), (), ()),
+                new_request_token_length=256,
+            )
+            picks.append(selected)
+        self.assertEqual(picks, [1, 1])
 
     def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
         _, topology = line_topology()

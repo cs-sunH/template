@@ -758,9 +758,9 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
 
         // SH2-only second DRAM bandwidth accounting (doc sec.3.8): when this
         // rank runs the LocalHbmBandwidthModel
-        // (hbm_kv_restore_bandwidth_sharing), report the runtime model's own
-        // read-only counters. The plain roofline_local_bytes record above is
-        // still emitted unchanged.
+        // (hbm_bandwidth_contention / hbm_kv_restore_bandwidth_sharing),
+        // report the runtime model's own read-only counters. The plain
+        // roofline_local_bytes record above is still emitted unchanged.
         const LocalHbmBandwidthModel* hbm_model =
             sys->workload->local_hbm_bandwidth_model.get();
         if (hbm_model != nullptr) {
@@ -770,9 +770,21 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 hbm_model->compute_bytes_served();
             const double restore_bytes_served =
                 hbm_model->restore_bytes_served();
+            const double comm_read_bytes_served =
+                hbm_model->comm_read_bytes_served();
+            const double comm_write_bytes_served =
+                hbm_model->comm_write_bytes_served();
+            const double pool_read_bytes_served =
+                hbm_model->pool_read_bytes_served();
+            const double pool_write_bytes_served =
+                hbm_model->pool_write_bytes_served();
             const long double served_bytes =
                 static_cast<long double>(compute_bytes_served) +
-                static_cast<long double>(restore_bytes_served);
+                static_cast<long double>(restore_bytes_served) +
+                static_cast<long double>(comm_read_bytes_served) +
+                static_cast<long double>(comm_write_bytes_served) +
+                static_cast<long double>(pool_read_bytes_served) +
+                static_cast<long double>(pool_write_bytes_served);
 
             json hbm_record;
             hbm_record["schema"] = 1;
@@ -782,9 +794,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             hbm_record["run_id"] = this->run_id_;
             hbm_record["rank"] = sys->id;
             hbm_record["model"] =
-                "LocalHbmBandwidthModel: one inference COMP job plus one "
-                "KV-restore DMA job per rank, 50/50 HBM bandwidth split "
-                "while both are active";
+                "LocalHbmBandwidthModel: N-way strict equal split of the "
+                "rank HBM bandwidth across all active HBM users (COMP, "
+                "KV-restore DMA, NoC p2p comm read/write endpoints, "
+                "off-chip pool read/write endpoints); full_rate/N per job, "
+                "event-driven reallocation on every completion; reads and "
+                "writes share one bus and one total bandwidth (no "
+                "peak/sustained distinction)";
             hbm_record["utilization_window_ns"] = sim_end_tick;
             hbm_record["utilization_window"] = "[0, sim_end_ns]";
             hbm_record["hbm_busy_ns"] = hbm_busy_ns;
@@ -793,13 +809,28 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
                 "streaming HBM bytes (memory-latency-only steps excluded)";
             hbm_record["hbm_shared_ns"] = hbm_shared_ns;
             hbm_record["hbm_shared_definition"] =
-                "subset of hbm_busy_ns during which the inference and "
-                "restore jobs shared the rank HBM bandwidth 50/50";
+                "subset of hbm_busy_ns during which two or more jobs shared "
+                "the rank HBM bandwidth (equal split)";
             hbm_record["compute_bytes_served"] = compute_bytes_served;
             hbm_record["restore_bytes_served"] = restore_bytes_served;
+            hbm_record["comm_read_bytes_served"] = comm_read_bytes_served;
+            hbm_record["comm_write_bytes_served"] = comm_write_bytes_served;
+            hbm_record["pool_read_bytes_served"] = pool_read_bytes_served;
+            hbm_record["pool_write_bytes_served"] = pool_write_bytes_served;
             hbm_record["bytes_served_definition"] =
                 "sum of per-step per_user_rate*step_ns accumulated inside "
                 "advance_to(); does not alter transition scheduling";
+            hbm_record["peak_concurrent_jobs"] =
+                hbm_model->peak_concurrent_jobs();
+            hbm_record["peak_concurrent_jobs_definition"] =
+                "largest number of simultaneously active HBM jobs observed "
+                "at a membership change (issue or completion)";
+            hbm_record["redistribution_events"] =
+                hbm_model->redistribution_events();
+            hbm_record["redistribution_events_definition"] =
+                "count of equal-share recomputations: every membership "
+                "change (job joining a non-empty set, completion leaving "
+                "survivors) with at least one remaining bandwidth user";
             hbm_record["local_hbm_restore_bytes_issued"] =
                 rank_state.local_hbm_restore_bytes;
             hbm_record["local_hbm_bw_bytes_per_second"] = sys->local_mem_bw;

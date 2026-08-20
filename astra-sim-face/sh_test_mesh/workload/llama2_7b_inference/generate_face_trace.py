@@ -364,7 +364,8 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         # also WRITE that stub to disk.
         sys.exit(
             f"missing request queue: {request_queue_csv}; "
-            "materialize the input per traces/PROVENANCE.md"
+            "materialize the input via traces/derive_20_first_30_seconds.py "
+            "(its stdout is the authoritative provenance record)"
         )
     source_request_queue = load_request_queue(request_queue_csv)
     request_queue, selected_session_ids = select_first_session_requests(
@@ -400,13 +401,13 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         output_dir=runtime_config_dir,
     )
     _validate_no_memory_expansion(runtime_configs.remote_memory)
-    configuration_digest = _configuration_digest(
-        (
+    digest_paths = [
             config_csv.resolve(),
+            request_queue_csv,
             hardware_path,
             system_template,
-        )
-    )
+    ]
+    configuration_digest = _configuration_digest(tuple(digest_paths))
 
     return FaceTraceConfig(
         config_csv=config_csv.resolve(),
@@ -746,7 +747,7 @@ def main(argv=None) -> None:  # noqa: ARG001
     """fail-closed 拒绝桩(2026-08-18 起生效):离线静态全管线入口已删除。
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
-    估算函数,见《路径功能代码对应说明.md》§4-a)。③④ 的输入物化入口是
+    估算函数)。③④ 的输入物化入口是
     plan_materializer.py(manifest/metrics/runtime_config/face_lut);
     静态 ET 生成入口不再存在。
     """

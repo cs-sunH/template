@@ -30,13 +30,10 @@ network simulation, no baseline artifacts touched:
           arrival window: synthetic envelopes at arbitrary (well beyond
           30 s) arrivals are ALL accepted under the 0 default (constructor
           default and CLI default); no csv-derived input is involved.
-  Part H  Backport fix cont. -- explicit small window + fail-closed audit:
-          an explicit --request-max-arrival-ns rejects visibly (counter),
-          the count-only tail scan (count_remaining_data_rows) recovers the
-          whole-file denominator even when the window stalls on
-          un-consumable rejected rows, and audit_completion() fail-closes
-          every dropping/unbalanced/incomplete combination (the synthetic
-          replay of the run-end [Error] gate).
+  Part H  Backport fix cont. (unified 2026-08-20 中-3) -- explicit window:
+          drops visible AND consumed at reject time (the window flows to
+          EOF with no stall and no tail scan), audit_completion()
+          fail-closes every bad combination.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
 Run (from template/astra-sim-wscllm):
@@ -435,14 +432,16 @@ void test_default_unbounded_window() {
                 "(constructor + CLI defaults)\n");
 }
 
-// Backport fix cont.: explicit small window -> drops VISIBLE (counter), the
-// count-only tail scan recovers the whole-file denominator (total AND turn-0)
-// under a stalled window, and audit_completion() fail-closes every bad
-// combination.
+// Backport fix cont. (unified 2026-08-20, 中-3): explicit small window ->
+// drops VISIBLE (counter) and CONSUMED AT REJECT TIME, so the window flows
+// to EOF naturally (no stall, no tail scan) and data_rows()/total_data_rows()
+// ARE the whole-file denominators; audit_completion() fail-closes every
+// dropping/unbalanced/incomplete combination.
 void test_explicit_window_fail_closed() {
     const std::string csv = fixture_path("windowed_reader_test_failclosed");
-    // 5 turn-0 rows: arrivals 10 s .. 90 s (rows beyond the 25 s window
-    // rejected) + 2 turn>0 rows (empty arrival): total = 7, turn0 = 5.
+    // 5 turn-0 rows: arrivals 10 s .. 90 s (the 25 s window admits only the
+    // 10 s row; 30/50/70/90 s are rejected = 4 drops) + 2 turn>0 rows
+    // (empty arrival): total = 7, turn0 = 5.
     write_csv(csv, {
         "session_0,0,session_0_request_0,100,50,10000000000,,d",
         "session_1,0,session_1_request_0,100,50,30000000000,,d",
@@ -453,36 +452,37 @@ void test_explicit_window_fail_closed() {
         "session_1,1,session_1_request_1,100,50,,5000000000,d",
     });
 
-    // Explicit small window with a bounded reader: the first 4 rows give
-    // 1 accepted + 3 rejected; the rejects are un-consumable (their arrival
-    // alarms never fire), so the window stalls at high_water=4 before EOF.
-    // count_remaining_data_rows must still yield the whole-file totals
-    // WITHOUT submitting anything.
+    // Explicit small window with a bounded reader. Nothing consumes rows in
+    // this fixture except the reader itself: the 4 rejected rows are
+    // consumed AT REJECT TIME, so only the 1 accepted + 2 turn>0 rows count
+    // toward occupancy and high_water=2 still binds -- the fixture's
+    // notify_consumed loop stands in for the production consumption path
+    // (turn-0 arrival alarm / turn>0 future alarm firing).
     EventQueue eq;
     DecisionMailbox mailbox;
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/4,
+    WindowedTraceReader reader(csv, ingress, /*high_water=*/2,
                                /*max_arrival_ns=*/25000000000ULL);
-    reader.pump();  // reads 4 rows (1 accepted, 3 rejected)
-    reader.pump();  // window full (3 un-consumed rejects): reads nothing
-    expect(reader.rows_read() == 4,
-           "window stalls at high_water over un-consumable rejects");
-    expect(!reader.eof(), "stalled window has NOT reached EOF");
-    expect(reader.rejected_out_of_range() == 3,
-           "explicit small window rejects visibly (counter)");
-    const uint64_t before_submit = ingress.pending_command_count();
-    expect(before_submit == 1, "only the in-range row was submitted");
-    const uint64_t tail = reader.count_remaining_data_rows();
-    expect(tail == 3, "count-only tail scan counts the 3 un-read rows");
-    expect(reader.eof(), "tail scan reaches EOF");
+    while (reader.pump()) {
+        for (int64_t i = 0;
+             i < static_cast<int64_t>(reader.rows_read()); ++i) {
+            reader.notify_consumed(i);
+        }
+    }
+    expect(reader.eof(),
+           "consume-at-reject: EOF reached naturally, no tail scan");
+    expect(reader.rows_read() == 7,
+           "the whole file was read: rejects never stalled the window");
+    expect(reader.rejected_out_of_range() == 4,
+           "explicit small window rejects visibly (4 of 5 turn-0 rows)");
     expect(reader.total_data_rows() == 7,
-           "whole-file denominator recovered despite the stalled window");
+           "whole-file denominator == data_rows at EOF");
     expect(reader.turn0_data_rows() == 5,
-           "turn-0 whole-file count recovered (3 read + 2 tail)");
-    expect(ingress.pending_command_count() == before_submit,
-           "tail scan submits nothing");
+           "turn-0 whole-file count");
+    expect(ingress.pending_command_count() == 1,
+           "only the in-range row was submitted");
 
     // The run-end audit arithmetic (audit_completion). Field order:
     // {total, turn0, accepted, completed, dropped}. Official-run shape
@@ -508,8 +508,13 @@ void test_explicit_window_fail_closed() {
     expect(audit_completion({7, 5, 5, 6, 0}) ==
                CompletionAuditVerdict::Incomplete,
            "audit: completed + dropped != total -> Incomplete");
+    // The unified fixture's own shape: 4 drops, only the in-range row
+    // accepted+completed, the 2 turn>0 orphans never scheduled -> both the
+    // Dropped-first ordering and the completed shortfall must fail-closed.
+    expect(audit_completion({7, 5, 1, 1, 4}) == CompletionAuditVerdict::Dropped,
+           "audit: this fixture's run-end shape is Dropped (drops first)");
     std::printf("[fixture] part H PASS: explicit window drops visible + "
-                "fail-closed completion audit (total/turn0 denominators)\n");
+                "consumed-at-reject EOF + fail-closed completion audit\n");
 }
 
 }  // namespace

@@ -706,7 +706,6 @@ int main(int argc, char* argv[]) {
 
     // Instantiate event queue
     const auto event_queue = std::make_shared<EventQueue>();
-    Topology::set_event_queue(event_queue);
 
     // Generate topology
     const auto network_parser = NetworkParser(network_configuration);
@@ -811,7 +810,12 @@ int main(int argc, char* argv[]) {
                   << " (windowed reader, high_water="
                   << windowed.high_water()
                   << " max_arrival_ns="
-                  << online_cli.request_max_arrival_ns << ")" << std::endl;
+                  << online_cli.request_max_arrival_ns
+                  << (online_cli.request_max_arrival_ns == 0 ?
+                          " (unbounded default; backport fix "
+                          "2026-08-16, sh_2.0测试 §5.1)" :
+                          "")
+                  << ")" << std::endl;
         // The arrival hook (simulation thread, from arrival_cb) advances the
         // window's consumed prefix: a row leaves the window when its arrival
         // alarm fires.
@@ -1018,37 +1022,8 @@ int main(int argc, char* argv[]) {
     // queued commands run them to completion (DRAINING semantics per
     // 合同②/总体方案 §5.5), and the negative CSV test proves the queue is
     // drained even when finished() was already true at loop entry.
-    // Debug probe (execution log 2026-08-16): ONLINE_PROGRESS_PROBE=1 prints
-    // tick / mailbox state every 5s wall to diagnose slow strategy runs.
-    const bool progress_probe = std::getenv("ONLINE_PROGRESS_PROBE") != nullptr;
-    auto probe_last = std::chrono::steady_clock::now();
-    uint64_t probe_ticks = 0;
     while (true) {
         ingress.drain_commands();
-        if (progress_probe) {
-            ++probe_ticks;
-            const auto now = std::chrono::steady_clock::now();
-            if (now - probe_last >= std::chrono::seconds(5)) {
-                std::cout << "[probe] loops=" << probe_ticks
-                          << " tick=" << event_queue->get_current_time()
-                          << " queue_finished="
-                          << (event_queue->finished() ? 1 : 0)
-                          << " decision_work="
-                          << (mailbox.has_decision_work() ? 1 : 0)
-                          << " store_pending_total=";
-        size_t pending_total = 0;
-        size_t free_total = 0;
-        size_t busy_ranks = 0;
-        for (const auto& gs : graph_sources) {
-            pending_total += gs->store().pending_count();
-            free_total += gs->store().resolve_free_nodes().size();
-            if (gs->store().pending_count() > 0) { ++busy_ranks; }
-        }
-        std::cout << pending_total << " store_free_total=" << free_total
-                  << " ranks_with_pending=" << busy_ranks << std::endl;
-                probe_last = now;
-            }
-        }
         // Phase 7 §10.4: top the window up right after the drain. pump()
         // only reads disk and queues Submit commands (processed on the next
         // drain); it never schedules or decides anything. The window can
@@ -1306,43 +1281,32 @@ int main(int argc, char* argv[]) {
     // (--command-fifo, no --request-queue-csv) complete requests that the
     // CSV never saw -- the IDLE fixture's scenario 2 -- so expected_requests
     // == 0 skips the audit; the fixture script asserts the counts instead.
-    if (expected_requests > 0 &&
-        svc.completed_request_count() != expected_requests) {
-        std::cerr << "[Error] (execution_driven/online) completed requests="
-                  << svc.completed_request_count() << " != expected CSV "
-                     "data rows="
-                  << expected_requests << std::endl;
-        gate_ok = false;
-    }
-    // Backport fix 2026-08-16 (对比报告 §5.1, fail-closed input-window
-    // audit): with the old default --request-max-arrival-ns=30e9, turn-0
-    // rows arriving beyond the window were rejected by the windowed reader,
-    // clogged the window (a rejected row never fires an arrival alarm, so it
-    // was never consumed), kept the reader from reaching EOF -- expected
-    // requests stayed 0, EVERY expected-scoped audit above was skipped and
-    // the run reported PASS with 12.5% of the input silently missing. The
-    // default is now unbounded (OnlineCli), a rejected row is consumed at
-    // reject time (WindowedTraceReader), and this gate makes any rejection
-    // or un-drained window a hard failure with the drop detail counts.
-    if (!online_cli.request_queue_csv.empty()) {
-        const uint64_t rejected = windowed.rejected_out_of_range();
-        if (rejected != 0 || !windowed.eof()) {
-            std::cerr << "[Error] (execution_driven/online) input window "
-                         "audit FAIL: rejected_out_of_range="
-                      << rejected
-                      << " (turn-0 arrivals beyond the explicit "
-                         "--request-max-arrival-ns="
-                      << online_cli.request_max_arrival_ns
-                      << " window; their turn>0 descendants are never "
-                         "scheduled either) csv_eof="
-                      << (windowed.eof() ? "true" : "false")
-                      << " rows_read=" << windowed.rows_read()
-                      << " data_rows=" << windowed.data_rows()
-                      << " accepted=" << svc.accepted_request_count()
-                      << " completed=" << svc.completed_request_count()
-                      << " -- out-of-window input FAILS the run, it is never "
-                         "silently dropped"
-                      << std::endl;
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1; unified 2026-08-20 中-3):
+    // the audit is the fail-closed audit_completion() -- denominator = the
+    // CSV's TOTAL data rows (a rejected row is consumed at reject time, so
+    // the window always flows to EOF and total_data_rows() at run end IS
+    // the whole-file count), any explicit-window drop is itself a failure
+    // with its count, and the accepted+dropped accounting must balance.
+    // The old completed==rows-the-window-read form silently PASSED
+    // dropping runs.
+    if (expected_requests > 0) {
+        const CompletionAuditCounts audit_counts{
+            windowed.total_data_rows(),
+            windowed.turn0_data_rows(),
+            svc.accepted_request_count(),
+            svc.completed_request_count(),
+            windowed.rejected_out_of_range()};
+        const CompletionAuditVerdict audit_verdict =
+            audit_completion(audit_counts);
+        if (audit_verdict != CompletionAuditVerdict::Ok) {
+            std::cerr << "[Error] (execution_driven/online) completion "
+                         "audit FAIL ("
+                      << completion_audit_why(audit_verdict)
+                      << "): total_rows=" << audit_counts.total_rows
+                      << " turn0_rows=" << audit_counts.turn0_rows
+                      << " accepted=" << audit_counts.accepted
+                      << " dropped_out_of_range=" << audit_counts.dropped
+                      << " completed=" << audit_counts.completed << std::endl;
             gate_ok = false;
         }
     }

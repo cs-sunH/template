@@ -651,6 +651,16 @@ class DecodeCandidateCost:
     per_die_delta_ns: float
 
 
+class DecodeTieCounter:
+    """decode 平局轮流裁决计数器（中-1 裁决 2026-08-20）：仅当候选集中
+    ≥2 个 per_die_delta_ns 精确相等（真实平局）时前进；tied 集按
+    instance_index 升序，取 counter % len(tied)。同一决策序列下确定可
+    重放；不传入计数器时保持旧"最小 instance_index"行为。"""
+
+    def __init__(self) -> None:
+        self.value = 0
+
+
 def select_decode_instance(
     *,
     topology: FaceTopology,
@@ -661,7 +671,11 @@ def select_decode_instance(
     has_prefill_work: Sequence[bool],
     decode_token_lengths: Sequence[Sequence[int]],
     new_request_token_length: int,
+    tie_counter: Optional[DecodeTieCounter] = None,
 ) -> tuple[int, tuple[DecodeCandidateCost, ...]]:
+    """平局规则（中-1 裁决 2026-08-20）：per_die_delta_ns 精确并列时按
+    instance_index 升序轮流（传入 tie_counter 时）；否则选最小
+    instance_index（旧行为）。"""
     if len(has_prefill_work) != len(topology.instances):
         raise ValueError("has_prefill_work length must match instances")
     if len(decode_token_lengths) != len(topology.instances):
@@ -703,7 +717,16 @@ def select_decode_instance(
                 per_die_delta_ns=delta / instance.size,
             )
         )
-    selected = min(costs, key=lambda cost: (cost.per_die_delta_ns, cost.instance_index))
+    min_delta = min(cost.per_die_delta_ns for cost in costs)
+    tied = sorted(
+        (cost for cost in costs if cost.per_die_delta_ns == min_delta),
+        key=lambda cost: cost.instance_index,
+    )
+    if len(tied) > 1 and tie_counter is not None:
+        selected = tied[tie_counter.value % len(tied)]
+        tie_counter.value += 1
+    else:
+        selected = tied[0]
     return selected.instance_index, tuple(costs)
 
 
@@ -1035,6 +1058,9 @@ def _plan_face_requests_legacy(
         graph,
         model_weight_bytes=estimate_model_weight_bytes(model),
     )
+    # 中-1 裁决（2026-08-20）：decode 平局按 instance_index 升序轮流；
+    # 本函数对应一次 plan 调用，全程共享同一个计数器（仅真实平局前进）。
+    decode_tie_counter = DecodeTieCounter()
     instances = [_InstanceRuntime(index=i) for i in range(len(topology.instances))]
     session_allocations: dict[str, KVAllocation] = {}
 
@@ -1157,6 +1183,7 @@ def _plan_face_requests_legacy(
                         has_prefill_work=has_prefill,
                         decode_token_lengths=active_tokens,
                         new_request_token_length=runtime.prefill_context_tokens,
+                        tie_counter=decode_tie_counter,
                     )
                     runtime.decode_instance_index = selected
                     runtime.decode_candidates = costs
@@ -1328,6 +1355,9 @@ def _plan_face_session_lru_recompute(
         model,
         reserve_context_tokens=reserve_context_tokens,
     )
+    # 中-1 裁决（2026-08-20）：decode 平局按 instance_index 升序轮流；
+    # 本函数对应一次 plan 调用，全程共享同一个计数器（仅真实平局前进）。
+    decode_tie_counter = DecodeTieCounter()
     instances = [_InstanceRuntime(index=index) for index in range(len(topology.instances))]
 
     event_heap: list[tuple[int, int, int, str, object]] = []
@@ -1633,6 +1663,7 @@ def _plan_face_session_lru_recompute(
                         has_prefill_work=has_prefill,
                         decode_token_lengths=active_tokens,
                         new_request_token_length=runtime.prefill_context_tokens,
+                        tie_counter=decode_tie_counter,
                     )
                     runtime.decode_instance_index = selected
                     runtime.decode_candidates = costs

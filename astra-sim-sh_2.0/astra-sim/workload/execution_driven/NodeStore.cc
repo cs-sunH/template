@@ -283,6 +283,10 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             // to the local HBM restore DMA path (HardwareResource hbm_dma).
             nv.is_local_hbm_kv_restore =
                 node->get_attr<bool>("is_local_hbm_kv_restore", false);
+            // sh_2.0 N-way HBM contention: pool endpoint charging mode
+            // (0/absent = none, 1 = local HBM read, 2 = local HBM write).
+            nv.hbm_access_mode = static_cast<int>(
+                node->get_attr<uint64_t>("hbm-access-mode", uint64_t(0)));
             break;
         case NodeKind::CommSend:
         case NodeKind::CommRecv:
@@ -305,6 +309,9 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             if (node->has_attr("comm_tag")) {
                 nv.comm.tag = node->comm_tag<uint32_t>();
             }
+            // sh_2.0 N-way HBM contention: p2p endpoint charging (default
+            // true; false = pass-through, no HBM job).
+            nv.hbm_charge = node->get_attr<bool>("hbm-charge", true);
             break;
         case NodeKind::CommCollective:
             if (node->has_attr("comm_type")) {

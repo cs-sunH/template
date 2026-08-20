@@ -3,8 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 service_vacuum_test.cc -- defect-A regression fixture (2026-08-16,
-face主动测试错误分析.md 缺陷 A: 服务终判 finished() 的计数真空;
-同步自 face 0049ef5 / face-defectfix2-done,按 sh_2.0 机制层 API 适配).
+face主动测试错误分析.md 缺陷 A: 服务终判 finished() 的计数真空).
 
 Reproduces, deterministically and unit-level, the F2/F3/F4 race window:
 the online main loop's OLD order was
@@ -16,29 +15,24 @@ register as pending alarms (on_alarm_scheduled) on the NEXT drain. On the
 loop turn where (a) every previously drained alarm has fired, (b) the
 arrival hook completed the requests immediately (no-node fixture
 contract), and (c) pump() just topped the window up with NEW rows -- the
-finished() check saw active==0 && pending_alarm==0 == true while
-queued-but-undrained commands existed, and ended the run with the CSV
-tail undelivered (the field signature: ack_count != delivery_count,
+finished() check saw active==0 && pending_alarm==0 && input closed ==
+true while queued-but-undrained commands existed, and ended the run with
+the CSV tail undelivered (the field signature: ack_count != delivery_count,
 恒差 1, and completed << total rows).
 
 The fixture drives the REAL WindowedTraceReader / RequestIngress /
-ServiceCoordinator / DecisionMailbox / EventQueue (sh_2.0 map family)
-through both loop orders on the same CSV (30 turn-0 rows, arrivals in 3
-batches of 10, high_water=10 so the file is read in exactly 3 pumps):
+ServiceCoordinator / DecisionMailbox / EventQueue through both loop
+orders on the same CSV (30 turn-0 rows, arrivals in 3 batches of 10,
+high_water=10 so the file is read in exactly 3 pumps):
 
   Part 1 (REPRO, legacy order):  the loop breaks with reader NOT at EOF,
       completed=10/30, queued-but-undrained commands > 0 -- the vacuum,
       caught as an assertion (in production this was the silent early
-      close). rows_read()==20 with completed==10 is the undelivered-tail
-      evidence (10 rows read off disk that were neither accepted nor
-      completed). sh_2.0 adaptation note: face's audit_completion()
-      verdict (sh_1.0 backport family) does not exist in this repo; the
-      equivalent fail-closed evidence is asserted directly
-      (rows_read < total && completed < total && queued > 0).
+      close). The audit_completion verdict must be Incomplete.
   Part 2 (FIXED order): the extra "drain whatever pump() just queued"
       (pending_command_count() > 0 -> drain_commands()) closes the
-      vacuum; the loop ends only at EOF with completed == data_rows ==
-      30 and nothing queued-but-undrained.
+      vacuum; the loop ends only at EOF with completed == total rows ==
+      30 and verdict Ok.
 
 Build: CMake target AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest.
 Exit code 0 = both parts behaved as described (legacy reproduces, fixed
@@ -96,10 +90,10 @@ std::string make_csv(const std::string& path) {
 struct RunResult {
     bool broke_at_vacuum = false;   // legacy: break while pump queued work
     uint64_t completed = 0;
-    uint64_t data_rows = 0;         // rows the reader read off disk
-    size_t rows_read = 0;
+    uint64_t total_rows = 0;
     bool eof = false;
     size_t queued_at_break = 0;
+    CompletionAuditVerdict verdict = CompletionAuditVerdict::Ok;
 };
 
 // One main-loop replica. `fixed_order` selects drain-after-pump (the fix).
@@ -149,15 +143,20 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
         }
     }
     res.completed = svc.completed_request_count();
-    res.data_rows = reader.data_rows();
-    res.rows_read = reader.rows_read();
+    res.total_rows = reader.data_rows();
+    const CompletionAuditCounts counts{reader.total_data_rows(),
+                                       reader.turn0_data_rows(),
+                                       svc.accepted_request_count(),
+                                       svc.completed_request_count(),
+                                       reader.rejected_out_of_range()};
+    res.verdict = audit_completion(counts);
     return res;
 }
 
 }  // namespace
 
 int main() {
-    const std::string root = "/tmp/sh20_service_vacuum_" +
+    const std::string root = "/tmp/service_vacuum_" +
                              std::to_string(::getpid());
     if (::mkdir(root.c_str(), 0755) != 0) {
         std::perror("mkdir");
@@ -172,20 +171,16 @@ int main() {
     expect(!legacy.eof, "legacy order: reader NOT at EOF at break");
     expect(legacy.queued_at_break > 0,
            "legacy order: queued-but-undrained commands exist at break");
-    expect(legacy.completed == 10 && legacy.data_rows == 20,
+    expect(legacy.completed == 10 && legacy.total_rows == 20,
            "legacy order completes 10 with only 20/30 rows read (the "
            "undelivered tail)");
-    // sh_2.0 adaptation of face's audit verdict assertion: rows were read
-    // off disk that were neither accepted nor completed -- the run-end
-    // audit evidence of the vacuum (main_online's completed != expected
-    // gate fires on this state in production).
-    expect(legacy.rows_read == 20 && legacy.completed == 10,
-           "legacy order: 10 rows read-but-undelivered (neither accepted "
-           "nor completed)");
+    expect(legacy.verdict != CompletionAuditVerdict::Ok,
+           "legacy order audit verdict fail-closed (AccountMismatch or "
+           "Incomplete: rows read but neither accepted nor completed)");
     std::printf("[service_vacuum_test] legacy order: VACUUM reproduced "
                 "(break at completed=%llu/%llu, queued=%zu, eof=%d)\n",
                 static_cast<unsigned long long>(legacy.completed),
-                static_cast<unsigned long long>(legacy.data_rows),
+                static_cast<unsigned long long>(legacy.total_rows),
                 legacy.queued_at_break, legacy.eof ? 1 : 0);
 
     // ---- Part 2: fixed order closes the vacuum ---------------------------
@@ -194,12 +189,14 @@ int main() {
     expect(fixed.eof, "fixed order: reader reached EOF");
     expect(fixed.queued_at_break == 0,
            "fixed order: nothing queued-but-undrained at break");
-    expect(fixed.completed == 30 && fixed.data_rows == 30,
+    expect(fixed.completed == 30 && fixed.total_rows == 30,
            "fixed order completes 30/30 (末笔交付前全部登记)");
+    expect(fixed.verdict == CompletionAuditVerdict::Ok,
+           "fixed order audit verdict Ok");
     std::printf("[service_vacuum_test] fixed order: green "
                 "(completed=%llu/%llu, queued=%zu, eof=%d)\n",
                 static_cast<unsigned long long>(fixed.completed),
-                static_cast<unsigned long long>(fixed.data_rows),
+                static_cast<unsigned long long>(fixed.total_rows),
                 fixed.queued_at_break, fixed.eof ? 1 : 0);
 
     const std::string rm = "rm -rf '" + root + "'";

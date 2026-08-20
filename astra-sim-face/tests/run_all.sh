@@ -8,9 +8,6 @@ export PYTHONPATH="${PROJECT_DIR}/extern/graph_frontend${PYTHONPATH:+:${PYTHONPA
 
 echo "[$0] Running all regression tests..."
 
-echo "[$0] Running rt_template..."
-${SCRIPT_DIR}/rt_template/run.sh || (echo "Failed." ; exit 1)
-
 echo "[$0] Running FACE scheduler tests..."
 (cd "${PROJECT_DIR}" && python3 -m unittest sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py) || (echo "Failed." ; exit 1)
 

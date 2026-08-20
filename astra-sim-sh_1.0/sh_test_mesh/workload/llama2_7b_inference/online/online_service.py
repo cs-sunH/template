@@ -67,7 +67,7 @@ def main(argv=None) -> int:
     parser.add_argument("--frozen-lut", default=None,
                         help="strategy 模式:冻结 LUT 表 face_lut.csv 路径"
                              "(缺省 = sh_test_mesh/generated/ 下唯一 ET 目录内的"
-                             " face_lut.csv;裸仓库态先生成,见 traces/PROVENANCE.md)")
+                             " face_lut.csv;裸仓库态先生成,物化入口 traces/derive_20_first_30_seconds.py)")
     parser.add_argument("--sensing", action="store_true", default=False,
                         help="阶段 3 感知开关(默认关):分层账本最小子集 + "
                              "两层剩余负载查询;感知数据是查询/审计输入,不进"

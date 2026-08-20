@@ -121,7 +121,14 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                        "bound)");
         exit(EXIT_FAILURE);
     }
-    if (sys->hbm_kv_restore_bandwidth_sharing) {
+    // The LocalHbmBandwidthModel exists when either flag asks for it:
+    // hbm-bandwidth-contention (new; N-way equal split owning COMP, restore,
+    // comm and pool endpoints) or the legacy hbm-kv-restore-bandwidth-sharing
+    // (two-user 50/50 semantics preserved for A/B). Inside the model the
+    // equal-split math is one N-way implementation; with contention off no
+    // comm/pool jobs are ever created, so the observable behavior is exactly
+    // the legacy one.
+    if (sys->hbm_kv_restore_bandwidth_sharing || sys->hbm_bandwidth_contention) {
         this->local_hbm_bandwidth_model =
             std::make_unique<LocalHbmBandwidthModel>(sys, this);
     }
@@ -358,6 +365,24 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) remote MEM
     // completion branch was deleted with the replay route; strategy/static
     // keep the real remote port-FIFO physics.
+    // N-way HBM contention pool endpoint: a MEM node annotated
+    // hbm-access-mode 1/2 additionally charges this rank's HBM
+    // (POOL_READ/POOL_WRITE, bytes = tensor_size); node completion becomes
+    // the join of the port transaction and the HBM job. Unannotated MEM
+    // nodes (including every NoC/SerDes pass-through) keep the single-sided
+    // completion exactly as before.
+    if (hbm_endpoint_charge_active() &&
+        node.mem.hbm_access_mode != 0 && node.mem.tensor_size > 0) {
+        WorkloadLayerHandlerData* hbm_wlhd =
+            begin_hbm_join(node.global_id, wlhd, EventType::General);
+        if (node.mem.hbm_access_mode == 1) {
+            local_hbm_bandwidth_model->issue_pool_read(
+                node.mem.tensor_size, hbm_wlhd);
+        } else {
+            local_hbm_bandwidth_model->issue_pool_write(
+                node.mem.tensor_size, hbm_wlhd);
+        }
+    }
     sys->remote_mem->issue(node.mem.tensor_size, wlhd);
 }
 
@@ -473,17 +498,25 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     if (node.compute.runtime_ns != 0ul) {
         runtime = node.compute.runtime_ns;
     }
-    // Path-2 removal (2026-08-18): the replay-only calibrated-COMP HBM-model
-    // bypass was deleted with the replay route; the HBM 50/50 execution
-    // model (preserved object #18) owns every calibrated compute job in
-    // strategy mode.
-    if (local_hbm_bandwidth_model != nullptr) {
+    if (local_hbm_bandwidth_model != nullptr &&
+        node.compute.runtime_ns == 0ul) {
         // sh_3.0 HBM 50/50 execution model (preserved object #18): the model
-        // owns the compute/restore job timing.
+        // owns the compute/restore job timing. A non-zero calibrated
+        // runtime_ns never enters the model and keeps its calibrated
+        // duration (calibration honor; 中-5 gate aligned 2026-08-20 with
+        // the other four repos -- the five-repo priority contract is
+        // calibration > fluid contention > roofline).
         local_hbm_bandwidth_model->issue_compute(node_num_ops,
                                                  node_tensor_size, wlhd);
     } else {
-        hw_resource->tics_gpu_ops += runtime;
+        // 中-4③: the HBM-model-closed fallback must keep the same is_cpu_op
+        // discrimination as the other four repos (face :339-343 semantics)
+        // instead of blanket-attributing to tics_gpu_ops.
+        if (node.is_cpu_op) {
+            hw_resource->tics_cpu_ops += runtime;
+        } else {
+            hw_resource->tics_gpu_ops += runtime;
+        }
         sys->register_event(this, EventType::General, wlhd, runtime);
     }
 
@@ -605,6 +638,19 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     sehd->wlhd = new WorkloadLayerHandlerData;
     sehd->wlhd->node_id = node.global_id;
     sehd->event = EventType::PacketSent;
+    // N-way HBM contention comm endpoint: the data sender reads the bytes
+    // out of its own HBM (COMM_READ job starting at this node's issue
+    // moment). The node completes on the join of the network-side
+    // PacketSent and the HBM job. hbm-charge=false (NoC<->SerDes
+    // pass-through at the edge rank) or zero bytes keeps the single-sided
+    // legacy completion. Multi-hop transit ranks never issue a comm node
+    // for the transfer, so they never touch their HBM (direct-through
+    // routing assumption).
+    if (hbm_endpoint_charge_active() && node.comm.hbm_charge && size > 0) {
+        WorkloadLayerHandlerData* hbm_wlhd = begin_hbm_join(
+            node.global_id, sehd->wlhd, EventType::PacketSent);
+        local_hbm_bandwidth_model->issue_comm_read(size, hbm_wlhd);
+    }
     sys->front_end_sim_send(0, Sys::dummy_data, size, UINT8, dst, tag, &snd_req,
                             Sys::FrontEndSendRecvType::NATIVE,
                             &Sys::handleEvent, sehd);
@@ -627,9 +673,163 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     rcehd->wlhd->node_id = node.global_id;
     rcehd->workload = this;
     rcehd->event = EventType::PacketReceived;
+    // N-way HBM contention comm endpoint: the data receiver writes the
+    // bytes into its own HBM (COMM_WRITE job at issue moment); completion
+    // is the join of PacketReceived and the HBM job. The remote_load
+    // NoC-stage recv at the KV target is annotated hbm-charge=false -- its
+    // HBM write is carried by the following serial restore node, avoiding
+    // double charging.
+    if (hbm_endpoint_charge_active() && node.comm.hbm_charge && size > 0) {
+        WorkloadLayerHandlerData* hbm_wlhd = begin_hbm_join(
+            node.global_id, rcehd->wlhd, EventType::PacketReceived);
+        local_hbm_bandwidth_model->issue_comm_write(size, hbm_wlhd);
+    }
     sys->front_end_sim_recv(0, Sys::dummy_data, size, UINT8, src, tag, &rcv_req,
                             Sys::FrontEndSendRecvType::NATIVE,
                             &Sys::handleEvent, rcehd);
+}
+
+bool Workload::hbm_endpoint_charge_active() const {
+    return sys->hbm_bandwidth_contention &&
+        local_hbm_bandwidth_model != nullptr;
+}
+
+WorkloadLayerHandlerData* Workload::begin_hbm_join(
+    uint64_t node_id,
+    WorkloadLayerHandlerData* network_side_wlhd,
+    EventType terminal_event) {
+    // One join state per node id; the network/port side is identified by its
+    // wlhd pointer (the pointer is the callback cookie the network stack /
+    // AnalyticalRemoteMemory hands back untouched).
+    hbm_join_pending_[node_id] =
+        HbmJoinState{node_id, terminal_event, false, false};
+    hbm_join_wlhd_sides_[network_side_wlhd] = HbmJoinSide::NetworkPort;
+    WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
+    hbm_wlhd->sys_id = sys->id;
+    hbm_wlhd->workload = this;
+    hbm_wlhd->node_id = node_id;
+    hbm_join_wlhd_sides_[hbm_wlhd] = HbmJoinSide::LocalHbm;
+    return hbm_wlhd;
+}
+
+bool Workload::consume_hbm_join_event(WorkloadLayerHandlerData* wlhd) {
+    auto side_it = hbm_join_wlhd_sides_.find(wlhd);
+    if (side_it == hbm_join_wlhd_sides_.end()) {
+        return false;  // not a joined side: normal single-sided completion
+    }
+    const HbmJoinSide side = side_it->second;
+    hbm_join_wlhd_sides_.erase(side_it);
+    const uint64_t node_id = wlhd->node_id;
+    delete wlhd;
+
+    auto state_it = hbm_join_pending_.find(node_id);
+    if (state_it == hbm_join_pending_.end()) {
+        // Both sides already accounted (duplicate delivery): drop silently;
+        // the terminal path ran exactly once and must never run again.
+        return true;
+    }
+    HbmJoinState& state = state_it->second;
+    if (side == HbmJoinSide::NetworkPort) {
+        state.network_done = true;
+    } else {
+        state.local_hbm_done = true;
+    }
+    if (!state.network_done || !state.local_hbm_done) {
+        return true;  // first side only; the node is still in flight
+    }
+    // Both sides fired: run the shared terminal body exactly once. The join
+    // entries are erased first so the terminal body (which may re-enter
+    // Workload::call synchronously) can never observe a stale join.
+    const EventType terminal_event = state.terminal_event;
+    hbm_join_pending_.erase(state_it);
+    finish_general_node(node_id, terminal_event);
+    return true;
+}
+
+void Workload::finish_general_node(uint64_t node_id, EventType event) {
+    // Step 1-8: online mode has no ETFeederNode handle (et_node ==
+    // nullptr); the online branch releases / records through the
+    // NodeView. The static branch below stays byte-identical.
+    std::optional<ExecutionDriven::NodeView> nv;
+    shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
+        nv = graph_source_->lookup(node_id);
+        if (!nv.has_value()) {
+            LoggerFactory::get_logger("workload")
+                ->critical("callback for unknown online node id={}",
+                           node_id);
+            exit(EXIT_FAILURE);
+        }
+        if (sys->trace_enabled) {
+            LoggerFactory::get_logger("workload")
+                ->debug("callback,sys->id={}, tick={}, node->id={}, "
+                        "node->name={}, node->type={}",
+                        sys->id, Sys::boostedTick(), node_id,
+                        nv->name.c_str(), nv->node_type);
+        }
+        hw_resource->release(*nv);
+        stats->record_end(*nv, Sys::boostedTick());
+        if (MetricCollector::instance().enabled()) {
+            MetricCollector::instance().on_node_complete(
+                sys->id, node_id, Sys::boostedTick());
+        }
+    } else {
+        node = graph_source_->et_node(node_id);
+
+        if (sys->trace_enabled) {
+            LoggerFactory::get_logger("workload")
+                ->debug("callback,sys->id={}, tick={}, node->id={}, "
+                        "node->name={}, node->type={}",
+                        sys->id, Sys::boostedTick(), node->id(),
+                        node->name(),
+                        static_cast<uint64_t>(node->type()));
+        }
+
+        hw_resource->release(node);
+        stats->record_end(node, Sys::boostedTick());
+        if (MetricCollector::instance().enabled()) {
+            MetricCollector::instance().on_node_complete(
+                sys->id, node->id(), Sys::boostedTick());
+        }
+    }
+
+    // Calculate network bandwidth for point-to-point communications
+    if (event == EventType::PacketSent ||
+        event == EventType::PacketReceived) {
+        auto& op_stat = stats->get_operator_statistics(node_id);
+        Tick execution_time =
+            stats->get_operator_statistics(node_id).end_time -
+            stats->get_operator_statistics(node_id).start_time;
+        if (execution_time > 0 && op_stat.comm_size.has_value()) {
+            double bandwidth =
+                static_cast<double>(op_stat.comm_size.value()) /
+                execution_time;
+            op_stat.network_bandwidth = bandwidth;
+        }
+    }
+
+    if (this->sys->track_local_mem) {
+        this->local_mem_usage_tracker->recordEnd(node,
+                                                 Sys::boostedTick());
+    }
+
+    // Step 1-3: unconditional node-terminal record (generic wlhd
+    // branch; also reached by AnalyticalRemoteMemory and
+    // LocalHbmBandwidthModel completions, which register_event back
+    // into Workload::call -- sh_3.0 fourth-terminal audit: both
+    // unique completion chains converge here); step 1-5
+    // reverse-index fill in online mode. The N-way HBM join terminal
+    // (comm / pool endpoints) converges here as well.
+    record_node_terminal(graph_source_, execution_mode_, sys->id,
+                         node_id,
+                         ExecutionDriven::NodeTerminalStatus::
+                             Success);
+
+    graph_source_->finish_node(node_id);
+    // Static auto-advance only (see collective branch above).
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
+        issue_dep_free_nodes();
+    }
 }
 
 void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
@@ -785,90 +985,14 @@ void Workload::call(EventType event, CallData* data) {
             issue_dep_free_nodes();
         } else {
             WorkloadLayerHandlerData* wlhd = (WorkloadLayerHandlerData*)data;
-            // Step 1-8: online mode has no ETFeederNode handle (et_node ==
-            // nullptr); the online branch releases / records through the
-            // NodeView. The static branch below stays byte-identical.
-            std::optional<ExecutionDriven::NodeView> nv;
-            shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
-            if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-                nv = graph_source_->lookup(wlhd->node_id);
-                if (!nv.has_value()) {
-                    LoggerFactory::get_logger("workload")
-                        ->critical("callback for unknown online node id={}",
-                                   wlhd->node_id);
-                    exit(EXIT_FAILURE);
-                }
-                if (sys->trace_enabled) {
-                    LoggerFactory::get_logger("workload")
-                        ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                                "node->name={}, node->type={}",
-                                sys->id, Sys::boostedTick(), wlhd->node_id,
-                                nv->name.c_str(), nv->node_type);
-                }
-                hw_resource->release(*nv);
-                stats->record_end(*nv, Sys::boostedTick());
-                if (MetricCollector::instance().enabled()) {
-                    MetricCollector::instance().on_node_complete(
-                        sys->id, wlhd->node_id, Sys::boostedTick());
-                }
-            } else {
-                node = graph_source_->et_node(wlhd->node_id);
-
-                if (sys->trace_enabled) {
-                    LoggerFactory::get_logger("workload")
-                        ->debug("callback,sys->id={}, tick={}, node->id={}, "
-                                "node->name={}, node->type={}",
-                                sys->id, Sys::boostedTick(), node->id(),
-                                node->name(),
-                                static_cast<uint64_t>(node->type()));
-                }
-
-                hw_resource->release(node);
-                stats->record_end(node, Sys::boostedTick());
-                if (MetricCollector::instance().enabled()) {
-                    MetricCollector::instance().on_node_complete(
-                        sys->id, node->id(), Sys::boostedTick());
-                }
+            // N-way HBM contention join: a charged comm/pool node delivers
+            // two wlhd-carrying completions (network/port side and HBM
+            // side). Only after both fired does the node terminal path run
+            // -- exactly once (idempotent by map erasure).
+            if (!consume_hbm_join_event(wlhd)) {
+                finish_general_node(wlhd->node_id, event);
+                delete wlhd;
             }
-
-            // Calculate network bandwidth for point-to-point communications
-            if (event == EventType::PacketSent ||
-                event == EventType::PacketReceived) {
-                auto& op_stat = stats->get_operator_statistics(wlhd->node_id);
-                Tick execution_time =
-                    stats->get_operator_statistics(wlhd->node_id).end_time -
-                    stats->get_operator_statistics(wlhd->node_id).start_time;
-                if (execution_time > 0 && op_stat.comm_size.has_value()) {
-                    double bandwidth =
-                        static_cast<double>(op_stat.comm_size.value()) /
-                        execution_time;
-                    op_stat.network_bandwidth = bandwidth;
-                }
-            }
-
-            if (this->sys->track_local_mem) {
-                this->local_mem_usage_tracker->recordEnd(node,
-                                                         Sys::boostedTick());
-            }
-
-            // Step 1-3: unconditional node-terminal record (generic wlhd
-            // branch; also reached by AnalyticalRemoteMemory and
-            // LocalHbmBandwidthModel completions, which register_event back
-            // into Workload::call -- sh_3.0 fourth-terminal audit: both
-            // unique completion chains converge here); step 1-5
-            // reverse-index fill in online mode.
-            record_node_terminal(graph_source_, execution_mode_, sys->id,
-                                 wlhd->node_id,
-                                 ExecutionDriven::NodeTerminalStatus::
-                                     Success);
-
-            graph_source_->finish_node(wlhd->node_id);
-            // Static auto-advance only (see collective branch above).
-            if (execution_mode_ == ExecutionDriven::ExecutionMode::Static) {
-                issue_dep_free_nodes();
-            }
-
-            delete wlhd;
         }
     }
 
@@ -877,7 +1001,7 @@ void Workload::call(EventType event, CallData* data) {
     // model idle windows) must never end the online simulation and drop
     // later injections. The end authority belongs exclusively to the
     // ServiceCoordinator (总体方案 §5.5). The static path keeps the
-    // pre-phase-1 behavior byte-for-byte (including the sh_3.0-specific
+    // pre-phase-1 behavior byte-for-byte (including the sh-family
     // hbm_dma slot and has_active_jobs conditions).
     if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
         // Step 1-4: static_all_done (free empty && ongoing empty) comes from
@@ -887,6 +1011,14 @@ void Workload::call(EventType event, CallData* data) {
             (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
             (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
             (hw_resource->num_in_flight_hbm_dma_ops == 0) &&
+            // Local-HBM contention: a still-active local-HBM job always
+            // belongs to a node that has not completed, so the slot counters
+            // above already cover it; the explicit has_active_jobs() check
+            // is a belt-and-braces guard -- a drained resolver with pending
+            // endpoint jobs must keep waiting for the model's completion
+            // callbacks (they re-enter Workload::call and finish the nodes).
+            // (num_in_flight_hbm_dma_ops above: sh-family local-HBM
+            // KV-tiering DMA occupies dedicated hardware slots.)
             (local_hbm_bandwidth_model == nullptr ||
              !local_hbm_bandwidth_model->has_active_jobs())) {
             report();

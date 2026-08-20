@@ -19,14 +19,17 @@ set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_unaware
 # Can be compiled into either library or executable
 option(NETWORK_BACKEND_BUILD_AS_LIBRARY "Build as a library" OFF)
 
-# Add external libraries
-include(FetchContent)
-FetchContent_Declare(
-    yaml-cpp
-    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
-    GIT_TAG a83cd31 # Current as of 2025-10-01
-)
-FetchContent_MakeAvailable(yaml-cpp)
+# Reuse the repository-vendored yaml-cpp target. The fallback keeps this
+# backend buildable as a standalone CMake project without downloading sources.
+if(NOT TARGET yaml-cpp)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../helper/yaml-cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/yaml-cpp"
+    )
+endif()
 
 # Include src files to compile
 file(GLOB srcs_common
@@ -99,7 +102,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
         )
     else ()
         add_executable(Analytical_Congestion_Aware ${srcs_congestion_aware} ${srcs_common})
-        target_sources(Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/example.cpp)
 
         # Properties
         set_target_properties(Analytical_Congestion_Aware

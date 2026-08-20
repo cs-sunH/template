@@ -152,15 +152,22 @@ void WindowedTraceReader::read_one_row() {
     env.arrival_world_ns = arrival_ns;
     ++rows_read_;
     if (max_arrival_ns_ > 0 && arrival_ns > max_arrival_ns_) {
-        // Phase-7 §10.4: simulation-out-of-range rejection. Backport fix
-        // (2026-08-16, sh_2.0测试 §5.1): max_arrival_ns_ == 0 = UNBOUNDED
-        // (the production default -- no 30s acceptance-window assumption is
-        // burned into the code); a nonzero value is the explicit experiment
-        // knob. Counted and never submitted; the row still got its
-        // queue_index and metrics request registered above ("every data row
-        // registered" stays true). The run-end completion audit fail-closes
-        // on any nonzero count (the drop is visible, never silent).
+        // Phase-7 §10.4: simulation-out-of-range rejection (EXPLICIT window
+        // only; default 0 = unbounded, backport fix 2026-08-16 对比报告
+        // §5.1; 推进机制统一 2026-08-20 中-3). Counted and never submitted;
+        // the row still got its queue_index and metrics request registered
+        // above ("every data row registered" stays true). The rejected row
+        // is marked consumed right here: it will never fire an arrival
+        // alarm, so leaving it un-consumed would pin the window occupancy
+        // at high_water and stall pump() before EOF. Rows are read strictly
+        // in order, so this row currently holds the highest queue index and
+        // advancing the consumed prefix to it is exact. The run-end
+        // completion audit fail-closes on any nonzero count (the drop is
+        // visible, never silent).
         ++rejected_out_of_range_;
+        if (queue_index > consumed_idx_) {
+            consumed_idx_ = queue_index;
+        }
         return;
     }
     IngressCommand cmd;
@@ -200,51 +207,6 @@ void WindowedTraceReader::notify_consumed(const int64_t queue_index) {
     if (queue_index > consumed_idx_) {
         consumed_idx_ = queue_index;
     }
-}
-
-uint64_t WindowedTraceReader::count_remaining_data_rows() {
-    // Backport fix (2026-08-16, sh_2.0测试 §5.1): count-only tail scan. A
-    // rejected row is never consumed (its arrival alarm never fires), so a
-    // drop-laden run can pin the window occupancy at high_water and stall
-    // pump() before EOF. The completion audit's denominator must be the
-    // file's TOTAL data rows, so this scans the remaining lines WITHOUT
-    // admitting them to the window: no Submit commands, no queue_index or
-    // metrics registration -- counting only (the same blank-line/header
-    // skips as read_one_row). Idempotent; eof() is true afterwards.
-    if (eof_) {
-        return 0;
-    }
-    uint64_t counted = 0;
-    uint64_t counted_turn0 = 0;
-    std::string line;
-    while (std::getline(file_, line)) {
-        if (line.empty()) {
-            continue;
-        }
-        if (!header_seen_) {
-            header_seen_ = true;
-            continue;
-        }
-        ++counted;
-        // Turn-0-ness of a tail row (6th CSV field non-empty) -- same field
-        // split as read_one_row; the fields before the arrival column
-        // never contain commas, so the prefix split is safe.
-        std::istringstream row(line);
-        std::string f1, f2, f3, f4, f5, arrival;
-        std::getline(row, f1, ',');
-        std::getline(row, f2, ',');
-        std::getline(row, f3, ',');
-        std::getline(row, f4, ',');
-        std::getline(row, f5, ',');
-        std::getline(row, arrival, ',');
-        if (!arrival.empty()) {
-            ++counted_turn0;
-        }
-    }
-    eof_ = true;
-    tail_rows_ = counted;
-    tail_turn0_rows_ = counted_turn0;
-    return counted;
 }
 
 bool WindowedTraceReader::write_checkpoint(const std::string& path) const {

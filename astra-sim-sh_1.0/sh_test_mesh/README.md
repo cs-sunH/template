@@ -16,22 +16,23 @@ required transfer delays execution without remapping the request.
 Physical mesh, D2D, local HBM, remote-memory bandwidth, and peak-compute
 parameters are authored only once in this repository:
 
-`@astra-sim-sh/sh_test_mesh/hardware/face_case5_config_c.json`
+`@astra-sim-sh_1.0/sh_test_mesh/hardware/face_case5_config_c.json`
 
 This scenario selects the `validation-160gib` local-HBM capacity profile in
 its trace CSV. The profile selection is scenario-specific; all common hardware
 values remain in the repository-local source. The mesh NPU count is derived from rows and
 columns rather than configured separately.
 
-The remote-memory source below defines only the edge-pool policy and its own
-latency. Boundary ranks and bandwidth are derived from the repository-local hardware:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
+The edge-pool remote-memory policy (memory type, latency, boundary selection,
+logical-pool name) is embedded in the `remote-memory` section of the hardware
+source above; the resolver reads it directly and derives the concrete boundary
+ranks and bandwidth from the repository-local hardware. There is no standalone
+remote-memory source file.
 
 At load time, the repository-local resolver generates the ASTRA-Sim-native system,
 network, remote-memory, and communicator files in the runtime directory:
 
-`@astra-sim-sh/sh_test_mesh/generated/runtime_config`
+`@astra-sim-sh_1.0/sh_test_mesh/generated/runtime_config`
 
 These files are derived output and must not be edited manually.
 
@@ -61,7 +62,7 @@ The configuration order starts from the center instance, then its four direct
 neighbors, then the four corners. It is also the final deterministic tie-break
 for otherwise equal FACE mapping decisions.
 
-## Default workload: requests arriving in the first three minutes
+## Default workload: materialized first-30-seconds window
 
 The simulated model is Meta LLaMA 2 7B: 32 decoder layers, hidden size 4096,
 32 attention heads with 128 dimensions per head, SwiGLU intermediate size
@@ -73,32 +74,13 @@ TP ranks own six heads each and four own five heads each. The six shard sizes
 sum exactly to the complete session KV size; no model or KV padding is added,
 and one session is not capacity-split across multiple instances.
 
-The default config reads the normalized queue exported from the selected native
-`astra_compute_100_trunc1M.csv`. It retains only requests in the inclusive
-simulation-time window `0 <= t <= 180,000,000,000 ns`: request zero uses
-`arrival_time`, then each following request adds the preceding row's
-`human_time` or `tool_time`. Source session IDs `0` through `677` contribute
-678 sessions and 9,179 requests; their later request tails are excluded.
-Arrival timestamps are not rebased:
+This bare template repository ships no checked-in request queue (placeholder
+state); the runner fails closed on a missing `--request-queue-csv` input. The
+only allowed source trace is `agent-traces/tracelab/astra_compute_20.csv`, and
+the official input is its first-30-seconds window, materialized by the traces/
+script (the run commands below show the exact invocation):
 
-- Prefill length range 1-161,734 tokens;
-- Decode length range 1-32,000 tokens;
-- first-arrival range 26,249,000-179,437,413,000 ns; latest retained request
-  arrival is 179,937,766,000 ns.
-
-The adapter moves a native row's outgoing `human_time` or `tool_time` to
-the following request's interval. It explicitly uses a zero-nanosecond interval
-for the 20 retained nonterminal rows that omit both values.
-
-The canonical sidecar is intentionally not consumed here: the existing FACE
-instance mapping and KV-management logic continue to use the repository's
-original request semantics.
-
-Authoritative source and normalized workload input:
-
-`@../../agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_80_100_120_v1/astra_compute_100_trunc1M.csv`
-
-`@../../agent-traces/TraceLab_ASTRA_WSC_empirical_arrival_compute_80_100_120_v1/derived/compute_100_trunc1M_first_3_minutes/astra_compute_100_trunc1M_first_3_minutes_request_queue.csv`
+`@astra-sim-sh_1.0/sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py`
 
 ## FACE mapping preserved by the planner
 
@@ -215,11 +197,10 @@ The configured remote-memory edges are all 26 physical boundary ranks of the
 0,1,2,3,4,5,6,11,12,17,18,23,24,29,30,35,36,41,42,47,48,49,50,51,52,53
 ```
 
-The source owns the boundary-selection policy, latency, and logical-pool name:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
-
-The concrete edge list is derived from the repository-local mesh and the
+The boundary-selection policy, latency, and logical-pool name are owned by the
+`remote-memory` section of the repository-local hardware source (the resolver
+reads it directly; there is no standalone remote-memory source file). The
+concrete edge list is derived from the repository-local mesh and the
 bandwidth is derived from the repository-local hardware source.
 
 ## Online execution adaptation (Chakra node semantics)
@@ -242,15 +223,15 @@ FLOPs, tensor/HBM bytes, KV migration bytes, and collective payload bytes are
 preserved, while repeated collective startup costs are compressed. Small
 workloads can still select `token_expanded`.
 
-The selected ASTRA-compute first-arrival offsets range from `26,249,000` to
-`179,437,413,000` ns.
+The selected ASTRA-compute source trace carries first-arrival offsets from
+`94,835,000` to `44,609,097,174,000` ns.
 The analytical network adapter retains event time as `long double` when
 returning ASTRA-sim time so 64-bit event-map keys are not missed by one
 nanosecond.
 
 Time-precision implementation:
 
-`@astra-sim-sh/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc`
+`@astra-sim-sh_1.0/astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc`
 
 Each generated `manifest.json` records the FACE mapping decisions together
 with:
@@ -268,38 +249,39 @@ with:
 
 Single hardware source:
 
-`@astra-sim-sh/sh_test_mesh/hardware/face_case5_config_c.json`
+`@astra-sim-sh_1.0/sh_test_mesh/hardware/face_case5_config_c.json`
 
 Hardware-free system template:
 
-`@astra-sim-sh/sh_test_mesh/system/llama2_7b_roofline_template.json`
+`@astra-sim-sh_1.0/sh_test_mesh/system/llama2_7b_roofline_template.json`
 
 Shared resolver and generated-file contract:
 
-`@astra-sim-sh/sh_test_mesh/config_resolver.py`
+`@astra-sim-sh_1.0/sh_test_mesh/config_resolver.py`
 
-Edge-attached remote-memory policy:
-
-`@astra-sim-sh/sh_test_mesh/remote_memory/edge_remote_memory_pool.json`
+Edge-attached remote-memory policy: embedded in the `remote-memory` section of
+the single hardware source above (resolver reads it directly; there is no
+standalone remote-memory source file).
 
 Default trace configuration:
 
-`@astra-sim-sh/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
+`@astra-sim-sh_1.0/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv`
 
 Generated runtime files (do not edit):
 
-`@astra-sim-sh/sh_test_mesh/generated/runtime_config`
+`@astra-sim-sh_1.0/sh_test_mesh/generated/runtime_config`
 
 ## Run and validate
 
 Run from the repository root. The online strategy routes are the supported
 pipeline (route 3 = strategy, route 4 = strategy + sensing). Inputs are
-materialized per `traces/PROVENANCE.md` (only allowed source:
-`agent-traces/tracelab/astra_compute_20.csv`), then the plan directory is
+materialized per `traces/derive_20_first_30_seconds.py` (only allowed
+source: `agent-traces/tracelab/astra_compute_20.csv`; its stdout is the
+authoritative provenance record), then the plan directory is
 produced by the materializer:
 
 ```bash
-# 1. materialize the 30s request-queue input (rules: traces/PROVENANCE.md)
+# 1. materialize the 30s request-queue input (traces/derive_20_first_30_seconds.py)
 cd sh_test_mesh/workload/llama2_7b_inference
 python3 traces/derive_20_first_30_seconds.py \
   /home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv traces/
@@ -316,7 +298,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 Unit tests (workload layer + sh_test_mesh contracts):
 
 ```bash
-cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py test_checkpointing.py -q
+cd sh_test_mesh/workload/llama2_7b_inference && python3 -m pytest test_face_scheduler.py -q
 cd ../.. && python3 -m pytest tests/ -q
 ```
 

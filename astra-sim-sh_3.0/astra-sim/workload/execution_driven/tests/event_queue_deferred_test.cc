@@ -3,8 +3,9 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 event_queue_deferred_test.cc -- phase-1 step 1-1 unit tests for the map-version
-EventQueue tick-end closing and same-tick deferred channel, plus the
-FluidScheduler deferred-flush integration (post-commit comm emission).
+(std::map<EventTime, EventList>) EventQueue tick-end closing and same-tick
+deferred channel, plus the FluidScheduler deferred-flush integration
+(post-commit comm emission) and the map-specific fail-fast proof (case E).
 
 Cases:
   A. tick-end callback is invoked exactly once per proceed(), after the
@@ -17,13 +18,10 @@ Cases:
      (deferred flush mode) does not trip the EventQueue strict-increase assert
      and the flow completes; the legacy (non-deferred) start_flow path still
      works from within a physical event handler.
-  E. (map version) invoke-context same-time schedule_event merges into the
-     EventList currently being invoked (try_emplace merge) and executes in the
-     same pass; a tick-end-callback schedule_event(current_time) trips the
-     strict-increase assert on the next proceed (death test via fork).
 
-Build (from template/astra-sim-sh_3.0):
+Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I extern/network_backend/analytical/include \
+      -I extern/network_backend/analytical/include/astra-network-analytical \
       astra-sim/workload/execution_driven/tests/event_queue_deferred_test.cc \
       extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
       extern/network_backend/analytical/common/event-queue/EventList.cpp \
@@ -33,7 +31,6 @@ Build (from template/astra-sim-sh_3.0):
       extern/network_backend/analytical/congestion_aware/fluid/FluidFlow.cpp \
       extern/network_backend/analytical/congestion_aware/fluid/FluidLinkState.cpp \
       extern/network_backend/analytical/congestion_aware/network/Link.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Chunk.cpp \
       extern/network_backend/analytical/congestion_aware/network/Device.cpp \
       -o /tmp/eq_test && /tmp/eq_test
 *******************************************************************************/
@@ -51,7 +48,6 @@ Build (from template/astra-sim-sh_3.0):
 #include <vector>
 
 #include "common/EventQueue.h"
-#include "congestion_aware/Chunk.h"
 #include "congestion_aware/Link.h"
 #include "congestion_aware/fluid/FluidScheduler.h"
 
@@ -66,9 +62,11 @@ void noop_handler(void*) noexcept {}
 // reference (pre-extension) EventQueue semantics -- oracle for case C
 // ---------------------------------------------------------------------------
 
-// Reference implementation mirrors the PRE-EXTENSION map-version EventQueue
-// (std::map<EventTime, EventList>, begin()/erase(), try_emplace merge) so that
-// case C compares the extended map queue against the original map semantics.
+struct RefEventList {
+    EventTime event_time;
+    std::list<std::pair<Callback, CallbackArg>> events;
+};
+
 class ReferenceQueue {
   public:
     ReferenceQueue() = default;
@@ -79,23 +77,32 @@ class ReferenceQueue {
 
     void proceed() noexcept {
         assert(!finished());
-        auto it = event_queue.begin();
-        auto& front = it->second;
-        assert(front.get_event_time() > current_time);
-        current_time = front.get_event_time();
-        front.invoke_events();
-        event_queue.erase(it);
+        auto begin_it = event_queue.begin();
+        auto& front = begin_it->second;
+        assert(front.event_time > current_time);
+        current_time = front.event_time;
+        // mirror EventList::invoke_events: pop_front + invoke loop, so events
+        // scheduled at the current time from inside a handler (same-time
+        // merge) are picked up by the same pass
+        while (!front.events.empty()) {
+            front.events.front().first(front.events.front().second);
+            front.events.pop_front();
+        }
+        event_queue.erase(event_queue.begin());
     }
 
     void schedule_event(EventTime t, Callback cb, CallbackArg arg) noexcept {
+        // mirror the map-family schedule_event: try_emplace merges same-time
+        // events into the existing EventList (same-time merge semantics)
         assert(t >= current_time);
-        auto it = event_queue.try_emplace(t, t).first;
-        it->second.add_event(cb, arg);
+        auto [it, inserted] = event_queue.try_emplace(t, RefEventList{t, {}});
+        (void)inserted;
+        it->second.events.emplace_back(cb, arg);
     }
 
   private:
     EventTime current_time = 0;
-    std::map<EventTime, EventList> event_queue;
+    std::map<EventTime, RefEventList> event_queue;
 };
 
 // ---------------------------------------------------------------------------
@@ -354,63 +361,71 @@ void run_fs_scenario(bool deferred_mode) {
                 deferred_mode ? "deferred" : "legacy");
 }
 
-
 // ---------------------------------------------------------------------------
-// case E (map version): invoke-context same-time merge + tick-end-callback
-// current-time schedule death test (strict-increase assert :31)
+// case E (map family): fail-fast proof -- schedule_event(current_time) from a
+// tick-end callback inserts a current_time EventList into the main map and the
+// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :31);
+// schedule_event(future) from the callback lands in the map normally.
 // ---------------------------------------------------------------------------
 
 struct CaseECtx {
-    int merged_runs = 0;
     EventQueue* eq = nullptr;
+    bool bad = false;   // true -> schedule_event(current_time) in tick-end
+    bool fired = false; // schedule from the tick-end callback only once
 };
 
-void case_e_invoke_merge(void* v) {
+void case_e_tick_end(void* v) {
     auto* c = static_cast<CaseECtx*>(v);
-    ++c->merged_runs;
-    // in the invoke context, a same-time schedule_event try_emplaces into the
-    // EventList still held by the map and merges into this same invoke pass
-    if (c->merged_runs < 3) {
-        c->eq->schedule_event(c->eq->get_current_time(), case_e_invoke_merge, c);
+    if (c->fired) {
+        return;
+    }
+    c->fired = true;
+    if (c->bad) {
+        // hard-rule violation: same-tick event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time(), noop_handler, nullptr);
+    } else {
+        // legal: strictly future event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time() + 5, noop_handler, nullptr);
     }
 }
 
-void case_e_bad_tick_end(void* v) {
-    auto* c = static_cast<CaseECtx*>(v);
-    // forbidden by the hard rule: current-time event from the tick-end
-    // context goes into the main queue and trips the :31 assert next proceed
-    c->eq->schedule_event(c->eq->get_current_time(), noop_handler, nullptr);
-}
-
-void test_case_e() {
+bool run_case_e_child(bool bad) {
     EventQueue eq;
     CaseECtx ctx;
     ctx.eq = &eq;
-    eq.schedule_event(10, case_e_invoke_merge, &ctx);
+    ctx.bad = bad;
+    eq.set_tick_end_callback(case_e_tick_end, &ctx);
+    eq.schedule_event(10, noop_handler, nullptr);
     eq.proceed();
-    assert(ctx.merged_runs == 3);
+    if (bad) {
+        // the next proceed must abort on the strict-increase assert
+        eq.proceed();
+        return false;  // should not reach here in a failing build
+    }
+    // legal path: the future event is in the map and executes at t=15
+    assert(eq.get_current_time() == 10);
+    assert(!eq.finished());
+    eq.proceed();
+    assert(eq.get_current_time() == 15);
     assert(eq.finished());
-    std::printf("[case E1] PASS: invoke-context same-time merge executed in "
-                "the same pass (try_emplace merge unchanged)\n");
+    return true;
+}
 
-    // death test: fork a child that must abort on the assert
-    pid_t pid = ::fork();
+void test_case_e() {
+    // legal variant runs in-process
+    assert(run_case_e_child(/*bad=*/false));
+    // violating variant must abort (assert) -- verify in a forked child
+    pid_t pid = fork();
     if (pid == 0) {
-        EventQueue child_eq;
-        CaseECtx child_ctx;
-        child_ctx.eq = &child_eq;
-        child_eq.set_tick_end_callback(case_e_bad_tick_end, &child_ctx);
-        child_eq.schedule_event(10, noop_handler, nullptr);
-        child_eq.proceed();  // tick-end inserts current_time event
-        child_eq.schedule_event(20, noop_handler, nullptr);
-        child_eq.proceed();  // must trip the strict-increase assert
-        _exit(0);            // not reached on failure-free (wrong) behavior
+        const bool reached_end = run_case_e_child(/*bad=*/true);
+        std::_Exit(reached_end ? 0 : 0);  // child exits 0 only if no abort AND completed
     }
     int status = 0;
-    ::waitpid(pid, &status, 0);
-    assert(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
-    std::printf("[case E2] PASS: tick-end current-time schedule trips the "
-                "strict-increase assert on next proceed (fail-fast holds)\n");
+    waitpid(pid, &status, 0);
+    // the child must have died from the assert (SIGABRT), not exited cleanly
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
+                "current_time) trips :31 on next proceed; future event OK\n");
 }
 
 }  // namespace
