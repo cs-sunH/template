@@ -198,6 +198,7 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
     }
     if (node.is_local_hbm_kv_restore) {
         --num_in_flight_hbm_dma_ops;
+        assert(num_in_flight_hbm_dma_ops == 0);
         hbm_dma_ops_node.erase(node.global_id);
         return;
     }

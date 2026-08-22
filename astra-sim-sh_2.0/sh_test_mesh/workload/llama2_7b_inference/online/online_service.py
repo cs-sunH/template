@@ -64,15 +64,18 @@ def _write_jsonl(path: str, rows: list) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_2.0 online decision service")
-    parser.add_argument("--bridge-dir", required=True)
-    parser.add_argument("--mode", default="strategy", choices=("strategy",))
+    parser.add_argument("--bridge-dir", required=True,
+                        help="bridge FIFO/request-response 目录(与 C++ 共享)")
+    parser.add_argument("--mode", default="strategy", choices=("strategy",),
+                        help="调度模式:strategy(步骤 1-9;唯一保留模式)")
     parser.add_argument("--plan-dir", required=True,
-                        help="manifest 目录（含 manifest.json）")
+                        help="plan/manifest 目录(含 manifest.json)")
     parser.add_argument("--config", default=None,
-                        help="trace_config.csv 路径（缺省用 workload 默认）")
+                        help="trace_config.csv 路径(缺省用 workload 默认)")
     parser.add_argument("--sensing", action="store_true", default=False,
-                        help="阶段 3 感知开关（默认关）：分层账本最小子集 + "
-                             "两层剩余负载查询；查询/审计输入，不进策略判据")
+                        help="阶段 3 感知开关(默认关,阶段 6 前默认关):分层"
+                             "账本最小子集 + 两层剩余负载查询;感知数据是"
+                             "查询/审计输入,不进策略判据,决策序列不变")
     args = parser.parse_args(argv)
 
     manifest_path = os.path.join(args.plan_dir, "manifest.json")
@@ -136,9 +139,8 @@ def main(argv=None) -> int:
     _write_jsonl(os.path.join(args.bridge_dir, "online_stats.jsonl"),
                  stats_rows)
 
-    # strategy 模式行序 = 触发序（无权威日志重排）。
-    log_rows = list(scheduler.online_log_rows)
-    _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME), log_rows)
+    _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME),
+                 scheduler.online_log_rows)
     if args.sensing:
         scheduler.dump_ledger(os.path.join(args.bridge_dir, "ledger.jsonl"))
         _write_jsonl(

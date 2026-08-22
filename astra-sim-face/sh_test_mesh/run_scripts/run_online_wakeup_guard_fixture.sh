@@ -34,7 +34,7 @@ RUN_ROOT=${1:-/tmp/face_wakeup_guard}
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
-  echo "[runner] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
+  echo "[wakeup_guard] expected exactly one generated dir under sh_test_mesh/generated (run plan_materializer.py after the traces/ materializer; its stdout is the authoritative provenance record), found: ${GEN_MATCH[*]}" >&2
   exit 1
 fi
 ET_DIR=${GEN_MATCH[0]}
@@ -176,8 +176,7 @@ exec 3>&-
 if [[ "${EXPECT_MODE}" == "legacy-stall" ]]; then
   # RED 基线:预修复二进制应陷入无进展(不退出)。10s 观察窗。
   if wait_cpp_exit 10; then
-    echo "[wakeup_guard] legacy-stall: C++ 已退出(未复现挂死;退出码 $( \
-      grep -c . /dev/null; echo '?'))——检查是否误用了修复后二进制" >&2
+    echo "[wakeup_guard] legacy-stall: C++ 已退出(未复现挂死)——检查是否误用了修复后二进制" >&2
     exit 1
   fi
   echo "[wakeup_guard] legacy-stall REPRODUCED: 预修复二进制 CloseInput 后 10s+ 无退出"

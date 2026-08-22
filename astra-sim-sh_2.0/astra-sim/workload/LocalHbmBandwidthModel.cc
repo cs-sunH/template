@@ -59,12 +59,16 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
         return;
     }
 
+    // Compute FLOPs always progress at peak rate in parallel with the HBM
+    // fluid (Roofline max(compute, memory) semantics), for every COMPUTE
+    // job regardless of how many jobs share the bus.
     const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
     for (Job& job : jobs) {
         if (job.kind == JobKind::COMPUTE) {
             job.remaining_ops = std::max(
                 0.0,
-                job.remaining_ops - compute_rate_ops_per_ns * elapsed_ns);
+                job.remaining_ops -
+                    compute_rate_ops_per_ns * elapsed_ns);
         }
     }
 
@@ -81,6 +85,8 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
             }
         }
 
+        // N-way strict equal split: every byte-streaming job receives
+        // full_rate / N where N is the number of concurrent streamers.
         const double per_user_rate = bandwidth_users.empty()
             ? 0.0
             : full_rate_bytes_per_ns /
@@ -147,7 +153,7 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                 this->hbm_shared_ns_ += step_ns;
             }
             for (const Job* job : bandwidth_users) {
-                this->kind_bytes_served_[static_cast<int>(job->kind)] +=
+                this->bytes_served_by_kind_[kind_index(job->kind)] +=
                     per_user_rate * step_ns;
             }
         }
@@ -183,11 +189,14 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         }
     }
 
+    // A COMPUTE job whose HBM side is already done may still be streaming
+    // FLOPs; its ops completion is a transition of its own.
+    const double compute_rate_ops_per_ns = sys->peak_perf / 1e9;
     for (const Job& job : jobs) {
         if (job.kind == JobKind::COMPUTE && memory_done(job) &&
             job.remaining_ops > kEpsilon) {
             next_ns = std::min(
-                next_ns, job.remaining_ops / (sys->peak_perf / 1e9));
+                next_ns, job.remaining_ops / compute_rate_ops_per_ns);
         }
     }
 
@@ -203,16 +212,34 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
         delay);
 }
 
-void LocalHbmBandwidthModel::issue_job(Job&& job) {
+void LocalHbmBandwidthModel::issue_job(
+    JobKind kind,
+    uint64_t num_ops,
+    uint64_t tensor_size,
+    WorkloadLayerHandlerData* wlhd) {
     advance_to(Sys::boostedTick());
-    const bool joins_active_set = !jobs.empty();
-    const Tick start_tick = Sys::boostedTick();
-    jobs.push_back(std::move(job));
-    if (jobs.size() > peak_concurrent_jobs_) {
-        peak_concurrent_jobs_ = jobs.size();
+    if (tensor_size == 0) {
+        // Zero-byte endpoints never create an HBM job (the Workload layer
+        // already guards this); reaching here is a wiring bug, not a data
+        // property: fail closed instead of silently stalling the node.
+        throw std::runtime_error(
+            "local HBM model refused a zero-byte job");
     }
-    if (joins_active_set) {
-        // The new job dilutes the equal split of the survivors.
+    const bool joins_active_jobs = !jobs.empty();
+    jobs.push_back(Job{
+        kind,
+        wlhd,
+        static_cast<double>(num_ops),
+        static_cast<double>(tensor_size),
+        static_cast<double>(sys->local_mem_latency),
+        Sys::boostedTick(),
+    });
+    if (jobs.size() > peak_concurrent_jobs_) {
+        peak_concurrent_jobs_ = static_cast<uint64_t>(jobs.size());
+    }
+    if (joins_active_jobs) {
+        // Every new streamer immediately dilutes the equal split for the
+        // already-active ones -- one redistribution per joining job.
         ++redistribution_events_;
     }
     schedule_next_transition();
@@ -222,75 +249,37 @@ void LocalHbmBandwidthModel::issue_compute(
     uint64_t num_ops,
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::COMPUTE,
-        wlhd,
-        static_cast<double>(num_ops),
-        static_cast<double>(tensor_size),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    issue_job(JobKind::COMPUTE, num_ops, tensor_size, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_restore(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::RESTORE,
-        wlhd,
-        0.0,
-        static_cast<double>(tensor_size),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    issue_job(JobKind::RESTORE, 0, tensor_size, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_comm_read(
-    uint64_t bytes, WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::COMM_READ,
-        wlhd,
-        0.0,
-        static_cast<double>(bytes),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::COMM_READ, 0, bytes, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_comm_write(
-    uint64_t bytes, WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::COMM_WRITE,
-        wlhd,
-        0.0,
-        static_cast<double>(bytes),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::COMM_WRITE, 0, bytes, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_pool_read(
-    uint64_t bytes, WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::POOL_READ,
-        wlhd,
-        0.0,
-        static_cast<double>(bytes),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::POOL_READ, 0, bytes, wlhd);
 }
 
 void LocalHbmBandwidthModel::issue_pool_write(
-    uint64_t bytes, WorkloadLayerHandlerData* wlhd) {
-    issue_job(Job{
-        JobKind::POOL_WRITE,
-        wlhd,
-        0.0,
-        static_cast<double>(bytes),
-        static_cast<double>(sys->local_mem_latency),
-        Sys::boostedTick(),
-    });
+    uint64_t bytes,
+    WorkloadLayerHandlerData* wlhd) {
+    issue_job(JobKind::POOL_WRITE, 0, bytes, wlhd);
 }
 
 void LocalHbmBandwidthModel::call(EventType, CallData* data) {
@@ -312,29 +301,31 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
             ++it;
         }
     }
+
+    // 中-4④ unified batch-level rule (face semantics): the whole completion
+    // batch leaves the survivors' shares re-split (full_rate/N ->
+    // full_rate/(N-k)); the batch counts ONCE regardless of how many jobs
+    // completed together (previously each completed job counted separately,
+    // diverging from the other four repos).
     if (!completed.empty() && !jobs.empty()) {
-        // Survivors are re-split from full_rate/N to full_rate/(N-k).
         ++redistribution_events_;
     }
 
     for (const Job& job : completed) {
         const uint64_t elapsed = now - job.start_tick;
-        // 中-4② unified binary rule (sh_3.0 semantics): every non-COMP job
-        // here (COMM_READ/WRITE, RESTORE, POOL_READ/WRITE) occupies local
-        // HBM bandwidth for its elapsed time -- a comm endpoint's stretched
-        // duration is HBM occupancy, not network transfer time, so the
-        // legacy comm tics bucket no longer receives it.
         if (job.kind == JobKind::COMPUTE) {
             workload->hw_resource->tics_gpu_ops += elapsed;
         } else {
+            // RESTORE / COMM_* / POOL_* jobs are HBM transfers; their
+            // elapsed time accumulates on the hbm_dma counter.
             workload->hw_resource->tics_hbm_dma_ops += elapsed;
         }
         job.wlhd->workload->call(EventType::General, job.wlhd);
     }
 
     // A completion callback may immediately issue the next job (compute,
-    // restore, comm or pool), which schedules a transition and advances the
-    // generation.  Do not invalidate that event by scheduling the same
+    // restore, comm, or pool), which schedules a transition and advances
+    // the generation.  Do not invalidate that event by scheduling the same
     // state a second time.
     if (event_generation == generation) {
         schedule_next_transition();

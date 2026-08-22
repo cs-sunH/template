@@ -91,13 +91,18 @@ class SameTickMilestoneHandler:
             "request_id": request_id,
             "stage": stage,
             "generation": generation,
-            # sh_3.0 adaptation: this repo's system template enables the
-            # roofline model (wscllm's did not), so a GPU COMP node is
-            # roofline-timed (~101ns) instead of honoring runtime_ns=1 and
-            # the decode would complete at T+102, not the T+2 the fixture
-            # asserts. A CPU comp node routes through issue_replay, which
-            # honors runtime_ns (>=1ns) -- deterministic T+2 (registered in
-            # the execution log; fixture-only change, no engine semantics).
+            # sh_3.0 adaptation: verified 2026-08-21 -- all five repos'
+            # system templates enable the roofline model, so the original
+            # "wscllm's did not" rationale was false. With runtime_ns=1 the
+            # calibration-honor gate in Workload::issue_comp (runtime_ns != 0
+            # keeps the calibrated duration; priority calibration > fluid
+            # contention > roofline) would already pin this node to T+2 on
+            # the GPU COMP path too. The is_cpu_op override's real role is
+            # calibration-node semantics: route through issue_replay (honors
+            # runtime_ns >= 1ns) so the milestone timing depends only on the
+            # calibrated runtime, never on the GPU COMP path (roofline/stat
+            # attribution, HBM-model adjacency) -- deterministic T+2
+            # (fixture-only change, no engine semantics).
             "is_cpu_op": True,
             "is_timer_op": False,
             "inputs_values": "",

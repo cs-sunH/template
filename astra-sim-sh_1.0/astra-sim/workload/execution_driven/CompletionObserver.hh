@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-CompletionObserver -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+CompletionObserver -- execution-driven mechanism layer (wscllm phase 1).
 
 Node-terminal recording independent of the metrics switch (总体方案 §5.1
 清单第 1 条; 仿真加速分析.md §5.1). Mounted unconditionally on the three

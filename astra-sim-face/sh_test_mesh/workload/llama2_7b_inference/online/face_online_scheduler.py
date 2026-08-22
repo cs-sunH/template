@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """face_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9,face 版)。
 
-以 _plan_face_session_lru_recompute(face_scheduler.py:1294-1806)为蓝本迁移,
+以 _plan_face_session_lru_recompute(face_scheduler.py)为蓝本迁移,
 保持决策顺序逐行对应(每处迁移用 `# offline: face_scheduler.py:XXXX` 注释标注)。
 离线事件循环与在线边界的一一对应:
 
@@ -15,7 +15,7 @@
                                                     / REQUEST_COMPLETE 事件处理:
     prefill 完成(:1613-1648)                        _on_prefill_drain:
       qp.popleft + select_decode_instance             busy=False + qp.popleft +
-      (:1627-1637,加权图候选 + LUT per-die 代价,       has_prefill_work/decode_token_
+      (:1627-1637,加权图候选 + Roofline per-die 代价,  has_prefill_work/decode_token_
       全局 9 实例快照 :1622-1627)                      lengths 快照 -> select_decode_
       + waiting_decode_admissions 登记 +               instance -> 等待 decode 准入
       try_admit_waiting_decodes(:1648)                 登记 + try_admit_waiting_decodes
@@ -33,7 +33,7 @@
     逐实例 serve(:1520-1588)                           per-instance 发射:
       prefill: try_admit_prefill(qp[0])                 try_admit_prefill + 发射
       decode:  active_decode 整批                       prefill/decode 整段
-    **计时部分删除**(:1551-1588 LUT lookup +
+    **计时部分删除**(:1551-1588 Roofline estimate +
     push iteration_complete):在线由真实完成事件
     (C++ 物理时钟)推进;排队/配对/准入逻辑原样
     保留于账本,不体现在图结构上(构图粒度与离线
@@ -42,18 +42,17 @@
 face 独有(与 wscllm 蓝图的差异,逐项保留不抹平):
   - 统一实例:9 实例同时承担 prefill+decode(qp 与 active_decode 可并存);
   - decode 实例动态选择:prefill 完成边界经 WeightedInstanceGraph 候选 +
-    LUT per-die 代价(select_decode_instance,face_scheduler.py:654-709)
-    选择;**LUT 以标定常数在线保留**(合同⑨裁决:estimate 公式不动,
-    max_d_token/request_count 从冻结输入导出,禁止在线增量扩展);
+    Roofline per-die 代价(select_decode_instance,face_scheduler.py)
+    选择;每次决策以当前精确工作负载直接计算；
   - decode 选择的顺序敏感全局快照:has_prefill_work(各实例 qp 非空)/
     decode_token_lengths(各实例 active_decode 的 current_decode_token)
     按离线 :1622-1627 同一构造,prefill 完成边界才读取(时机不变);
   - try_admit_waiting_decodes 的阻塞重排队语义(move.admission_blocked ->
-    queue.append + continue,face_scheduler.py:1488-1495)原样保留。
+    queue.append + continue,face_scheduler.py)原样保留。
 
 real-online 刻意差异(合同⑦ Tier B real-online 验收;不变量 = 同一快照输入
 -> 同一输出,不逐值强等):
-  - 计时/迭代粒度:离线 LUT 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
+  - 计时/迭代粒度:离线 Roofline 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
     request-aggregated 构图;
   - 实例 busy 语义:离线 busy 覆盖一次混合迭代(1 prefill chunk + 全部
     active decode 各 1 token);在线 busy 覆盖"一个 prefill/decode 整段
@@ -73,8 +72,8 @@ import sys
 from collections import deque
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_face_trace.py /
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置、
+# 发射与调度模块在上一级。路径只做 import 用途(红线:generate_face_trace.py /
 # face_scheduler.py / session_kv_manager.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +101,6 @@ from face_scheduler import (  # noqa: E402
     NOC_MIGRATE,
     DecodeTieCounter,
     FaceInstanceSpec,
-    FaceLut,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
     build_instances,
@@ -112,7 +110,7 @@ from face_scheduler import (  # noqa: E402
 
 
 class _OnlineInstanceState:
-    """在线实例账本(离线 _InstanceRuntime,face_scheduler.py:1004-1009 的
+    """在线实例账本(离线 _InstanceRuntime,face_scheduler.py 的
     在线子集):qp = prefill FCFS 队列(deque),active_decode = 已准入 decode
     列表,last_arrival_ns = 选择键素材,busy = 一个整段在飞。"""
 
@@ -188,10 +186,10 @@ class _OnlineRequestRuntime:
         self.kv_state_after_completion = None
         self.kv_instance_after_completion = None
         self.hbm_after_completion = None
-        # offline: face_scheduler.py:997-998(初始值;准入时 :1442-1445 重算)
+        # offline: face_scheduler.py(初始值;准入时 :1442-1445 重算)
         self.remaining_chunks = math.ceil(self.prefill_length / _P_CHUNK_HOLDER[0]) \
             if _P_CHUNK_HOLDER[0] else 0
-        # offline: face_scheduler.py:999(current_decode_token = prefill_context)
+        # offline: face_scheduler.py(current_decode_token = prefill_context)
         self.current_decode_token = self.prefill_context_tokens
         self.completion_ns = None
 
@@ -229,10 +227,10 @@ def _kv_event_dict(event) -> dict:
 class FaceOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:face 真实策略(关感知)在在线骨架中运行。
 
-    蓝本: _plan_face_session_lru_recompute(face_scheduler.py:1294-1806),
+    蓝本: _plan_face_session_lru_recompute(face_scheduler.py),
     kv_cache_policy == "session_lru_recompute"(主变体)。拓扑 / 加权实例图 /
-    LUT(标定常数)/ KV 账本(与离线同一函数、同参数)在 __init__ 一次性
-    构建,运行期策略输入全部来自这些 Python 账本(关感知)。
+    Roofline 估计 / KV 账本(与离线同一函数、同参数)在运行期按当前候选
+    直接计算,策略输入全部来自这些 Python 账本(关感知)。
     """
 
     def __init__(self, *, manifest, config, graph, digest_sink=None,
@@ -255,7 +253,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用;基类经 self.graph 调 begin_batch)
 
         # 蓝图 :1314:拓扑(统一实例,require_equal_size)。
-        # offline: face_scheduler.py:1314
+        # offline: face_scheduler.py
         specs = tuple(
             FaceInstanceSpec(
                 name=group.name,
@@ -268,30 +266,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             config.hardware, specs, require_equal_size=True)
         self.p_chunk = int(config.prefill_chunk_size)
 
-        # 蓝图 :1316-1324:LUT(合同⑨裁决:标定常数,在线保留为静态代价
-        # 函数)。max_d_token / request_count 从冻结输入的 manifest 按离线
-        # 同一推导导出(max(final_context_tokens) / 请求数;manifest =
-        # 阶段 0 冻结输入的 policy-independent 事实)——**禁止在线运行时
-        # 增量扩展 token bin 或放宽 d_batch 上界**(超范围查询 KeyError
-        # fail-closed,face_scheduler.py:521-525 已有行为)。
-        # offline: face_scheduler.py:1316-1324
-        request_count = len(manifest["requests"])
-        max_d_token = max(
-            record["final_context_tokens"]
-            for record in manifest["requests"]
-        )
-        self.lut = FaceLut.build(
-            config.hardware,
-            config.model,
-            instance_sizes=(instance.size
-                            for instance in self.topology.instances),
-            p_chunk=self.p_chunk,
-            request_count=request_count,
-            max_d_token=max_d_token,
-        )
-
-        # 蓝图 :1325-1330:加权实例图 + KV 账本。
-        # offline: face_scheduler.py:1325-1330
+        # 蓝图 :1175-1180:加权实例图 + KV 账本。Roofline 估计在候选选择
+        # 时直接使用精确 d_token 计算，不持久化工作负载表。
+        # offline: face_scheduler.py
         self.instance_graph = WeightedInstanceGraph(self.topology)
         self.kv_manager = SessionKVCacheManager(
             self.topology,
@@ -303,7 +280,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self._decode_tie_counter = DecodeTieCounter()
 
         # 蓝图 :1331:实例账本(统一实例,无 phase_role)。
-        # offline: face_scheduler.py:1331
+        # offline: face_scheduler.py
         self.instances = [
             _OnlineInstanceState(index=instance.index)
             for instance in self.topology.instances
@@ -311,17 +288,17 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
         # 蓝图 :1333-1334:future arrival min-heap(在线由 ingress ARRIVAL
         # 事件喂入)。键含 queue_index,同 tick 到期项按冻结队列序稳定弹出。
-        # offline: face_scheduler.py:1333-1334
+        # offline: face_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
 
         # 蓝图 :1353-1355:等待 decode 准入登记(按实例)。
-        # offline: face_scheduler.py:1353-1355
+        # offline: face_scheduler.py
         self.waiting_decode_admissions = {
             instance.index: deque() for instance in self.topology.instances
         }
         # 蓝图 :1359-1362:容量 epoch / 准入门控。
-        # offline: face_scheduler.py:1359-1362
+        # offline: face_scheduler.py
         self.capacity_epoch = [0 for _ in self.topology.instances]
         self.prefill_attempt_epoch = {}
         self.decode_admission_epoch = [-1 for _ in self.topology.instances]
@@ -368,7 +345,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         tick = delta["tick"]
 
         # ---- completion 批(离线 priority 0;同 tick 先于 arrival)----
-        # offline: face_scheduler.py:1598-1682
+        # offline: face_scheduler.py
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
@@ -384,13 +361,13 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                         stage, request_id))
 
         # ---- arrival 批(离线 priority 1)----
-        # offline: face_scheduler.py:1683-1695
+        # offline: face_scheduler.py
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
 
         # ---- 准入/发射 pass(离线 start_ready_iterations,计时部分删除)----
-        # offline: face_scheduler.py:1697 -> 1517-1590
+        # offline: face_scheduler.py -> 1517-1590
         self._admit_pass(tick)
 
         # ---- kv 动作流:本批次 kv_manager 新产出的账本事件 ----
@@ -408,7 +385,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         -> qp 入队 -> last_arrival_ns 更新。快照在 append 之前取(ordering_key
         反映选择时刻的排队深度/最近到达)。
 
-        offline: face_scheduler.py:1683-1695
+        offline: face_scheduler.py
         """
         runtime.estimated_arrival_ns = tick  # :1688
         snapshots = self._queue_snapshots()  # :1689
@@ -425,11 +402,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                            {"type": "prefill_qp", "instance_index": selected})
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
-        """离线 prefill 完成分支(:1613-1648):实例空闲 + qp 出队 + 全局
-        快照 -> select_decode_instance(加权图候选 + LUT per-die 代价) ->
+        """离线 prefill 完成分支(:1476-1512):实例空闲 + qp 出队 + 全局
+        快照 -> select_decode_instance(加权图候选 + Roofline per-die 代价) ->
         等待 decode 准入登记 + dirty + 立即 try_admit_waiting_decodes。
 
-        offline: face_scheduler.py:1613-1648
+        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
@@ -442,7 +419,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         else:
             self._ready_frontier.discard(state.index)
         # 全局 9 实例快照(顺序敏感决策点,离线 :1622-1627 同一构造)。
-        # offline: face_scheduler.py:1622-1627
+        # offline: face_scheduler.py
         has_prefill = [bool(instance.qp) for instance in self.instances]
         active_tokens = [
             [member.current_decode_token for member in instance.active_decode]
@@ -451,7 +428,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         selected, costs = select_decode_instance(  # :1627-1637
             topology=self.topology,
             graph=self.instance_graph,
-            lut=self.lut,
+            hardware=self.config.hardware,
+            model=self.config.model,
             fixed_p_chunk=self.p_chunk,
             prefill_instance_index=state.index,
             has_prefill_work=has_prefill,
@@ -477,7 +455,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         active_decode 出队 + mark_complete + note_capacity_change + 快照。
         下一次 arrival 排程在 REQUEST_COMPLETE 边界(同 tick)。
 
-        offline: face_scheduler.py:1650-1675
+        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
@@ -531,7 +509,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         now + 该 turn 的 inter_request_interval_ns 注册未来 alarm(向
         ingress,不再 push 到事件堆)。
 
-        offline: face_scheduler.py:1676-1681
+        offline: face_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         # §7.3:_runtime_index O(1) 定位。
@@ -583,7 +561,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
     def _admit_pass(self, tick: int) -> None:
         """离线 start_ready_iterations(:1517-1590)的排队/准入部分;计时部分
-        (LUT 估计 + push iteration_complete,:1551-1588)删除,由真实完成事件
+        (Roofline 估计 + push iteration_complete,:1551-1588)删除,由真实完成事件
         推进(合同⑨裁决 1)。先 try_admit_waiting_decodes(:1519),再逐实例
         serve(:1520-1588,统一实例:qp 与 active_decode 可并存;prefill 队首
         优先,准入失败时服务 decode 队首——离线迭代同批混合 prefill chunk +
@@ -592,7 +570,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         §7.3:逐实例 serve 只访问 ready frontier(sorted 保持实例 index 序 =
         离线 :1520 的循环序,决策确定性不受影响)。
 
-        offline: face_scheduler.py:1517-1590
+        offline: face_scheduler.py
         """
         self._try_admit_waiting_decodes(tick)  # :1519
         for instance_index in sorted(self._ready_frontier):  # §7.3 frontier
@@ -622,9 +600,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
     def _try_admit_prefill(self, runtime, now_ns: int) -> bool:
         """离线 try_admit_prefill(:1382-1453),逐行对应;无逐 chunk 计时
-        账本(聚合粒度)。**不读 LUT**(KV 准入链不读 LUT,合同⑨复核结论)。
+        账本(聚合粒度)。KV 准入链不参与 Roofline 候选成本计算。
 
-        offline: face_scheduler.py:1382-1453
+        offline: face_scheduler.py
         """
         if runtime.admitted_prefill:  # :1384-1385
             return True
@@ -708,7 +686,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         """离线 try_admit_waiting_decodes(:1455-1515),逐行对应(含 face 的
         阻塞重排队语义:admission_blocked -> queue.append + continue)。
 
-        offline: face_scheduler.py:1455-1515
+        offline: face_scheduler.py
         """
         ready_targets = tuple(  # :1456-1465
             instance_index
@@ -792,7 +770,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         current_prefill;与离线 ET 按 request 整段一致)。watch 注册
         PREFILL_DRAIN。
 
-        offline: face_scheduler.py:1523-1547(发射对象为整段而非 chunk)
+        offline: face_scheduler.py(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_prefill_batch(plan)
@@ -840,7 +818,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         barrier)。watch 注册 DECODE_COMPLETION(C++ 同 fire 推
         DECODE_COMPLETION + REQUEST_COMPLETE 两条 completed_groups)。
 
-        offline: face_scheduler.py:1526/1548-1550(decode_indexes 的聚合发射)
+        offline: face_scheduler.py/1548-1550(decode_indexes 的聚合发射)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_decode_batch(plan)
@@ -901,7 +879,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         """离线 queue_snapshot(:1371-1376):全部 9 统一实例(无角色过滤),
         remaining_chunks = qp 成员之和,last_arrival_ns = 实例最近到达。
 
-        offline: face_scheduler.py:1371-1376 / 1689
+        offline: face_scheduler.py / 1689
         """
         return tuple(
             PrefillQueueSnapshot(

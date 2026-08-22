@@ -177,8 +177,7 @@ exec 3>&-
 if [[ "${EXPECT_MODE}" == "legacy-stall" ]]; then
   # RED 基线:预修复二进制应陷入无进展(不退出)。10s 观察窗。
   if wait_cpp_exit 10; then
-    echo "[wakeup_guard] legacy-stall: C++ 已退出(未复现挂死;退出码 $( \
-      grep -c . /dev/null; echo '?'))——检查是否误用了修复后二进制" >&2
+    echo "[wakeup_guard] legacy-stall: C++ 已退出(未复现挂死)——检查是否误用了修复后二进制" >&2
     exit 1
   fi
   echo "[wakeup_guard] legacy-stall REPRODUCED: 预修复二进制 CloseInput 后 10s+ 无退出"

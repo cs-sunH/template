@@ -274,7 +274,8 @@ class Sys : public Callable {
     ExecutionDriven::ExecutionMode execution_mode_ =
         ExecutionDriven::ExecutionMode::Static;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-
+    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
+    // --online-mode replay; strategy mode keeps real physics (false).
     // roofline model
     bool roofline_enabled;
     double peak_perf;
@@ -285,12 +286,13 @@ class Sys : public Callable {
     std::string local_mem_trace_filename;
     double local_mem_bw;
     uint64_t local_mem_latency;
-    // Multi-user local-HBM bandwidth contention ("hbm-bandwidth-contention"
-    // in the system configuration): COMP roofline traffic and p2p comm
-    // endpoints share the single local-mem-bw scalar with event-driven
-    // equal-split arbitration (LocalHbmBandwidthModel, one instance per
-    // Workload).  Auto-false when local_mem_bw <= 0 (a zero-rate fluid
-    // model could never drain).
+    // Multi-user local-HBM bandwidth contention (system config key
+    // "hbm-bandwidth-contention", default true). When true, COMP roofline
+    // traffic and NoC p2p comm endpoint reads/writes compete for the single
+    // local-mem-bw scalar through LocalHbmBandwidthModel (strict fair
+    // sharing, event-driven re-allocation). local-mem-bw <= 0 force-disables
+    // it (a zero-rate fluid model would stall forever); false restores the
+    // legacy closed-form roofline + comm-without-HBM behavior.
     bool hbm_bandwidth_contention;
     double remote_mem_bw;
     uint64_t remote_mem_latency;

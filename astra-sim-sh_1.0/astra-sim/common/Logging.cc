@@ -11,7 +11,7 @@ bool is_default_file_logging_disabled(const std::string& log_path) {
 
 }  // namespace
 
-std::unordered_set<spdlog::sink_ptr> LoggerFactory::default_sinks;
+std::vector<spdlog::sink_ptr> LoggerFactory::default_sinks;
 
 std::shared_ptr<spdlog::logger> LoggerFactory::get_logger(
     const std::string& logger_name) {
@@ -53,7 +53,7 @@ void LoggerFactory::init_default_components(const std::string& log_path) {
     auto sink_color_console =
         std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     sink_color_console->set_level(spdlog::level::info);
-    default_sinks.insert(sink_color_console);
+    default_sinks.push_back(sink_color_console);
 
     if (is_default_file_logging_disabled(log_path)) {
         spdlog::init_thread_pool(8192, 1);
@@ -71,13 +71,13 @@ void LoggerFactory::init_default_components(const std::string& log_path) {
         std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             log_path + "/log.log", 1024 * 1024 * 10, 10);
     sink_rotate_out->set_level(spdlog::level::debug);
-    default_sinks.insert(sink_rotate_out);
+    default_sinks.push_back(sink_rotate_out);
 
     auto sink_rotate_err =
         std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
             log_path + "/err.log", 1024 * 1024 * 10, 10);
     sink_rotate_err->set_level(spdlog::level::err);
-    default_sinks.insert(sink_rotate_err);
+    default_sinks.push_back(sink_rotate_err);
 
     spdlog::init_thread_pool(8192, 1);
     spdlog::set_pattern("[%Y-%m-%dT%T%z] [%L] <%n>: %v");

@@ -9,11 +9,10 @@ config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
 config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
 config,output_prefix,llama2_7b_inference,,,,Trace file prefix
 config,output_dir,,,,,Leave empty for derived sh_test generated path
-config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方按方案文档 sh_1.0仓库改造详细执行方案.md §3 步骤 0-1 物化输入（traces/derive_20_first_30_seconds.py 四件套）后指定;正式入口缺失输入 fail-closed
-config,request_queue_context_csv,,,,,Prefix sidecar slot (sh_1.0 sidecar_restore): 物化 plain 队列必填（指向伴生 *_request_context.csv），漏接加载时 fail-closed;recompute 口径留空
-config,prefill_chunk_size,512,,,,Fixed token count processed by each Prefill chunk
-config,request_queue_session_limit,0,,,,Select every session already represented by the strict request-level window
+config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方物化输入（traces/derive_20_first_30_seconds.py 产出 recompute 队列 + canonical 审计件）后指定;正式入口缺失输入 fail-closed
+config,request_queue_session_limit,0,,,,Use every session in the normalized three-minute queue
 config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations
+config,prefill_chunk_size,512,,,,Fixed Prefill and history-recompute chunk size in tokens
 config,kv_reserve_context_tokens,1000000,,,,Reserve local HBM capacity for a complete one-million-token KV cache shard before retaining historical KV locally
 config,hardware_config,hardware/face_case5_config_c.json,,,,Single authoritative FACE Case 5 hardware source for this repository
 config,local_hbm_capacity_profile,validation-160gib,,,,Select the validation-only 160 GiB/NPU capacity defined in the repository-local hardware source

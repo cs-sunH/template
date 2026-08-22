@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-OnlineCli -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 1).
+OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
 
 Online entry CLI contract (方案 §4 步骤 1-2 操作 5). The shared CmdLineParser
 uses cxxopts with allow_unrecognised_options() (CmdLineParser.cc:18-21):
@@ -100,11 +100,9 @@ struct OnlineCliOptions {
     // {0, 8, 16, 32, 64, 128}.
     size_t request_window_rows = 128;
     // Phase 7 §10.4: turn-0 arrival upper bound; beyond = rejected (ns).
-    // Backport fix 2026-08-16 (对比报告 §5.1): default 0 = UNBOUNDED (the
-    // old 30e9 default was the 30s acceptance input's window assumption and
-    // silently rejected later turn-0 rows of longer inputs). A nonzero value
-    // is an EXPLICIT window; out-of-window rows then fail the run (counted,
-    // never silently dropped).
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1): default UNBOUNDED (0 = no
+    // cap). The window is an explicit experiment knob only; any drop it
+    // causes is counted and fail-closes the run-end completion audit.
     uint64_t request_max_arrival_ns = 0;
 };
 

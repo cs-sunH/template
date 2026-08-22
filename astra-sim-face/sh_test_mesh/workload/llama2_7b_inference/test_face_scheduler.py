@@ -18,24 +18,25 @@ from face_scheduler import (  # noqa: E402
     DecodeTieCounter,
     FaceHardware,
     FaceInstanceSpec,
-    FaceLut,
-    FaceLutEntry,
     FaceModel,
-    FaceRequest,
+    FaceRooflineEstimate,
     KVAllocator,
     PrefillQueueSnapshot,
-    SessionKVCacheManager,
     WeightedInstanceGraph,
-    attention_heads_by_tp_rank,
     build_instances,
+    estimate_iteration_time_ns,
     estimate_model_weight_bytes,
-    kv_cache_shard_bytes_for_tokens,
-    model_weight_shard_bytes_by_tp_rank,
-    plan_face_requests,
     select_decode_instance,
     select_prefill_instance,
 )
+from session_kv_manager import (  # noqa: E402
+    SessionKVCacheManager,
+    attention_heads_by_tp_rank,
+    kv_cache_shard_bytes_for_tokens,
+    model_weight_shard_bytes_by_tp_rank,
+)
 from generate_face_trace import (  # noqa: E402
+    _candidate_dict,
     load_face_trace_config,
     select_first_session_requests,
 )
@@ -388,22 +389,69 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(select_prefill_instance(tied), 1)
 
-    def test_lut_exact_filters_and_nearest_token_tie(self) -> None:
-        lut = FaceLut(
-            (
-                FaceLutEntry(2, 0, 1, 256, 10),
-                FaceLutEntry(2, 0, 1, 512, 20),
-                FaceLutEntry(2, 64, 1, 256, 30),
-            )
+    def test_roofline_estimate_uses_exact_tokens_and_validates_prefill_context(self) -> None:
+        hardware, topology = line_topology()
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
+        self.assertGreater(
+            estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=2,
+                p_chunk=8,
+                d_batch=1,
+                d_token=257,
+                p_context_tokens=64,
+            ),
+            0,
         )
-        row = lut.lookup(instance_size=2, p_chunk=0, d_batch=1, d_token=384)
-        self.assertEqual(row.d_token, 256)
-        with self.assertRaises(KeyError):
-            lut.lookup(instance_size=2, p_chunk=0, d_batch=2, d_token=384)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "face_lut.csv"
-            lut.export_csv(output)
-            self.assertIn("iteration_time_ns", output.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "p_context_tokens must be zero"):
+            estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=2,
+                p_chunk=0,
+                d_batch=1,
+                d_token=257,
+                p_context_tokens=1,
+            )
+        with self.assertRaisesRegex(ValueError, "must include the current Prefill chunk"):
+            estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=2,
+                p_chunk=8,
+                d_batch=1,
+                d_token=257,
+                p_context_tokens=7,
+            )
+
+        _, costs = select_decode_instance(
+            topology=topology,
+            graph=WeightedInstanceGraph(topology),
+            hardware=hardware,
+            model=model,
+            fixed_p_chunk=64,
+            prefill_instance_index=1,
+            has_prefill_work=(False, False, False),
+            decode_token_lengths=((257,), (), ()),
+            new_request_token_length=385,
+        )
+        loaded = next(cost for cost in costs if cost.instance_index == 0)
+        self.assertIsInstance(loaded.current_roofline, FaceRooflineEstimate)
+        self.assertEqual(loaded.current_roofline.d_token, 257)
+        self.assertEqual(loaded.updated_roofline.d_token, 385)
+        serialized = _candidate_dict(loaded)
+        self.assertEqual(
+            set(serialized),
+            {
+                "instance_index",
+                "weighted_distance",
+                "current_roofline",
+                "updated_roofline",
+                "delta_time_ns",
+                "per_die_delta_ns",
+            },
+        )
 
     def test_weighted_schedulable_range_changes_after_update(self) -> None:
         hardware, topology = line_topology()
@@ -414,113 +462,114 @@ class FaceSchedulerTests(unittest.TestCase):
         after = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
         self.assertEqual(tuple(index for index, _ in after), (0, 1))
 
-    def test_decode_per_die_cost_and_config_order_tie(self) -> None:
-        _, topology = line_topology()
+    def test_decode_roofline_cost_uses_formula_and_config_order_tie(self) -> None:
+        hardware, topology = line_topology()
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         graph = WeightedInstanceGraph(topology)
-        lut = FaceLut(
-            (
-                FaceLutEntry(2, 0, 0, 0, 0),
-                FaceLutEntry(2, 0, 1, 256, 100),
-                FaceLutEntry(2, 0, 2, 256, 300),
-            )
-        )
         selected, costs = select_decode_instance(
             topology=topology,
             graph=graph,
-            lut=lut,
+            hardware=hardware,
+            model=model,
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
             decode_token_lengths=((256,), (), ()),
             new_request_token_length=256,
         )
-        self.assertEqual(selected, 1)
         self.assertEqual([cost.instance_index for cost in costs], [0, 1, 2])
-        self.assertGreater(costs[0].per_die_delta_ns, costs[1].per_die_delta_ns)
-        self.assertEqual(costs[1].per_die_delta_ns, costs[2].per_die_delta_ns)
+        expected = min(costs, key=lambda cost: (cost.per_die_delta_ns, cost.instance_index))
+        self.assertEqual(selected, expected.instance_index)
+        for cost in costs:
+            self.assertEqual(
+                cost.delta_time_ns,
+                cost.updated_roofline.iteration_time_ns
+                - cost.current_roofline.iteration_time_ns,
+            )
 
     def _decode_tie_fixture(self):
-        """平局集 {1,2} 的 select_decode_instance fixture(与既有 tie 测试
-        同款:实例 0 的 per-die 增量严格更大,实例 1/2 精确并列)。"""
-        _, topology = line_topology()
+        """所有候选工作负载相同，因此形成可重放的精确三方平局。"""
+        hardware, topology = line_topology()
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         graph = WeightedInstanceGraph(topology)
-        lut = FaceLut(
-            (
-                FaceLutEntry(2, 0, 0, 0, 0),
-                FaceLutEntry(2, 0, 1, 256, 100),
-                FaceLutEntry(2, 0, 2, 256, 300),
-            )
-        )
-        return topology, graph, lut
+        return hardware, model, topology, graph
 
     def test_decode_tie_round_robin_rotation(self) -> None:
         # 中-1 裁决(2026-08-20):真实平局下共享 counter 轮流取 tied 元素。
-        topology, graph, lut = self._decode_tie_fixture()
+        hardware, model, topology, graph = self._decode_tie_fixture()
         counter = DecodeTieCounter()
         picks = []
         for _ in range(4):
             selected, _ = select_decode_instance(
                 topology=topology,
                 graph=graph,
-                lut=lut,
+                hardware=hardware,
+                model=model,
                 fixed_p_chunk=64,
                 prefill_instance_index=1,
                 has_prefill_work=(False, False, False),
-                decode_token_lengths=((256,), (), ()),
+                decode_token_lengths=((), (), ()),
                 new_request_token_length=256,
                 tie_counter=counter,
             )
             picks.append(selected)
-        self.assertEqual(picks, [1, 2, 1, 2])
+        self.assertEqual(picks, [0, 1, 2, 0])
 
     def test_decode_tie_counter_not_advanced_on_unique_min(self) -> None:
-        # 唯一最小时 counter 不前进;随后的首次平局仍取 tied[0]。
-        topology, graph, lut = self._decode_tie_fixture()
+        # 唯一可调度候选不触发计数器；随后恢复精确平局仍取 tied[0]。
+        hardware, model, topology, graph = self._decode_tie_fixture()
         counter = DecodeTieCounter()
+        graph.increase_path((0, 1), amount=2)
+        graph.increase_path((1, 2), amount=2)
         selected, _ = select_decode_instance(
             topology=topology,
             graph=graph,
-            lut=lut,
+            hardware=hardware,
+            model=model,
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((), (256,), (256,)),
-            new_request_token_length=256,
-            tie_counter=counter,
-        )
-        self.assertEqual(selected, 0)
-        self.assertEqual(counter.value, 0)
-        selected, _ = select_decode_instance(
-            topology=topology,
-            graph=graph,
-            lut=lut,
-            fixed_p_chunk=64,
-            prefill_instance_index=1,
-            has_prefill_work=(False, False, False),
-            decode_token_lengths=((256,), (), ()),
+            decode_token_lengths=((), (), ()),
             new_request_token_length=256,
             tie_counter=counter,
         )
         self.assertEqual(selected, 1)
+        self.assertEqual(counter.value, 0)
+        graph.decrease_path((0, 1), amount=2)
+        graph.decrease_path((1, 2), amount=2)
+        selected, _ = select_decode_instance(
+            topology=topology,
+            graph=graph,
+            hardware=hardware,
+            model=model,
+            fixed_p_chunk=64,
+            prefill_instance_index=1,
+            has_prefill_work=(False, False, False),
+            decode_token_lengths=((), (), ()),
+            new_request_token_length=256,
+            tie_counter=counter,
+        )
+        self.assertEqual(selected, 0)
         self.assertEqual(counter.value, 1)
 
     def test_decode_tie_without_counter_keeps_config_order(self) -> None:
         # 不传 counter:单次调用完全旧行为,连调两次均取 tied[0]。
-        topology, graph, lut = self._decode_tie_fixture()
+        hardware, model, topology, graph = self._decode_tie_fixture()
         picks = []
         for _ in range(2):
             selected, _ = select_decode_instance(
                 topology=topology,
                 graph=graph,
-                lut=lut,
+                hardware=hardware,
+                model=model,
                 fixed_p_chunk=64,
                 prefill_instance_index=1,
                 has_prefill_work=(False, False, False),
-                decode_token_lengths=((256,), (), ()),
+                decode_token_lengths=((), (), ()),
                 new_request_token_length=256,
             )
             picks.append(selected)
-        self.assertEqual(picks, [1, 1])
+        self.assertEqual(picks, [0, 0])
 
     def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
         _, topology = line_topology()
@@ -619,136 +668,7 @@ class FaceSchedulerTests(unittest.TestCase):
         manager.mark_complete("c", 31, "c0")
         manager.assert_final_state()
 
-    def test_session_policy_keeps_face_mapping_without_capacity_pressure(self) -> None:
-        config = load_checked_in_config()
-        specs = tuple(
-            FaceInstanceSpec(group.name, group.pg_name, group.ranks)
-            for group in config.inference_groups
-        )
-        requests = tuple(
-            FaceRequest(index, f"s{index}", 0, f"r{index}", 512, 2, 0, None)
-            for index in range(4)
-        )
-        legacy = plan_face_requests(
-            hardware=config.hardware,
-            model=config.model,
-            instance_specs=specs,
-            requests=requests,
-        )
-        managed = plan_face_requests(
-            hardware=config.hardware,
-            model=config.model,
-            instance_specs=specs,
-            requests=requests,
-            p_chunk=512,
-            kv_cache_policy="session_lru_recompute",
-            reserve_context_tokens=1_000_000,
-            record_planning_iterations=False,
-        )
-        self.assertEqual(legacy.p_chunk, managed.p_chunk)
-        self.assertEqual(
-            [
-                (item.prefill_instance_index, item.decode_instance_index)
-                for item in legacy.requests
-            ],
-            [
-                (item.prefill_instance_index, item.decode_instance_index)
-                for item in managed.requests
-            ],
-        )
 
-    def test_checked_in_shape_and_requests_plan_deterministically(self) -> None:
-        config = load_checked_in_config()
-        hardware = config.hardware
-        model = config.model
-        specs = tuple(
-            FaceInstanceSpec(group.name, group.pg_name, group.ranks)
-            for group in config.inference_groups
-        )
-        requests = (
-            FaceRequest(0, "session_0", 0, "session_0_request_0", 497, 42, 0, None),
-            FaceRequest(
-                1,
-                "session_0",
-                1,
-                "session_0_request_1",
-                494,
-                58,
-                None,
-                1_000_000_000,
-            ),
-            FaceRequest(2, "session_1", 0, "session_1_request_0", 241, 57, 0, None),
-            FaceRequest(
-                3,
-                "session_1",
-                1,
-                "session_1_request_1",
-                152,
-                46,
-                None,
-                1_000_000_000,
-            ),
-        )
-        first = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=requests,
-        )
-        second = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=requests,
-        )
-        self.assertEqual(first.p_chunk, 346)
-        self.assertEqual(len(first.requests), 4)
-        self.assertTrue(first.iterations)
-        signature = [
-            (
-                plan.request_id,
-                plan.estimated_arrival_ns,
-                plan.prefill_instance_index,
-                plan.decode_instance_index,
-                plan.completion_ns,
-            )
-            for plan in first.requests
-        ]
-        self.assertEqual(
-            signature,
-            [
-                (
-                    plan.request_id,
-                    plan.estimated_arrival_ns,
-                    plan.prefill_instance_index,
-                    plan.decode_instance_index,
-                    plan.completion_ns,
-                )
-                for plan in second.requests
-            ],
-        )
-        by_id = {plan.request_id: plan for plan in first.requests}
-        self.assertEqual(
-            by_id["session_0_request_1"].estimated_arrival_ns,
-            by_id["session_0_request_0"].completion_ns + 1_000_000_000,
-        )
-        self.assertEqual(
-            by_id["session_1_request_1"].estimated_arrival_ns,
-            by_id["session_1_request_0"].completion_ns + 1_000_000_000,
-        )
-        for plan in first.requests:
-            self.assertGreaterEqual(plan.prefill_start_ns, plan.estimated_arrival_ns)
-            self.assertGreater(plan.completion_ns, plan.prefill_complete_ns)
-            self.assertTrue(plan.decode_candidates)
-            self.assertIn(
-                plan.decode_instance_index,
-                [candidate.instance_index for candidate in plan.decode_candidates],
-            )
-            for candidate in plan.decode_candidates:
-                self.assertLessEqual(
-                    candidate.weighted_distance,
-                    hardware.schedulable_distance_limit,
-                )
 
 
 if __name__ == "__main__":

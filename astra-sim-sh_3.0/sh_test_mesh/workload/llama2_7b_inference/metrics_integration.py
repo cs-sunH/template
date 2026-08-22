@@ -1,4 +1,4 @@
-"""Glue between the SH2 ET generator and the frozen metrics schema.
+"""Glue between the SH3 ET generator and the frozen metrics schema.
 
 This module is strictly observational (implementation doc sec.4/6/7): it
 collects request stage boundary node ids while the ET is emitted, mirrors the
@@ -19,7 +19,7 @@ Digest recipes (deterministic, identical with metrics on/off):
 - ``request_mapping_digest``: SHA256 of the canonical JSON
   (``sort_keys``, compact separators) of the original manifest's ``requests``
   array, which carries the FACE prefill/decode mapping and KV placement.
-- ``kv_event_digest``: SHA256 of the canonical JSON of the SH2 KV event
+- ``kv_event_digest``: SHA256 of the canonical JSON of the SH3 KV event
   payload: every request's ``kv_transfers`` rows in queue order, which cover
   suffix-half evictions, full-session fallback evictions, suffix/full
   restores, NoC migrations, and local hits.
@@ -48,7 +48,7 @@ from metrics_schema import (  # noqa: E402
 )
 
 
-REPO_VARIANT = "astra-sim-sh_2.0"
+REPO_VARIANT = "astra-sim-sh_3.0"
 METRICS_CONFIG_PATH = Path(__file__).resolve().parent / "metrics_config.json"
 
 # Anchor kinds follow the doc sec.7.8 table; anything else is a nearest-stage
@@ -64,12 +64,12 @@ __all__ = [
     "EVENT_PREFILL_END",
     "EVENT_PREFILL_START",
     "MemoryActionRecorder",
-    "PlannerLutStatsAccumulator",
+    "PlannerRooflineStatsAccumulator",
     "ServiceMetrics",
     "canonical_json",
     "compute_trace_digest",
     "resolve_metrics_detail",
-    "write_planner_lut_stats",
+    "write_planner_roofline_stats",
 ]
 
 
@@ -82,18 +82,19 @@ def kv_bin_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
-class PlannerLutStatsAccumulator:
+class PlannerRooflineStatsAccumulator:
     """Streaming planner-iteration aggregates (doc sec.8.8).
 
-    The service planner notifies one LUT lookup per planning iteration through
-    :meth:`record_lut_iteration`; only per-cell count/sum/min/max are kept, so
+    The service planner notifies one direct Roofline estimate per planning
+    iteration through :meth:`record_roofline_iteration`; only per-cell
+    count/sum/min/max are kept, so
     memory stays O(cells) regardless of iteration count.  Cells are keyed by
     ``(phase, tp_degree, batch, kv_bin)`` where phase is ``prefill`` /
     ``decode`` / ``mixed`` (a mixed iteration carries both a prefill chunk and
-    a decode batch in the FACE LUT model), batch is the prefill chunk for
+    a decode batch in the FACE model), batch is the prefill chunk for
     prefill cells and the decode batch otherwise, and kv_bin is the
     power-of-two ceiling of the decode KV length.  These records are a
-    planner-LUT proxy (``source=planner_lut``), never the paper's primary
+    planner-Roofline proxy (``source=planner_roofline``), never the paper's primary
     iteration-time source.
     """
 
@@ -101,11 +102,11 @@ class PlannerLutStatsAccumulator:
         # (phase, tp_degree, batch, kv_bin, prefill_chunk) -> [count,sum,min,max]
         self._cells: dict[tuple[str, int, int, int, int], list[int]] = {}
 
-    def record_lut_iteration(
-        self, lut_entry: Any, start_ns: int, end_ns: int
+    def record_roofline_iteration(
+        self, roofline_estimate: Any, start_ns: int, end_ns: int
     ) -> None:
-        p_chunk = int(lut_entry.p_chunk)
-        d_batch = int(lut_entry.d_batch)
+        p_chunk = int(roofline_estimate.p_chunk)
+        d_batch = int(roofline_estimate.d_batch)
         if p_chunk > 0 and d_batch > 0:
             phase = "mixed"
         elif p_chunk > 0:
@@ -115,9 +116,9 @@ class PlannerLutStatsAccumulator:
         batch = p_chunk if phase == "prefill" else d_batch
         key = (
             phase,
-            int(lut_entry.instance_size),
+            int(roofline_estimate.instance_size),
             batch,
-            kv_bin_power_of_two(int(lut_entry.d_token)),
+            kv_bin_power_of_two(int(roofline_estimate.d_token)),
             p_chunk,
         )
         iteration_time_ns = int(end_ns) - int(start_ns)
@@ -138,8 +139,8 @@ class PlannerLutStatsAccumulator:
             records.append(
                 {
                     "schema": 1,
-                    "type": "planner_lut_iteration_stats",
-                    "source": "planner_lut",
+                    "type": "planner_roofline_iteration_stats",
+                    "source": "planner_roofline",
                     "repo_variant": repo_variant,
                     "phase": phase,
                     "tp_degree": tp_degree,
@@ -155,22 +156,22 @@ class PlannerLutStatsAccumulator:
         return records
 
 
-def write_planner_lut_stats(
-    accumulator: PlannerLutStatsAccumulator,
+def write_planner_roofline_stats(
+    accumulator: PlannerRooflineStatsAccumulator,
     *,
     output_dir: Path,
     repo_variant: str = REPO_VARIANT,
 ) -> Path:
-    """Write the planner_lut_stats.json sidecar and echo every record as a
+    """Write the planner_roofline_stats.json sidecar and echo every record as a
     single-line ``[METRIC]`` JSON record (doc sec.8.8/11.1)."""
 
     records = accumulator.to_records(repo_variant=repo_variant)
-    sidecar = output_dir / "planner_lut_stats.json"
+    sidecar = output_dir / "planner_roofline_stats.json"
     sidecar.write_text(
         json.dumps(
             {
                 "schema": 1,
-                "source": "planner_lut",
+                "source": "planner_roofline",
                 "repo_variant": repo_variant,
                 "records": records,
             },
@@ -211,8 +212,8 @@ def kv_event_digest(kv_payload: Any) -> str:
     return _sha256_hex(canonical_json(kv_payload))
 
 
-def kv_event_payload_sh2(request_records: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
-    """One row per KVTransfer in request queue order (SH2 planner KV event log).
+def kv_event_payload_sh3(request_records: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
+    """One row per KVTransfer in request queue order (SH3 planner KV event log).
 
     The rows reference the original manifest's ``kv_transfers`` records
     verbatim, so the digest stays identical whether or not metrics are on.
@@ -260,7 +261,7 @@ class MemoryActionRecorder:
     forwards the delta to the read-only observer, and stores it for the
     manifest ``memory_actions`` replay stream (doc sec.7.8).
 
-    SH2's ``KVCacheManager`` methods do not carry planner timestamps, so the
+    SH3's ``KVCacheManager`` methods do not carry planner timestamps, so the
     scheduler stamps the current event-loop time through
     :meth:`set_planner_time`; an explicit ``planner_time_ns`` argument always
     wins over the stamped value.
@@ -373,7 +374,7 @@ def _build_request_metadata(config: Any, plan: Any) -> list[RequestMetadata]:
 
 
 class ServiceMetrics:
-    """Per-generation metrics context for one SH2 service trace run."""
+    """Per-generation metrics context for one SH3 service trace run."""
 
     def __init__(self, detail: str, *, chiplets_per_npu: Optional[int] = None) -> None:
         if detail not in {"summary", "full"}:
@@ -408,7 +409,7 @@ class ServiceMetrics:
 
         if not self.memory.deltas:
             raise RuntimeError(
-                "no memory deltas were recorded; the SH2 KV cache manager "
+                "no memory deltas were recorded; the SH3 KV cache manager "
                 "must run under face_scheduler.set_metrics_observer() before "
                 "writing the metrics manifest"
             )

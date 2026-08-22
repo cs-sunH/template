@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sh20_online_scheduler.py -- sh_2.0 关感知策略调度器（strategy 模式，步骤 1-9）。
 
-以 plan_face_requests（face_scheduler.py:3492-4132）为蓝本逐行迁移，保持决策
+以已移除的离线 plan_face_requests（2026-08-21 离线 planner 清除批删去）为蓝本逐行迁移，保持决策
 顺序逐行对应（每处迁移用 `# offline: face_scheduler.py:XXXX` 注释标注）。
 
   离线事件循环                                   在线边界
@@ -16,25 +16,26 @@
   completion 收尾（:3968-4002）                    _on_request_complete：
     mark_complete → enforce_reserve → 快照         同款 + completion 段发射 +
                                                  下一 turn arrival 排程（alarm）
-  arrival 批（:4004-4018）                         _on_arrival（truncate_history
-                                                 → pending_admissions）
+  arrival 批（:4004-4018）                         _on_arrival（arrival 落账 →
+                                                 pending_admissions；2026-08-21
+                                                 起无 truncate 通道，discarded 恒 0）
   admit_waiting_requests（:3764-3770）             _admit_pass 头部（各决策边界
                                                  触发，与离线 retry_admissions
                                                  门控同集合）
   start_ready_iterations（:3772-3829）              _admit_pass 尾部：实例空闲
                                                  → 发射 qp[0] 的 prefill 整段；
-                                                 **LUT 计时删除**（offline-only，
+                                                 **离线计时表删除**（offline-only，
                                                  在线由 C++ 真实完成事件推进；
                                                  PD 混合排队语义保留于账本，
                                                  不体现在图结构上）
 
 关感知口径（§4.1 第 6 条）：策略输入全部来自 Python 账本——task-load 三分量、
-KV 容量/位置/可行性（KVCacheManager）、LUT 静态代价表（select_decode_instance
-的 lut.lookup——合同⑨：本仓 LUT 在线继续消费，标定常数构建）。不新增任何
+KV 容量/位置/可行性（KVCacheManager）、精确 Roofline 增量代价
+（select_decode_instance 直接计算）。不新增任何
 C++ 状态读取。
 
 与离线蓝图的刻意差异（real-online 语义，合同⑦ Tier B real-online 验收）：
-  - 计时/迭代粒度：离线 LUT 时钟 + 逐 chunk 迭代 → 在线真实完成事件 +
+  - 计时/迭代粒度：离线 Roofline 时钟 + 逐 chunk 迭代 → 在线真实完成事件 +
     request-aggregated 构图；
   - task-load 三分量口径：running prefill 与 queued prefill 均按 512-chunk
     逐块求和（在飞段 fraction=1.0 全量剩余、恰计一次——在线无 chunk 级
@@ -42,7 +43,7 @@ C++ 状态读取。
     语义下取整段剩余（current_decode_token=prefill_context），公式与参数
     与离线同一估算器（estimate_prefill_task_load_ns /
     estimate_decode_remaining_task_load_ns / _prefill_chunk_task_load_ns
-    缓存同款）；完成时序由真实物理决定，不要求与离线 LUT 时钟 exact；
+    缓存同款）；完成时序由真实物理决定，不要求与离线 Roofline 时钟 exact；
   - 实例 busy 语义：在线 busy 覆盖"一个 prefill 整段在飞"；decode 段发射
     不受 busy 门（strategy 保持物理跨 request 链，per-rank previous_id
     天然串行化同实例段）。
@@ -66,10 +67,7 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from face_scheduler import (  # noqa: E402 -- 只读 import
     InstanceTaskLoadSnapshot,
-    PREFILL_CHUNK_SIZE,
     FaceInstanceSpec,
-    FaceLut,
-    FaceRequest,
     KVCacheManager,
     WeightedInstanceGraph,
     _validate_and_expand_requests,
@@ -112,6 +110,7 @@ def _kv_action_rows(runtime, stage):
     if stage == "prefill":
         for transfer in runtime.history_evictions:
             add("history_eviction", transfer)
+        add("history_prefix_transfer", runtime.history_prefix_transfer)
         add("history_transfer", runtime.history_transfer)
         for transfer in runtime.prefill_evictions:
             add("prefill_eviction", transfer)
@@ -126,8 +125,8 @@ def _kv_action_rows(runtime, stage):
 
 
 class _OnlineInstanceState:
-    """在线实例账本（离线 _InstanceRuntime，face_scheduler.py:3417-3429 的
-    在线子集；iteration_* 计时字段删除——在线无 LUT 迭代时钟）。"""
+    """在线实例账本（离线 _InstanceRuntime，face_scheduler.py 的
+    在线子集；iteration_* 计时字段删除——在线无预计算迭代时钟）。"""
 
     __slots__ = ("index", "qp", "active_decode", "last_arrival_ns", "busy")
 
@@ -161,12 +160,15 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         constants = calibrated_constants or {}
         self.average_decode_length = constants.get(
             "average_decode_length", config.source_average_decode_length)
-        self.p_chunk = PREFILL_CHUNK_SIZE
-        # task-load 逐 chunk 估计缓存（同款 key 与离线 plan_face_requests 的
+        p_chunk = int(config.prefill_chunk_size)
+        if p_chunk <= 0:
+            raise ValueError("online path requires an explicit positive p_chunk")
+        self.p_chunk = p_chunk
+        # task-load 逐 chunk 估计缓存（同款 key 与已移除的离线 plan_face_requests 的
         # prefill_task_cache / sh_3.0 在线版一致）。
         self._prefill_task_cache: dict[tuple[int, int, int], int] = {}
 
-        # offline: face_scheduler.py:3499（topology）
+        # offline: face_scheduler.py（topology）
         specs = tuple(
             FaceInstanceSpec(group.name, group.pg_name, group.ranks)
             for group in config.inference_groups
@@ -174,26 +176,13 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self.topology = build_instances(
             config.hardware, specs, require_equal_size=True)
 
-        # offline: face_scheduler.py:3511-3536（_validate_and_expand_requests +
-        # max_d_token + LUT）。在线用同一函数推导 runtime（含 prefix clamp
-        # :3459-3475）；request_count/max_d_token 为 LUT 覆盖参数（标定常数，
-        # 与离线同值——LUT 值只依赖硬件/模型与 bin 覆盖）。
+        # offline: face_scheduler.py（_validate_and_expand_requests）。在线用
+        # 同一函数推导 runtime（含 prefix clamp）；Decode 候选的 Roofline
+        # 代价在决策边界以当前精确 token 直接计算。
         requests = _to_scheduler_requests(config.request_queue)
         self.runtimes, self._next_request_map = _validate_and_expand_requests(
             requests, self.p_chunk)
-        max_d_token = constants.get(
-            "max_d_token",
-            max(runtime.final_context_tokens for runtime in self.runtimes))
-        self.lut = FaceLut.build(
-            config.hardware,
-            config.model,
-            instance_sizes=(instance.size for instance in self.topology.instances),
-            p_chunk=self.p_chunk,
-            request_count=constants.get(
-                "request_count", len(self.runtimes)),
-            max_d_token=max_d_token,
-        )
-        # offline: face_scheduler.py:3537-3541（graph + KV 账本；Python KV 账本
+        # offline: face_scheduler.py（graph + KV 账本；Python KV 账本
         # 唯一权威，C++ 不建容量模型）
         self.graph_topology = WeightedInstanceGraph(self.topology)
         self.kv_manager = KVCacheManager(
@@ -207,7 +196,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             for i in range(len(self.topology.instances))
         ]
 
-        # offline: face_scheduler.py:3542-3561
+        # offline: face_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
         self.pending_admissions = deque()
@@ -217,7 +206,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self._runtime_index = {
             runtime.request.request_id: index
             for index, runtime in enumerate(self.runtimes)}
-        # offline: face_scheduler.py:3559-3560（next_request）
+        # offline: face_scheduler.py（next_request）
         self.next_request = [
             self._next_request_map.get(index)
             for index in range(len(self.runtimes))]
@@ -251,43 +240,51 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 边界 --
 
     def _push_arrival(self, arrival: dict, tick: int) -> None:
-        # offline: face_scheduler.py:3553-3558（arrival priority 1）
+        # offline: face_scheduler.py（arrival priority 1）。键含
+        # queue_index——同 tick 到期项按冻结队列序稳定弹出，与 face:566 /
+        # wscllm:522 / sh_3.0:434 的显式冻结队列序键对齐；基类 schema 门
+        # 已保证 arrivals 队列序非降（queue_index 与 sequence 在 push 序中
+        # 同向单调），插入后排序结果不变。
         index = self._runtime_index[arrival["request_id"]]
+        runtime = self.runtimes[index]
         heapq.heappush(
-            self.arrival_heap, (tick, 1, self._sequence, "arrival", index))
+            self.arrival_heap,
+            (tick, 1, runtime.request.queue_index, self._sequence, "arrival",
+             index))
         self._sequence += 1
 
     def _drain_arrival_heap(self, tick: int) -> None:
-        # offline: face_scheduler.py:4004-4018（arrival 批）
+        # offline: face_scheduler.py（arrival 批）
         while self.arrival_heap and self.arrival_heap[0][0] <= tick:
-            _, _, _, _, index = heapq.heappop(self.arrival_heap)
+            _, _, _, _, _, index = heapq.heappop(self.arrival_heap)
             runtime = self.runtimes[index]
             if runtime.estimated_arrival_ns is not None:
                 raise RuntimeError("request arrival was delivered more than once")
             runtime.estimated_arrival_ns = tick
-            runtime.history_tokens_discarded = (
-                self.kv_manager.truncate_history(
-                    runtime.request.session_id,
-                    runtime.history_tokens_before,
-                    trigger_request_id=runtime.request.request_id,
-                )
-            )
+            # recompute 单口径（2026-08-21 起）：turn-0 前缀已折入队列
+            # prefill_length，session 历史由 KV 账本动态维护，不存在源声明
+            # 前缀截断通道；字段保留、恒 0（与离线 face_scheduler 同口径）。
+            runtime.history_tokens_discarded = 0
             self.pending_admissions.append(index)
+            # 阶段 3 感知账本：进入 admitted 层（排队类型 prefill_qp =
+            # 已准入未发射的 prefill 排队，contract ⑥ 三型之一；sh_2.0 的
+            # 实例选择推迟到 HBM 准入（_try_admit_request），到达点
+            # instance 键缺省）。查询/审计数据，不进策略判据。
             self._ledger_admit(runtime.request.request_id, tick,
-                               {"type": "pending_admission"})
+                               {"type": "prefill_qp"})
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
         """离线 prefill 收尾分支（:3864-3944）：调用顺序与离线逐行一致。"""
         index = self._runtime_index[request_id]
         runtime = self.runtimes[index]
         state = self.instances[runtime.prefill_instance_index]
-        # offline: face_scheduler.py:3851-3862
+        # offline: face_scheduler.py
         state.busy = False
         if not state.qp or state.qp[0] != index:
             raise RuntimeError("prefill FCFS queue order was corrupted")
         state.qp.popleft()
         runtime.prefill_complete_ns = tick
-        # offline: face_scheduler.py:3873-3881（expand_prefill）
+        # offline: face_scheduler.py（expand_prefill）
         runtime.prefill_evictions = self.kv_manager.expand_prefill(
             session_id=runtime.request.session_id,
             instance_index=state.index,
@@ -295,8 +292,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
-        # offline: face_scheduler.py:3882-3907（select_decode_instance；LUT
-        # 代价在线继续消费——合同⑨本仓裁决）
+        # offline: face_scheduler.py（select_decode_instance；精确 Roofline
+        # 增量代价按当前候选状态直接计算）
         has_prefill_work = [bool(instance.qp) for instance in self.instances]
         active_tokens = [
             [self.runtimes[i].current_decode_token
@@ -304,9 +301,10 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             for instance in self.instances
         ]
         selected, costs = select_decode_instance(
+            hardware=self.config.hardware,
+            model=self.config.model,
             topology=self.topology,
             graph=self.graph_topology,
-            lut=self.lut,
             fixed_p_chunk=self.p_chunk,
             prefill_instance_index=state.index,
             has_prefill_work=has_prefill_work,
@@ -325,14 +323,14 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         )
         runtime.decode_instance_index = selected
         runtime.decode_candidates = costs
-        # offline: face_scheduler.py:3908-3913
+        # offline: face_scheduler.py
         reservation_move_evictions = (
             self.kv_manager.move_request_capacity_reservation(
                 request_id=runtime.request.request_id,
                 target_instance_index=selected,
             )
         )
-        # offline: face_scheduler.py:3914-3925
+        # offline: face_scheduler.py
         (runtime.prefill_decode_transfer,
          decode_move_evictions) = self.kv_manager.move_prefill_to_decode(
             session_id=runtime.request.session_id,
@@ -340,7 +338,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
-        # offline: face_scheduler.py:3926-3935
+        # offline: face_scheduler.py
         decode_growth_evictions = self.kv_manager.expand_decode(
             session_id=runtime.request.session_id,
             instance_index=selected,
@@ -352,20 +350,30 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             reservation_move_evictions + decode_move_evictions
             + decode_growth_evictions
         )
-        # offline: face_scheduler.py:3936-3942
+        # offline: face_scheduler.py
         runtime.kv_allocation = self.kv_manager.allocation_for_session(
             session_id=runtime.request.session_id,
             request_id=runtime.request.request_id,
         )
         self.kv_manager.release_request_capacity_reservation(
             runtime.request.request_id)
-        # offline: face_scheduler.py:3943
+        # offline: face_scheduler.py
         self.instances[selected].active_decode.append(index)
         runtime.decode_start_ns = tick
         # 发射 decode 整段 + DECODE_COMPLETION watch。assignment 在 decode
         # 决策后追加（sh_2.0 的 decode 实例在 prefill 完成时才决策——
         # GraphBatch 校验要求 prefill/decode 实例索引非负齐备）。
         members = self.graph.emit_decode_batch(self._plan_of(runtime))
+        # 阶段 3 感知账本：admitted 层排队类型更新（active_decode，face
+        # :754 同款；sh_2.0 无 waiting_decode 中间态——decode 在 prefill
+        # 完成时即决策即发射，准入更新与发射钩子合位点）+ 发射记录 +
+        # issued 层写入。查询/审计数据，不进策略判据。
+        self._ledger_admit(request_id, tick,
+                           {"type": "active_decode",
+                            "instance_index": runtime.decode_instance_index})
+        self._note_emitted(request_id, STAGE_DECODE)
+        self._ledger_issue(request_id, tick, STAGE_DECODE,
+                           runtime.decode_instance_index)
         self._batch["kv_actions"].extend(_kv_action_rows(runtime, "decode"))
         self.log_decision({
             "kind": "decode", "request_id": request_id, "priority": 0,
@@ -411,19 +419,19 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         （:3960-3966）+ completion 段发射。"""
         index = self._runtime_index[request_id]
         runtime = self.runtimes[index]
-        # offline: face_scheduler.py:3976-3980（mark_complete）
+        # offline: face_scheduler.py（mark_complete）
         self.kv_manager.mark_complete(
             runtime.request.session_id,
             tick,
             next_request_type=runtime.request.next_trigger_type,
         )
-        # offline: face_scheduler.py:3981-3991（enforce_reserve）
+        # offline: face_scheduler.py（enforce_reserve）
         (runtime.completion_evictions,
          runtime.reserve_unmet_ranks) = self.kv_manager.enforce_reserve(
             instance_index=runtime.decode_instance_index,
             trigger_request_id=runtime.request.request_id,
         )
-        # offline: face_scheduler.py:3992-4002（快照）
+        # offline: face_scheduler.py（快照）
         completion_snapshot = self.kv_manager.session_snapshot(
             runtime.request.session_id)
         runtime.kv_location_after_completion = completion_snapshot.location
@@ -449,7 +457,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             interval = following.request.inter_request_interval_ns
             if interval is None:
                 raise RuntimeError("validated later request lost its interval")
-            # offline: face_scheduler.py:3965-3966（push_event(now+interval,1)）
+            # offline: face_scheduler.py（push_event(now+interval,1)）
             # 在线：向 ingress 注册未来 alarm（strategy 口径 = 完成时刻 +
             # interval；准入等待由调度器在 ARRIVAL 边界处理）。
             self._batch["future_alarms"].append({
@@ -491,22 +499,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         snapshots = tuple(
             self._task_load_snapshot(state, now_ns) for state in self.instances)
         runtime.prefill_hbm_feasible_instances = hbm_feasible_instances
-        if runtime.request.session_id in self.kv_manager.session_ids:
-            history_snapshot = self.kv_manager.session_snapshot(
-                runtime.request.session_id)
-        else:
-            history_snapshot = None
-        if (history_snapshot is not None
-                and history_snapshot.location
-                == KVCacheManager.PARTIAL_HBM_REMOTE):
-            if history_snapshot.instance_index is None:
-                raise RuntimeError("partial history lost its resident instance")
-            selected = history_snapshot.instance_index
-            if not hbm_feasible_instances[selected]:
-                return False
-            runtime.prefill_affinity_reason = "resident_prefix_layers"
-        else:
-            selected = select_prefill_instance(snapshots, hbm_feasible_instances)
+        selected = select_prefill_instance(snapshots, hbm_feasible_instances)
 
         selected_snapshot = snapshots[selected]
         admission_evictions = self.kv_manager.reserve_request_capacity(
@@ -520,6 +513,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         runtime.prefill_instance_loads = snapshots
         runtime.admission_time_ns = now_ns
         (runtime.history_location_before,
+         runtime.history_prefix_transfer,
          runtime.history_transfer,
          prepare_evictions) = self.kv_manager.prepare_prefill(
             session_id=runtime.request.session_id,
@@ -535,16 +529,19 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     f"session {runtime.request.session_id} has no prior KV state")
             runtime.history_source_instance_index = (
                 runtime.history_location_before.instance_index)
-            runtime.history_transfer_bytes = (
-                0 if runtime.history_transfer is None
-                or runtime.history_transfer.kind == "local_hit"
-                else runtime.history_transfer.total_bytes)
+            runtime.history_transfer_bytes = sum(
+                transfer.total_bytes
+                for transfer in (
+                    runtime.history_prefix_transfer,
+                    runtime.history_transfer,
+                )
+                if transfer is not None and transfer.kind != "local_hit")
         self.instances[selected].qp.append(request_index)
         self.instances[selected].last_arrival_ns = now_ns
         return True
 
     def _admit_pass(self, now_ns: int) -> None:
-        """offline: face_scheduler.py:3764-3770（admit_waiting_requests）+
+        """offline: face_scheduler.py（admit_waiting_requests）+
         :3772-3829（start_ready_iterations 的在线形态）。"""
         blocked = deque()
         while self.pending_admissions:
@@ -554,13 +551,13 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self.pending_admissions.extend(blocked)
 
         for state in self.instances:
-            # offline: face_scheduler.py:3773-3775（实例空闲且有工作）
+            # offline: face_scheduler.py（实例空闲且有工作）
             if state.busy or (not state.qp and not state.active_decode):
                 continue
             if state.qp:
                 index = state.qp[0]
                 runtime = self.runtimes[index]
-                # offline: face_scheduler.py:3786-3788（prefill_start）
+                # offline: face_scheduler.py（prefill_start）
                 if runtime.prefill_start_ns is None:
                     runtime.prefill_start_ns = now_ns
                 if runtime.request.request_id in self._emitted_prefill:
@@ -592,8 +589,11 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     "members": members,
                     "statuses": ["Success", "Skipped"],
                 })
+                # 阶段 3 感知账本：发射记录 + issued 层写入（face :777-779
+                # 同款；查询/审计数据，不进策略判据）。
+                self._note_emitted(runtime.request.request_id, STAGE_PREFILL)
                 self._ledger_issue(
-                    runtime.request.request_id, now_ns, "prefill",
+                    runtime.request.request_id, now_ns, STAGE_PREFILL,
                     runtime.prefill_instance_index)
 
     # ------------------------------------------------- task-load 三分量 --
@@ -616,7 +616,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
 
     def _task_load_snapshot(self, state: _OnlineInstanceState,
                             now_ns: int) -> InstanceTaskLoadSnapshot:
-        """离线 task_load_snapshot（face_scheduler.py:3693 起）的在线复刻。
+        """离线 task_load_snapshot（face_scheduler.py 起）的在线复刻。
         三分量口径（每个请求恰计一次）：
           - running_prefill：在飞段全量剩余**逐 512-chunk 求和，恰计一次**
             （在线无 chunk 级进度事件，fraction=1.0 上界近似；与 sh_3.0
@@ -711,7 +711,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
 
     def _plan_of(self, runtime) -> dict:
         """runtime → graph_batch_builder 的 plan dict（strategy 模式直接传
-        对象：history_transfer / evictions 已是 KVTransfer，
+        对象：history_prefix_transfer / history_transfer / evictions 已是
+        KVTransfer，
         history_location_before 已是 SessionKVSnapshot）。"""
         return {
             "queue_index": runtime.request.queue_index,
@@ -726,6 +727,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             "history_tokens_before": runtime.history_tokens_before,
             "prefill_context_tokens": runtime.prefill_context_tokens,
             "final_context_tokens": runtime.final_context_tokens,
+            "history_prefix_transfer": runtime.history_prefix_transfer,
             "history_transfer": runtime.history_transfer,
             "history_evictions": runtime.history_evictions,
             "prefill_evictions": runtime.prefill_evictions,
@@ -739,3 +741,32 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 runtime.kv_location_after_completion),
             "hbm_wait_ns": getattr(runtime, "hbm_wait_ns", 0),
         }
+
+    # --------------------------------------------------------------- 收尾 --
+
+    def verify_run_end(self) -> None:
+        """基类协议校验之上，对齐 face/sh_1.0/sh_3.0/wscllm 四仓收尾断言集
+        （蓝本 sh_3.0 sh30_online_scheduler.py:980-1006；防御深度——正常
+        路径零行为变化）。sh_2.0 无 ready frontier 结构（_admit_pass 直接
+        遍历全部实例，无 frontier 就绪集），故省略蓝本的 ready frontier
+        断言，不为凑断言新增状态结构。"""
+        super().verify_run_end()
+        if self.pending_admissions:
+            pending_ids = [
+                self.runtimes[request_index].request.request_id
+                for request_index in self.pending_admissions]
+            raise RuntimeError(
+                "strategy run ended with blocked HBM admissions: "
+                "{}".format(pending_ids[:5]))
+        if self.completed_requests != len(self.runtimes):
+            raise RuntimeError(
+                "strategy run ended with {}/{} requests complete".format(
+                    self.completed_requests, len(self.runtimes)))
+        if any(state.busy or state.qp or state.active_decode
+               for state in self.instances):
+            raise RuntimeError(
+                "strategy run ended with non-idle instance state")
+        if self.arrival_heap:
+            raise RuntimeError(
+                "run ended with {} unconsumed arrival events".format(
+                    len(self.arrival_heap)))

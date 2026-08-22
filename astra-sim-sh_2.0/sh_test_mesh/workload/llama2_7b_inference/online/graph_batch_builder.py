@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- sh_2.0 在线 GraphBatch 构图器（方案 §4 步骤 1-8 操作 4）。
 
-阶段 1 最关键的对齐点：复用 generator 发射逻辑的节点结构。per-request 发射
-（generate_face_trace.py 模块级函数）由模块级
+阶段 1 最关键的对齐点：复用共享发射原语的节点结构。per-request 发射
+（generate_face_trace.py 模块级函数）由共享
 助手函数组成（_emit_kv_transfer / _emit_tp_readiness_barrier /
 _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——本模块
 直接 import 它们（红线：只读 import），用 OnlineTraceBuilder（与 TraceBuilder
 同构的在线侧 builder）驱动，保证：
 
   - 节点属性、插入顺序、rank ownership 跨 request 链结构一致（节点级审计口径）；
-  - per-rank 节点 id 跨批次全局递增（与离线 per-rank .et id 序列一致）；
+  - per-rank 节点 id 跨批次全局递增，保持运行时 GraphBatch 的连续 ID 契约；
   - interval gate 的 after_node_id 指向上一 request 的 decode end barrier
     节点 id（completion 段账本，跨批次解析）。
 
@@ -19,14 +19,14 @@ _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——
   - 每 request 拆三段发射：ARRIVAL 边界发射 prefill 整段（gates/history
     逐出/恢复/prefill），PREFILL_DRAIN 边界发射 decode 整段（decode 逐出/
     prefill→decode 迁移/decode/end barrier），REQUEST_COMPLETE 边界发射
-    completion 逐出 + 下一 turn 的 interval gates——离线同 request 一次写完，
-    但 per-rank id 序列一致；
-  - watch 锚点与离线 metrics 锚点一致：PREFILL_DRAIN = 每 rank 末个真实
+    completion 逐出 + 下一 turn 的 interval gates；三段共享同一 per-rank ID
+    序列；
+  - watch 锚点遵循保留的调度语义：PREFILL_DRAIN = 每 rank 末个真实
     prefill 节点（prefill_last_node_by_rank，排除 end barrier；含 PARTIAL
     恢复流水 suffix 尾段——suffix restore 节点先于 prefill 算子发射，其
     完成被 first-chunk-suffix 的 arm_dependency 依赖覆盖，合同④边界映射）；
     DECODE_COMPLETION = end barrier 前每 rank 的 decode 末节点
-    （decode_last_node_by_rank，离线 doc sec.6.4 口径，含迁移 transfer 尾）；
+    （decode_last_node_by_rank，含迁移 transfer 尾）；
   - strategy 模式保持物理跨 request 链。
 """
 
@@ -34,8 +34,8 @@ import os
 import sys
 
 # --------------------------------------------------------------------------
-# import 路径：本文件位于 workload/llama2_7b_inference/online/，离线写出模块
-# 在上一级。路径只做 import 用途（红线：generate_face_trace.py /
+# import 路径：本文件位于 workload/llama2_7b_inference/online/，共享发射与
+# 配置模块在上一级。路径只做 import 用途（红线：generate_face_trace.py /
 # face_scheduler.py 只读 import 与注释）。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -67,18 +67,18 @@ from generate_trace import (  # noqa: E402
 
 
 class OnlineTraceBuilder:
-    """与离线 TraceBuilder 同构的在线侧每-rank builder。
+    """与共享 TraceBuilder 接口同构的在线侧每-rank builder。
 
     同一接口面：timer_gate / arm_timer_gate / arm_dependency /
     chain_checkpoint / restore_chain / mem_store / mem_load /
     local_hbm_kv_restore / comp / all_reduce / comm_send / comm_recv /
-    next_id / previous_id / node_count——离线助手函数（_emit_kv_transfer 等）
+    next_id / previous_id / node_count——共享助手函数（_emit_kv_transfer 等）
     可直接驱动。与 TraceBuilder 的差异：节点发射为 GraphBatch nodes[] dict
-    （而非 ChakraNode 字节流），依赖记录为 parent_edges[]（离线 .et 的
+    （而非 ChakraNode 对象），依赖记录为 parent_edges[]（共享 builder 的
     data_deps 内联在节点里，在线按边列表携带）；timer_gate 忽略 duration
     （runtime_ns=0，alarm 替代等待）。
 
-    per-rank id 自 0 起全局递增（跨批次），与离线 .et 每 rank id 序列一致。
+    per-rank id 自 0 起全局递增，跨批次保持连续。
     """
 
     def __init__(self, rank: int, *, remote_operand_loads: bool):
@@ -160,14 +160,14 @@ class OnlineTraceBuilder:
     def timer_gate(self, name: str, duration_ns: int, *, after_node_id=None):
         """在线 timer gate：发射节点（runtime_ns=0，is_timer_op）。
 
-        与离线 TraceBuilder.timer_gate（generate_trace.py:735-759）完全同构：
-          - duration == 0 → 直接返回 after_node_id，不发射节点
-            （离线同款；interval==0 的 request 在离线 .et 中没有 interval
-            gate 节点，在线也必须没有）；
+        与共享 TraceBuilder.timer_gate 完全同构：
+        - duration == 0 → 直接返回 after_node_id，不发射节点
+            （共享接口同款；interval==0 的 request 不产生 interval gate
+            节点）；
           - 否则直接创建节点（不经 _new_node）——不链 previous_id、不消费
             pending_extra_dependencies、不更新 previous_id；仅 after_node_id
             依赖（interval gate 依赖上一 request 完成 barrier）。
-        离线语义（duration = 到达时刻/interval，gate 等待）由 C++ arrival
+        调度参考语义（duration = 到达时刻/interval，gate 等待）由 C++ arrival
         alarm（future_alarms）替代——gate 只保留结构与依赖，保持时长会双重
         等待（蓝本步骤 1-8 设计分析，同样适用本仓）。
         """
@@ -324,7 +324,7 @@ def kv_transfer_from_log(record) -> KVTransfer:
 def history_snapshot_from_log(plan: dict):
     """重建 history_location_before：location 取 prefill 决策上下文记录的
     history_location_before（决策日志已含）；resident 层数 = partial
-    history_transfer 的 layer_start（离线 writer 断言两者相等）。
+    history_transfer 的 layer_start（共享调度语义要求两者相等）。
     strategy 模式的 plan["history_location_before"] 直接是
     SessionKVSnapshot 对象（字段同名），原样返回。"""
     snapshot = plan.get("history_location_before")
@@ -350,7 +350,7 @@ def history_snapshot_from_log(plan: dict):
 class GraphBatchBuilder:
     """在线构图器：持有 per-rank OnlineTraceBuilder（状态跨批次），按决策
     边界发射 prefill 整段 / decode 整段 / completion 段，并维护
-    pending_history 与 completion gate 账本（离线 writer 同构）。"""
+    pending_history 与 completion gate 账本（共享调度语义同构）。"""
 
     def __init__(self, config, *, digest_sink=None):
         self.config = config
@@ -361,7 +361,7 @@ class GraphBatchBuilder:
             for rank in range(config.npus_count)
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
-        # 离线 writer 同构账本（generate_face_trace.py:2196-2212）：
+        # 跨请求 history/completion gate 账本：
         self.pending_history = {}          # request_id -> PendingHistoryGate
         self.pending_request_by_session = {}
         self.deferred_session_locations = {}
@@ -369,9 +369,8 @@ class GraphBatchBuilder:
         self._prefill_completion_nodes = {}  # request_id -> {rank: node_id}
         self._decode_completion_nodes = {}   # request_id -> {rank: node_id}
         self._tag_allocator = TransferTagAllocator()
-        # 离线 writer 的 per-request action_sequence 账本（generate_face_
-        # trace.py:2259-2270：action 名含 _action{seq:03d}_，跨该 request
-        # 的全部 transfer 递增）——在线三段发射共享同一计数器，保证节点
+        # 每 request 的 action_sequence 账本（action 名含 _action{seq:03d}_，
+        # 跨该 request 的全部 transfer 递增）——在线三段发射共享同一计数器，保证节点
         # 名跨 request 逐字节稳定（canonical 命名 key）。
         self._action_sequence = {}
         self.batch = None
@@ -438,7 +437,7 @@ class GraphBatchBuilder:
     def emit_completion_batch(self, request_plan: dict,
                               following_plan: dict = None) -> None:
         """发射 completion 逐出 + 下一 turn 的 interval gates
-        （REQUEST_COMPLETE 决策；离线 writer 的收尾段在线复刻）。"""
+        （REQUEST_COMPLETE 决策；共享完成语义的在线实现）。"""
         # GraphBatch 校验的 stage/generation 闭集 = {prefill:0, decode:1}
         # （GraphBatchCommitter :174/:420）；completion 段节点（completion
         # 逐出与 interval gates）归 decode 阶段，generation 1。
@@ -450,7 +449,7 @@ class GraphBatchBuilder:
     # --------------------------------------------------- per-request 发射 --
 
     def _mark_pending_history_store(self, transfer: KVTransfer) -> None:
-        # 离线 writer 同构（generate_face_trace.py:2213-2229）。
+        # 与共享 history-gate 账本一致。
         if transfer.resident_prefix_layers_after == 0:
             location = "remote_memory"
         elif transfer.resident_prefix_layers_after < transfer.model_layers:
@@ -489,7 +488,8 @@ class GraphBatchBuilder:
         prefix = _prefix_of(request_plan)
         request = config.request_queue[request_plan["queue_index"]]
 
-        # ---- 到达/history gate（离线 :2199-2230 的在线复刻）----
+        # ---- 到达/history gate（turn-0 预置到达 timer；turn>0 消费跨请求
+        #      pending gate）----
         if request_plan["turn_index"] == 0:
             arrival = request.session_arrival_time_ns
             if arrival is None:
@@ -515,7 +515,7 @@ class GraphBatchBuilder:
             if pending_gate is None:
                 raise RuntimeError(
                     f"request {request_plan['request_id']} has no arrival/history gate")
-            # offline: generate_face_trace.py:2258（pending_request_by_session.pop）
+            # 消费该 request 的跨请求 history gate。
             self.pending_request_by_session.pop(request_plan["session_id"], None)
 
         history_before = history_snapshot_from_log(request_plan)
@@ -558,7 +558,7 @@ class GraphBatchBuilder:
             control_instance_index=pending_gate.source_instance_index,
             node_gates=pending_gate.timer_gates,
         )
-        for transfer in request_plan.get("history_evictions", ()):
+        for transfer in request_plan["history_evictions"]:
             emit_transfer(kv_transfer_from_log(transfer), "history_evictions",
                           trigger_gate=history_eviction_trigger)
 
@@ -573,10 +573,17 @@ class GraphBatchBuilder:
             kv_transfer_from_log(history_transfer)
             if history_transfer is not None else None
         )
+        history_prefix_transfer = request_plan.get("history_prefix_transfer")
+        history_prefix_transfer = (
+            kv_transfer_from_log(history_prefix_transfer)
+            if history_prefix_transfer is not None else None
+        )
 
         if history_transfer is None:
             if request_plan["turn_index"] != 0:
                 raise RuntimeError("later request is missing its history transfer action")
+            if history_prefix_transfer is not None:
+                raise RuntimeError("new history unexpectedly has a prefix migration")
             source_group = self.group_by_index[pending_gate.source_instance_index]
             if source_group.ranks != prefill_group.ranks:
                 raise RuntimeError("first-request arrival gate is not on its Prefill ranks")
@@ -584,13 +591,18 @@ class GraphBatchBuilder:
                 builders[rank].arm_timer_gate(
                     pending_gate.timer_gates[relative_index])
         elif not partial_history_restore:
+            if history_prefix_transfer is not None:
+                raise RuntimeError("non-partial history has a prefix migration")
+            if history_before is None:
+                raise RuntimeError(
+                    "history transfer is missing its location snapshot")
             if pending_gate.location != history_before.location:
                 raise RuntimeError(
                     f"history gate location {pending_gate.location!r} does not "
                     f"match planned location {history_before.location!r}")
             emit_transfer(history_transfer, "history_transfer", gate=pending_gate)
 
-        for transfer in request_plan.get("prefill_evictions", ()):
+        for transfer in request_plan["prefill_evictions"]:
             emit_transfer(kv_transfer_from_log(transfer), "prefill_evictions")
 
         # ---- PARTIAL 恢复流水 / 全量 readiness barrier ----
@@ -601,43 +613,73 @@ class GraphBatchBuilder:
                     or history_transfer.layer_start != history_before.resident_prefix_layers
                     or history_transfer.layer_end != config.layers):
                 raise RuntimeError("partial history load does not match its suffix")
-            if request_plan["prefill_instance_index"] != history_before.instance_index:
-                raise RuntimeError("partial history lost Prefill instance affinity")
-            for relative_index, rank in enumerate(prefill_group.ranks):
-                builders[rank].arm_timer_gate(
-                    pending_gate.timer_gates[relative_index])
-            _emit_tp_readiness_barrier(
-                builders=builders,
-                group=prefill_group,
-                name=f"{prefix}_prefill_resident_prefix_ready_barrier",
-            )
+            if history_before.instance_index is None:
+                raise RuntimeError("partial history has no resident source instance")
+            if history_prefix_transfer is None:
+                if request_plan["prefill_instance_index"] != history_before.instance_index:
+                    raise RuntimeError(
+                        "cross-instance partial history is missing its prefix migration"
+                    )
+                for relative_index, rank in enumerate(prefill_group.ranks):
+                    builders[rank].arm_timer_gate(
+                        pending_gate.timer_gates[relative_index])
+                _emit_tp_readiness_barrier(
+                    builders=builders,
+                    group=prefill_group,
+                    name=f"{prefix}_prefill_resident_prefix_ready_barrier",
+                )
+                prefix_ready_nodes = tuple(
+                    builders[rank].previous_id for rank in prefill_group.ranks
+                )
+            else:
+                resident_prefix_layers = history_before.resident_prefix_layers
+                if (
+                    history_prefix_transfer.kind != "noc_migrate"
+                    or history_prefix_transfer.phase != "history"
+                    or history_prefix_transfer.reason
+                    != "history_partial_prefix_migrate"
+                    or history_prefix_transfer.source_instance_index
+                    != history_before.instance_index
+                    or history_prefix_transfer.target_instance_index
+                    != request_plan["prefill_instance_index"]
+                    or history_prefix_transfer.source_instance_index
+                    == history_prefix_transfer.target_instance_index
+                    or history_prefix_transfer.layer_start != 0
+                    or history_prefix_transfer.layer_end != resident_prefix_layers
+                    or history_prefix_transfer.resident_prefix_layers_before
+                    != resident_prefix_layers
+                    or history_prefix_transfer.resident_prefix_layers_after
+                    != resident_prefix_layers
+                ):
+                    raise RuntimeError("partial history prefix migration is invalid")
+                emit_transfer(
+                    history_prefix_transfer,
+                    "history_prefix_transfer",
+                    gate=pending_gate,
+                )
+                prefix_readiness = _emit_tp_point_to_point_readiness_barrier(
+                    builders=builders,
+                    group=prefill_group,
+                    tag_allocator=self._tag_allocator,
+                    name=f"{prefix}_prefill_prefix_ready_barrier",
+                )
+                prefix_ready_nodes = tuple(
+                    int(node_id)
+                    for _, node_id in prefix_readiness["node_ids_by_rank"]
+                )
             checkpoints = {
                 rank: builders[rank].chain_checkpoint()
                 for rank in prefill_group.ranks
             }
-            prefix_barrier_nodes = tuple(
-                builders[rank].previous_id for rank in prefill_group.ranks
-            )
             branch_gate = PendingHistoryGate(
                 source_instance_index=request_plan["prefill_instance_index"],
-                timer_gates=prefix_barrier_nodes,
+                timer_gates=prefix_ready_nodes,
                 location=history_before.location,
             )
-            history_record = _emit_kv_transfer(
-                config=config,
-                builders=builders,
-                group_by_index=self.group_by_index,
-                tag_allocator=self._tag_allocator,
-                transfer=history_transfer,
-                action_name=(
-                    f"{prefix}_history_transfer_action"
-                    f"{self._next_action_sequence(request_plan):03d}_"
-                    f"{sanitize_node_prefix(history_transfer.session_id)}_"
-                    f"{history_transfer.kind}"
-                ),
-                pending_gate=branch_gate,
-                trigger_gate=None,
-                transfer_anchor_sink=None,
+            history_record = emit_transfer(
+                history_transfer,
+                "history_transfer",
+                gate=branch_gate,
             )
             for shard_record in history_record["shards"]:
                 target_rank = shard_record.get("target_rank")
@@ -678,6 +720,10 @@ class GraphBatchBuilder:
             request_plan["prefill_context_tokens"]
             - request_plan["history_tokens_before"]
         )
+        if prefill_tokens_to_process <= 0:
+            raise ValueError(
+                f"request {request_plan['request_id']} has no Prefill work tokens"
+            )
         prefill_spans = []
         processed = 0
         while processed < prefill_tokens_to_process:
@@ -783,13 +829,13 @@ class GraphBatchBuilder:
 
         # [frontier 接续裁决，strategy 死锁修复 2026-08-16]
         # strategy 模式（真实物理）**不恢复**：per-rank previous_id 保持
-        # 接续到当前 frontier（= 离线 writer 的跨 request 物理链同构），
+        # 接续到当前 frontier（= 共享跨 request 物理链语义），
         # 使 per-rank 发行序 = 全局发射序——任意两个发射段在所有共享
         # rank 上的相对次序一致，跨实例 P2P（noc_migrate send/recv/ack）
         # 与 collective 参与序不可能反转（死锁机理见实录：sdg1 waits-for
         # 证据，rank0/rank6 槽位互持 + ack 反压成环）。decode 组 rank
-        # 首节点因此链到该 rank 当前 frontier（跨 request 边），与离线
-        # 跨 request previous_id 链一致（差分归因类别②的既有口径）。
+        # 首节点因此链到该 rank 当前 frontier（跨 request 边），保持连续的
+        # per-rank previous_id 链（差分归因类别②的既有口径）。
         prefill_completion_nodes = self._prefill_completion_nodes[
             request_plan["request_id"]]
 
@@ -821,7 +867,7 @@ class GraphBatchBuilder:
             node_gates=tuple(
                 prefill_completion_nodes[rank] for rank in prefill_group.ranks),
         )
-        for transfer in request_plan.get("decode_evictions", ()):
+        for transfer in request_plan["decode_evictions"]:
             emit_transfer(kv_transfer_from_log(transfer), "decode_evictions",
                           trigger_gate=decode_eviction_trigger)
         prefill_decode_transfer = request_plan.get("prefill_decode_transfer")
@@ -913,13 +959,12 @@ class GraphBatchBuilder:
             node_gates=tuple(
                 decode_completion_nodes[rank] for rank in decode_group.ranks),
         )
-        for transfer in request_plan.get("completion_evictions", ()):
+        for transfer in request_plan["completion_evictions"]:
             emit_transfer(kv_transfer_from_log(transfer), "completion_evictions",
                           trigger_gate=completion_eviction_trigger)
 
-        # ---- 下一 turn 的 interval gates（离线 :2790-2806 的在线复刻；
-        #      duration 保持离线同参（duration == 0 → 无节点，after_node_id
-        #      直接作依赖），实际等待由 C++ arrival alarm 替代）----
+        # ---- 下一 turn 的 interval gates（duration == 0 → 无节点，
+        #      after_node_id 直接作依赖；实际等待由 C++ arrival alarm 替代）----
         if following_plan is None:
             self.deferred_session_locations.pop(request_plan["session_id"], None)
             self.pending_request_by_session.pop(
@@ -963,8 +1008,7 @@ class GraphBatchBuilder:
         return value
 
     def config_p_chunk(self) -> int:
-        from face_scheduler import PREFILL_CHUNK_SIZE  # noqa: E402 -- 只读
-        return PREFILL_CHUNK_SIZE
+        return self.config.prefill_chunk_size
 
 
 def _prefix_of(request_plan: dict) -> str:

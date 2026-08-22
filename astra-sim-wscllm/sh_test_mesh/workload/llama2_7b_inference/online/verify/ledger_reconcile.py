@@ -20,6 +20,11 @@ strategy 感知运行目录):
                               phase-4 end audit(committed/watch/kv 权威计数)
   --manifest <ET_DIR>/manifest.json   全部请求事实(1177 requests)
   --cpp-log <run>/cpp.log     C++ 门计数器(可选;存在则核对 completed)
+  --expected-requests N       输入期望请求数(R0a;缺省 1177 = 20.csv
+                              前 30s 验收值,跨输入复用时按物化实测改传)
+  --expected-accepted-sessions N
+                              输入期望 accepted 会话数(R0e;缺省 112
+                              = 30s 验收值,同上)
   --report <path>.md          对账报告输出(markdown)
 
 对平项(全部硬断言;任一失配即"不平"并逐项列差异与证据):
@@ -283,6 +288,13 @@ def main(argv=None) -> int:
     parser.add_argument("--bridge-dir", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--cpp-log", default=None)
+    parser.add_argument(
+        "--expected-requests", type=int, default=1177,
+        help="输入期望请求数(R0a;缺省 1177 = 20.csv 前 30s 验收值,"
+             "跨输入复用时按物化实测改传)")
+    parser.add_argument(
+        "--expected-accepted-sessions", type=int, default=112,
+        help="输入期望 accepted 会话数(R0e;缺省 112 = 30s 验收值,同上)")
     parser.add_argument("--report", default=None,
                         help="markdown report path (default: stdout)")
     args = parser.parse_args(argv)
@@ -309,8 +321,9 @@ def main(argv=None) -> int:
     cpp_audit = load_cpp_audit(args.cpp_log)
 
     manifest_count = len(manifest_ids)
-    check("R0a", manifest_count == 1177,
-          "manifest requests = {} (expected 1177)".format(manifest_count))
+    check("R0a", manifest_count == args.expected_requests,
+          "manifest requests = {} (expected {})".format(
+              manifest_count, args.expected_requests))
 
     unreconciled = {
         request_id: layers.get("completed_unreconciled")
@@ -318,8 +331,8 @@ def main(argv=None) -> int:
         if layers.get("completed_unreconciled") is not None
     }
     check("R0b", len(unreconciled) == manifest_count,
-          "Python completed-unreconciled = {} (expected 1177)".format(
-              len(unreconciled)))
+          "Python completed-unreconciled = {} (expected {})".format(
+              len(unreconciled), manifest_count))
     extra = set(unreconciled) - set(manifest_ids)
     missing = set(manifest_ids) - set(unreconciled)
     check("R0b1", not extra,
@@ -337,14 +350,14 @@ def main(argv=None) -> int:
         rid: entry.get("request_complete")
         for rid, entry in cpp_completions.items()}
     check("R0c", len(req_facts) == manifest_count,
-          "C++ REQUEST_COMPLETE facts = {} (expected 1177)".format(
-              len(req_facts)))
+          "C++ REQUEST_COMPLETE facts = {} (expected {})".format(
+              len(req_facts), manifest_count))
     check("R0c1", len(prefill_facts) == manifest_count,
-          "C++ prefill completion facts = {} (expected 1177)".format(
-              len(prefill_facts)))
+          "C++ prefill completion facts = {} (expected {})".format(
+              len(prefill_facts), manifest_count))
     check("R0c2", len(decode_facts) == manifest_count,
-          "C++ decode completion facts = {} (expected 1177)".format(
-              len(decode_facts)))
+          "C++ decode completion facts = {} (expected {})".format(
+              len(decode_facts), manifest_count))
     check("R0c3", not (set(prefill_facts) - set(manifest_ids)),
           "prefill facts outside manifest: {!r}".format(
               sorted(set(prefill_facts) - set(manifest_ids))))
@@ -357,11 +370,13 @@ def main(argv=None) -> int:
 
     if cpp_counters is not None:
         check("R0d", cpp_counters["completed"] == manifest_count,
-              "cpp.log completed = {} (expected 1177)".format(
-                  cpp_counters["completed"]))
-        check("R0e", cpp_counters["accepted"] == 112,
-              "cpp.log accepted sessions = {} (expected 112)".format(
-                  cpp_counters["accepted"]))
+              "cpp.log completed = {} (expected {})".format(
+                  cpp_counters["completed"], manifest_count))
+        check("R0e", cpp_counters["accepted"]
+              == args.expected_accepted_sessions,
+              "cpp.log accepted sessions = {} (expected {})".format(
+                  cpp_counters["accepted"],
+                  args.expected_accepted_sessions))
 
     # ---- R1 逐 request 生命周期对平 ----
     lifecycle_bad = []
@@ -847,7 +862,8 @@ def _render_report(balanced, failures, manifest_count, arrival_epochs,
     lines.append("")
     lines.append("| 对平项 | 结果 |")
     lines.append("|---|---|")
-    lines.append("| R0 集合对平(manifest / Python completed-unreconciled / C++ REQUEST_COMPLETE / cpp.log completed = 1177;prefill/decode 完成事实各 1177;零重复) | {} |".format(
+    lines.append("| R0 集合对平(manifest / Python completed-unreconciled / C++ REQUEST_COMPLETE / cpp.log completed = {};prefill/decode 完成事实各 {};零重复) | {} |".format(
+        manifest_count, manifest_count,
         "PASS" if not failures else "FAIL"))
     lines.append("| R1 逐 request 生命周期对平(admitted<=commit<=prefill<=decode==complete;gen 0/1/1) | {} |".format(
         "PASS" if not lifecycle_bad else "FAIL: {} 条".format(len(lifecycle_bad))))

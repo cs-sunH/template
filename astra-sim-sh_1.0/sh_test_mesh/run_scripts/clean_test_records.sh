@@ -32,10 +32,10 @@ fi
 if git rev-parse --git-dir >/dev/null 2>&1; then
   if ! git diff --quiet -- "$WL/trace_config.csv" 2>/dev/null; then
     git checkout -- "$WL/trace_config.csv" && echo "[clean] trace_config.csv 已恢复 git 原始字节"
-  echo "[clean] 提示: trace_config 已恢复占位态;重跑前需运行 traces/ 物化器脚本重新物化并接线（sidecar 仓 request_queue_context_csv 必填,漏接将 fail-closed）"
+  echo "[clean] 提示: trace_config 已恢复占位态;重跑前需运行 traces/ 物化器脚本重新物化并将 request_queue_csv 指到物化产物（占位/缺失将 fail-closed）"
   fi
 else
-  echo "[clean][warn] 非 git 环境，跳过 trace_config 恢复（请手动核对第12/13行指向 placeholder）"
+  echo "[clean][warn] 非 git 环境，跳过 trace_config 恢复（请手动核对第12行指向 placeholder）"
 fi
 # 5. 缓存
 find . -path ./build -prune -o -type d \( -name "__pycache__" -o -name ".pytest_cache" \) -print 2>/dev/null | while read -r d; do rm -rf "$d"; done

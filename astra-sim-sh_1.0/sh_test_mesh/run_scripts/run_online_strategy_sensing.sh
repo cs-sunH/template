@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # sh_1.0 阶段 4 官方在线 runner:strategy 感知模式(真实策略 + 感知开关)。
 # Usage: bash run_online_strategy_sensing.sh <run_dir> <request_csv>
-# request-neutral(裸仓库):request_csv 由调用方按方案文档
-# sh_1.0仓库改造详细执行方案.md §3 步骤 0-1 物化后必填传入(缺失即
+# request-neutral(裸仓库):request_csv 由调用方按
+# traces/derive_20_first_30_seconds.py 物化后必填传入(缺失即
 # fail-closed)。
 # 与 run_online_strategy.sh 完全同构,区别仅三处:
 #   C++   追加 --sensing-enabled(阶段 4 感知 feature flag,默认关;开启后
@@ -19,7 +19,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
 RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 sh_1.0仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
+REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
 # Bare-repo restore (2026-08-16, phase 7): the baseline/20_30s archive is
 # deleted; resolve the single generated dir dynamically (the dir name

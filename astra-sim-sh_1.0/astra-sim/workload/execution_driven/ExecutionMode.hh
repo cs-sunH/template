@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-ExecutionMode -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+ExecutionMode -- execution-driven mechanism layer (wscllm phase 1).
 
 Execution mode of the simulation binary, introduced by the step-1-2
 execution-mode factory (方案 §4 步骤 1-2 操作 4). Only replacing the main()

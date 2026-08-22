@@ -34,6 +34,7 @@ reverse index (步骤 1-5).
 #define EXECUTION_DRIVEN_GRAPHSOURCE_HH
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -170,6 +171,22 @@ class GraphSource {
     /// False in online mode (the end authority belongs exclusively to the
     /// ServiceCoordinator).
     virtual bool static_all_done() = 0;
+
+    /// Zero-copy fast path for hot loops; the default keeps the by-value
+    /// semantics so static/empty sources are unchanged. The NodeStore-backed
+    /// source overrides it to iterate its stable storage (nodes are never
+    /// erased, so the references outlive the callback).
+    virtual void for_each_dep_free(
+        const std::function<void(const NodeView&)>& consume) {
+        for (const auto& nv : dep_free_nodes()) {
+            consume(nv);
+        }
+    }
+
+    /// Zero-copy lookup for the online terminal paths. Returns nullptr when
+    /// unsupported (static sources) -- online callers treat that as unknown
+    /// node. Default returns nullptr; the NodeStore-backed source overrides.
+    virtual const NodeView* lookup_ptr(uint64_t /*node_id*/) { return nullptr; }
 };
 
 /// Empty source: yields no nodes, finishes nothing. Used as the step-1-2

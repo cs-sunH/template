@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-OnlineCli -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 1).
+OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
 Implementation (方案 §4 步骤 1-2 操作 5; CLI rules unit-tested in
 tests/cli_online_test.cc).
 *******************************************************************************/
@@ -54,14 +54,12 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     std::string request_queue_csv;
     std::string command_fifo;
     size_t request_window_rows = 128;
-    // Backport fix 2026-08-16 (对比报告 §5.1): the default arrival window is
-    // UNBOUNDED. The old default (30,000,000,000 ns) was the 30s acceptance
-    // input's window assumption frozen into the mechanism layer -- any longer
-    // input had its later turn-0 rows silently rejected by the windowed
-    // reader (12.5% measured on a 3-minute input) while the run still
-    // reported PASS. The window bound stays available as an EXPLICIT
-    // parameter; when set, out-of-window rows are counted and fail the run
-    // (main_online run-end audit), never silently dropped.
+    // Backport fix (2026-08-16, sh_2.0测试 §5.1): default UNBOUNDED (0 = no
+    // arrival-window cap). The previous 30e9 default burned the 30s
+    // acceptance-input window into the code and silently dropped over-window
+    // requests; the window survives only as an explicit experiment knob
+    // (--request-max-arrival-ns), and any drop it causes is fail-closed at
+    // the run-end completion audit (see main_online.cc).
     uint64_t request_max_arrival_ns = 0;
 
     for (int i = 1; i < argc; ++i) {

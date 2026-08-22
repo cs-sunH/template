@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-DecisionBridge -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
 Interface + File implementation (方案 §4 步骤 1-7).
 
 The C++ <-> Python decision channel of the Execution-Driven loop. The

@@ -111,10 +111,8 @@ class MetricCollector {
                           uint64_t num_ops,
                           uint64_t local_tensor_bytes);
 
-    // Local HBM KV-restore issue hook. SH2 wires this to
-    // Workload::issue_local_hbm_kv_restore, so the accumulator counts every
-    // restore payload at issue time (the LocalHbmBandwidthModel counters
-    // track the same bytes as they are actually served).
+    // Reserved for repos with a local HBM restore model (e.g. SH2). In this
+    // repo no caller exists; the accumulator is kept for interface parity.
     void on_local_hbm_restore_issue(int rank, uint64_t bytes);
 
     // Compute and print all metric records. Called after the event loop,

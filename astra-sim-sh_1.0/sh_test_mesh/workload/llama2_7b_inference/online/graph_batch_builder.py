@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- sh_1.0 在线 GraphBatch 构图器(方案 §4 步骤 1-8 操作 4)。
 
-阶段 1 最关键的对齐点:复用离线写出逻辑的节点结构。离线 per-request 十段发射
-(write_face_trace 主发射循环, generate_face_trace.py:2033-2413)由模块级助手
-函数组成(_emit_kv_transfer / _emit_transfer_trigger / _emit_tp_readiness_barrier
-/ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
-(与 TraceBuilder 同构的在线侧 builder)驱动,保证:
+阶段 1 最关键的对齐点:复用共享发射原语的节点结构。`generate_face_trace.py`
+提供的 _emit_kv_transfer / _emit_transfer_trigger /
+_emit_tp_readiness_barrier 与 transformer_pass_aggregated 由本模块直接
+import，并用 OnlineTraceBuilder 驱动，保证:
 
   - 节点属性、插入顺序、rank ownership 跨 request 链结构一致(节点级审计口径);
   - per-rank 节点 id 跨批次全局递增;
   - interval gate 的 after_node_id 指向上一同 session request 的 decode 完成
     barrier 节点 id(pending_history 账本,跨批次解析)。
 
-sh_1.0 三段式发射(方案 §4 步骤 1-8 操作 4;与蓝本两段式的差异,离线
-transfer_order_per_request 十段 manifest 的三次分组):
+sh_1.0 三段式发射(方案 §4 步骤 1-8 操作 4;相对于两段式语义蓝本的
+三次分组):
   - 段 1(ARRIVAL 边界) = 到达/interval timer gates + history_evictions +
     history_transfer(或 turn-0 arm gate)+ prefill_evictions + prefill 屏障 +
     prefill 整段(chunked-aggregated + end barrier);
@@ -22,7 +21,7 @@ transfer_order_per_request 十段 manifest 的三次分组):
     per-rank decode end barrier;
   - 段 3(DECODE_COMPLETION/REQUEST_COMPLETE 边界) = completion_evictions
     (触发门 = decode 段末 per-rank 节点)+ 下一同 session turn 的 interval
-    timer gates(离线 :2373-2399 语义,after_node_id=decode 完成节点,
+    timer gates(after_node_id=decode 完成节点,
     duration = interval + hbm_wait_ns)。
 
 在线语义差异(刻意,注释标注;蓝本裁决 3/7/9 的三段推广):
@@ -33,11 +32,11 @@ transfer_order_per_request 十段 manifest 的三次分组):
     builders(2026-08-15 的段间恢复裁决已于 2026-08-19 废止,见
     emit_prefill_batch 的 frontier 接续裁决块);
   - strategy 保持物理跨 request 链(无条件接续 frontier);
-  - watch 锚点与离线 metrics 锚点一致(2026-08-20 五仓统一,R2-2):
+  - watch 锚点与共享指标口径一致(2026-08-20 五仓统一,R2-2):
     PREFILL_DRAIN = 每 rank 末个真实 prefill 计算节点(end barrier 之前,
-    与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier);
-    DECODE_COMPLETION = end barrier 前每 rank 的 decode 末节点(离线
-    EVENT_DECODE_END 口径);REQUEST_COMPLETE = completion_evictions 段
+    与 EVENT_PREFILL_END 锚点一致,排除 end barrier);
+    DECODE_COMPLETION = end barrier 前每 rank 的 decode 末节点(EVENT_DECODE_END
+    口径);REQUEST_COMPLETE = completion_evictions 段
     每 rank 末节点(无 completion_evictions 时 = 调用方显式记录的段 2
     decode 块末)。触发门角色(decode_evictions/completion_evictions 的
     node_gates、下一 turn interval gate 的 after_node_id、_block_ends
@@ -45,18 +44,18 @@ transfer_order_per_request 十段 manifest 的三次分组):
     决策边界因此比 post-barrier 口径早一个 all_reduce——这是五仓统一的
     预期时间线变化。
 
-离线账本在线复刻:pending_history(request_id -> PendingHistoryGate 等价
-dict)/pending_request_by_session/deferred_remote_sessions
-(离线 :1950-1987 与 :2373-2402 的语义)。
+共享调度语义在在线侧的账本:pending_history(request_id ->
+PendingHistoryGate 等价 dict)/pending_request_by_session/
+deferred_remote_sessions。
 """
 
 import os
 import sys
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_face_trace.py / face_scheduler.py
-# 只读 import 与注释)。
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置与
+# 发射原语模块在上一级。路径只做 import 用途(红线:generate_face_trace.py /
+# face_scheduler.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -86,15 +85,15 @@ from face_scheduler import KVTransfer, KVTransferShard  # noqa: E402
 
 
 class OnlineTraceBuilder:
-    """与离线 TraceBuilder 同构的在线侧每-rank builder(generate_trace.py:648)。
+    """与共享 TraceBuilder API 同构的在线侧每-rank builder。
 
     同一接口面:timer_gate / arm_timer_gate / comp / all_reduce / comm_send /
     comm_recv / mem_store / mem_load / next_id / previous_id / node_count——
-    离线助手函数(_emit_kv_transfer 等)可直接驱动。与 TraceBuilder 的差异:
+    共享助手函数(_emit_kv_transfer 等)可直接驱动。与 TraceBuilder 的差异:
     节点发射为 GraphBatch nodes[] dict(而非 ChakraNode 字节流),依赖记录为
-    parent_edges[](离线 .et 的 data_deps 内联在节点里,在线按边列表携带);
+    parent_edges[] 以边列表携带依赖;
     timer_gate 忽略 duration(runtime_ns=0,alarm 替代等待)。duration==0 时
-    与离线 :711-712 同款跳过节点(返回 after_node_id)。
+    跳过节点(返回 after_node_id)。
     """
 
     def __init__(self, rank: int, *, remote_operand_loads: bool):
@@ -187,7 +186,7 @@ class OnlineTraceBuilder:
 
     def timer_gate(self, name: str, duration_ns: int, *,
                    after_node_id=None):
-        """在线 timer gate:duration==0 与离线 :711-712 同款跳过;否则发射节点
+        """在线 timer gate:duration==0 跳过节点(返回 after_node_id);否则发射节点
         (runtime_ns=0,is_timer_op,不经 _new_node——不链 previous_id、不消费
         pending_extra_dependencies、不更新 previous_id;仅 after_node_id 依赖)。
         离线语义(duration = 到达/interval,gate 等待)由 C++ arrival alarm
@@ -299,7 +298,7 @@ class OnlineTraceBuilder:
 
 def _restore_kv_transfer(record: dict) -> KVTransfer:
     """把决策日志/在线决策里的 transfer dict 重建为 KVTransfer(只读重建,
-    驱动离线 _emit_kv_transfer 发射)。"""
+    驱动共享 _emit_kv_transfer 发射)。"""
     return KVTransfer(
         kind=record["kind"],
         phase=record["phase"],
@@ -349,7 +348,7 @@ class GraphBatchBuilder:
         self.group_by_index = dict(enumerate(config.inference_groups))
         self.tag_allocator = TransferTagAllocator()
         self.p_chunk = int(config.prefill_chunk_size)
-        # 离线 pending_history 账本的在线等价(request_id -> dict:
+        # 共享 pending_history 账本的在线等价(request_id -> dict:
         # source_instance_index/timer_gates/location)。
         self.pending_history = {}
         self.pending_request_by_session = {}
@@ -362,10 +361,9 @@ class GraphBatchBuilder:
         # 一致,不随 watch 锚点变化)。PREFILL_DRAIN/DECODE_COMPLETION
         # watch 锚点自 2026-08-20(R2-2)起改用 barrier 前末节点,不经本账本。
         self._block_ends = {}
-        # request_id -> 连续 action 计数(离线 write_face_trace 的
-        # per-request action_sequence:2057 计数跨全部 stage 连续;在线三段
-        # 发射共用同一计数器,保证 actionNNN 命名与离线 .et 逐节点一致——
-        # canonical 命名 key 含 name,分段各自归零会造成同逻辑节点改名)。
+        # request_id -> 连续 action 计数:每个 request 的全部 stage 共用
+        # 同一计数器，保证跨三个在线段的 actionNNN 命名稳定；canonical
+        # 命名 key 含 name，分段各自归零会造成同逻辑节点改名。
         self._action_sequence_by_request = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -413,7 +411,7 @@ class GraphBatchBuilder:
         }
 
     def _mark_pending_history_remote(self, session_id: str) -> None:
-        # 离线 mark_pending_history_remote(:1954-1959)的在线复刻。
+        # remote_store 逐出后会话 history 迁往 remote_memory 的在线登记。
         pending_request_id = self.pending_request_by_session.get(session_id)
         if pending_request_id is None:
             self.deferred_remote_sessions.add(session_id)
@@ -428,6 +426,10 @@ class GraphBatchBuilder:
         EVENT_PREFILL_END 锚点一致,排除 end barrier;四仓统一口径)。
         decode_evictions 触发门不经返回值,仍用 _block_ends["seg1"] 的
         post-barrier 块末。"""
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
         self._set_context(request_plan, "prefill", 0)
         prefill_group = self.group_by_index[
             request_plan["prefill_instance_index"]]
@@ -486,7 +488,7 @@ class GraphBatchBuilder:
         return members
 
     def _emit_segment1(self, request_plan: dict) -> dict:
-        """离线 write_face_trace 主循环的段 1 部分(:2044-2240 的在线复刻)。"""
+        """发射在线请求的段 1：到达、历史/KV 准备与 Prefill。"""
         builders = self.builders
         prefill_group = self.group_by_index[
             request_plan["prefill_instance_index"]]
@@ -568,11 +570,10 @@ class GraphBatchBuilder:
             name=f"{prefix}_prefill_kv_ready_barrier",
         )
 
-        # prefill 整段(request-aggregated;span 与离线 :2103-2163 同款)。
-        # Context sidecar:按实际工作量发射。recompute 口径下
-        # context - history == request.prefill_length;sidecar_restore 口径
-        # 下 = input_tokens_total - min(prefix, 账本)(turn-0 prefix 计入,
-        # 复用部分剔除),kv span 仍 = history + processed + chunk。
+        # prefill 整段(request-aggregated;span 切分口径见下)。
+        # 按实际工作量发射:recompute 单口径下
+        # context - history == request.prefill_length(turn-0 prefix 已折入
+        # 队列 prefill_length),kv span = history + processed + chunk。
         prefill_spans: list[tuple[int, int]] = []
         processed = 0
         prefill_work_tokens = (
@@ -637,7 +638,8 @@ class GraphBatchBuilder:
         return dict(prefill_last_node_by_rank)
 
     def _emit_segment2(self, request_plan: dict) -> dict:
-        """离线主循环的段 2 部分(:2241-2360 的在线复刻)。"""
+        """主循环段 2 的在线发射:decode_evictions + Prefill-to-Decode KV
+        迁移 + decode 主体。"""
         builders = self.builders
         prefill_group = self.group_by_index[
             request_plan["prefill_instance_index"]]
@@ -702,7 +704,7 @@ class GraphBatchBuilder:
             name=f"{prefix}_decode_kv_ready_barrier",
         )
 
-        # decode 整段(request-aggregated;span 与离线 :2313-2316 同款)。
+        # decode 整段(request-aggregated;span 口径见下)。
         tensor_parallel = len(decode_group.ranks)
         decode_spans = tuple(
             (1, request_plan["prefill_context_tokens"] + step + 1)
@@ -751,9 +753,8 @@ class GraphBatchBuilder:
         return dict(decode_last_node_by_rank)
 
     def _emit_arrival_gate(self, request_plan: dict) -> None:
-        """turn-0 request 的到达 timer gates(离线 :1961-1987 预发射的在线
-        等价:段 1 批次内调用)。duration 参数与离线一致(admission_time_ns;
-        0 时离线亦不发射节点,在线同款跳过)。"""
+        """turn-0 request 的到达 timer gates(段 1 批次内发射)。
+        duration = admission_time_ns(0 时不发射节点,timer_gate 同款跳过)。"""
         if request_plan["turn_index"] != 0:
             raise RuntimeError("arrival gate is a turn-0-only structure")
         group = self.group_by_index[request_plan["prefill_instance_index"]]
@@ -777,7 +778,7 @@ class GraphBatchBuilder:
             request_plan["request_id"]
 
     def _emit_segment3(self, request_plan: dict) -> dict:
-        """离线主循环的段 3 部分(:2362-2402 的在线复刻):completion_evictions
+        """主循环段 3 的在线发射:completion_evictions
         (触发门 = decode 段末节点)+ 下一 turn 的 interval gates。"""
         builders = self.builders
         decode_group = self.group_by_index[
@@ -841,7 +842,7 @@ class GraphBatchBuilder:
         self._mark_block_end(request_plan["request_id"], "seg3",
                              sorted(touched_ranks), before=self._seg3_before)
 
-        # 下一同 session turn 的 interval gates(离线 :2373-2399;duration =
+        # 下一同 session turn 的 interval gates(duration =
         # interval + hbm_wait_ns——在线 hbm_wait_ns 由策略按准入时刻账本给出,
         # 缺省 0 之外的值由 request_plan["next_hbm_wait_ns"] 携带)。
         following = request_plan.get("following")

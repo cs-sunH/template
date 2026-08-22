@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """wakeup_guard_fixture_service.py -- 缺陷 C 回归 fixture 的决策服务
-(2026-08-16, synced from face-defectfix2-done; 源分析:
-face主动测试错误分析.md 缺陷 C)。
+(2026-08-16, face主动测试错误分析.md 缺陷 C)。
 
 run_online_wakeup_guard_fixture.sh 的 Python 端,两个场景:
 

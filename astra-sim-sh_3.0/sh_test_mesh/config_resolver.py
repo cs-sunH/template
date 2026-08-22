@@ -339,13 +339,14 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
     if hardware.remote_memory_logical_pool is None:
         raise ValueError("Remote-memory expansion requires a logical pool")
 
-    boundary_ranks = [
-        row * hardware.mesh_cols + column
-        for row in range(hardware.mesh_rows)
-        for column in range(hardware.mesh_cols)
-        if row in {0, hardware.mesh_rows - 1}
-        or column in {0, hardware.mesh_cols - 1}
-    ]
+    boundary_ranks = []
+    for row in range(hardware.mesh_rows):
+        for column in range(hardware.mesh_cols):
+            if row in {0, hardware.mesh_rows - 1} or column in {
+                0,
+                hardware.mesh_cols - 1,
+            }:
+                boundary_ranks.append(row * hardware.mesh_cols + column)
     remote["remote-mem-latency"] = hardware.remote_memory_latency_ns
     remote["logical-pool"] = hardware.remote_memory_logical_pool
     remote["npu-ids"] = boundary_ranks

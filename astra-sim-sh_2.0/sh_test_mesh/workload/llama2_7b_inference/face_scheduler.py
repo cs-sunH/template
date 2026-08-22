@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Pure FACE request-mapping planner used by the Chakra trace generator.
+"""Pure FACE request-mapping semantic reference used by online scheduling.
 
-The FACE paper describes a live host scheduler.  ASTRA-sim consumes static ET
-graphs, so this module performs a deterministic discrete-event planning pass at
-trace-generation time.  It implements the paper's queue ordering,
-schedulable-instance range, LUT matching, per-die incremental decode cost, and
-local-first KV allocation without depending on protobuf or ASTRA-sim internals.
+The FACE paper describes a live host scheduler.  The online strategy reuses
+this module's deterministic queue ordering, schedulable-instance range,
+exact Roofline matching, per-die incremental decode cost, and local-first KV
+allocation at dynamic decision boundaries.  It does not construct or
+serialize static ET files and has no protobuf or ASTRA-sim runtime dependency.
 """
 
 from __future__ import annotations
 
-import csv
 import heapq
 import math
-from collections import deque
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, Optional, Sequence
 
 
 PREFILL_CHUNK_SIZE = 512
@@ -38,19 +35,6 @@ def set_metrics_observer(recorder: Any) -> None:
 
     global _METRICS_RECORDER
     _METRICS_RECORDER = recorder
-
-
-# Optional read-only streaming planner-LUT statistics hook (doc sec.8.8).
-# The trace generator installs it around plan_face_requests(); it observes
-# every planning iteration's LUT lookup and never feeds back into scheduling.
-_ITERATION_STATS_HOOK: Any = None
-
-
-def set_iteration_stats_hook(hook: Any) -> None:
-    """Install (or clear, with ``None``) the planner iteration stats hook."""
-
-    global _ITERATION_STATS_HOOK
-    _ITERATION_STATS_HOOK = hook
 
 
 def _metrics_anchor_for_phase(phase: str) -> str:
@@ -254,7 +238,8 @@ def build_instances(
         raise ValueError("FACE instances must cover every configured NPU exactly once")
     if require_equal_size and len({instance.size for instance in instances}) != 1:
         raise ValueError(
-            "the static ET adapter requires equal-size instances for KV shard pairing"
+            "the online GraphBatch scheduler requires equal-size instances for "
+            "KV shard pairing"
         )
 
     adjacency_sets = [set() for _ in instances]
@@ -503,29 +488,13 @@ def nearest_edge_rank(
 
 
 @dataclass(frozen=True)
-class FaceLutEntry:
+class FaceRooflineEstimate:
     instance_size: int
     p_chunk: int
     d_batch: int
     d_token: int
     iteration_time_ns: int
     source: str = "analytical_roofline"
-
-
-def _power_of_two_token_bins(max_token: int) -> tuple[int, ...]:
-    if max_token < 0:
-        raise ValueError("max_token must be non-negative")
-    bins = [0]
-    value = 1
-    while value < max(1, max_token):
-        value *= 2
-        if value >= 128:
-            bins.append(value)
-    if len(bins) == 1:
-        bins.append(128)
-    if bins[-1] < max_token:
-        bins.append(bins[-1] * 2)
-    return tuple(dict.fromkeys(bins))
 
 
 def estimate_iteration_time_ns(
@@ -539,7 +508,7 @@ def estimate_iteration_time_ns(
     p_context_tokens: Optional[int] = None,
 ) -> int:
     if instance_size <= 0 or p_chunk < 0 or d_batch < 0 or d_token < 0:
-        raise ValueError("invalid LUT workload parameters")
+        raise ValueError("invalid Roofline workload parameters")
     if p_context_tokens is None:
         p_context_tokens = p_chunk
     if p_context_tokens < 0:
@@ -680,115 +649,6 @@ def estimate_decode_remaining_task_load_ns(
         )
         load_ns += token_fraction * token_time_ns
     return math.ceil(load_ns)
-
-
-class FaceLut:
-    def __init__(self, entries: Iterable[FaceLutEntry]) -> None:
-        self.entries = tuple(entries)
-        if not self.entries:
-            raise ValueError("FACE LUT must contain at least one entry")
-        index: dict[tuple[int, int, int], list[FaceLutEntry]] = {}
-        seen: set[tuple[int, int, int, int]] = set()
-        for entry in self.entries:
-            key4 = (
-                entry.instance_size,
-                entry.p_chunk,
-                entry.d_batch,
-                entry.d_token,
-            )
-            if key4 in seen:
-                raise ValueError(f"duplicate FACE LUT entry: {key4}")
-            seen.add(key4)
-            index.setdefault(key4[:3], []).append(entry)
-        self._index = {
-            key: tuple(sorted(rows, key=lambda row: row.d_token))
-            for key, rows in index.items()
-        }
-
-    @classmethod
-    def build(
-        cls,
-        hardware: FaceHardware,
-        model: FaceModel,
-        *,
-        instance_sizes: Iterable[int],
-        p_chunk: int,
-        request_count: int,
-        max_d_token: int,
-    ) -> "FaceLut":
-        if p_chunk <= 0:
-            raise ValueError("p_chunk must be positive")
-        if request_count <= 0:
-            raise ValueError("request_count must be positive")
-        token_bins = _power_of_two_token_bins(max_d_token)
-        rows: list[FaceLutEntry] = []
-        for instance_size in sorted(set(instance_sizes)):
-            for chunk in (0, p_chunk):
-                for d_batch in range(request_count + 1):
-                    for d_token in token_bins:
-                        if d_batch == 0 and d_token != 0:
-                            continue
-                        if d_batch > 0 and d_token == 0:
-                            continue
-                        rows.append(
-                            FaceLutEntry(
-                                instance_size=instance_size,
-                                p_chunk=chunk,
-                                d_batch=d_batch,
-                                d_token=d_token,
-                                iteration_time_ns=estimate_iteration_time_ns(
-                                    hardware,
-                                    model,
-                                    instance_size=instance_size,
-                                    p_chunk=chunk,
-                                    d_batch=d_batch,
-                                    d_token=d_token,
-                                ),
-                            )
-                        )
-        return cls(rows)
-
-    def lookup(
-        self,
-        *,
-        instance_size: int,
-        p_chunk: int,
-        d_batch: int,
-        d_token: int,
-    ) -> FaceLutEntry:
-        rows = self._index.get((instance_size, p_chunk, d_batch))
-        if not rows:
-            raise KeyError(
-                "FACE LUT has no exact instance_size/p_chunk/d_batch match for "
-                f"({instance_size}, {p_chunk}, {d_batch})"
-            )
-        return min(rows, key=lambda row: (abs(row.d_token - d_token), row.d_token))
-
-    def export_csv(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as output:
-            writer = csv.DictWriter(
-                output,
-                fieldnames=(
-                    "instance_size",
-                    "p_chunk",
-                    "d_batch",
-                    "d_token",
-                    "iteration_time_ns",
-                    "source",
-                ),
-            )
-            writer.writeheader()
-            for entry in sorted(
-                self.entries,
-                key=lambda row: (
-                    row.instance_size,
-                    row.p_chunk,
-                    row.d_batch,
-                    row.d_token,
-                ),
-            ):
-                writer.writerow(entry.__dict__)
 
 
 @dataclass(frozen=True)
@@ -935,8 +795,8 @@ class WeightedInstanceGraph:
 class DecodeCandidateCost:
     instance_index: int
     weighted_distance: float
-    current_lut: FaceLutEntry
-    updated_lut: FaceLutEntry
+    current_roofline: FaceRooflineEstimate
+    updated_roofline: FaceRooflineEstimate
     delta_time_ns: int
     per_die_delta_ns: float
     remaining_hbm_capacity_bytes: int
@@ -945,9 +805,10 @@ class DecodeCandidateCost:
 
 def select_decode_instance(
     *,
+    hardware: FaceHardware,
+    model: FaceModel,
     topology: FaceTopology,
     graph: WeightedInstanceGraph,
-    lut: FaceLut,
     fixed_p_chunk: int,
     prefill_instance_index: int,
     has_prefill_work: Sequence[bool],
@@ -989,25 +850,42 @@ def select_decode_instance(
         p_chunk = fixed_p_chunk if has_prefill_work[instance_index] else 0
         d_batch = len(active_tokens)
         d_token = max(active_tokens, default=0)
-        current = lut.lookup(
+        current = FaceRooflineEstimate(
             instance_size=instance.size,
             p_chunk=p_chunk,
             d_batch=d_batch,
             d_token=d_token,
+            iteration_time_ns=estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=instance.size,
+                p_chunk=p_chunk,
+                d_batch=d_batch,
+                d_token=d_token,
+            ),
         )
-        updated = lut.lookup(
+        updated_d_token = max(d_token, new_request_token_length)
+        updated = FaceRooflineEstimate(
             instance_size=instance.size,
             p_chunk=p_chunk,
             d_batch=d_batch + 1,
-            d_token=max(d_token, new_request_token_length),
+            d_token=updated_d_token,
+            iteration_time_ns=estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=instance.size,
+                p_chunk=p_chunk,
+                d_batch=d_batch + 1,
+                d_token=updated_d_token,
+            ),
         )
         delta = updated.iteration_time_ns - current.iteration_time_ns
         costs.append(
             DecodeCandidateCost(
                 instance_index=instance_index,
                 weighted_distance=distance,
-                current_lut=current,
-                updated_lut=updated,
+                current_roofline=current,
+                updated_roofline=updated,
                 delta_time_ns=delta,
                 per_die_delta_ns=delta / instance.size,
                 remaining_hbm_capacity_bytes=(
@@ -1568,8 +1446,7 @@ class KVCacheManager:
 
         Existing local or partially resident KV already consumes HBM on its
         resident instance, so only the missing bytes are required there.  A
-        different instance must admit the complete final KV.  Partially
-        resident sessions retain their resident-prefix affinity.
+        different instance must admit the complete final KV.
         """
 
         final_shards = kv_cache_shard_bytes_for_tokens(
@@ -1580,7 +1457,6 @@ class KVCacheManager:
         session = self._sessions.get(session_id)
         resident_instance_index: Optional[int] = None
         resident_shards = tuple(0 for _ in final_shards)
-        partial_affinity = False
         if session is not None:
             if session.context_tokens > final_context_tokens:
                 raise ValueError("request final context cannot shrink the KV cache")
@@ -1595,15 +1471,11 @@ class KVCacheManager:
                     layer_start=0,
                     layer_end=session.resident_prefix_layers,
                 )
-                partial_affinity = session.location == self.PARTIAL_HBM_REMOTE
             elif session.location != self.REMOTE_MEMORY:
                 raise RuntimeError(f"unknown KV location: {session.location}")
 
         feasible: list[bool] = []
         for instance in self.topology.instances:
-            if partial_affinity and instance.index != resident_instance_index:
-                feasible.append(False)
-                continue
             if instance.index == resident_instance_index:
                 required = tuple(
                     final_bytes - local_bytes
@@ -1649,18 +1521,8 @@ class KVCacheManager:
             final_context_tokens,
             self.tp_degree,
         )
-        session = self._sessions.get(session_id)
-        affinity_instance: Optional[int] = None
-        if session is not None and session.location == self.PARTIAL_HBM_REMOTE:
-            if session.instance_index is None:
-                raise RuntimeError("partial KV session has no resident instance")
-            affinity_instance = session.instance_index
-
         feasible: list[bool] = []
         for instance in self.topology.instances:
-            if affinity_instance is not None and instance.index != affinity_instance:
-                feasible.append(False)
-                continue
             feasible.append(
                 all(
                     final_bytes
@@ -1914,107 +1776,6 @@ class KVCacheManager:
 
     def session_snapshots(self) -> tuple[SessionKVSnapshot, ...]:
         return tuple(self.session_snapshot(session_id) for session_id in self.session_ids)
-
-    def truncate_history(
-        self,
-        session_id: str,
-        history_tokens: int,
-        *,
-        trigger_request_id: Optional[str] = None,
-    ) -> int:
-        """Discard KV tokens removed by the workload's context-window policy.
-
-        ``trigger_request_id`` is observational only (metrics anchoring); it
-        never influences what gets discarded.
-        """
-
-        if (
-            isinstance(history_tokens, bool)
-            or not isinstance(history_tokens, int)
-            or history_tokens < 0
-        ):
-            raise ValueError("history_tokens must be a non-negative integer")
-        if session_id not in self._sessions:
-            if history_tokens != 0:
-                raise ValueError(
-                    f"new session {session_id} cannot start with historical KV"
-                )
-            return 0
-        session = self._sessions[session_id]
-        if session.active:
-            raise RuntimeError("active session history cannot be truncated")
-        if history_tokens > session.context_tokens:
-            raise ValueError(
-                f"session {session_id} prefix exceeds its stored KV context"
-            )
-        discarded_tokens = session.context_tokens - history_tokens
-        if discarded_tokens == 0:
-            return 0
-
-        new_shards = kv_cache_shard_bytes_for_tokens(
-            self.model,
-            history_tokens,
-            self.tp_degree,
-        )
-        if session.location in {self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE}:
-            if session.instance_index is None:
-                raise RuntimeError("resident KV session has no instance")
-            old_local_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model,
-                session.context_tokens,
-                self.tp_degree,
-                layer_start=0,
-                layer_end=session.resident_prefix_layers,
-            )
-            new_local_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model,
-                history_tokens,
-                self.tp_degree,
-                layer_start=0,
-                layer_end=session.resident_prefix_layers,
-            )
-            self._remove_local_shards(
-                session.instance_index,
-                tuple(
-                    old_bytes - new_bytes
-                    for old_bytes, new_bytes in zip(
-                        old_local_shards,
-                        new_local_shards,
-                    )
-                ),
-            )
-        session.context_tokens = history_tokens
-        session.total_bytes = sum(new_shards)
-        session.shard_bytes = new_shards
-        if (
-            history_tokens == 0
-            and session.location == self.PARTIAL_HBM_REMOTE
-        ):
-            # An empty cache has no remote suffix to restore.  Keep the
-            # existing instance affinity, but normalize the zero-byte state to
-            # a fully local cache so ET generation does not emit a meaningless
-            # zero-shard suffix load.
-            session.location = self.LOCAL_HBM
-            session.resident_prefix_layers = self.model.layers
-        self._check_invariants()
-        if (
-            self._metrics_recorder is not None
-            and session.instance_index is not None
-        ):
-            # Mirror the manager's uniform per-token truncation exactly:
-            # remove every old part under its key, then re-add the remaining
-            # resident prefix as one fresh segment (doc sec.7.3/7.4).
-            self._metrics_reconsolidate_parts(
-                session_id,
-                session.instance_index,
-                history_tokens,
-                session.resident_prefix_layers,
-                new_local_shards,
-                anchor_kind="prefill_start",
-                request_id=trigger_request_id,
-                cause="truncate_history",
-            )
-        return discarded_tokens
 
     def nearest_edge(self, rank: int) -> int:
         return nearest_edge_rank(
@@ -2336,7 +2097,7 @@ class KVCacheManager:
         magnitude, so the chiplet projection stays exactly removable), then
         each original part is removed from the source ranks under its own
         key (doc sec.7.4/7.6).  Target add precedes source release, matching
-        the static ET ordering."""
+        the runtime KV-transition ordering."""
 
         if self._metrics_recorder is None:
             return
@@ -2472,6 +2233,69 @@ class KVCacheManager:
             layer_end=self.model.layers,
             resident_prefix_layers_before=self.model.layers,
             resident_prefix_layers_after=self.model.layers,
+        )
+
+    def _partial_prefix_noc_transfer(
+        self,
+        *,
+        session: SessionKVState,
+        trigger_request_id: str,
+        source_instance_index: int,
+        target_instance_index: int,
+    ) -> KVTransfer:
+        """Build the dedicated history action for a partial resident prefix.
+
+        Full-session migration remains intentionally guarded by
+        ``_noc_transfer``.  This action transfers only the currently local
+        prefix and leaves the suffix to the canonical remote-load action.
+        """
+
+        resident_layers = session.resident_prefix_layers
+        if not 0 < resident_layers < self.model.layers:
+            raise RuntimeError("partial-prefix migration requires partial KV")
+        if source_instance_index == target_instance_index:
+            raise ValueError("partial-prefix migration requires distinct instances")
+        source = self.topology.instance(source_instance_index)
+        target = self.topology.instance(target_instance_index)
+        prefix_shards = kv_cache_shard_bytes_for_layer_range(
+            self.model,
+            session.context_tokens,
+            self.tp_degree,
+            layer_start=0,
+            layer_end=resident_layers,
+        )
+        shards = tuple(
+            KVTransferShard(
+                source_rank=source_rank,
+                target_rank=target_rank,
+                edge_rank=None,
+                bytes=shard_bytes,
+                noc_path=deterministic_xy_route(
+                    self.topology.hardware, source_rank, target_rank
+                ),
+                layer_start=0,
+                layer_end=resident_layers,
+            )
+            for source_rank, target_rank, shard_bytes in zip(
+                source.ranks, target.ranks, prefix_shards
+            )
+            if shard_bytes > 0
+        )
+        return KVTransfer(
+            kind="noc_migrate",
+            phase="history",
+            reason="history_partial_prefix_migrate",
+            session_id=session.session_id,
+            trigger_request_id=trigger_request_id,
+            source_instance_index=source_instance_index,
+            target_instance_index=target_instance_index,
+            total_bytes=sum(prefix_shards),
+            shards=shards,
+            model_layers=self.model.layers,
+            layer_start=0,
+            layer_end=resident_layers,
+            resident_prefix_layers_before=resident_layers,
+            resident_prefix_layers_after=resident_layers,
         )
 
     def _remote_load_transfer(
@@ -2871,6 +2695,7 @@ class KVCacheManager:
     ) -> tuple[
         Optional[SessionKVSnapshot],
         Optional[KVTransfer],
+        Optional[KVTransfer],
         tuple[KVTransfer, ...],
     ]:
         expected_shards = kv_cache_shard_bytes_for_tokens(
@@ -2893,7 +2718,7 @@ class KVCacheManager:
                 active=True,
             )
             self._check_invariants()
-            return None, None, ()
+            return None, None, None, ()
 
         session = self._sessions[session_id]
         before = self.session_snapshot(session_id)
@@ -2919,7 +2744,7 @@ class KVCacheManager:
                     trigger_request_id=trigger_request_id,
                 )
                 self._check_invariants()
-                return before, transfer, ()
+                return before, None, transfer, ()
 
             # The arriving request owns this session before any capacity
             # reclamation starts; it must never become its own eviction victim.
@@ -2954,14 +2779,20 @@ class KVCacheManager:
                 request_id=trigger_request_id,
                 cause="history_other_instance",
             )
-            return before, transfer, evictions
+            return before, None, transfer, evictions
 
         if session.location == self.PARTIAL_HBM_REMOTE:
-            if session.instance_index != target_instance_index:
-                raise ValueError(
-                    "partially resident history must retain instance affinity"
-                )
+            if session.instance_index is None:
+                raise RuntimeError("partial history has no source instance")
+            source_instance_index = session.instance_index
             suffix_start = session.resident_prefix_layers
+            prefix_shards = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                history_tokens,
+                self.tp_degree,
+                layer_start=0,
+                layer_end=suffix_start,
+            )
             suffix_shards = kv_cache_shard_bytes_for_layer_range(
                 self.model,
                 history_tokens,
@@ -2970,14 +2801,50 @@ class KVCacheManager:
                 layer_end=self.model.layers,
             )
             session.active = True
-            evictions = self._ensure_capacity(
+            evictions: list[KVTransfer] = []
+            prefix_transfer: Optional[KVTransfer] = None
+            if source_instance_index != target_instance_index:
+                # The admission reservation already protects the final target
+                # capacity.  Keep the existing prepare-time physical-capacity
+                # guard so actual prefix placement remains fail-closed.
+                evictions.extend(self._ensure_capacity(
+                    target_instance_index,
+                    prefix_shards,
+                    phase="history",
+                    reason="history_prefix_target_capacity",
+                    trigger_request_id=trigger_request_id,
+                    reservation_request_id=reservation_request_id,
+                ))
+                prefix_transfer = self._partial_prefix_noc_transfer(
+                    session=session,
+                    trigger_request_id=trigger_request_id,
+                    source_instance_index=source_instance_index,
+                    target_instance_index=target_instance_index,
+                )
+                self._remove_local_shards(source_instance_index, prefix_shards)
+                self._add_local_shards(target_instance_index, prefix_shards)
+                # The session remains partial while its remote suffix is
+                # restored, but physical ownership now follows the target.
+                session.instance_index = target_instance_index
+                self._check_invariants()
+                self._metrics_move_session_parts(
+                    session_id,
+                    target_instance_index,
+                    history_tokens,
+                    suffix_start,
+                    prefix_shards,
+                    anchor_kind="transfer_complete",
+                    request_id=trigger_request_id,
+                    cause="history_partial_prefix_migrate",
+                )
+            evictions.extend(self._ensure_capacity(
                 target_instance_index,
                 suffix_shards,
                 phase="history",
                 reason="history_suffix_target_capacity",
                 trigger_request_id=trigger_request_id,
                 reservation_request_id=reservation_request_id,
-            )
+            ))
             transfer = self._remote_load_transfer(
                 phase="history",
                 reason="history_remote_suffix_restore",
@@ -3005,7 +2872,7 @@ class KVCacheManager:
                 request_id=trigger_request_id,
                 cause="history_remote_suffix_restore",
             )
-            return before, transfer, evictions
+            return before, prefix_transfer, transfer, tuple(evictions)
 
         if session.location != self.REMOTE_MEMORY:
             raise RuntimeError(f"unknown history location: {session.location}")
@@ -3043,7 +2910,7 @@ class KVCacheManager:
             request_id=trigger_request_id,
             cause="history_remote_restore",
         )
-        return before, transfer, evictions
+        return before, None, transfer, evictions
 
     def _expand_local_session(
         self,
@@ -3321,8 +3188,6 @@ class FaceRequest:
     decode_length: int
     session_arrival_time_ns: Optional[int]
     inter_request_interval_ns: Optional[int]
-    prefix_tokens: Optional[int] = None
-    input_tokens_total: Optional[int] = None
     # Trigger type of the request following this one ("human"/"tool"); feeds
     # the typed eviction policy via mark_complete. Defaults keep the many
     # positional test constructions valid.
@@ -3340,29 +3205,6 @@ class FaceRequest:
                 "next_trigger_type must be None, 'human' or 'tool', got "
                 f"{self.next_trigger_type!r}"
             )
-        if self.prefix_tokens is not None and (
-            isinstance(self.prefix_tokens, bool)
-            or not isinstance(self.prefix_tokens, int)
-            or self.prefix_tokens < 0
-        ):
-            raise ValueError("prefix_tokens must be None or a non-negative integer")
-        if self.input_tokens_total is not None and (
-            isinstance(self.input_tokens_total, bool)
-            or not isinstance(self.input_tokens_total, int)
-            or self.input_tokens_total <= 0
-        ):
-            raise ValueError("input_tokens_total must be None or a positive integer")
-        if (self.prefix_tokens is None) != (self.input_tokens_total is None):
-            raise ValueError(
-                "prefix_tokens and input_tokens_total must be provided together"
-            )
-        if (
-            self.input_tokens_total is not None
-            and self.input_tokens_total != self.prefix_tokens + self.prefill_length
-        ):
-            raise ValueError(
-                "input_tokens_total must equal prefix_tokens + prefill_length"
-            )
         if self.turn_index == 0:
             if self.session_arrival_time_ns is None or self.session_arrival_time_ns < 0:
                 raise ValueError("first turn requires a non-negative session arrival")
@@ -3376,75 +3218,6 @@ class FaceRequest:
                 or self.inter_request_interval_ns < 0
             ):
                 raise ValueError("later turns require a non-negative interval")
-
-
-@dataclass(frozen=True)
-class FaceIterationRecord:
-    instance_index: int
-    iteration_index: int
-    start_ns: int
-    end_ns: int
-    prefill_request_id: Optional[str]
-    prefill_chunk_tokens: int
-    decode_request_ids: tuple[str, ...]
-    lut_entry: FaceLutEntry
-
-
-@dataclass(frozen=True)
-class FaceRequestPlan:
-    queue_index: int
-    session_id: str
-    turn_index: int
-    request_id: str
-    history_tokens_before: int
-    prefill_context_tokens: int
-    final_context_tokens: int
-    estimated_arrival_ns: int
-    admission_time_ns: int
-    hbm_wait_ns: int
-    prefill_instance_index: int
-    prefill_assignment_key: tuple[int, int, int]
-    prefill_instance_loads: tuple[InstanceTaskLoadSnapshot, ...]
-    prefill_hbm_feasible_instances: tuple[bool, ...]
-    prefill_affinity_reason: Optional[str]
-    prefill_start_ns: int
-    prefill_complete_ns: int
-    decode_instance_index: int
-    decode_candidates: tuple[DecodeCandidateCost, ...]
-    decode_start_ns: int
-    completion_ns: int
-    kv_allocation: KVAllocation
-    history_source_instance_index: Optional[int]
-    history_transfer_bytes: int
-    history_tokens_discarded: int
-    history_location_before: Optional[SessionKVSnapshot] = None
-    history_transfer: Optional[KVTransfer] = None
-    history_evictions: tuple[KVTransfer, ...] = ()
-    prefill_evictions: tuple[KVTransfer, ...] = ()
-    prefill_decode_transfer: Optional[KVTransfer] = None
-    decode_evictions: tuple[KVTransfer, ...] = ()
-    completion_evictions: tuple[KVTransfer, ...] = ()
-    kv_location_after_completion: Optional[str] = None
-    kv_instance_after_completion: Optional[int] = None
-    hbm_after_completion: tuple[NodeHBMSnapshot, ...] = ()
-    reserve_unmet_ranks: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True)
-class FacePlan:
-    p_chunk: int
-    average_decode_length: float
-    topology: FaceTopology
-    lut: FaceLut
-    requests: tuple[FaceRequestPlan, ...]
-    iterations: tuple[FaceIterationRecord, ...]
-    iterations_recorded: bool
-    final_edge_weights: tuple[tuple[int, int, int], ...]
-    final_remaining_capacity_bytes: tuple[int, ...]
-    edge_ranks: tuple[int, ...] = ()
-    reserve_context_tokens: int = 1_000_000
-    final_hbm_states: tuple[NodeHBMSnapshot, ...] = ()
-    final_session_states: tuple[SessionKVSnapshot, ...] = ()
 
 
 @dataclass
@@ -3476,6 +3249,7 @@ class _RequestRuntime:
     history_transfer_bytes: int = 0
     history_tokens_discarded: int = 0
     history_location_before: Optional[SessionKVSnapshot] = None
+    history_prefix_transfer: Optional[KVTransfer] = None
     history_transfer: Optional[KVTransfer] = None
     history_evictions: tuple[KVTransfer, ...] = ()
     prefill_evictions: tuple[KVTransfer, ...] = ()
@@ -3486,21 +3260,6 @@ class _RequestRuntime:
     kv_instance_after_completion: Optional[int] = None
     hbm_after_completion: tuple[NodeHBMSnapshot, ...] = ()
     reserve_unmet_ranks: tuple[int, ...] = ()
-
-
-@dataclass
-class _InstanceRuntime:
-    index: int
-    qp: deque[int] = field(default_factory=deque)
-    active_decode: list[int] = field(default_factory=list)
-    last_arrival_ns: Optional[int] = None
-    busy: bool = False
-    iteration_count: int = 0
-    iteration_start_ns: Optional[int] = None
-    iteration_end_ns: Optional[int] = None
-    running_prefill_index: Optional[int] = None
-    running_prefill_chunk_tokens: int = 0
-    running_decode_indexes: tuple[int, ...] = ()
 
 
 def _validate_and_expand_requests(
@@ -3530,23 +3289,9 @@ def _validate_and_expand_requests(
         previous_final_context = 0
         for position, index in enumerate(ordered):
             request = requests[index]
-            if request.prefix_tokens is None:
-                history = previous_final_context
-                prefill_tokens_to_process = request.prefill_length
-                prefill_context = history + prefill_tokens_to_process
-            else:
-                # Reuse only the prefix that can exist in the preceding local or
-                # remote KV state.  Any additional source prefix is recomputed as
-                # Prefill work together with this round's newly appended tokens.
-                history = min(request.prefix_tokens, previous_final_context)
-                assert request.input_tokens_total is not None
-                prefill_context = request.input_tokens_total
-                prefill_tokens_to_process = prefill_context - history
-                if prefill_tokens_to_process <= 0:
-                    raise ValueError(
-                        f"session {session_id} request {request.request_id} has no "
-                        "Prefill work after prefix reuse"
-                    )
+            history = previous_final_context
+            prefill_tokens_to_process = request.prefill_length
+            prefill_context = history + prefill_tokens_to_process
             final_context = prefill_context + request.decode_length
             runtimes[index] = _RequestRuntime(
                 request=request,
@@ -3563,647 +3308,3 @@ def _validate_and_expand_requests(
     return [runtime for runtime in runtimes if runtime is not None], next_request
 
 
-def plan_face_requests(
-    *,
-    hardware: FaceHardware,
-    model: FaceModel,
-    instance_specs: Sequence[FaceInstanceSpec],
-    requests: Sequence[FaceRequest],
-    edge_ranks: Optional[Sequence[int]] = None,
-    reserve_context_tokens: int = 1_000_000,
-    average_decode_length: Optional[float] = None,
-    record_iterations: bool = True,
-) -> FacePlan:
-    topology = build_instances(hardware, instance_specs, require_equal_size=True)
-    # LLaMA 2 7B dimensions are partitioned exactly across the configured TP.
-    # ET generation assigns whole heads and exact MLP/vocabulary slices
-    # unevenly by rank whenever a model dimension is not divisible by TP.
-
-    p_chunk = PREFILL_CHUNK_SIZE
-    if not requests:
-        raise ValueError("request list must not be empty")
-    if average_decode_length is None:
-        average_decode_length = sum(
-            request.decode_length for request in requests
-        ) / len(requests)
-    if (
-        isinstance(average_decode_length, bool)
-        or not isinstance(average_decode_length, (int, float))
-        or not math.isfinite(average_decode_length)
-        or average_decode_length <= 0
-    ):
-        raise ValueError("average_decode_length must be a positive finite number")
-    average_decode_length = float(average_decode_length)
-    runtimes, next_request = _validate_and_expand_requests(requests, p_chunk)
-    max_d_token = max(runtime.final_context_tokens for runtime in runtimes)
-    lut = FaceLut.build(
-        hardware,
-        model,
-        instance_sizes=(instance.size for instance in topology.instances),
-        p_chunk=p_chunk,
-        request_count=len(requests),
-        max_d_token=max_d_token,
-    )
-    graph = WeightedInstanceGraph(topology)
-    kv_manager = KVCacheManager(
-        topology,
-        model,
-        edge_ranks=edge_ranks,
-        reserve_context_tokens=reserve_context_tokens,
-    )
-    instances = [_InstanceRuntime(index=i) for i in range(len(topology.instances))]
-
-    # Event tuple: (time_ns, priority, sequence, kind, payload).  All events at
-    # one timestamp are drained before starting new iterations.  Completion has
-    # priority over arrival, as required by the adapter contract.
-    event_heap: list[tuple[int, int, int, str, object]] = []
-    sequence = 0
-
-    def push_event(time_ns: int, priority: int, kind: str, payload: object) -> None:
-        nonlocal sequence
-        heapq.heappush(event_heap, (time_ns, priority, sequence, kind, payload))
-        sequence += 1
-
-    for index, runtime in enumerate(runtimes):
-        if runtime.request.turn_index == 0:
-            arrival = runtime.request.session_arrival_time_ns
-            if arrival is None:
-                raise RuntimeError("validated first request lost its arrival time")
-            push_event(arrival, 1, "arrival", index)
-
-    iterations: list[FaceIterationRecord] = []
-    pending_admissions: deque[int] = deque()
-    prefill_task_cache: dict[tuple[int, int, int], int] = {}
-
-    def prefill_chunk_task_load_ns(
-        *,
-        instance_size: int,
-        chunk_tokens: int,
-        context_tokens: int,
-    ) -> int:
-        key = (instance_size, chunk_tokens, context_tokens)
-        if key not in prefill_task_cache:
-            prefill_task_cache[key] = estimate_prefill_task_load_ns(
-                hardware,
-                model,
-                instance_size=instance_size,
-                chunk_tokens=chunk_tokens,
-                context_tokens=context_tokens,
-            )
-        return prefill_task_cache[key]
-
-    def remaining_iteration_fraction(state: _InstanceRuntime, now_ns: int) -> float:
-        if not state.busy:
-            return 1.0
-        if state.iteration_start_ns is None or state.iteration_end_ns is None:
-            raise RuntimeError("busy instance lost its iteration timing")
-        duration_ns = state.iteration_end_ns - state.iteration_start_ns
-        if duration_ns <= 0 or not state.iteration_start_ns <= now_ns < state.iteration_end_ns:
-            raise RuntimeError("busy instance has invalid remaining iteration interval")
-        return (state.iteration_end_ns - now_ns) / duration_ns
-
-    def queued_prefill_task_load_ns(
-        state: _InstanceRuntime,
-        *,
-        instance_size: int,
-    ) -> int:
-        total_load_ns = 0
-        for request_index in state.qp:
-            runtime = runtimes[request_index]
-            processed_tokens = runtime.prompt_tokens_processed
-            if request_index == state.running_prefill_index:
-                processed_tokens += state.running_prefill_chunk_tokens
-            remaining_tokens = runtime.prefill_tokens_to_process - processed_tokens
-            while remaining_tokens > 0:
-                chunk_tokens = min(p_chunk, remaining_tokens)
-                context_tokens = (
-                    runtime.history_tokens_before
-                    + processed_tokens
-                    + chunk_tokens
-                )
-                total_load_ns += prefill_chunk_task_load_ns(
-                    instance_size=instance_size,
-                    chunk_tokens=chunk_tokens,
-                    context_tokens=context_tokens,
-                )
-                processed_tokens += chunk_tokens
-                remaining_tokens -= chunk_tokens
-        return total_load_ns
-
-    def task_load_snapshot(
-        state: _InstanceRuntime,
-        now_ns: int,
-    ) -> InstanceTaskLoadSnapshot:
-        instance_size = topology.instance(state.index).size
-        running_fraction = remaining_iteration_fraction(state, now_ns)
-
-        running_prefill_load_ns = 0
-        if state.running_prefill_index is not None:
-            runtime = runtimes[state.running_prefill_index]
-            chunk_tokens = state.running_prefill_chunk_tokens
-            context_tokens = (
-                runtime.history_tokens_before
-                + runtime.prompt_tokens_processed
-                + chunk_tokens
-            )
-            full_chunk_load_ns = prefill_chunk_task_load_ns(
-                instance_size=instance_size,
-                chunk_tokens=chunk_tokens,
-                context_tokens=context_tokens,
-            )
-            running_prefill_load_ns = math.ceil(
-                full_chunk_load_ns * running_fraction
-            )
-
-        active_decode_load_ns = 0
-        running_decode_set = set(state.running_decode_indexes)
-        for request_index in state.active_decode:
-            runtime = runtimes[request_index]
-            generated_tokens = (
-                runtime.current_decode_token - runtime.prefill_context_tokens
-            )
-            active_decode_load_ns += estimate_decode_remaining_task_load_ns(
-                hardware,
-                model,
-                instance_size=instance_size,
-                current_context_tokens=runtime.current_decode_token,
-                generated_tokens=generated_tokens,
-                average_decode_length=average_decode_length,
-                running_step_fraction_remaining=(
-                    running_fraction
-                    if request_index in running_decode_set
-                    else 1.0
-                ),
-            )
-
-        return InstanceTaskLoadSnapshot(
-            instance_index=state.index,
-            running_prefill_task_load_ns=running_prefill_load_ns,
-            queued_prefill_task_load_ns=queued_prefill_task_load_ns(
-                state,
-                instance_size=instance_size,
-            ),
-            active_decode_task_load_ns=active_decode_load_ns,
-            last_arrival_ns=state.last_arrival_ns,
-        )
-
-    def try_admit_request(request_index: int, now_ns: int) -> bool:
-        runtime = runtimes[request_index]
-        if runtime.estimated_arrival_ns is None:
-            raise RuntimeError("request cannot be admitted before arrival")
-        hbm_feasible_instances = kv_manager.request_hbm_feasible_instances(
-            session_id=runtime.request.session_id,
-            final_context_tokens=runtime.final_context_tokens,
-        )
-        if not any(hbm_feasible_instances):
-            eventually_feasible = (
-                kv_manager.request_hbm_eventually_feasible_instances(
-                    session_id=runtime.request.session_id,
-                    final_context_tokens=runtime.final_context_tokens,
-                )
-            )
-            if not any(eventually_feasible):
-                raise ValueError(
-                    f"request {runtime.request.request_id} final KV cannot fit on "
-                    "any eligible empty instance; "
-                    f"final_context_tokens={runtime.final_context_tokens}"
-                )
-            return False
-
-        snapshots = tuple(task_load_snapshot(state, now_ns) for state in instances)
-        runtime.prefill_hbm_feasible_instances = hbm_feasible_instances
-        if runtime.request.session_id in kv_manager.session_ids:
-            history_snapshot = kv_manager.session_snapshot(
-                runtime.request.session_id
-            )
-        else:
-            history_snapshot = None
-        if (
-            history_snapshot is not None
-            and history_snapshot.location == KVCacheManager.PARTIAL_HBM_REMOTE
-        ):
-            if history_snapshot.instance_index is None:
-                raise RuntimeError("partial history lost its resident instance")
-            selected = history_snapshot.instance_index
-            if not hbm_feasible_instances[selected]:
-                return False
-            runtime.prefill_affinity_reason = "resident_prefix_layers"
-        else:
-            selected = select_prefill_instance(
-                snapshots,
-                hbm_feasible_instances,
-            )
-
-        selected_snapshot = snapshots[selected]
-        admission_evictions = kv_manager.reserve_request_capacity(
-            request_id=runtime.request.request_id,
-            session_id=runtime.request.session_id,
-            instance_index=selected,
-            final_context_tokens=runtime.final_context_tokens,
-        )
-        runtime.prefill_instance_index = selected
-        runtime.prefill_assignment_key = selected_snapshot.ordering_key
-        runtime.prefill_instance_loads = snapshots
-        runtime.admission_time_ns = now_ns
-        (
-            runtime.history_location_before,
-            runtime.history_transfer,
-            prepare_evictions,
-        ) = kv_manager.prepare_prefill(
-            session_id=runtime.request.session_id,
-            target_instance_index=selected,
-            history_tokens=runtime.history_tokens_before,
-            trigger_request_id=runtime.request.request_id,
-            reservation_request_id=runtime.request.request_id,
-        )
-        runtime.history_evictions = admission_evictions + prepare_evictions
-        if runtime.request.turn_index > 0:
-            if runtime.history_location_before is None:
-                raise RuntimeError(
-                    f"session {runtime.request.session_id} has no prior KV state"
-                )
-            runtime.history_source_instance_index = (
-                runtime.history_location_before.instance_index
-            )
-            runtime.history_transfer_bytes = (
-                0
-                if runtime.history_transfer is None
-                or runtime.history_transfer.kind == "local_hit"
-                else runtime.history_transfer.total_bytes
-            )
-        instances[selected].qp.append(request_index)
-        instances[selected].last_arrival_ns = now_ns
-        return True
-
-    def admit_waiting_requests(now_ns: int) -> None:
-        blocked: deque[int] = deque()
-        while pending_admissions:
-            request_index = pending_admissions.popleft()
-            if not try_admit_request(request_index, now_ns):
-                blocked.append(request_index)
-        pending_admissions.extend(blocked)
-
-    def start_ready_iterations(now_ns: int) -> None:
-        for state in instances:
-            if state.busy or (not state.qp and not state.active_decode):
-                continue
-            prefill_index = state.qp[0] if state.qp else None
-            decode_indexes = tuple(state.active_decode)
-            chunk_tokens = 0
-            if prefill_index is not None:
-                runtime = runtimes[prefill_index]
-                chunk_tokens = min(
-                    p_chunk,
-                    runtime.prefill_tokens_to_process
-                    - runtime.prompt_tokens_processed,
-                )
-                if runtime.prefill_start_ns is None:
-                    runtime.prefill_start_ns = now_ns
-            for request_index in decode_indexes:
-                if runtimes[request_index].decode_start_ns is None:
-                    runtimes[request_index].decode_start_ns = now_ns
-            d_tokens = [runtimes[index].current_decode_token for index in decode_indexes]
-            entry = lut.lookup(
-                instance_size=topology.instance(state.index).size,
-                p_chunk=p_chunk if prefill_index is not None else 0,
-                d_batch=len(decode_indexes),
-                d_token=max(d_tokens, default=0),
-            )
-            end_ns = now_ns + entry.iteration_time_ns
-            if _ITERATION_STATS_HOOK is not None:
-                _ITERATION_STATS_HOOK(entry, now_ns, end_ns)
-            record = FaceIterationRecord(
-                instance_index=state.index,
-                iteration_index=state.iteration_count,
-                start_ns=now_ns,
-                end_ns=end_ns,
-                prefill_request_id=(
-                    None if prefill_index is None else runtimes[prefill_index].request.request_id
-                ),
-                prefill_chunk_tokens=chunk_tokens,
-                decode_request_ids=tuple(
-                    runtimes[index].request.request_id for index in decode_indexes
-                ),
-                lut_entry=entry,
-            )
-            if record_iterations:
-                iterations.append(record)
-            state.iteration_count += 1
-            state.busy = True
-            state.iteration_start_ns = now_ns
-            state.iteration_end_ns = end_ns
-            state.running_prefill_index = prefill_index
-            state.running_prefill_chunk_tokens = chunk_tokens
-            state.running_decode_indexes = decode_indexes
-            push_event(
-                end_ns,
-                0,
-                "iteration_complete",
-                (state.index, prefill_index, chunk_tokens, decode_indexes),
-            )
-
-    completed_requests = 0
-    while event_heap:
-        now_ns = event_heap[0][0]
-        if _METRICS_RECORDER is not None:
-            # Stamp the planner event-loop time for any memory deltas the KV
-            # manager records while draining this batch (doc sec.7.1); the
-            # value is observational only.
-            _METRICS_RECORDER.set_planner_time(now_ns)
-        batch = []
-        while event_heap and event_heap[0][0] == now_ns:
-            batch.append(heapq.heappop(event_heap))
-        batch.sort(key=lambda item: (item[1], item[2]))
-        completed_now: list[int] = []
-        retry_admissions = False
-
-        for _, _, _, kind, payload in batch:
-            if kind != "iteration_complete":
-                continue
-            state_index, prefill_index, chunk_tokens, decode_indexes = payload
-            state = instances[state_index]
-            if (
-                state.running_prefill_index != prefill_index
-                or state.running_prefill_chunk_tokens != chunk_tokens
-                or state.running_decode_indexes != decode_indexes
-            ):
-                raise RuntimeError("iteration runtime state disagrees with completion event")
-            state.busy = False
-            state.iteration_start_ns = None
-            state.iteration_end_ns = None
-            state.running_prefill_index = None
-            state.running_prefill_chunk_tokens = 0
-            state.running_decode_indexes = ()
-
-            if prefill_index is not None:
-                runtime = runtimes[prefill_index]
-                runtime.prompt_tokens_processed += chunk_tokens
-                runtime.remaining_chunks -= 1
-                if runtime.remaining_chunks < 0:
-                    raise RuntimeError("prefill remaining chunk count became negative")
-                if runtime.remaining_chunks == 0:
-                    retry_admissions = True
-                    if not state.qp or state.qp[0] != prefill_index:
-                        raise RuntimeError("prefill FCFS queue order was corrupted")
-                    state.qp.popleft()
-                    runtime.prefill_complete_ns = now_ns
-                    runtime.prefill_evictions = kv_manager.expand_prefill(
-                        session_id=runtime.request.session_id,
-                        instance_index=state_index,
-                        context_tokens=runtime.prefill_context_tokens,
-                        trigger_request_id=runtime.request.request_id,
-                        reservation_request_id=runtime.request.request_id,
-                    )
-                    has_prefill = [bool(instance.qp) for instance in instances]
-                    active_tokens = [
-                        [runtimes[index].current_decode_token for index in instance.active_decode]
-                        for instance in instances
-                    ]
-                    selected, costs = select_decode_instance(
-                        topology=topology,
-                        graph=graph,
-                        lut=lut,
-                        fixed_p_chunk=p_chunk,
-                        prefill_instance_index=state_index,
-                        has_prefill_work=has_prefill,
-                        decode_token_lengths=active_tokens,
-                        new_request_token_length=runtime.prefill_context_tokens,
-                        remaining_hbm_capacity_bytes=(
-                            kv_manager.instance_remaining_capacity_totals()
-                        ),
-                        hbm_feasible_instances=(
-                            kv_manager.decode_hbm_feasible_instances(
-                                session_id=runtime.request.session_id,
-                                final_context_tokens=runtime.final_context_tokens,
-                                reservation_request_id=runtime.request.request_id,
-                            )
-                        ),
-                    )
-                    runtime.decode_instance_index = selected
-                    runtime.decode_candidates = costs
-                    reservation_move_evictions = (
-                        kv_manager.move_request_capacity_reservation(
-                            request_id=runtime.request.request_id,
-                            target_instance_index=selected,
-                        )
-                    )
-                    (
-                        runtime.prefill_decode_transfer,
-                        decode_move_evictions,
-                    ) = kv_manager.move_prefill_to_decode(
-                        session_id=runtime.request.session_id,
-                        target_instance_index=selected,
-                        trigger_request_id=runtime.request.request_id,
-                        reservation_request_id=runtime.request.request_id,
-                    )
-                    decode_growth_evictions = kv_manager.expand_decode(
-                        session_id=runtime.request.session_id,
-                        instance_index=selected,
-                        final_context_tokens=runtime.final_context_tokens,
-                        trigger_request_id=runtime.request.request_id,
-                        reservation_request_id=runtime.request.request_id,
-                    )
-                    runtime.decode_evictions = (
-                        reservation_move_evictions
-                        + decode_move_evictions
-                        + decode_growth_evictions
-                    )
-                    runtime.kv_allocation = kv_manager.allocation_for_session(
-                        session_id=runtime.request.session_id,
-                        request_id=runtime.request.request_id,
-                    )
-                    kv_manager.release_request_capacity_reservation(
-                        runtime.request.request_id
-                    )
-                    instances[selected].active_decode.append(prefill_index)
-
-            for request_index in decode_indexes:
-                runtime = runtimes[request_index]
-                runtime.decode_steps_remaining -= 1
-                runtime.current_decode_token += 1
-                if runtime.decode_steps_remaining < 0:
-                    raise RuntimeError("decode remaining step count became negative")
-                if runtime.decode_steps_remaining == 0:
-                    retry_admissions = True
-                    if request_index not in state.active_decode:
-                        raise RuntimeError("decode queue membership was corrupted")
-                    state.active_decode.remove(request_index)
-                    runtime.completion_ns = now_ns
-                    completed_requests += 1
-                    completed_now.append(request_index)
-                    following = next_request[request_index]
-                    if following is not None:
-                        next_runtime = runtimes[following]
-                        interval = next_runtime.request.inter_request_interval_ns
-                        if interval is None:
-                            raise RuntimeError("validated later request lost its interval")
-                        push_event(now_ns + interval, 1, "arrival", following)
-
-        completion_order = sorted(
-            completed_now,
-            key=lambda index: (
-                runtimes[index].request.session_id,
-                runtimes[index].request.request_id,
-                runtimes[index].request.queue_index,
-            ),
-        )
-        for request_index in completion_order:
-            kv_manager.mark_complete(
-                runtimes[request_index].request.session_id,
-                now_ns,
-                next_request_type=(
-                    runtimes[request_index].request.next_trigger_type
-                ),
-            )
-        for request_index in completion_order:
-            runtime = runtimes[request_index]
-            if runtime.decode_instance_index is None:
-                raise RuntimeError("completed request has no Decode instance")
-            (
-                runtime.completion_evictions,
-                runtime.reserve_unmet_ranks,
-            ) = kv_manager.enforce_reserve(
-                instance_index=runtime.decode_instance_index,
-                trigger_request_id=runtime.request.request_id,
-            )
-        completion_hbm_snapshot = kv_manager.hbm_snapshots()
-        for request_index in completion_order:
-            runtime = runtimes[request_index]
-            completion_snapshot = kv_manager.session_snapshot(
-                runtime.request.session_id
-            )
-            runtime.kv_location_after_completion = completion_snapshot.location
-            runtime.kv_instance_after_completion = (
-                completion_snapshot.instance_index
-            )
-            runtime.hbm_after_completion = completion_hbm_snapshot
-
-        for _, _, _, kind, payload in batch:
-            if kind != "arrival":
-                continue
-            request_index = int(payload)
-            runtime = runtimes[request_index]
-            if runtime.estimated_arrival_ns is not None:
-                raise RuntimeError("request arrival was delivered more than once")
-            runtime.estimated_arrival_ns = now_ns
-            runtime.history_tokens_discarded = kv_manager.truncate_history(
-                runtime.request.session_id,
-                runtime.history_tokens_before,
-                trigger_request_id=runtime.request.request_id,
-            )
-            pending_admissions.append(request_index)
-            retry_admissions = True
-
-        if retry_admissions:
-            admit_waiting_requests(now_ns)
-        start_ready_iterations(now_ns)
-
-    if pending_admissions:
-        pending_ids = [
-            runtimes[index].request.request_id for index in pending_admissions
-        ]
-        raise RuntimeError(
-            f"FACE planning ended with blocked HBM admissions: {pending_ids[:5]}"
-        )
-    if completed_requests != len(runtimes):
-        raise RuntimeError(
-            f"FACE planning stopped with {completed_requests}/{len(runtimes)} requests complete"
-        )
-    if any(state.busy or state.qp or state.active_decode for state in instances):
-        raise RuntimeError("FACE planning ended with non-idle instance state")
-
-    plans: list[FaceRequestPlan] = []
-    for runtime in runtimes:
-        required = {
-            "estimated_arrival_ns": runtime.estimated_arrival_ns,
-            "admission_time_ns": runtime.admission_time_ns,
-            "prefill_instance_index": runtime.prefill_instance_index,
-            "prefill_assignment_key": runtime.prefill_assignment_key,
-            "prefill_start_ns": runtime.prefill_start_ns,
-            "prefill_complete_ns": runtime.prefill_complete_ns,
-            "decode_instance_index": runtime.decode_instance_index,
-            "decode_start_ns": runtime.decode_start_ns,
-            "completion_ns": runtime.completion_ns,
-            "kv_allocation": runtime.kv_allocation,
-            "prefill_decode_transfer": runtime.prefill_decode_transfer,
-            "kv_location_after_completion": (
-                runtime.kv_location_after_completion
-            ),
-        }
-        missing = [name for name, value in required.items() if value is None]
-        if missing:
-            raise RuntimeError(
-                f"request {runtime.request.request_id} is missing plan fields: {missing}"
-            )
-        plans.append(
-            FaceRequestPlan(
-                queue_index=runtime.request.queue_index,
-                session_id=runtime.request.session_id,
-                turn_index=runtime.request.turn_index,
-                request_id=runtime.request.request_id,
-                history_tokens_before=runtime.history_tokens_before,
-                prefill_context_tokens=runtime.prefill_context_tokens,
-                final_context_tokens=runtime.final_context_tokens,
-                estimated_arrival_ns=int(runtime.estimated_arrival_ns),
-                admission_time_ns=int(runtime.admission_time_ns),
-                hbm_wait_ns=(
-                    int(runtime.admission_time_ns)
-                    - int(runtime.estimated_arrival_ns)
-                ),
-                prefill_instance_index=int(runtime.prefill_instance_index),
-            prefill_assignment_key=tuple(runtime.prefill_assignment_key),
-            prefill_instance_loads=runtime.prefill_instance_loads,
-            prefill_hbm_feasible_instances=(
-                runtime.prefill_hbm_feasible_instances
-            ),
-            prefill_affinity_reason=runtime.prefill_affinity_reason,
-                prefill_start_ns=int(runtime.prefill_start_ns),
-                prefill_complete_ns=int(runtime.prefill_complete_ns),
-                decode_instance_index=int(runtime.decode_instance_index),
-                decode_candidates=runtime.decode_candidates,
-                decode_start_ns=int(runtime.decode_start_ns),
-                completion_ns=int(runtime.completion_ns),
-                kv_allocation=runtime.kv_allocation,
-            history_source_instance_index=runtime.history_source_instance_index,
-            history_transfer_bytes=runtime.history_transfer_bytes,
-            history_tokens_discarded=runtime.history_tokens_discarded,
-            history_location_before=runtime.history_location_before,
-                history_transfer=runtime.history_transfer,
-                history_evictions=runtime.history_evictions,
-                prefill_evictions=runtime.prefill_evictions,
-                prefill_decode_transfer=runtime.prefill_decode_transfer,
-                decode_evictions=runtime.decode_evictions,
-                completion_evictions=runtime.completion_evictions,
-                kv_location_after_completion=runtime.kv_location_after_completion,
-                kv_instance_after_completion=runtime.kv_instance_after_completion,
-                hbm_after_completion=runtime.hbm_after_completion,
-                reserve_unmet_ranks=runtime.reserve_unmet_ranks,
-            )
-        )
-
-    edge_weights = tuple(
-        (source, target, weight)
-        for (source, target), weight in sorted(graph.weights.items())
-    )
-    return FacePlan(
-        p_chunk=p_chunk,
-        average_decode_length=average_decode_length,
-        topology=topology,
-        lut=lut,
-        requests=tuple(sorted(plans, key=lambda plan: plan.queue_index)),
-        iterations=tuple(
-            sorted(
-                iterations,
-                key=lambda item: (item.start_ns, item.instance_index, item.iteration_index),
-            )
-        ),
-        iterations_recorded=record_iterations,
-        final_edge_weights=edge_weights,
-        final_remaining_capacity_bytes=(
-            kv_manager.instance_remaining_capacity_totals()
-        ),
-        edge_ranks=kv_manager.edge_ranks,
-        reserve_context_tokens=reserve_context_tokens,
-        final_hbm_states=kv_manager.hbm_snapshots(),
-        final_session_states=kv_manager.session_snapshots(),
-    )

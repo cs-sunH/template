@@ -1,15 +1,11 @@
-"""Glue between the WSC-LLM ET generator and the frozen metrics schema.
+"""Legacy static-ET metrics compatibility utilities for the frozen schema.
 
-Ported from astra-sim-face metrics_integration.py (implementation doc
-sec.9.2).  This module is strictly observational (doc sec.4/6/7): it collects
-request stage boundary node ids while the ET is emitted, mirrors the planner
-memory deltas recorded by ``session_kv_manager`` through the read-only
-:class:`metrics_schema.MemoryMetricsObserver`, and finally writes the
-``metrics_manifest.json`` sidecar next to the generated ``.et`` files.
-
-Nothing here feeds back into request mapping, scheduling, KV management, or
-ET construction.  When metrics are disabled the generator never builds this
-context, so the ``.et`` output stays byte-identical (doc sec.12.3).
+Ported from astra-sim-face metrics_integration.py (implementation doc sec.9.2).
+These observational helpers can build a metrics sidecar and digest records for
+explicitly supplied historic ET files.  They are not imported by the online
+GraphBatch routes, whose runtime inputs are materialized separately.  Nothing
+here feeds back into request mapping, scheduling, KV management, or dynamic
+graph construction.
 
 WSC-LLM differences versus the FACE original:
 
@@ -22,7 +18,7 @@ The manifest is exactly the frozen-schema product of
 :class:`metrics_schema.MetricManifestBuilder`; no extra keys are injected
 beyond what the frozen ``MetricsManifest`` dataclass emits.
 
-Digest recipes (deterministic, identical with metrics on/off):
+Legacy digest recipes:
 
 - ``trace_digest``: per rank ``<rank>:<sha256 hexdigest of the .et bytes>``
   lines joined with ``\\n``, then SHA256 of that UTF-8 text.  The run script
@@ -56,7 +52,6 @@ from metrics_schema import (  # noqa: E402
     RequestMetadata,
     RUN_MODE_SERVICE,
 )
-from session_kv_manager import model_weight_shard_bytes_by_tp_rank  # noqa: E402
 
 
 REPO_VARIANT = "astra-sim-wscllm"
@@ -206,7 +201,7 @@ def _sha256_hex(text: str) -> str:
 
 
 def compute_trace_digest(et_paths_by_rank: Mapping[int, Path]) -> str:
-    """SHA256 over the sorted per-rank ``.et`` SHA256 lines (see module doc)."""
+    """Hash explicitly supplied legacy ET paths in deterministic rank order."""
 
     per_rank = []
     for rank, path in sorted(et_paths_by_rank.items()):
@@ -404,43 +399,11 @@ class ServiceMetrics:
         )
         # (rank, node_id, event_code, subject_id) in emission order.
         self.events: list[tuple[int, int, int, int]] = []
-        self.weight_preload_recorded = False
 
     def add_event(
         self, rank: int, node_id: int, event_code: int, subject_id: int
     ) -> None:
         self.events.append((rank, node_id, event_code, subject_id))
-
-    def record_weight_preload(self, config: Any, plan: Any) -> None:
-        """Legacy path only: the KV manager never runs there, so the generator
-        itself mirrors the preloaded per-rank weight shards (anchor tick 0)."""
-
-        if self.weight_preload_recorded:
-            raise RuntimeError("weight preload recorded twice")
-        self.weight_preload_recorded = True
-        for instance in plan.topology.instances:
-            shards = model_weight_shard_bytes_by_tp_rank(
-                config.model, len(instance.ranks)
-            )
-            for relative_rank, rank in enumerate(instance.ranks):
-                self.memory.initialize_rank(
-                    rank, config.hardware.local_hbm_capacity_bytes
-                )
-        for instance in plan.topology.instances:
-            shards = model_weight_shard_bytes_by_tp_rank(
-                config.model, len(instance.ranks)
-            )
-            for relative_rank, rank in enumerate(instance.ranks):
-                self.memory.record(
-                    planner_time_ns=0,
-                    anchor_kind="tick_zero",
-                    request_id=None,
-                    session_id=None,
-                    rank=rank,
-                    allocation_key=f"weight:{rank}",
-                    weight_delta_bytes=int(shards[relative_rank]),
-                    cause="model_weight_preload",
-                )
 
     def write_manifest(
         self,
@@ -458,8 +421,8 @@ class ServiceMetrics:
         if not self.memory.deltas:
             raise RuntimeError(
                 "no memory deltas were recorded; the session KV manager must "
-                "run under set_metrics_observer() or record_weight_preload() "
-                "must be called before writing the metrics manifest"
+                "run under set_metrics_observer() before writing the metrics "
+                "manifest"
             )
         request_id_to_queue = {
             spec.request_id: index for index, spec in enumerate(config.request_queue)
@@ -500,13 +463,12 @@ class ServiceMetrics:
         for rank, rank_result in sorted(memory_result.ranks.items()):
             builder.add_planner_memory_peak(rank_result.to_dict())
         manifest = builder.build()
-        manifest_dict = manifest.to_dict()
         manifest_path = output_dir / "metrics_manifest.json"
         # Compact serialization: the memory action stream is machine-read
         # (C++ MetricCollector / post-processing), and pretty-printing it
         # would grow the sidecar by several times on large workloads.
         manifest_path.write_text(
-            json.dumps(manifest_dict, separators=(",", ":")) + "\n",
+            json.dumps(manifest.to_dict(), separators=(",", ":")) + "\n",
             encoding="utf-8",
         )
         return manifest_path

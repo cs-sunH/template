@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-NodeStore -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 1).
+NodeStore -- execution-driven mechanism layer (wscllm phase 1).
 
 Minimal dynamic node store (方案 §4 步骤 1-4). First version supports only
 "the current request's current stage": a GraphBatch adds a batch of nodes,
@@ -122,6 +122,11 @@ class NodeStore {
     /// Full record (GraphSource::lookup backing).
     std::optional<OnlineNode> node(uint64_t node_id) const;
 
+    /// Zero-copy full record (GraphSource::lookup_ptr / for_each_dep_free
+    /// backing). Nodes are never erased, so the returned pointer stays
+    /// stable for the node's lifetime.
+    const OnlineNode* node_ptr(uint64_t node_id) const;
+
     /// Reverse index (watch/fence).
     std::optional<NodeStoreMeta> meta_for(uint64_t node_id) const;
 
@@ -159,8 +164,11 @@ class NodeStoreGraphSource : public GraphSource {
     const NodeStore& store() const { return store_; }
 
     std::vector<NodeView> dep_free_nodes() override;
+    void for_each_dep_free(
+        const std::function<void(const NodeView&)>& consume) override;
     void finish_node(uint64_t node_id) override;
     std::optional<NodeView> lookup(uint64_t node_id) override;
+    const NodeView* lookup_ptr(uint64_t node_id) override;
     void take_node(uint64_t node_id) override;
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
         uint64_t) override {

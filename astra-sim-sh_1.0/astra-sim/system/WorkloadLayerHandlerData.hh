@@ -22,7 +22,8 @@ class WorkloadLayerHandlerData : public BasicEventHandlerData, public MetaData {
     // Workload::call through this same handler; the flag distinguishes the
     // HBM-side arrival of a joined node completion (network / remote-port
     // side uses the default false). Set by Workload when it allocates the
-    // endpoint job's handler; never read elsewhere.
+    // endpoint job's handler; read by Workload::try_join_hbm_node to
+    // discriminate the HBM-side vs network-side arrival.
     bool is_local_hbm_job;
     WorkloadLayerHandlerData();
 };

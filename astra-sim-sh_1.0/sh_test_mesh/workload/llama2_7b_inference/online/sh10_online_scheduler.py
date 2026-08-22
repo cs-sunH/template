@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """sh10_online_scheduler.py -- Sh10OnlineScheduler(策略路径,关感知)。
 
-方案 §4 步骤 1-9:以 plan_face_requests(face_scheduler.py:2759-3239)为蓝本
+方案 §4 步骤 1-9:以已移除的离线 plan_face_requests(2026-08-21 清除)为蓝本
 逐行迁移(注释标注离线行号 `# offline: face_scheduler.py:XXXX`),保持决策
-顺序与调用链逐行对应;离线 LUT 计时(start_ready_iterations 推 iteration_
+顺序与调用链逐行对应;离线迭代计时(start_ready_iterations 推 iteration_
 complete 事件)删除,由 C++ 真实完成事件推进;实例内 PD 混合排队语义
 (FCFS qp / active_decode / busy / remaining_chunks 记账)原样保留于账本,
 不体现在图结构上(request-aggregated 三段式构图,合同④粒度口径)。
 
 红线(§0.4):策略判据全部只读 import 复用——KVCacheManager、
 select_prefill_instance、select_decode_instance、PrefillQueueSnapshot、
-WeightedInstanceGraph、kv_cache_bytes_for_tokens;LUT 按合同⑨以物化期冻结
-的 face_lut.csv 加载(只 lookup,禁止在线 build/增量扩展)。
+WeightedInstanceGraph、kv_cache_bytes_for_tokens;Decode 代价由当前硬件、模型
+和队列状态直接计算 Roofline 估计，不加载或缓存成本表。
 
 边界映射(方案步骤 1-9 操作 1):
   ARRIVAL(冻结队列序)        -> 离线 arrival 批 :3123-3133 + admit_waiting_
@@ -33,13 +33,11 @@ enforce_reserve——与离线 :3086-3110 的"先全部 mark_complete 再全部
 enforce_reserve"一致。
 """
 
-import csv
 import heapq
 import math
 import os
 import sys
 from collections import deque
-from pathlib import Path
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -49,8 +47,6 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 
 from face_scheduler import (  # noqa: E402  (红线:只读 import)
     DecodeTieCounter,
-    FaceLut,
-    FaceLutEntry,
     KVCacheManager,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
@@ -68,36 +64,12 @@ from online.online_scheduler_base import (  # noqa: E402
 )
 
 
-def load_frozen_lut(path) -> FaceLut:
-    """合同⑨:加载物化期冻结的 face_lut.csv(只 lookup;禁止在线 build)。
-    从冻结表行重建 FaceLutEntry 索引——与离线同一 lookup 实现/同一数值,
-    不引入任何增量统计。加载失败 fail-closed。"""
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"frozen LUT table missing: {path} (materialize via "
-            "plan_materializer.py; contract 09 frozen-LUT rule)")
-    entries = []
-    with path.open(newline="", encoding="utf-8") as source:
-        for row in csv.DictReader(source):
-            entries.append(FaceLutEntry(
-                instance_size=int(row["instance_size"]),
-                p_chunk=int(row["p_chunk"]),
-                d_batch=int(row["d_batch"]),
-                d_token=int(row["d_token"]),
-                iteration_time_ns=int(row["iteration_time_ns"]),
-                source=row.get("source", "analytical_roofline"),
-            ))
-    return FaceLut(entries)
-
-
 class Sh10OnlineScheduler(OnlineSchedulerBase):
-    """sh_1.0 单策略变体在线调度器(队列深度均衡 prefill + LUT 代价 decode +
+    """sh_1.0 单策略变体在线调度器(队列深度均衡 prefill + Roofline 代价 decode +
     两态 KV + edge-rank 远端存取;关感知 = 策略输入全是 Python 账本)。"""
 
     def __init__(self, *, manifest, config, graph, digest_sink=None,
-                 mode: str = "strategy", sensing: bool = False,
-                 frozen_lut_csv=None):
+                 mode: str = "strategy", sensing: bool = False):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -106,8 +78,8 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             sensing=sensing,
         )
         self.graph = graph
-        # ---- 离线 plan_face_requests 的构造段(:2770-2805)在线复刻 ----
-        # offline: face_scheduler.py:2770 topology
+        # ---- 已移除的离线 plan_face_requests 构造段在线复刻 ----
+        # offline: face_scheduler.py topology
         specs = tuple(
             FaceInstanceSpec(group.name, group.pg_name, group.ranks)
             for group in config.inference_groups
@@ -120,12 +92,6 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         if p_chunk <= 0:
             raise ValueError("online path requires an explicit positive p_chunk")
         self.p_chunk = p_chunk
-        # LUT:计时角色 offline-only;成本模型角色在线保留——冻结表加载
-        # (合同⑨ sh_1.0 独有裁决)。
-        lut_path = frozen_lut_csv
-        if lut_path is None:
-            lut_path = _default_frozen_lut_path(config)
-        self.lut = load_frozen_lut(lut_path)
         # offline: :2798-2804
         self.graph_w = WeightedInstanceGraph(self.topology)
         self.kv_manager = KVCacheManager(
@@ -138,7 +104,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             _InstanceState(index=index)
             for index in range(len(self.topology.instances))
         ]
-        # offline: plan_face_requests 起点的 decode_tie_counter —— decode 平局
+        # 蓝本起点的 decode_tie_counter —— decode 平局
         # 轮流裁决计数器（中-1 裁决 2026-08-20）：调度器生命周期持有一个，
         # 仅真实平局（HBM 可行集内 per_die_delta_ns 精确相等 ≥2）时前进。
         self._decode_tie_counter = DecodeTieCounter()
@@ -210,24 +176,10 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 f"session {session_id} turn indexes must be contiguous "
                 f"from zero (got turn {spec.turn_index} after {last_turn})")
         history = self._session_history.get(session_id, 0)
-        # Context sidecar(离线 _validate_and_expand_requests :2845-2866 的
-        # 逐到达等价):recompute 口径 prefill 工作 = 队列 prefill_length;
-        # sidecar_restore 口径只复用账本内实际存在的前缀(min(prefix,
-        # 上一轮 final)),prefill_context = input_tokens_total,工作量 =
-        # context - history(turn-0 账本为 0,prefix 全量进 prefill 算力)。
-        if spec.prefix_tokens is None:
-            prefill_tokens_to_process = spec.prefill_length
-            prefill_context = history + prefill_tokens_to_process
-        else:
-            history = min(spec.prefix_tokens, history)
-            assert spec.input_tokens_total is not None
-            prefill_context = spec.input_tokens_total
-            prefill_tokens_to_process = prefill_context - history
-            if prefill_tokens_to_process <= 0:
-                raise ValueError(
-                    f"session {session_id} request {request_id} has no "
-                    "Prefill work after prefix reuse"
-                )
+        # recompute 单口径(离线 _validate_and_expand_requests 的逐到达
+        # 等价):prefill 工作 = 队列 prefill_length(turn-0 已折入 prefix)。
+        prefill_tokens_to_process = spec.prefill_length
+        prefill_context = history + prefill_tokens_to_process
         final_context = prefill_context + spec.decode_length
         runtime = _OnlineRuntime(
             request=spec,
@@ -239,15 +191,6 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             remaining_chunks=math.ceil(prefill_tokens_to_process / self.p_chunk),
         )
         runtime.estimated_arrival_ns = tick  # offline: :3130
-        # Context sidecar:arrival 时把 session KV 账本截到 sidecar 声明的
-        # 历史前缀(workload context-window 丢弃语义),使 prepare_prefill
-        # 的严格相等校验成立(离线 :3257-3265 同款;recompute 口径下
-        # history == 上一轮 final,恒为 no-op;turn-0 新会话返回 0)。
-        runtime.history_tokens_discarded = self.kv_manager.truncate_history(
-            session_id,
-            history,
-            trigger_request_id=request_id,
-        )
         self._session_turn[session_id] = spec.turn_index
         self._session_history[session_id] = final_context
         self._runtimes[request_id] = runtime
@@ -345,8 +288,8 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         runtime = self._runtimes[request_id]
         state_index = runtime.prefill_instance_index
         state = self.instances[state_index]
-        # Context sidecar:drain 记实际 prefill 工作量(recompute 口径 ==
-        # request.prefill_length;离线 :3109 chunk 累计的整段等价)。
+        # drain 记实际 prefill 工作量(recompute 单口径 ==
+        # request.prefill_length;离线 chunk 累计的整段等价)。
         runtime.prompt_tokens_processed = runtime.prefill_tokens_to_process
         runtime.remaining_chunks = 0
         # offline: :2989-2991 FCFS qp popleft(离线 iteration 串行化保证
@@ -373,9 +316,10 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             for instance in self.instances
         ]
         selected, costs = select_decode_instance(
+            hardware=self.config.hardware,
+            model=self.config.model,
             topology=self.topology,
             graph=self.graph_w,
-            lut=self.lut,
             fixed_p_chunk=self.p_chunk,
             prefill_instance_index=state_index,
             has_prefill_work=has_prefill,
@@ -691,8 +635,8 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
 
 
 class _OnlineRuntime:
-    """离线 _RequestRuntime(face_scheduler.py:2671-2703)的在线对应物
-    (LUT 计时字段 decode_steps_remaining/current_decode_token 的增量推进
+    """离线 _RequestRuntime(face_scheduler.py)的在线对应物
+    (静态迭代计时字段 decode_steps_remaining/current_decode_token 的增量推进
     删除;current_decode_token 保持在 decode 起始口径,作为
     select_decode_instance 的 active_tokens 账本输入)。"""
 
@@ -702,9 +646,8 @@ class _OnlineRuntime:
         self.request = request
         self.queue_index = queue_index
         self.history_tokens_before = history_tokens_before
-        # Context sidecar:实际 prefill 工作量(recompute 口径 ==
-        # request.prefill_length;sidecar_restore 口径 = context - history,
-        # 离线 _RequestRuntime.prefill_tokens_to_process :2776 同款)。
+        # 实际 prefill 工作量(recompute 单口径 == request.prefill_length,
+        # 离线 _RequestRuntime.prefill_tokens_to_process 同款)。
         if prefill_tokens_to_process is None:
             prefill_tokens_to_process = request.prefill_length
         self.prefill_tokens_to_process = prefill_tokens_to_process
@@ -712,8 +655,8 @@ class _OnlineRuntime:
         self.final_context_tokens = final_context_tokens
         self.remaining_chunks = remaining_chunks
         self.prompt_tokens_processed = 0
-        # Context sidecar:arrival 时 truncate_history 丢弃的旧 KV token 数
-        # (recompute 口径恒 0)。
+        # recompute 单口径下恒 0(源负载无 context-window 丢弃行为;
+        # 字段保留以维持输出 schema)。
         self.history_tokens_discarded = 0
         self.current_decode_token = prefill_context_tokens
         self.estimated_arrival_ns = None
@@ -741,7 +684,7 @@ class _OnlineRuntime:
 
 
 class _InstanceState:
-    """离线 _InstanceRuntime(:2707-2713);busy/iteration_count 为 LUT 计时
+    """离线 _InstanceRuntime(:2707-2713);busy/iteration_count 为离线迭代计时
     产物,在线不消费(图内物理串行化替代)。"""
 
     def __init__(self, index):
@@ -749,25 +692,3 @@ class _InstanceState:
         self.qp = deque()
         self.active_decode = []
         self.last_arrival_ns = None
-
-
-def _default_frozen_lut_path(config) -> Path:
-    """冻结 LUT 表缺省路径(合同⑨:物化期按冻结输入同一推导导出,只 lookup,
-    禁止在线 build)。裸仓库态(阶段 7 还原 2026-08-16):baseline 归档已删,
-    缺省解析 = sh_test_mesh/generated/ 下唯一 llama2_7b_inference_54npus_*
-    目录内的 face_lut.csv(该文件由 generate_trace.py 随 ET 一起再生,目录名
-    编码窗口与 config digest——与在线 runner 的 ET 解析同款动态规则);
-    解析失败/不存在 = fail-closed(调用方先物化输入并生成,物化入口 =
-    traces/derive_20_first_30_seconds.py)。"""
-    workload_dir = Path(_WORKLOAD_DIR)
-    generated_root = workload_dir.parent.parent / "generated"
-    if generated_root.is_dir():
-        matches = sorted(generated_root.glob("llama2_7b_inference_54npus_*"))
-        for candidate in matches:
-            lut = candidate / "face_lut.csv"
-            if lut.is_file():
-                return lut
-    # Bare state / not generated yet: the historical archived path (kept for
-    # the error message provenance).
-    return (workload_dir.parent.parent / "baseline" / "20_30s" / "generated"
-            / "face_lut.csv")

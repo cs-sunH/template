@@ -14,7 +14,7 @@ stderr 留痕);C++ 读到 error 即 abort。C++ 端崩溃/结束 => req_notify.f
 写端关闭 => read 返回 EOF => serve_forever 返回 0;resp_notify 写端
 BrokenPipe(C++ 常开读端关闭,运行中途) => BridgePipeError fail-closed
 退出(缺陷 B 修复 2026-08-16:resp 通道双侧长连接,消除按交换开/关握手
-的内核竞态族——POLLHUP 假 EOF 误检与 EPIPE 楔死;同步自 face 0049ef5)。
+的内核竞态族——POLLHUP 假 EOF 误检与 EPIPE 楔死)。
 
 本模块是决策通道,不是运行期 request 注入通道:Producer -> C++ 的
 submit/close/EOF/error 走步骤 1-2 的 command queue,不经过 req_notify.fifo。
@@ -151,16 +151,15 @@ class BridgeServer:
     def _notify_response(self):
         """写 1 字节通知 C++。
 
-        缺陷 B 修复(2026-08-16, face主动测试错误分析.md;同步自 face
-        0049ef5):resp_notify 写端改为 serve_forever 启动时一次打开、run
-        生命周期持有的长连接(与 C++ 侧 open_notify 持有的常开读端配对),
-        这里只写不再开/关。旧的按交换 open/write/close 握手存在无法从应用
-        层消除的内核竞态族:pending 的 O_WRONLY open 被读端唤醒后、write
-        落地前读端已关 → BrokenPipeError;C++ 侧新开读端的 poll_wait 恰逢
-        写端 1→0 关闭转移且缓冲空 → POLLHUP + read()==0 的"Python 已崩"
-        误检(F1),以及同族的握手楔死(F7 形态)。长连接下双端 run 期无
-        fd 开关转移:写端 BrokenPipeError 只能是 C++ 进程已死(fail-closed,
-        异常向上传播由 serve 循环捕获留痕)。
+        缺陷 B 修复(2026-08-16, face主动测试错误分析.md):resp_notify 写端改为
+        serve_forever 启动时一次打开、run 生命周期持有的长连接(与 C++ 侧
+        open_notify 持有的常开读端配对),这里只写不再开/关。旧的按交换
+        open/write/close 握手存在无法从应用层消除的内核竞态族:pending 的
+        O_WRONLY open 被读端唤醒后、write 落地前读端已关 → BrokenPipeError;
+        C++ 侧新开读端的 poll_wait 恰逢写端 1→0 关闭转移且缓冲空 → POLLHUP +
+        read()==0 的"Python 已崩"误检(F1),以及同族的握手楔死(F7 形态)。
+        长连接下双端 run 期无 fd 开关转移:写端 BrokenPipeError 只能是 C++
+        进程已死(fail-closed,异常向上传播由 serve 循环捕获留痕)。
 
         写阻塞时间计入 gil_wait_ns(等待 C++ 进程消费)。
         """

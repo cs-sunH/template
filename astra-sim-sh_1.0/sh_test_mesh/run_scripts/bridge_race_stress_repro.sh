@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bridge_race_stress_repro.sh -- 缺陷 B 复现装置(2026-08-16,
-# synced from face-defectfix2-done; 源分析: face主动测试错误分析.md 缺陷 B)。
+# face主动测试错误分析.md 缺陷 B)。
 #
 # 背景:FileDecisionBridge 旧协议在 resp_notify 通道上按交换开/关:
 #   C++:  open(O_RDONLY|O_NONBLOCK) -> poll(POLLIN|POLLHUP) -> read(1) -> close

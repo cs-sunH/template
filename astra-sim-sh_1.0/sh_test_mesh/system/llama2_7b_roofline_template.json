@@ -10,8 +10,8 @@
   "collective-optimization": "localBWAware",
   "boost-mode": 0,
   "roofline-enabled": 1,
+  "hbm-bandwidth-contention": 1,
   "replay-only": 0,
   "track-local-mem": 0,
-  "trace-enabled": 0,
-  "hbm-bandwidth-contention": 1
+  "trace-enabled": 0
 }

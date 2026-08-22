@@ -566,11 +566,8 @@ class OnlineSchedulerBase:
         含 admitted / committed / issued / completed-unreconciled 常驻层信息
         (已核销请求的各层齐备;运行结束 admitted / committed / issued 应已
         清空,由对账脚本复核;ready 层为边界视图不常驻,在
-        sensing_query_log.jsonl 逐边界导出)。remote FIFO 为实账本层
-        (contract ⑥,sh_1.0 独有:AnalyticalRemoteMemory 26 端口 FIFO 的
-        pending/active 计数与字节,由 C++ 侧 Workload 计数采集,经
-        remote_fifo_ledger.jsonl 逐交付快照导出,不入本逐 request 视图);
-        local HBM job 为显式"不适用"占位(本仓无 LocalHbmBandwidthModel)。"""
+        sensing_query_log.jsonl 逐边界导出)。remote FIFO / local HBM 为
+        显式"不适用"占位(contract ⑥,本仓无远端内存 / HBM 执行模型)。"""
         requests = {}
         for request_id, info in self.ledger_admitted.items():
             requests.setdefault(request_id, {})["admitted"] = info

@@ -2,8 +2,8 @@
 """test_graph_batch_builder.py -- sh_1.0 watch 锚点统一(barrier 前末节点)
 钉子测试。
 
-背景(《5仓库本该一致却不同排查报告-第二轮.md》R2-2 /
-《R2修复03-sh10-watch锚点统一执行方案.md》,2026-08-20):PREFILL_DRAIN/
+背景(《5仓库本该一致却不同排查报告-第二轮.md》R2-2,
+2026-08-20):PREFILL_DRAIN/
 DECODE_COMPLETION watch 成员原取 end-barrier 之后的节点(barrier 本身),
 face/sh_2.0/sh_3.0/wscllm 四仓均取 barrier 之前每 rank 真实末节点(与
 离线 EVENT_PREFILL_END/EVENT_DECODE_END 锚点一致,排除 end barrier)。
@@ -62,6 +62,7 @@ class WatchAnchorNailTest(unittest.TestCase):
         self.config = SimpleNamespace(
             npus_count=4,
             remote_operand_loads=False,
+            trace_granularity="request_aggregated",
             inference_groups=[
                 SimpleNamespace(ranks=PREFILL_RANKS, pg_name="tp_prefill"),
                 SimpleNamespace(ranks=DECODE_RANKS, pg_name="tp_decode"),

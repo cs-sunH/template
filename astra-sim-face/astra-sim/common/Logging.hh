@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
+#include <vector>
 
 namespace AstraSim {
 
@@ -22,7 +22,7 @@ class LoggerFactory {
 
   private:
     static void init_default_components(const std::string& log_path);
-    static std::unordered_set<spdlog::sink_ptr> default_sinks;
+    static std::vector<spdlog::sink_ptr> default_sinks;
 };
 
 }  // namespace AstraSim

@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-DecisionBridge -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
 File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,

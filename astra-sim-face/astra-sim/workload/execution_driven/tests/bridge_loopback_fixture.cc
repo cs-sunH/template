@@ -34,7 +34,7 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-face):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest \
       sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py
@@ -75,7 +75,7 @@ void expect(bool cond, const char* what) {
 
 std::string make_temp_root() {
     const std::string root =
-        "/tmp/wscllm_bridge_loopback_" + std::to_string(::getpid());
+        "/tmp/face_bridge_loopback_" + std::to_string(::getpid());
     if (::mkdir(root.c_str(), 0755) != 0) {
         std::perror("mkdir");
         std::exit(1);

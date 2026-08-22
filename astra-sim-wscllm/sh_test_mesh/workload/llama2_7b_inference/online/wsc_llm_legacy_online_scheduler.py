@@ -2,7 +2,7 @@
 """wsc_llm_legacy_online_scheduler.py -- legacy WSC Relevant(P,D) 静态域调度器
 (strategy 模式,阶段 7 §10.6 第二变体在线迁移)。
 
-以 _plan_wsc_llm_requests_legacy(wsc_llm_scheduler.py:1295-1664)为蓝本迁移,
+以已移除的离线 _plan_wsc_llm_requests_legacy(2026-08-21 清除)为蓝本迁移,
 与 WscLlmOnlineScheduler 之于 session_lru 同构(每处迁移用
 `# offline: wsc_llm_scheduler.py:XXXX` 注释标注)。离线 legacy 事件循环与
 在线边界的一一对应:
@@ -46,7 +46,7 @@
 一致。
 
 §0.4 红线(逐项保留,本变体的存在意义):
-  - WscRelevantKvAllocator(只读复用 wsc_llm_scheduler.py:852-1077):Relevant
+  - WscRelevantKvAllocator(只读复用 wsc_llm_scheduler.py):Relevant
     (P,D) 静态域分配——decode 实例优先、选中 prefill 次之、同域 sibling
     prefill 最后,永不扩大到其他 Decode 域;
   - FCFS 队头阻塞:head try_allocate 失败 -> continue,队内后续请求一概不
@@ -58,8 +58,8 @@
     列);legacy 在线无逐事件 KV 日志,只有 run-end allocator 终值
     (metrics_integration.kv_event_payload_legacy 同构口径)。
 
-p_chunk 标定常数(用户裁决 2026-08-15,见方案文档 §3 步骤 0-1 物化规则与
-附录 C 登记):
+p_chunk 标定常数(用户裁决 2026-08-15,物化规则见 traces/
+derive_20_first_30_seconds.py,推导内联登记于下):
   = ceil(mean(prefill_length)) = ceil(5830711/1177) = 4954,物化阶段从冻结
   输入(20.csv 前30s,1177 请求)按与离线 legacy 同一过程预先导出,离线/在线
   两路径共用同一常数。在线不做任何"从已到达请求算增量 mean"的统计
@@ -68,8 +68,9 @@ p_chunk 标定常数(用户裁决 2026-08-15,见方案文档 §3 步骤 0-1 物�
 
 与离线蓝图的刻意差异(real-online 语义,合同⑦ Tier B real-online 验收):
   - 计时/迭代粒度:离线 LUT 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
-    request-aggregated 构图(prefill 整段 + decode 整段,与离线 ET 粒度一致);
-  - 构图 history 粒度:离线 writer 对前序 kv_allocation.pieces 逐 piece 发射
+    request-aggregated 构图(prefill 整段 + decode 整段,与历史规划的工作量
+    粒度一致);
+  - 构图 history 粒度:历史 legacy 发射语义对前序 kv_allocation.pieces 逐 piece 构造
     多个 history_piece transfer(category 1000+piece*100,source = 各
     Relevant(P,D) 存储实例)+ 父 decode 段的 kv_offload(category 5000+);
     在线复用共享构图器 graph_batch_builder 的 NOC_MIGRATE 分支 = 单个
@@ -89,8 +90,8 @@ import sys
 from collections import deque
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py / wsc_llm_
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置、
+# 发射与调度模块在上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py / wsc_llm_
 # scheduler.py / session_kv_manager.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -120,8 +121,8 @@ from wsc_llm_scheduler import (  # noqa: E402
 )
 
 
-# p_chunk 标定常数(用户裁决 2026-08-15;推导登记于方案文档 §3 步骤 0-1
-# 物化规则与附录 C)。
+# p_chunk 标定常数(用户裁决 2026-08-15;物化规则见 traces/
+# derive_20_first_30_seconds.py,推导登记于下方内联说明)。
 # 物化阶段从冻结输入(20.csv 前30s,1177 请求)按与离线 legacy 同一过程
 # ceil(sum(prefill_length)/count) 预先导出;离线/在线共用。在线不使用
 # (无 LUT 计时、无 chunk 切分),仅作标定声明;严禁在线从已到达请求计算
@@ -130,7 +131,7 @@ P_CHUNK = 4954
 
 
 class _LegacyInstanceState:
-    """在线实例账本(离线 _InstanceRuntime,wsc_llm_scheduler.py:1225-1231 的
+    """在线实例账本(离线 _InstanceRuntime,wsc_llm_scheduler.py 的
     在线子集):qp = prefill FCFS 队列(deque),active_decode = 已准入 decode
     列表,busy = 一个整段在飞。"""
 
@@ -150,7 +151,7 @@ class _LegacyInstanceState:
 
 
 class _LegacyRequestRuntime:
-    """在线请求运行账本(离线 _RequestRuntime,wsc_llm_scheduler.py:1199-1223
+    """在线请求运行账本(离线 _RequestRuntime,wsc_llm_scheduler.py
     的在线子集)。
 
     输入事实(request-neutral,来自 manifest,policy-independent):
@@ -198,7 +199,7 @@ class _LegacyRequestRuntime:
 class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:legacy WSC Relevant(P,D) 静态域调度器。
 
-    蓝本: _plan_wsc_llm_requests_legacy(wsc_llm_scheduler.py:1295-1664),
+    蓝本: 已移除的离线 _plan_wsc_llm_requests_legacy,
     kv_cache_policy == "legacy"。拓扑 / 静态路由 / WscRelevantKvAllocator
     (与离线同一函数、同参数)在 __init__ 一次性构建,运行期策略输入全部
     来自这些 Python 账本(关感知)。
@@ -230,7 +231,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用)
 
         # 蓝图 :1302-1303:拓扑 + 静态 PD 路由(alpha 默认 1.0,与离线同参)。
-        # offline: wsc_llm_scheduler.py:1302-1303
+        # offline: wsc_llm_scheduler.py
         specs = tuple(
             WscLlmInstanceSpec(
                 name=group.name,
@@ -246,7 +247,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
             self.topology, alpha=1.0)
 
         # 蓝图 :1310-1313:WSC Relevant(P,D) 分配器(model_weight_bytes 同参)。
-        # offline: wsc_llm_scheduler.py:1310-1313
+        # offline: wsc_llm_scheduler.py
         self.allocator = WscRelevantKvAllocator(
             self.topology,
             self.static_mapping,
@@ -254,7 +255,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         )
 
         # 蓝图 :1315-1317:实例账本。
-        # offline: wsc_llm_scheduler.py:1315-1317
+        # offline: wsc_llm_scheduler.py
         self.instances = [
             _LegacyInstanceState(index=instance.index,
                                  phase_role=instance.phase_role)
@@ -263,14 +264,14 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
 
         # 蓝图 :1319:session -> KVAllocation 保留账本(turn>0 arrival 释放
         # 前序,terminal 完成释放终态)。
-        # offline: wsc_llm_scheduler.py:1319
+        # offline: wsc_llm_scheduler.py
         self.session_allocations = {}
 
         # 蓝图 :1321-1334:future arrival min-heap(在线由 ingress ARRIVAL
         # 事件喂入)。阶段 4 §7.3:键含 queue_index,同 tick 到期项按冻结
         # 队列序稳定弹出(与 C++ 序列化的 arrivals 冻结队列序一致);
         # 消费规则 tick <= current_tick(见 _drain_arrival_heap)。
-        # offline: wsc_llm_scheduler.py:1321-1334
+        # offline: wsc_llm_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
 
@@ -283,7 +284,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         self._ready_frontier = set()
 
         # 请求运行账本(queue_index 序;manifest 事实 policy-independent)。
-        # offline: wsc_llm_scheduler.py:1304(runtimes 由
+        # offline: wsc_llm_scheduler.py(runtimes 由
         # _validate_and_expand_requests 构造;在线输入事实直接来自 manifest,
         # 事实字段同源:history_tokens_before / prefill_context_tokens /
         # final_context_tokens 与离线 expand 的推导一致)。
@@ -324,7 +325,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         tick = delta["tick"]
 
         # ---- completion 批(离线 priority 0;同 tick 先于 arrival)----
-        # offline: wsc_llm_scheduler.py:1449-1547
+        # offline: wsc_llm_scheduler.py
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
@@ -340,13 +341,13 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
                         stage, request_id))
 
         # ---- arrival 批(离线 priority 1)----
-        # offline: wsc_llm_scheduler.py:1552-1578
+        # offline: wsc_llm_scheduler.py
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
 
         # ---- 准入/发射 pass(离线 start_ready_iterations,计时部分删除)----
-        # offline: wsc_llm_scheduler.py:1357-1469
+        # offline: wsc_llm_scheduler.py
         self._admit_pass(tick)
 
         # ---- kv 动作流:legacy 无逐事件 KV 日志(metrics_integration.py:251
@@ -361,7 +362,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         :1368-1376 一致,arrival 不路由)。快照在 append 之前取(ordering_key
         反映选择时刻的排队深度)。
 
-        offline: wsc_llm_scheduler.py:1552-1578
+        offline: wsc_llm_scheduler.py
         """
         runtime.estimated_arrival_ns = tick  # :1554
         # :1555 释放/取走该 session 的前序保留分配(turn-0 时不存在,
@@ -398,7 +399,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         active_decode(legacy 无二次 decode 准入——KV 在准入时已分配在
         Relevant(P,D) 域,decode 实例参与域分配)。
 
-        offline: wsc_llm_scheduler.py:1488-1510
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
@@ -434,7 +435,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         + terminal 释放(同分支逐行)。下一 turn arrival 排程在
         REQUEST_COMPLETE 边界(同 tick,见 _on_request_complete)。
 
-        offline: wsc_llm_scheduler.py:1511-1547
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
@@ -483,7 +484,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         now + 该 turn 的 inter_request_interval_ns 注册未来 alarm
         (向 ingress,不再 push 到事件堆)。
 
-        offline: wsc_llm_scheduler.py:1524-1531
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         # §7.3:_runtime_index O(1) 定位(替换 O(N) 全量扫描)。
@@ -543,7 +544,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         逐字节不变)。frontier 在到达/完成(设)与发射(清)时增量维护,
         单批访问条目数 = 到期/受影响条目数,与总 request 数无关。
 
-        offline: wsc_llm_scheduler.py:1357-1469
+        offline: wsc_llm_scheduler.py
         """
         for instance_index in sorted(self._ready_frontier):  # §7.3 frontier
             self._profile_scan()  # §7.3:frontier 访问条目(就绪实例)
@@ -606,7 +607,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         """聚合粒度发射 prefill 整段(与离线 ET 按 request 整段一致;
         离线逐 chunk 迭代在在线不存在)。watch 注册 PREFILL_DRAIN。
 
-        offline: wsc_llm_scheduler.py:1364-1395(发射对象为整段而非 chunk)
+        offline: wsc_llm_scheduler.py(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_prefill_batch(plan)
@@ -658,7 +659,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         barrier)。watch 注册 DECODE_COMPLETION(C++ 同 fire 推
         DECODE_COMPLETION + REQUEST_COMPLETE 两条 completed_groups)。
 
-        offline: wsc_llm_scheduler.py:1397-1415(发射对象为整段而非 chunk)
+        offline: wsc_llm_scheduler.py(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_decode_batch(plan)

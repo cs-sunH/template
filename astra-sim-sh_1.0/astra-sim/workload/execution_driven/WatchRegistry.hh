@@ -2,11 +2,11 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-WatchRegistry -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+WatchRegistry -- execution-driven mechanism layer (wscllm phase 1).
 Implementation (方案 §4 步骤 1-5).
 
 Stage-completion watches over an exact member set, driven by the terminal
-facts recorded by CompletionObserver (step 1-3). The sh_1.0 boundary mapping
+facts recorded by CompletionObserver (step 1-3). The wscllm boundary mapping
 (步骤 1-5 操作 1) is: prefill stage all-nodes-terminal -> PREFILL_DRAIN,
 decode stage all-nodes-terminal -> DECODE_COMPLETION. The registry itself is
 stage-agnostic -- the stage string is opaque, and the reason mapping
@@ -29,7 +29,7 @@ Semantics (all explicit, none implied):
     completed_members.
   - Whether a terminal status satisfies a watch is the watch's own explicit
     policy (satisfying_statuses set at registration) -- Skipped is NEVER
-    implicitly upgraded to Success. Phase-1 sh_1.0 stage watches register
+    implicitly upgraded to Success. Phase-1 wscllm stage watches register
     {Success, Skipped}: a stage ends when its last node is terminal,
     regardless of which path produced the terminal fact (real traces
     contain INVALID_NODE / metadata nodes that are always skipped).

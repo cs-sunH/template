@@ -20,6 +20,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
+namespace spdlog {
+class logger;
+}  // namespace spdlog
+
 namespace AstraSim {
 
 class Sys;
@@ -98,6 +102,12 @@ class Workload : public Callable {
                                    LocalHbmBandwidthModel::JobKind kind);
 
   private:
+    // R4-14: cached "workload" logger -- fetched once in the constructor;
+    // the registry returns the same logger object per name for the process
+    // lifetime, so member reuse is behavior-equivalent (and skips the
+    // per-call registry mutex + map lookup on the per-node hot paths).
+    std::shared_ptr<spdlog::logger> workload_logger_;
+
     // From the node view, find out the corresponding communicator group, and
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.

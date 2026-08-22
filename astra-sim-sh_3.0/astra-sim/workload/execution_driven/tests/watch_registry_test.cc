@@ -26,7 +26,7 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-sh_3.0):
+Run (from template/astra-sim-wscllm):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
 Exit code 0 on ALL PASS.

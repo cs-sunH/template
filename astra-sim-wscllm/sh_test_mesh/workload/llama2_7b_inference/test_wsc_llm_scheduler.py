@@ -16,6 +16,7 @@ MODULE_DIR = Path(__file__).resolve().parent
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
+from session_kv_manager import SessionKVCacheManager  # noqa: E402
 from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
     PREFILL_ROLE,
@@ -25,15 +26,12 @@ from wsc_llm_scheduler import (  # noqa: E402
     WscLlmHardware,
     WscLlmInstanceSpec,
     WscLlmModel,
-    WscLlmRequest,
     WscLlmTimingEntry,
     WscLlmTimingLut,
     WscRelevantKvAllocator,
-    SessionKVCacheManager,
     build_instances,
     build_static_pd_mapping,
     estimate_model_weight_bytes,
-    plan_wsc_llm_requests,
     select_prefill_instance,
 )
 from generate_wsc_llm_trace import (  # noqa: E402
@@ -357,30 +355,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 1)
         self.assertIn("missing request queue", stderr.getvalue())
 
-    def test_session_lru_mode_keeps_terminal_kv_and_uses_static_route(self) -> None:
-        config, _ = checked_in_topology()
-        specs = tuple(
-            WscLlmInstanceSpec(group.name, group.pg_name, group.ranks, group.phase_role)
-            for group in config.inference_groups
-        )
-        requests = (
-            WscLlmRequest(0, "s0", 0, "s0r0", 10, 2, 0, None),
-            WscLlmRequest(1, "s1", 0, "s1r0", 10, 2, 0, None),
-            WscLlmRequest(2, "s0", 1, "s0r1", 8, 2, None, 1_000),
-        )
-        plan = plan_wsc_llm_requests(
-            hardware=config.hardware,
-            model=config.model,
-            instance_specs=specs,
-            requests=requests,
-            p_chunk=512,
-            kv_cache_policy="session_lru_recompute",
-            record_planning_iterations=False,
-        )
-        self.assertEqual(plan.p_chunk, 512)
-        self.assertEqual(tuple(item.history_action for item in plan.requests), ("NO_HISTORY", "NO_HISTORY", "NOC_MIGRATE"))
-        self.assertTrue(all(not item.terminal_kv_release_at_completion for item in plan.requests))
-        self.assertTrue(all(item.state == "RESIDENT" for item in plan.final_session_snapshots))
 
     def test_decode_instances_are_center_prioritized_and_validation_rejects_inverse(self) -> None:
         _, topology = checked_in_topology()
@@ -650,172 +624,8 @@ class WscLlmSchedulerTests(unittest.TestCase):
         manager.mark_complete("c", 31, "c0")
         manager.assert_final_state()
 
-    def test_dedicated_phase_iterations_least_occupied_queues_and_fixed_decode(self) -> None:
-        config, topology = checked_in_topology()
-        specs = tuple(
-            WscLlmInstanceSpec(
-                group.name,
-                group.pg_name,
-                group.ranks,
-                group.phase_role,
-            )
-            for group in config.inference_groups
-        )
-        requests = tuple(
-            WscLlmRequest(
-                queue_index=index,
-                session_id=f"s{index}",
-                turn_index=0,
-                request_id=f"r{index}",
-                prefill_length=12,
-                decode_length=2,
-                session_arrival_time_ns=0,
-                inter_request_interval_ns=None,
-            )
-            for index in range(7)
-        )
-        plan = plan_wsc_llm_requests(
-            hardware=config.hardware,
-            model=small_model(),
-            instance_specs=specs,
-            requests=requests,
-        )
-        self.assertEqual(
-            [request.prefill_instance_index for request in plan.requests],
-            [1, 4, 5, 6, 7, 8, 1],
-        )
-        self.assertEqual(plan.requests[-1].prefill_assignment_key, (1, 1))
-        for request in plan.requests:
-            expected_decode, expected_path = EXPECTED_STATIC_ROUTES[
-                request.prefill_instance_index
-            ]
-            self.assertEqual(request.decode_instance_index, expected_decode)
-            self.assertEqual(request.static_route.path, expected_path)
-            self.assertTrue(request.terminal_kv_release_at_completion)
-        for iteration in plan.iterations:
-            self.assertEqual(
-                topology.instance(iteration.instance_index).phase_role,
-                iteration.phase_role,
-            )
-            if iteration.phase_role == PREFILL_ROLE:
-                self.assertIsNotNone(iteration.prefill_request_id)
-                self.assertFalse(iteration.decode_request_ids)
-            else:
-                self.assertIsNone(iteration.prefill_request_id)
-                self.assertTrue(iteration.decode_request_ids)
 
-    def test_capacity_pressure_stops_prefill_fcfs_until_kv_release(self) -> None:
-        model = small_model()
-        usable_bytes_per_instance = 2_000
-        hardware = WscLlmHardware(
-            mesh_rows=1,
-            mesh_cols=2,
-            local_hbm_capacity_bytes=(
-                estimate_model_weight_bytes(model) + usable_bytes_per_instance
-            ),
-            local_hbm_bandwidth_gbps=1.0,
-            d2d_bandwidth_gbps=2.0,
-            peak_perf_tflops=1.0,
-            d2d_latency_ns=0,
-            local_hbm_latency_ns=0,
-        )
-        specs = (
-            WscLlmInstanceSpec("d0", "1", (0,), DECODE_ROLE),
-            WscLlmInstanceSpec("p1", "2", (1,), PREFILL_ROLE),
-        )
-        requests = (
-            WscLlmRequest(0, "s0", 0, "r0", 4, 20, 0, None),
-            WscLlmRequest(1, "s1", 0, "r1", 4, 20, 0, None),
-        )
 
-        plan = plan_wsc_llm_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=requests,
-        )
-
-        first, second = plan.requests
-        self.assertEqual(first.static_route.path, (1, 0))
-        self.assertEqual(second.static_route.path, (1, 0))
-        self.assertEqual(first.kv_allocation.total_bytes, 3_072)
-        self.assertEqual(second.kv_allocation.total_bytes, 3_072)
-        self.assertEqual(
-            first.completion_ns,
-            second.prefill_start_ns,
-            "the blocked FCFS head should resume at the first capacity-release event",
-        )
-        self.assertGreater(second.prefill_start_ns, first.prefill_complete_ns)
-        self.assertTrue(first.terminal_kv_release_at_completion)
-        self.assertTrue(second.terminal_kv_release_at_completion)
-
-    def test_multi_turn_planning_is_deterministic_and_preserves_session_timing(self) -> None:
-        config, _ = checked_in_topology()
-        specs = tuple(
-            WscLlmInstanceSpec(
-                group.name,
-                group.pg_name,
-                group.ranks,
-                group.phase_role,
-            )
-            for group in config.inference_groups
-        )
-        requests = (
-            WscLlmRequest(0, "s0", 0, "s0r0", 20, 3, 0, None),
-            WscLlmRequest(1, "s0", 1, "s0r1", 11, 2, None, 1000),
-            WscLlmRequest(2, "s1", 0, "s1r0", 18, 2, 0, None),
-            WscLlmRequest(3, "s1", 1, "s1r1", 9, 2, None, 2000),
-        )
-        first = plan_wsc_llm_requests(
-            hardware=config.hardware,
-            model=small_model(),
-            instance_specs=specs,
-            requests=requests,
-        )
-        second = plan_wsc_llm_requests(
-            hardware=config.hardware,
-            model=small_model(),
-            instance_specs=specs,
-            requests=requests,
-        )
-        signature = lambda plan: [
-            (
-                request.request_id,
-                request.estimated_arrival_ns,
-                request.prefill_instance_index,
-                request.decode_instance_index,
-                request.static_route.path,
-                request.completion_ns,
-            )
-            for request in plan.requests
-        ]
-        self.assertEqual(signature(first), signature(second))
-        by_id = {request.request_id: request for request in first.requests}
-        self.assertFalse(by_id["s0r0"].terminal_kv_release_at_completion)
-        self.assertTrue(by_id["s0r1"].terminal_kv_release_at_completion)
-        self.assertFalse(by_id["s1r0"].terminal_kv_release_at_completion)
-        self.assertTrue(by_id["s1r1"].terminal_kv_release_at_completion)
-        self.assertEqual(
-            by_id["s0r1"].estimated_arrival_ns,
-            by_id["s0r0"].completion_ns + 1000,
-        )
-        self.assertEqual(
-            by_id["s1r1"].estimated_arrival_ns,
-            by_id["s1r0"].completion_ns + 2000,
-        )
-        for request in first.requests:
-            self.assertGreaterEqual(request.prefill_start_ns, request.estimated_arrival_ns)
-            self.assertGreater(request.completion_ns, request.prefill_complete_ns)
-            self.assertEqual(
-                request.decode_instance_index,
-                EXPECTED_STATIC_ROUTES[request.prefill_instance_index][0],
-            )
-        expected_free = tuple(
-            instance.size * config.hardware.local_hbm_capacity_bytes
-            - estimate_model_weight_bytes(small_model())
-            for instance in first.topology.instances
-        )
-        self.assertEqual(first.final_remaining_capacity_bytes, expected_free)
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_checked_in_config()

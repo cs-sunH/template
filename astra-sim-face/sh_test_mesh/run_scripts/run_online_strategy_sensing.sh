@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # face phase-3 官方在线 runner:strategy 感知模式(真实策略 + 感知开关)。
 # Usage: bash run_online_strategy_sensing.sh <run_dir> <request_csv>
-# request-neutral(裸仓库):request_csv 由调用方按方案文档 §3 步骤 0-1
+# request-neutral(裸仓库):request_csv 由调用方按 traces/derive_20_first_30_seconds.py
 # 物化后必填传入(缺失即 fail-closed)。
 # 与 run_online_strategy.sh 完全同构,唯一区别:
 #   C++   追加 --sensing-enabled(阶段 3 感知 feature flag,默认关;
@@ -16,7 +16,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
 RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 face仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
+REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
 # ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。

@@ -3,8 +3,7 @@
 > 本仓为 Execution-Driven 改造后的**裸仓库终态**：仅保留路径③（strategy 关感知）
 > 与路径④（strategy 开感知）两条在线仿真路线；离线静态（①）与 replay（②）
 > 已删除。仓库 request-neutral：不带任何 request 队列，正式入口缺失输入
-> fail-closed。全部改造/验证/清理过程记录见仓内《face改造执行实录.md》
-> 与工作区根目录《五仓改造终态汇总.md》。
+> fail-closed。
 >
 > 本仓是 ASTRA-sim 2.0 的晶圆级芯片（Wafer-Scale Chip, WSC）推理仿真改造仓。
 > 五个同源仓 `astra-sim-face / astra-sim-wscllm / astra-sim-sh_1.0 / astra-sim-sh_2.0 / astra-sim-sh_3.0`
@@ -93,16 +92,18 @@ prefill 与 decode 不分池。
 
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
-| **astra-sim-face（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die LUT 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 未启用（NO_MEMORY_EXPANSION） |
+| **astra-sim-face（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 未启用（NO_MEMORY_EXPANSION） |
 | astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
-| astra-sim-sh_1.0 | 统一实例 | prefill HBM 可行过滤 + 剩余 chunk 最少；decode 按 LUT per-die 代价 | LOCAL_HBM/REMOTE_MEMORY 两态；整 session 粒度逐出；恢复＝远端全量取回 | 启用（全部边缘芯粒挂端口） |
-| astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡；decode 按 LUT 代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段逐出；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
+| astra-sim-sh_1.0 | 统一实例 | prefill HBM 可行过滤 + 剩余 chunk 最少；decode 按 per-die Roofline 增量代价 | LOCAL_HBM/REMOTE_MEMORY 两态；整 session 粒度逐出；恢复＝远端全量取回 | 启用（全部边缘芯粒挂端口） |
+| astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
 五仓还共享同一套 Execution-Driven 在线仿真机制层（`astra-sim/workload/execution_driven/`：
 RequestIngress / DecisionMailbox / DecisionBridge / GraphBatchCommitter 等）：策略决策由
 Python 在线服务层实时给出，计时由 C++ 物理时钟推进；各仓仅保留路径③（strategy 关感知）
-与路径④（strategy 开感知）两条在线路线。具体用法见各仓 `README_使用说明.md`。
+与路径④（strategy 开感知）两条在线路线。五仓在线决策均不再使用任何离线 LUT
+（残留 LUT 查表已随静态链路一并删除）：face / sh_1.0 / sh_2.0 的 decode 候选代价由
+在线 Roofline 模型即时计算（`per_die_delta_ns`），决策确定可复算复放。
 
 ### G. 本地 HBM 带宽模型（多用户竞争，`hbm-bandwidth-contention`）
 
@@ -139,12 +140,12 @@ served bytes（compute / comm_read / comm_write）、峰值并发作业数、均
 
 ## 1. 本仓是什么
 
-- **策略语义（保留对象，未改动）**：FACE 原始映射：加权实例图 + per-die LUT 代价选择 decode 实例；RESIDENT/EVICTED 两态 + LRU recompute；无远端内存；prefix 走 recompute
+- **策略语义（保留对象，未改动）**：FACE 原始映射：加权实例图 + per-die Roofline 增量代价选择 decode 实例（平局轮流裁决）；RESIDENT/EVICTED 两态 + LRU recompute；无远端内存；prefix 走 recompute；session 驻留状态/字节数由运行时 KV 账本（SessionKVManager）动态维护，无 sidecar
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），五仓接口一致。
 - **验证证据**：Tier B 等价、感知开/关决策逐字节一致、分层账本对账、
-  机制 fixtures——详见实录与根目录报告。
+  机制 fixtures。
 
 ## 2. 快速开始
 
@@ -195,9 +196,9 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - `astra-sim/workload/execution_driven/`：在线机制层（C++）
 - `sh_test_mesh/workload/llama2_7b_inference/online/`：在线调度器/构图器/服务层（Python）
 - `.../online/verify/`：对账与验证工具
-- `sh_test_mesh/run_scripts/`：全部 runner 与命令速查（README_COMMANDS.md）
-- `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化；PROVENANCE.md 已于 2026-08-20 按用户指示删除，provenance 以物化器 stdout 为准）
-- `sh_test_mesh/tests/` + workload 根：pytest（基线：24+33（无预存失败））
+- `sh_test_mesh/run_scripts/`：全部 runner 脚本
+- `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
+- `sh_test_mesh/tests/` + workload 根：pytest（基线：17+33 = 50 passed，无预存失败）
 
 ## 6. 边界与纪律
 
@@ -207,13 +208,50 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - 策略文件（face_scheduler.py / session_kv_manager.py）为保留对象，勿改。
 - 改动机制层后请跑 §4 fixtures + §2 ⑤ 对账再交付。
 
+## 7. Online execution adaptation
 
-## 残留补清（2026-08-18，主 agent 执行，工作树未提交）
+在线策略路线（③/④）是实时宿主调度器：调度器进程内逐决策边界做映射决策，
+把结果作为 per-rank 图批次发射给执行驱动引擎，决策不预先固化；每 tick 先
+处理 completion 批（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），
+再处理 arrival 批，最后跑一次准入/发射 pass
+（`sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py:341-371`）。
 
-删①②主链后的验收工具类残留清理：build_analytical_aware.sh（目标已删脚本必坏）、
-run_metric_microbench.sh + generate_metric_microbench.py（microbench=①族工具链）、
-( [ face = sh_3.0 ] && echo "b3_canonical_compare.py（对照①离线产物）" )( [ face = wscllm ] && echo "tier_b_compare.py（②族 oracle）" )（tier_b_compare 已在主清理中删除）；README_COMMANDS 悬空引用行同步清理。保留定性：clean_history.sh（清 generated/results，③④ 同用）、run_metrics_postprocess 链（③④共用）、contracts/tier_b 报告/实录（历史记录载体）。剩余文字性提及均为注释或历史文档，无功能性依赖。
-
+- 决策边界与仓内路由：`_on_arrival` 按离线同款选择键选 prefill 实例入 FCFS
+  队列（`:383-402`）；`_on_prefill_drain` 复位实例 busy，以全局 9 实例快照经
+  加权图候选 + Roofline per-die 代价动态选择 decode 实例（统一实例，P/D 可
+  同可异；`:404-451`）；`_on_decode_complete` 出队并落 KV 完成账本（`:453`）；
+  `_on_request_complete` 排下一 turn 的 arrival alarm（`:507`）。
+- request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
+  （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
+  聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
+  恒等，只压缩重复层/chunk/token 与集合通信启动次数
+  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:973-996`）；
+  在线发射仅支持该粒度，其它粒度 fail-closed
+  （`online/graph_batch_builder.py:276-279`）。
+- 发射并发骨架（本仓形态：实例单段在飞 busy 门）：实例账本 `busy` 语义为
+  "一个 prefill/decode 整段在飞"（`face_online_scheduler.py:112-126`）；
+  准入/发射 pass 只服务非忙实例，prefill 队首整段优先、否则发射
+  active_decode 队首整段，发射即置忙并移出就绪 frontier（`:562-599`）；
+  busy 只在 PREFILL_DRAIN（`:415`）/ DECODE_COMPLETION（`:466`）边界复位，
+  同实例下一个段须等上一个整段物理完成（per-rank 物理链天然串行化同实例
+  段）；统一实例 qp 与 active_decode 可并存。
+- 接栅栏与段末屏障：decode 段发射不做块末恢复/段内清链，per-rank
+  `previous_id` 无条件接续当前 frontier（per-rank 发行序 = 全局发射序，
+  2026-08-19 五仓统一；`online/graph_batch_builder.py:403-412`），跨请求
+  P2P 与集合通信参与序不会反转成环；每个 decode 段以 TP 组
+  `*_decode_request_end_barrier` 收尾（`:443-445`）；KV 准备段后另有 TP 组
+  `*_history_tp_ready_barrier`（`:382-385`）。
+- 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
+  turn-0 源前缀折入该行 prefill_length（整段重算口径，
+  `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的
+  history_tokens_before 推导值（`plan_materializer.py:61-88`）；会话 KV 的
+  规模与位置由运行时 `SessionKVCacheManager` 账本动态维护
+  （`face_online_scheduler.py:273`；`session_kv_manager.py:363`）：驻留命中
+  直接复用、跨实例历史先经 NoC 迁移段、被逐出则窗口内重算。
+- long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
+  范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
+  64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
+  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:71-81`）。
 
 ---
 

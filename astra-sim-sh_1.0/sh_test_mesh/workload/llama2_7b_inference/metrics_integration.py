@@ -64,12 +64,12 @@ __all__ = [
     "EVENT_PREFILL_END",
     "EVENT_PREFILL_START",
     "MemoryActionRecorder",
-    "PlannerLutStatsAccumulator",
+    "PlannerRooflineStatsAccumulator",
     "ServiceMetrics",
     "canonical_json",
     "compute_trace_digest",
     "resolve_metrics_detail",
-    "write_planner_lut_stats",
+    "write_planner_roofline_stats",
 ]
 
 
@@ -82,30 +82,29 @@ def kv_bin_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
-class PlannerLutStatsAccumulator:
+class PlannerRooflineStatsAccumulator:
     """Streaming planner-iteration aggregates (doc sec.8.8).
 
-    The service planner notifies one LUT lookup per planning iteration through
-    :meth:`record_lut_iteration`; only per-cell count/sum/min/max are kept, so
+    The service planner notifies one direct Roofline estimate per planning
+    iteration through :meth:`record_roofline_iteration`; only per-cell
+    count/sum/min/max are kept, so
     memory stays O(cells) regardless of iteration count.  Cells are keyed by
     ``(phase, tp_degree, batch, kv_bin)`` where phase is ``prefill`` /
     ``decode`` / ``mixed`` (a mixed iteration carries both a prefill chunk and
-    a decode batch in the FACE LUT model), batch is the prefill chunk for
+    a decode batch), batch is the prefill chunk for
     prefill cells and the decode batch otherwise, and kv_bin is the
-    power-of-two ceiling of the decode KV length.  These records are a
-    planner-LUT proxy (``source=planner_lut``), never the paper's primary
-    iteration-time source.
+    power-of-two ceiling of the decode KV length.
     """
 
     def __init__(self) -> None:
         # (phase, tp_degree, batch, kv_bin, prefill_chunk) -> [count,sum,min,max]
         self._cells: dict[tuple[str, int, int, int, int], list[int]] = {}
 
-    def record_lut_iteration(
-        self, lut_entry: Any, start_ns: int, end_ns: int
+    def record_roofline_iteration(
+        self, roofline_estimate: Any, start_ns: int, end_ns: int
     ) -> None:
-        p_chunk = int(lut_entry.p_chunk)
-        d_batch = int(lut_entry.d_batch)
+        p_chunk = int(roofline_estimate.p_chunk)
+        d_batch = int(roofline_estimate.d_batch)
         if p_chunk > 0 and d_batch > 0:
             phase = "mixed"
         elif p_chunk > 0:
@@ -115,9 +114,9 @@ class PlannerLutStatsAccumulator:
         batch = p_chunk if phase == "prefill" else d_batch
         key = (
             phase,
-            int(lut_entry.instance_size),
+            int(roofline_estimate.instance_size),
             batch,
-            kv_bin_power_of_two(int(lut_entry.d_token)),
+            kv_bin_power_of_two(int(roofline_estimate.d_token)),
             p_chunk,
         )
         iteration_time_ns = int(end_ns) - int(start_ns)
@@ -138,8 +137,8 @@ class PlannerLutStatsAccumulator:
             records.append(
                 {
                     "schema": 1,
-                    "type": "planner_lut_iteration_stats",
-                    "source": "planner_lut",
+                    "type": "planner_roofline_iteration_stats",
+                    "source": "planner_roofline",
                     "repo_variant": repo_variant,
                     "phase": phase,
                     "tp_degree": tp_degree,
@@ -155,22 +154,22 @@ class PlannerLutStatsAccumulator:
         return records
 
 
-def write_planner_lut_stats(
-    accumulator: PlannerLutStatsAccumulator,
+def write_planner_roofline_stats(
+    accumulator: PlannerRooflineStatsAccumulator,
     *,
     output_dir: Path,
     repo_variant: str = REPO_VARIANT,
 ) -> Path:
-    """Write the planner_lut_stats.json sidecar and echo every record as a
+    """Write the planner_roofline_stats.json sidecar and echo every record as a
     single-line ``[METRIC]`` JSON record (doc sec.8.8/11.1)."""
 
     records = accumulator.to_records(repo_variant=repo_variant)
-    sidecar = output_dir / "planner_lut_stats.json"
+    sidecar = output_dir / "planner_roofline_stats.json"
     sidecar.write_text(
         json.dumps(
             {
                 "schema": 1,
-                "source": "planner_lut",
+                "source": "planner_roofline",
                 "repo_variant": repo_variant,
                 "records": records,
             },

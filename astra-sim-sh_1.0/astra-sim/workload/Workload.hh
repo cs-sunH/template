@@ -22,6 +22,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
+namespace spdlog {
+class logger;
+}  // namespace spdlog
+
 namespace AstraSim {
 
 class Sys;
@@ -92,6 +96,12 @@ class Workload : public Callable {
     // with the replay route; strategy mode always keeps real physics.
 
   private:
+    // R4-14: cached "workload" logger -- fetched once in the constructor;
+    // the registry returns the same logger object per name for the process
+    // lifetime, so member reuse is behavior-equivalent (and skips the
+    // per-call registry mutex + map lookup on the per-node hot paths).
+    std::shared_ptr<spdlog::logger> workload_logger_;
+
     // From the node view, find out the corresponding communicator group, and
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
@@ -170,6 +180,13 @@ class RemoteFifoLedger {
 
     static RemoteFifoLedger& instance();
 
+    // R4-12: sensing gate (fail-closed, default off). record_* are no-ops
+    // until main_online.cc enables the ledger for a --sensing-enabled run;
+    // ordinary (sensing-off) comparison runs skip the per-MEM-node
+    // bookkeeping entirely. Enabled runs are byte-identical to the
+    // ungated behavior (the export side is already sensing-gated).
+    void set_enabled(bool enabled);
+
     void record_issue(int sys_id, uint64_t tensor_size);
     void record_completion(int sys_id, uint64_t tensor_size);
 
@@ -186,6 +203,7 @@ class RemoteFifoLedger {
 
   private:
     RemoteFifoLedger() = default;
+    bool enabled_ = false;
     std::map<int, PortCounters> ports_;
 };
 

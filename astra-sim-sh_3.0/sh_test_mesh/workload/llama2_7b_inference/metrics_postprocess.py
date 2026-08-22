@@ -7,7 +7,7 @@ grouped into runs (one run per ``init`` record occurrence per log).  When a
 run's init record carries ``manifest_path``, the referenced
 ``metrics_manifest.json`` (microbenchmark point spec) and its sibling
 ``manifest.json`` (model/hardware/kv_policy labels) and
-``planner_lut_stats.json`` (doc sec.8.8 aggregates) are read as the run's
+``planner_roofline_stats.json`` (doc sec.8.8 aggregates) are read as the run's
 own declared provenance; all metrics themselves come from the log.
 
 Output (sec.11.2/11.3):
@@ -15,7 +15,7 @@ Output (sec.11.2/11.3):
 - ``raw_metrics.csv``: one row per measured entity with an explicit ``source``
   column — ``simulator`` (service run latency/tput summary),
   ``simulator_microbenchmark`` (per benchmark-point iteration rows),
-  ``planner_lut`` (streaming planner iteration aggregates, sec.8.8), and
+  ``planner_roofline`` (streaming planner iteration aggregates, sec.8.8), and
   ``planner_memory_ledger`` (per-rank capacity time-average and peak rows,
   sec.7.8/7.7).
 - ``normalized_metrics.csv``: per comparison group, the two frozen methods
@@ -64,7 +64,7 @@ SUPPORTED_SCHEMA = 1
 
 SOURCE_SIMULATOR = "simulator"
 SOURCE_MICROBENCHMARK = "simulator_microbenchmark"
-SOURCE_PLANNER_LUT = "planner_lut"
+SOURCE_PLANNER_ROOFLINE = "planner_roofline"
 SOURCE_PLANNER_MEMORY = "planner_memory_ledger"
 
 RAW_COLUMNS = [
@@ -150,7 +150,7 @@ class Run:
     iterations: list[dict[str, Any]] = field(default_factory=list)
     capacity_timeavg: list[dict[str, Any]] = field(default_factory=list)
     planner_peaks: list[dict[str, Any]] = field(default_factory=list)
-    planner_lut: list[dict[str, Any]] = field(default_factory=list)
+    planner_roofline: list[dict[str, Any]] = field(default_factory=list)
     consistency: list[dict[str, Any]] = field(default_factory=list)
     schema_versions: set[int] = field(default_factory=set)
 
@@ -216,8 +216,8 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                     current.capacity_timeavg.append(record)
                 elif record_type == "planner_memory_peaks":
                     current.planner_peaks.append(record)
-                elif record_type == "planner_lut_iteration_stats":
-                    current.planner_lut.append(record)
+                elif record_type == "planner_roofline_iteration_stats":
+                    current.planner_roofline.append(record)
                 elif record_type == "consistency":
                     current.consistency.append(record)
                 # memory_anchor and unknown types are tolerated but unused.
@@ -242,14 +242,14 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
 
 
 def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-    """Return (metrics_manifest, service manifest.json, planner_lut records)."""
+    """Return (metrics_manifest, service manifest.json, planner_roofline records)."""
 
     metrics_manifest: dict[str, Any] = {}
     service_manifest: dict[str, Any] = {}
-    lut_records: list[dict[str, Any]] = []
+    roofline_records: list[dict[str, Any]] = []
     manifest_path = run.init.get("manifest_path")
     if not manifest_path:
-        return metrics_manifest, service_manifest, lut_records
+        return metrics_manifest, service_manifest, roofline_records
     path = Path(manifest_path)
     try:
         metrics_manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -261,19 +261,19 @@ def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], l
         )
     except (OSError, json.JSONDecodeError):
         service_manifest = {}
-    if not run.planner_lut:
+    if not run.planner_roofline:
         try:
             sidecar = json.loads(
-                (path.parent / "planner_lut_stats.json").read_text(encoding="utf-8")
+                (path.parent / "planner_roofline_stats.json").read_text(encoding="utf-8")
             )
-            lut_records = [
+            roofline_records = [
                 record
                 for record in sidecar.get("records", [])
-                if record.get("type") == "planner_lut_iteration_stats"
+                if record.get("type") == "planner_roofline_iteration_stats"
             ]
         except (OSError, json.JSONDecodeError):
-            lut_records = []
-    return metrics_manifest, service_manifest, lut_records
+            roofline_records = []
+    return metrics_manifest, service_manifest, roofline_records
 
 
 def _check_request_completion(run: Run) -> None:
@@ -419,10 +419,10 @@ def _microbench_rows(
     return rows
 
 
-def _planner_lut_rows(run: Run, labels: dict[str, str], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _planner_roofline_rows(run: Run, labels: dict[str, str], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for record in records:
-        row = _base_row(run, labels, SOURCE_PLANNER_LUT)
+        row = _base_row(run, labels, SOURCE_PLANNER_ROOFLINE)
         row.update(
             {
                 "phase": record.get("phase", ""),
@@ -498,7 +498,7 @@ def build_raw_rows(
     rows: list[dict[str, Any]] = []
     for run in runs:
         _check_request_completion(run)
-        metrics_manifest, service_manifest, lut_sidecar = _load_manifest_sidecars(run)
+        metrics_manifest, service_manifest, roofline_sidecar = _load_manifest_sidecars(run)
         labels = _labels(run, service_manifest, run_configs.get(run.run_id, {}))
         run_mode = run.init.get("run_mode", "service")
         if run_mode == "microbenchmark":
@@ -506,7 +506,9 @@ def build_raw_rows(
         else:
             rows.extend(_service_rows(run, labels))
         rows.extend(
-            _planner_lut_rows(run, labels, run.planner_lut or lut_sidecar)
+            _planner_roofline_rows(
+                run, labels, run.planner_roofline or roofline_sidecar
+            )
         )
         rows.extend(_memory_ledger_rows(run, labels))
     return rows

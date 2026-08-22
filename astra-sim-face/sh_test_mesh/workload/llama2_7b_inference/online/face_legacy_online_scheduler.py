@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """face_legacy_online_scheduler.py -- legacy 变体在线调度器(阶段 7 §10.6)。
 
-以 _plan_face_requests_legacy(face_scheduler.py:1008-1292)为蓝本迁移,每处
+以已移除的离线 _plan_face_requests_legacy(2026-08-21 离线 planner 清除批删去)为蓝本迁移,每处
 `# offline: face_scheduler.py:XXXX` 标注。face legacy 与 wscllm legacy 的关键
 差异(方案 §10.6 差异清单,不得照搬 wscllm 形态):
   ① 无 FCFS 队头阻塞:KVAllocator.allocate 容量不足直接 raise
-    (face_scheduler.py:772-776)——在线保持 fail-closed(运行失败),
+    (face_scheduler.py)——在线保持 fail-closed(运行失败),
     不引入等待机制;
   ② KV 跨实例分片会动态改边权(allocate 内 increase_path / release 内
     decrease_path),影响后续 decode 候选的加权距离——在线账本按离线
@@ -17,7 +17,7 @@
     推导预先导出(30s 输入 = 4954),离线/在线共用;禁止在线增量 mean。
 
 real-online 刻意差异(与 FaceOnlineScheduler 同款):计时/迭代粒度聚合
-(离线 LUT 时钟 + 逐 chunk 迭代 -> 真实完成事件 + request-aggregated 构图);
+(离线 Roofline 时钟 + 逐 chunk 迭代 -> 真实完成事件 + request-aggregated 构图);
 busy 覆盖一个整段在飞;decode 一次发射队首整段。
 """
 
@@ -42,7 +42,6 @@ from online.online_scheduler_base import (  # noqa: E402
 from face_scheduler import (  # noqa: E402  (READ-ONLY, import only)
     DecodeTieCounter,
     FaceInstanceSpec,
-    FaceLut,
     KVAllocator,
     PrefillQueueSnapshot,
     WeightedInstanceGraph,
@@ -98,7 +97,7 @@ class _LegacyRequestRuntime:
         self.history_source_instance_index = None
         self.history_transfer_bytes = 0
         self.completion_ns = None
-        # offline: face_scheduler.py:999(current_decode_token = prefill_context)
+        # offline: face_scheduler.py(current_decode_token = prefill_context)
         self.current_decode_token = self.prefill_context_tokens
 
 
@@ -125,23 +124,13 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
         )
         self.topology = build_instances(
             config.hardware, specs, require_equal_size=True)
-        # offline: face_scheduler.py:1021(标定常数:冻结输入同一推导;
+        # offline: face_scheduler.py(标定常数:冻结输入同一推导;
         # 30s 输入 = 4954,禁止在线增量 mean)。
         self.p_chunk = math.ceil(sum(
             record["prefill_length"]
             for record in manifest["requests"]) / len(manifest["requests"]))
-        # offline: face_scheduler.py:1023-1031(LUT 标定常数,合同⑨)。
-        self.lut = FaceLut.build(
-            config.hardware, config.model,
-            instance_sizes=(instance.size
-                            for instance in self.topology.instances),
-            p_chunk=self.p_chunk,
-            request_count=len(manifest["requests"]),
-            max_d_token=max(record["final_context_tokens"]
-                            for record in manifest["requests"]),
-        )
         self.instance_graph = WeightedInstanceGraph(self.topology)
-        # offline: face_scheduler.py:1032-1037(KVAllocator:分片 + 边权
+        # offline: face_scheduler.py(KVAllocator:分片 + 边权
         # 动态调整,read-only import 共用实例)。
         self.allocator = KVAllocator(
             self.topology, self.instance_graph,
@@ -179,7 +168,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
 
     def run_variant_policy(self, delta) -> None:
         tick = delta["tick"]
-        # offline: face_scheduler.py:1128-1193(completion 批)
+        # offline: face_scheduler.py(completion 批)
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
@@ -192,7 +181,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
             else:
                 raise ValueError(
                     "unknown stage {!r} for {!r}".format(stage, request_id))
-        # offline: face_scheduler.py:1195-1221(arrival 批)
+        # offline: face_scheduler.py(arrival 批)
         for arrival in delta["arrivals"]:
             runtime = self.runtime_by_request_id[arrival["request_id"]]
             heapq.heappush(
@@ -204,13 +193,13 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
             _, _, _, _, kind, payload = heapq.heappop(self.arrival_heap)
             self._profile_scan()
             self._on_arrival(payload, tick)
-        # offline: face_scheduler.py:1223(聚合发射 pass)
+        # offline: face_scheduler.py(聚合发射 pass)
         self._admit_pass(tick)
 
     # ------------------------------------------------------------- 边界 --
 
     def _on_arrival(self, runtime, tick: int) -> None:
-        """offline: face_scheduler.py:1198-1221(session 重访 release 上一
+        """offline: face_scheduler.py(session 重访 release 上一
         allocation -> 快照 -> select_prefill_instance -> qp 入队)。"""
         runtime.estimated_arrival_ns = tick  # :1200
         previous_allocation = self.session_allocations.pop(
@@ -238,7 +227,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
                            {"type": "prefill_qp", "instance_index": selected})
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:1135-1173(qp 出队 + 全局快照 ->
+        """offline: face_scheduler.py(qp 出队 + 全局快照 ->
         select_decode_instance + KVAllocator.allocate)。"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
@@ -257,7 +246,10 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
             for instance in self.instances
         ]
         selected, costs = select_decode_instance(  # :1151-1160
-            topology=self.topology, graph=self.instance_graph, lut=self.lut,
+            topology=self.topology,
+            graph=self.instance_graph,
+            hardware=self.config.hardware,
+            model=self.config.model,
             fixed_p_chunk=self.p_chunk,
             prefill_instance_index=state.index,
             has_prefill_work=has_prefill,
@@ -287,7 +279,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
                            {"type": "active_decode", "instance_index": selected})
 
     def _on_decode_complete(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:1181-1193(decode 完成路径;
+        """offline: face_scheduler.py(decode 完成路径;
         legacy 完成不触发 KV 动作——release 在下一 turn 的 arrival)。"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
@@ -312,7 +304,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
         )
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:1187-1193(下一次 arrival 排程)。"""
+        """offline: face_scheduler.py(下一次 arrival 排程)。"""
         runtime = self.runtime_by_request_id[request_id]
         following = self.next_request[self._runtime_index[runtime.request_id]]
         if following is None:
@@ -333,7 +325,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 发射 --
 
     def _admit_pass(self, tick: int) -> None:
-        """offline: face_scheduler.py:1068-1118 的聚合版(计时部分删除)。"""
+        """offline: face_scheduler.py 的聚合版(计时部分删除)。"""
         for instance_index in sorted(self._ready_frontier):
             self._profile_scan()
             state = self.instances[instance_index]
@@ -447,7 +439,7 @@ class FaceLegacyOnlineScheduler(OnlineSchedulerBase):
         }
 
     def _queue_snapshots(self):
-        """offline: face_scheduler.py:1061-1066。"""
+        """offline: face_scheduler.py。"""
         return tuple(
             PrefillQueueSnapshot(
                 instance_index=state.index,

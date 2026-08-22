@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Materialize the astra_compute_20.csv first-30-seconds simulation input
-(sidecar_restore double-file form) for the sh_3.0 repository.
+(folded recompute single-queue form) for the sh_3.0 repository.
 
 Rebuild entry (backport re-verification 2026-08-16): the phase-0
 materializer + PROVENANCE were removed by the phase-7 bare-repo restore;
-this reconstruction reproduces the frozen artifacts BYTE-EXACTLY --
-context sidecar md5 25b7da357cac249c14bf4a3ae26ddfd4 (registered in
-sh_3.0改造执行实录 步骤 0-1; the queue's description column is the sh_3.0
-wording, without sh_2.0's "(sidecar_restore)" suffix -- that is the only
-inter-repo text difference and it is what the frozen md5s attest). On
-2026-08-18 the typed-eviction format change (next_trigger_type column)
-superseded the 2026-08-16 queue md5 8b615b5a12b15143a10bbbf13f31a6bb;
-the current frozen queue md5 is printed by the script below.
+this reconstruction reproduces the frozen artifacts BYTE-EXACTLY.
+2026-08-18: the typed-eviction format change (next_trigger_type column)
+superseded the 2026-08-16 queue md5. 2026-08-21 (KV 账本统一维护改造):
+the sidecar_restore double-file form was removed repo-wide; the turn-0
+prefix is now FOLDED into turn-0 prefill_length (full recompute caliber),
+the request-context sidecar product is gone, and the canonical digest's
+prefix_mode reads "recompute". Session KV history size/location is
+maintained dynamically by the runtime KV ledger (KVCacheManager) from
+turn-0 prefill accounting onward. The frozen queue/digest md5s below were
+re-registered from an actual rerun after this change.
 
 Simulation-input constraint (user directive 2026-08-15): ONLY
 `agent-traces/tracelab/astra_compute_20.csv` rows with
@@ -19,22 +21,21 @@ Simulation-input constraint (user directive 2026-08-15): ONLY
 window.
 
 Derivation rules (frozen 3-minute lineage, template_back/history/20_3mins;
-identical to the sh_2.0 materializer -- single pass, queue + sidecar +
-canonical digest from one traversal):
+single pass, folded queue + canonical digest from one traversal):
   1. window: a session is included iff its first row's arrival_time < 30e9;
      turn arrival = previous arrival + previous gap (gap = human_time if
      non-empty else tool_time if non-empty else 0); a session's later turns
      are truncated once the derived arrival >= 30e9.
-  2. queue keeps source prefill_length (NEW tokens only, prefix NOT folded
-     in) and emits the context sidecar delivering prefix_tokens = source
-     prefix_len with input_tokens_total = prefix_tokens + prefill_length
-     for every row (sidecar_restore variant). Prefix must not be double
-     counted. NOTE (2026-08-20): this repo's trace_config.csv is the
-     request-neutral placeholder -- after materializing, the operator must
-     point config rows request_queue_csv / request_queue_context_csv at
-     the queue/context files above; a materialized plain queue left
-     without context wiring now fails closed at load
-     (generate_face_trace._require_sidecar_wiring).
+  2. queue turn-0 rows FOLD the source prefix into prefill_length
+     (prefill_length = source prefix_len + source prefill_length, full
+     recompute); turn>=1 rows keep source prefill_length (NEW tokens only).
+     Prefix must not be double counted. No request-context sidecar is
+     produced: turn-0 recompute accounts the full prefix into the local
+     HBM KV ledger at prefill completion, and later turns resolve history
+     from the ledger (LOCAL_HIT / migrate / restore / recompute).
+     NOTE: this repo's trace_config.csv is the request-neutral
+     placeholder -- after materializing, the operator must point the
+     config row request_queue_csv at the queue file above.
   3. session_arrival_time_ns uses the source absolute time (turn-0 only).
   4. interval semantics = per-row human_time||tool_time gap.
   5. next_trigger_type (added 2026-08-18, typed KV eviction): per-row
@@ -46,11 +47,7 @@ canonical digest from one traversal):
      fields empty (0-interval successor) classifies "tool". The column is
      appended after inter_request_interval_ns; the C++ WindowedTraceReader
      parses only the first 7 columns by position, so it is transparent to
-     the simulator. NOTE: this is a deliberate queue FORMAT change -- the
-     2026-08-16 byte-exact rebuild guarantee (frozen md5s below) applied to
-     the pre-change 8-column format; after this change the queue md5 changes
-     (the frozen print below tracks the new value) while the context sidecar
-     and digest stay byte-identical.
+     the simulator.
 """
 
 import csv
@@ -67,10 +64,6 @@ QUEUE_HEADER = [
     "decode_length", "session_arrival_time_ns", "inter_request_interval_ns",
     "next_trigger_type",
     "description",
-]
-CONTEXT_HEADER = [
-    "session_id", "turn_index", "request_id", "prefix_tokens",
-    "input_tokens_total",
 ]
 DIGEST_HEADER = [
     "request_id", "raw_prefix_tokens", "raw_new_prefill_tokens",
@@ -106,7 +99,6 @@ def _next_trigger_type(human_time, tool_time, is_last_row):
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else SOURCE_DEFAULT
     out_queue = os.path.join(HERE, "astra_compute_20_first_30_seconds_request_queue.csv")
-    out_ctx = os.path.join(HERE, "astra_compute_20_first_30_seconds_request_context.csv")
     out_digest = os.path.join(HERE, "astra_compute_20_first_30_seconds_canonical_digest.csv")
 
     with open(src, newline="") as f:
@@ -122,8 +114,10 @@ def main():
             order.append(sid)
         sessions[sid].append(r)
 
-    queue_rows, ctx_rows, digest_rows = [], [], []
+    queue_rows, digest_rows = [], []
     session_count = 0
+    turn0_prefix_rows = 0
+    max_total = 0
     for sid in order:
         srows = sessions[sid]
         first_arrival = int(srows[0]["arrival_time"])
@@ -138,8 +132,16 @@ def main():
                 if arrival >= WINDOW_NS:
                     break
             rid = "%s_request_%d" % (sid, turn)
-            prefill = int(r["prefill_length"])
+            new_prefill = int(r["prefill_length"])
             prefix = int(r["prefix_len"])
+            # Folded recompute caliber: turn-0 prefill carries the full
+            # source prefix (prefix + new tokens); later turns keep only
+            # their new tokens (history comes from the runtime KV ledger).
+            prefill = new_prefill + prefix if turn == 0 else new_prefill
+            total = prefix + new_prefill
+            if turn == 0 and prefix > 0:
+                turn0_prefix_rows += 1
+            max_total = max(max_total, total)
             if turn == 0:
                 session_ns, interval_ns = str(arrival), ""
             else:
@@ -152,14 +154,13 @@ def main():
             queue_rows.append([
                 sid, turn, rid, prefill, r["decode_length"], session_ns,
                 interval_ns, trigger_type,
-                "compute_20 first-30-seconds window; turn-0 prefix kept as "
-                "historical KV (see context sidecar)",
+                "compute_20 first-30-seconds window; turn-0 prefix folded "
+                "into prefill_length (recompute caliber)",
             ])
-            ctx_rows.append([sid, turn, rid, prefix, prefix + prefill])
             digest = hashlib.sha256(
-                ("%s|%d|%d|%d" % (rid, prefix, prefill, prefix + prefill)).encode()
+                ("%s|%d|%d|%d" % (rid, prefix, new_prefill, total)).encode()
             ).hexdigest()
-            digest_rows.append([rid, prefix, prefill, prefix + prefill, digest, "sidecar_restore"])
+            digest_rows.append([rid, prefix, new_prefill, total, digest, "recompute"])
 
     def write(path, header, data):
         with open(path, "w", newline="") as f:
@@ -168,29 +169,23 @@ def main():
             w.writerows(data)
 
     write(out_queue, QUEUE_HEADER, queue_rows)
-    write(out_ctx, CONTEXT_HEADER, ctx_rows)
     write(out_digest, DIGEST_HEADER, digest_rows)
 
     src_md5 = hashlib.md5(open(src, "rb").read()).hexdigest()
     queue_md5 = hashlib.md5(open(out_queue, "rb").read()).hexdigest()
-    ctx_md5 = hashlib.md5(open(out_ctx, "rb").read()).hexdigest()
-    turn0_prefix_rows = sum(1 for row in ctx_rows if int(row[1]) == 0 and int(row[3]) > 0)
-    max_total = max(int(row[4]) for row in ctx_rows)
+    digest_md5 = hashlib.md5(open(out_digest, "rb").read()).hexdigest()
     print("source_md5=%s" % src_md5)
-    # Frozen reference updated 2026-08-18: the typed-eviction format change
-    # (next_trigger_type column) moved the queue md5 from the 2026-08-16
-    # rebuild value 8b615b5a12b15143a10bbbf13f31a6bb to the value below;
-    # context/digest sidecars are byte-identical to the 2026-08-16 rebuild.
-    print("queue_md5=%s (frozen: face335c594b4b857bbfcf583729a154)" % queue_md5)
-    print("context_md5=%s (frozen: 25b7da357cac249c14bf4a3ae26ddfd4)" % ctx_md5)
+    # Frozen references re-registered 2026-08-21 (KV 账本统一维护改造):
+    # sidecar_restore double-file form removed; turn-0 prefix folded into
+    # prefill_length; digest prefix_mode="recompute". Values below are the
+    # actual product md5s of this script's rerun after the change.
+    print("queue_md5=%s (frozen: ff18f42df40e5f35582fe3e356c214e8)" % queue_md5)
+    print("digest_md5=%s (frozen: a049d7308b4c2c39c13f8a2da55d95ff)" % digest_md5)
     print("sessions=%d requests=%d" % (session_count, len(queue_rows)))
     print("turn0_prefix_gt0_rows=%d max_input_tokens_total=%d" % (turn0_prefix_rows, max_total))
     print("average_decode_length=%s"
           % (sum(int(r[4]) for r in queue_rows) / float(len(queue_rows))))
     print("[next-steps] 1) trace_config.csv:12 request_queue_csv -> %s" % out_queue)
-    print("[next-steps] 2) trace_config.csv:13 request_queue_context_csv -> %s" % out_ctx)
-    print("[next-steps] 3) 漏接 :13 将在加载时 fail-closed（守卫 "
-          "_require_sidecar_wiring）")
 
 
 if __name__ == "__main__":

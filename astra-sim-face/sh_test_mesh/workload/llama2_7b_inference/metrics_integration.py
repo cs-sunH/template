@@ -1,16 +1,12 @@
-"""Glue between the FACE ET generator and the frozen metrics schema.
+"""Legacy static-ET metrics compatibility utilities for the frozen schema.
 
-This module is strictly observational (implementation doc sec.4/6/7): it
-collects request stage boundary node ids while the ET is emitted, mirrors the
-planner memory deltas recorded by ``session_kv_manager`` through the read-only
-:class:`metrics_schema.MemoryMetricsObserver`, and finally writes the
-``metrics_manifest.json`` sidecar next to the generated ``.et`` files.
+These observational helpers can build a metrics sidecar and digest records for
+explicitly supplied historic ET files.  They are not imported by the online
+GraphBatch routes, whose runtime inputs are materialized separately.  Nothing
+here feeds back into request mapping, scheduling, KV management, or dynamic
+graph construction.
 
-Nothing here feeds back into request mapping, scheduling, KV management, or
-ET construction.  When metrics are disabled the generator never builds this
-context, so the ``.et`` output stays byte-identical (doc sec.12.3).
-
-Digest recipes (deterministic, identical with metrics on/off):
+Legacy digest recipes:
 
 - ``trace_digest``: per rank ``<rank>:<sha256 hexdigest of the .et bytes>``
   lines joined with ``\\n``, then SHA256 of that UTF-8 text.  The run script
@@ -44,7 +40,6 @@ from metrics_schema import (  # noqa: E402
     RequestMetadata,
     RUN_MODE_SERVICE,
 )
-from session_kv_manager import model_weight_shard_bytes_by_tp_rank  # noqa: E402
 
 
 REPO_VARIANT = "astra-sim-face"
@@ -63,12 +58,12 @@ __all__ = [
     "EVENT_PREFILL_END",
     "EVENT_PREFILL_START",
     "MemoryActionRecorder",
-    "PlannerLutStatsAccumulator",
+    "PlannerRooflineStatsAccumulator",
     "ServiceMetrics",
     "canonical_json",
     "compute_trace_digest",
     "resolve_metrics_detail",
-    "write_planner_lut_stats",
+    "write_planner_roofline_stats",
 ]
 
 
@@ -81,18 +76,18 @@ def kv_bin_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
-class PlannerLutStatsAccumulator:
+class PlannerRooflineStatsAccumulator:
     """Streaming planner-iteration aggregates (doc sec.8.8).
 
-    The service planner notifies one LUT lookup per planning iteration through
-    :meth:`record_lut_iteration`; only per-cell count/sum/min/max are kept, so
+    The service planner notifies one Roofline estimate per planning iteration
+    through :meth:`record_roofline_iteration`; only per-cell count/sum/min/max are kept, so
     memory stays O(cells) regardless of iteration count.  Cells are keyed by
     ``(phase, tp_degree, batch, kv_bin)`` where phase is ``prefill`` /
     ``decode`` / ``mixed`` (a mixed iteration carries both a prefill chunk and
-    a decode batch in the FACE LUT model), batch is the prefill chunk for
+    a decode batch in the FACE Roofline model), batch is the prefill chunk for
     prefill cells and the decode batch otherwise, and kv_bin is the
     power-of-two ceiling of the decode KV length.  These records are a
-    planner-LUT proxy (``source=planner_lut``), never the paper's primary
+    planner-Roofline proxy (``source=planner_roofline``), never the paper's primary
     iteration-time source.
     """
 
@@ -100,11 +95,11 @@ class PlannerLutStatsAccumulator:
         # (phase, tp_degree, batch, kv_bin, prefill_chunk) -> [count,sum,min,max]
         self._cells: dict[tuple[str, int, int, int, int], list[int]] = {}
 
-    def record_lut_iteration(
-        self, lut_entry: Any, start_ns: int, end_ns: int
+    def record_roofline_iteration(
+        self, roofline_estimate: Any, start_ns: int, end_ns: int
     ) -> None:
-        p_chunk = int(lut_entry.p_chunk)
-        d_batch = int(lut_entry.d_batch)
+        p_chunk = int(roofline_estimate.p_chunk)
+        d_batch = int(roofline_estimate.d_batch)
         if p_chunk > 0 and d_batch > 0:
             phase = "mixed"
         elif p_chunk > 0:
@@ -114,9 +109,9 @@ class PlannerLutStatsAccumulator:
         batch = p_chunk if phase == "prefill" else d_batch
         key = (
             phase,
-            int(lut_entry.instance_size),
+            int(roofline_estimate.instance_size),
             batch,
-            kv_bin_power_of_two(int(lut_entry.d_token)),
+            kv_bin_power_of_two(int(roofline_estimate.d_token)),
             p_chunk,
         )
         iteration_time_ns = int(end_ns) - int(start_ns)
@@ -137,8 +132,8 @@ class PlannerLutStatsAccumulator:
             records.append(
                 {
                     "schema": 1,
-                    "type": "planner_lut_iteration_stats",
-                    "source": "planner_lut",
+                    "type": "planner_roofline_iteration_stats",
+                    "source": "planner_roofline",
                     "repo_variant": repo_variant,
                     "phase": phase,
                     "tp_degree": tp_degree,
@@ -154,22 +149,22 @@ class PlannerLutStatsAccumulator:
         return records
 
 
-def write_planner_lut_stats(
-    accumulator: PlannerLutStatsAccumulator,
+def write_planner_roofline_stats(
+    accumulator: PlannerRooflineStatsAccumulator,
     *,
     output_dir: Path,
     repo_variant: str = REPO_VARIANT,
 ) -> Path:
-    """Write the planner_lut_stats.json sidecar and echo every record as a
+    """Write the planner_roofline_stats.json sidecar and echo every record as a
     single-line ``[METRIC]`` JSON record (doc sec.8.8/11.1)."""
 
     records = accumulator.to_records(repo_variant=repo_variant)
-    sidecar = output_dir / "planner_lut_stats.json"
+    sidecar = output_dir / "planner_roofline_stats.json"
     sidecar.write_text(
         json.dumps(
             {
                 "schema": 1,
-                "source": "planner_lut",
+                "source": "planner_roofline",
                 "repo_variant": repo_variant,
                 "records": records,
             },
@@ -194,7 +189,7 @@ def _sha256_hex(text: str) -> str:
 
 
 def compute_trace_digest(et_paths_by_rank: Mapping[int, Path]) -> str:
-    """SHA256 over the sorted per-rank ``.et`` SHA256 lines (see module doc)."""
+    """Hash explicitly supplied legacy ET paths in deterministic rank order."""
 
     per_rank = []
     for rank, path in sorted(et_paths_by_rank.items()):
@@ -393,43 +388,11 @@ class ServiceMetrics:
         )
         # (rank, node_id, event_code, subject_id) in emission order.
         self.events: list[tuple[int, int, int, int]] = []
-        self.weight_preload_recorded = False
 
     def add_event(
         self, rank: int, node_id: int, event_code: int, subject_id: int
     ) -> None:
         self.events.append((rank, node_id, event_code, subject_id))
-
-    def record_weight_preload(self, config: Any, plan: Any) -> None:
-        """Legacy path only: the KV manager never runs there, so the generator
-        itself mirrors the preloaded per-rank weight shards (anchor tick 0)."""
-
-        if self.weight_preload_recorded:
-            raise RuntimeError("weight preload recorded twice")
-        self.weight_preload_recorded = True
-        for instance in plan.topology.instances:
-            shards = model_weight_shard_bytes_by_tp_rank(
-                config.model, len(instance.ranks)
-            )
-            for relative_rank, rank in enumerate(instance.ranks):
-                self.memory.initialize_rank(
-                    rank, config.hardware.local_hbm_capacity_bytes
-                )
-        for instance in plan.topology.instances:
-            shards = model_weight_shard_bytes_by_tp_rank(
-                config.model, len(instance.ranks)
-            )
-            for relative_rank, rank in enumerate(instance.ranks):
-                self.memory.record(
-                    planner_time_ns=0,
-                    anchor_kind="tick_zero",
-                    request_id=None,
-                    session_id=None,
-                    rank=rank,
-                    allocation_key=f"weight:{rank}",
-                    weight_delta_bytes=int(shards[relative_rank]),
-                    cause="model_weight_preload",
-                )
 
     def write_manifest(
         self,
@@ -447,8 +410,8 @@ class ServiceMetrics:
         if not self.memory.deltas:
             raise RuntimeError(
                 "no memory deltas were recorded; the session KV manager must "
-                "run under set_metrics_observer() or record_weight_preload() "
-                "must be called before writing the metrics manifest"
+                "run under set_metrics_observer() before writing the metrics "
+                "manifest"
             )
         request_id_to_queue = {
             spec.request_id: index for index, spec in enumerate(config.request_queue)

@@ -19,6 +19,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
+namespace spdlog {
+class logger;
+}  // namespace spdlog
+
 namespace AstraSim {
 
 class Sys;
@@ -91,6 +95,12 @@ class Workload : public Callable {
     // with the replay route; strategy mode always keeps real physics.
 
   private:
+    // R4-14: cached "workload" logger -- fetched once in the constructor;
+    // the registry returns the same logger object per name for the process
+    // lifetime, so member reuse is behavior-equivalent (and skips the
+    // per-call registry mutex + map lookup on the per-node hot paths).
+    std::shared_ptr<spdlog::logger> workload_logger_;
+
     // From the node view, find out the corresponding communicator group, and
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
@@ -103,9 +113,12 @@ class Workload : public Callable {
     // completion); a charged pool MEM node completes on the join of
     // (remote-memory port transaction, local-HBM POOL_READ/POOL_WRITE job).
     // Implemented entirely inside Workload: each side carries its own
-    // WorkloadLayerHandlerData whose pointer identifies the side; the node
-    // terminal path runs exactly once, after both sides fired (idempotent by
-    // map erasure). The network / remote-memory APIs are untouched.
+    // WorkloadLayerHandlerData; the join state stores the local-HBM-side
+    // cookie so a delivery is side-classified by comparing against a live
+    // join (R4-13: no wlhd-pointer map keys -- a side that never fires
+    // must not leave a dangling key behind); the node terminal path runs
+    // exactly once, after both sides fired (idempotent by node-id map
+    // erasure). The network / remote-memory APIs are untouched.
     // ---------------------------------------------------------------
     enum class HbmJoinSide { NetworkPort, LocalHbm };
     struct HbmJoinState {
@@ -113,17 +126,21 @@ class Workload : public Callable {
         EventType terminal_event = EventType::General;
         bool network_done = false;
         bool local_hbm_done = false;
+        // Cookie of the local-HBM side (valid for the join's lifetime, from
+        // begin_hbm_join until the double-arrival erases the pending entry).
+        // Any other cookie reaching consume_hbm_join_event for this node id
+        // is the network/port side.
+        WorkloadLayerHandlerData* hbm_side_wlhd = nullptr;
     };
     // True when this rank must create endpoint HBM jobs for comm / pool
     // nodes (flag on, model alive; per-node opt-outs like hbm-charge=false
     // or zero bytes are checked by the callers).
     bool hbm_endpoint_charge_active() const;
-    // Registers the network/port-side wlhd of a joined node and creates a
-    // fresh local-HBM-side wlhd (returned; the caller feeds it to the
-    // LocalHbmBandwidthModel issue_* call).
+    // Creates a fresh local-HBM-side wlhd for a joined node (returned; the
+    // caller feeds it to the LocalHbmBandwidthModel issue_* call) and
+    // registers the pending join state keyed by node id.
     WorkloadLayerHandlerData* begin_hbm_join(
-        uint64_t node_id, WorkloadLayerHandlerData* network_side_wlhd,
-        EventType terminal_event);
+        uint64_t node_id, EventType terminal_event);
     // Workload::call entry for wlhd-carrying events: returns true when the
     // event was one side of a pending join (already accounted; possibly the
     // terminal completion ran). The caller must then skip the normal
@@ -134,8 +151,16 @@ class Workload : public Callable {
     void finish_general_node(uint64_t node_id, EventType event);
 
     std::unordered_map<uint64_t, HbmJoinState> hbm_join_pending_;
-    std::unordered_map<WorkloadLayerHandlerData*, HbmJoinSide>
-        hbm_join_wlhd_sides_;
+    // Fail-closed fire-after guard (R8-7): identity of the most recently
+    // fired join's local-HBM side (cookie + node id). The pending entry is
+    // erased at fire so the map stays bounded by in-flight joins, so this
+    // single-slot record is what an already-fired HBM-side cookie is
+    // checked against (constant memory; a re-delivery arriving only after
+    // further joins fired falls back to the ordinary terminal path as
+    // before -- the same-side live-join guard below catches the
+    // double-fire while the join is still pending).
+    WorkloadLayerHandlerData* last_fired_hbm_side_wlhd_ = nullptr;
+    uint64_t last_fired_hbm_join_node_ = 0;
 };
 
 }  // namespace AstraSim

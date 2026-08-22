@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Generate WSC-LLM PD-disaggregated Chakra ET traces for the wafer scenario."""
+"""Shared WSC-LLM configuration and GraphBatch-emission primitives for online runs."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
 import json
-import os
-import shlex
-import shutil
 import sys
-import tempfile
-import uuid
 from collections import deque
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -30,49 +25,20 @@ from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
     PREFILL_ROLE,
     WscLlmHardware,
-    WscLlmInstanceSpec,
-    WscLlmTimingEntry,
     WscLlmModel,
-    WscLlmPlan,
-    WscLlmRequest,
-    WscLlmRequestPlan,
-    KVAllocation,
     kv_cache_bytes_for_tokens,
-    plan_wsc_llm_requests,
 )
-import wsc_llm_scheduler  # noqa: E402
 from session_kv_manager import NOC_MIGRATE, RECOMPUTE  # noqa: E402
-import session_kv_manager  # noqa: E402
-from metrics_integration import (  # noqa: E402
-    EVENT_DECODE_END,
-    EVENT_DECODE_START,
-    EVENT_MEMORY_ANCHOR_COMPLETE,
-    EVENT_PREFILL_END,
-    EVENT_PREFILL_START,
-    PlannerLutStatsAccumulator,
-    ServiceMetrics,
-    kv_event_payload_legacy,
-    kv_event_payload_session_lru,
-    resolve_metrics_detail,
-    write_planner_lut_stats,
-)
 from generate_trace import (  # noqa: E402
-    ChakraAttr,
     ChakraNode,
-    GlobalMetadata,
-    PROJECT_ROOT,
-    REQUEST_QUEUE_COLUMNS,
     RequestSpec,
     TraceBuilder,
     clean_csv_row,
-    encode_message,
     load_request_queue,
     parse_bool,
     parse_int,
     parse_nonnegative_int,
     parse_rank_spec,
-    range_label,
-    request_queue_digest,
     sanitize_node_prefix,
     shard_extent,
     transformer_pass,
@@ -455,10 +421,11 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
-    if not request_queue_csv.exists():
+    if not request_queue_csv.is_file():
         print(
             f"missing request queue: {request_queue_csv};"
-            "请按方案文档 wscllm仓库改造详细执行方案.md §3 步骤 0-1 物化输入",
+            "请按 traces/derive_20_first_30_seconds.py 物化输入"
+            "(运行 stdout 即权威 provenance 记录)",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -577,7 +544,7 @@ def _paired_transfer(
     timer_gates: Optional[dict[int, Optional[int]]] = None,
 ) -> list[dict[str, object]]:
     if len(source_group.ranks) != len(target_group.ranks):
-        raise ValueError("WSC-LLM ET adapter requires equal TP for direct KV shard pairing")
+        raise ValueError("WSC-LLM direct KV shard pairing requires equal TP degree")
     if source_group.name == target_group.name:
         if timer_gates is not None:
             for rank in target_group.ranks:
@@ -797,7 +764,7 @@ def main(argv=None) -> None:  # noqa: ARG001
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
     估算函数)。③④ 的输入物化入口是
-    plan_materializer.py(manifest/metrics/runtime_config/face_lut);
+    plan_materializer.py(manifest/metrics/runtime_config);
     静态 ET 生成入口不再存在。
     """
     raise SystemExit(

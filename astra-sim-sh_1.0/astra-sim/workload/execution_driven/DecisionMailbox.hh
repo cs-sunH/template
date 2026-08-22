@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-DecisionMailbox -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+DecisionMailbox -- execution-driven mechanism layer (wscllm phase 1).
 Implementation (方案 §4 步骤 1-6).
 
 Aggregates only scheduler-visible events. The tick-end activity gate
@@ -10,7 +10,7 @@ Aggregates only scheduler-visible events. The tick-end activity gate
 tick; when the mailbox has no decision work, the gate returns WITHOUT any
 Python round-trip (仿真加速分析.md §3.3 门控条件).
 
-Reason closed set (sh_1.0, phase-1 minimal; written into contract ④):
+Reason closed set (wscllm, phase-1 minimal; written into contract ④):
   ARRIVAL            -- a request arrived (ingress arrival alarm deposit).
   PREFILL_DRAIN      -- the request's prefill stage is fully terminal
                         (watch fire, stage "prefill").
@@ -96,7 +96,7 @@ struct DecisionPayload {
 };
 
 /// One scheduler-visible event. seq is assigned by the mailbox at push
-/// (accepted events only). stage is opaque ("prefill"/"decode" in sh_1.0
+/// (accepted events only). stage is opaque ("prefill"/"decode" in wscllm
 /// phase 1); generation disambiguates same-request repeated stages.
 struct DecisionEvent {
     uint64_t seq = 0;

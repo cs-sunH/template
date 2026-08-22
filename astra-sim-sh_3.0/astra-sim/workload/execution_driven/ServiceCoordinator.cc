@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-ServiceCoordinator -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 1).
+ServiceCoordinator -- execution-driven mechanism layer (wscllm phase 1).
 Implementation (方案 §4 步骤 1-2 操作 3): IDLE/ACTIVE/DRAINING/FINISHED
 lifecycle; final end authority; no-busy-wait work channel. Step 1-10:
 fully-drained ACTIVE returns to IDLE while the input stays open (合同②

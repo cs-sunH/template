@@ -1016,6 +1016,11 @@ int main(int argc, char* argv[]) {
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
     driver_ctx.sensing_enabled = online_cli.sensing_enabled;
+    // R4-12: gate the RemoteFifoLedger bookkeeping on the same token (the
+    // single-line short-circuit lives in RemoteFifoLedger::record_*).
+    // Sensing-on runs are unchanged; sensing-off comparison runs now pay
+    // zero per-MEM-node ledger cost (fail-closed: disabled unless opened).
+    RemoteFifoLedger::instance().set_enabled(online_cli.sensing_enabled);
     // Phase-4 sensing (方案 §6.2 操作 2): open the remote-FIFO ledger
     // sidecar in the bridge dir (sensing-gated). The runner archives it to
     // results/ with the other jsonl artifacts; the reconcile script checks

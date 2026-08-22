@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""bridge_cpp_death_fixture.py -- 缺陷 B 修复回归(2026-08-16, Python 侧;
-synced from face-defectfix2-done)。
+"""bridge_cpp_death_fixture.py -- 缺陷 B 修复回归(2026-08-16, Python 侧)。
 
 C++ 进程运行中途死亡 => Python 侧 resp_notify 长连接写端 BrokenPipe =>
 BridgePipeError fail-closed 退出 + stderr 留痕(修复 F1 现场 python.log

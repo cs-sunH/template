@@ -243,7 +243,8 @@ def _assigned(batch):
 def test_import_and_p_chunk_calibration():
     """p_chunk 标定常数 = 4954(用户裁决 2026-08-15;推导 = ceil(mean(
     prefill_length)) = ceil(5830711/1177),登记于 online/wsc_llm_legacy_
-    online_scheduler.py 模块注释与方案文档 §3 步骤 0-1 物化规则/附录 C;
+    online_scheduler.py 模块注释(物化规则见 traces/derive_20_first_30_
+    seconds.py);
     离线 legacy 运行目录名 pc4954 实测同值)。"""
     assert P_CHUNK == 4954
 

@@ -19,6 +19,10 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
+namespace spdlog {
+class logger;
+}  // namespace spdlog
+
 namespace AstraSim {
 
 class Sys;
@@ -89,6 +93,12 @@ class Workload : public Callable {
     // with the replay route; strategy mode always keeps real physics.
 
   private:
+    // R4-14: cached "workload" logger -- fetched once in the constructor;
+    // the registry returns the same logger object per name for the process
+    // lifetime, so member reuse is behavior-equivalent (and skips the
+    // per-call registry mutex + map lookup on the per-node hot paths).
+    std::shared_ptr<spdlog::logger> workload_logger_;
+
     // From the node view, find out the corresponding communicator group, and
     // return the pointer. If no communicator group is specified for this
     // node, return nullptr.
@@ -109,6 +119,13 @@ class Workload : public Callable {
         // 闩锁开闸后的终态带宽门用此存储事件，后到者（HBM 侧 General）
         // 不再使 p2p 带宽统计静默缺失（中-4①，2026-08-20）。
         EventType completion_event = EventType::General;
+        // Fail-closed double-fire flags (R8-7): each side must arrive
+        // exactly once; a same-side second arrival is a model-layer
+        // mechanism violation and exits instead of opening the latch early
+        // (2 -> 1 -> 0 while the other side is still pending). Side
+        // attribution happens in Workload::call (by event type).
+        bool network_done = false;
+        bool hbm_done = false;
     };
     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
 };

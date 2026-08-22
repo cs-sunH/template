@@ -12,8 +12,9 @@
      final_context_tokens；推导规则与《sh_3.0的120档问题分析报告.md》§4
      受控实验（20 档真实 manifest 2091/2091 行 0 mismatch）同式：
      turn-0 history=0；turn>0 history=上一请求 final；
-     prefill_context=input_tokens_total（sidecar 变体）或折入后的
-     prefill_length（recompute 变体/无 sidecar）；final=context+decode）；
+     prefill_context=折入后的 prefill_length（turn-0，前缀已折入）或
+     history+prefill_length（turn≥1）（recompute 单口径）；
+     final=context+decode）；
   3. metrics_manifest.json —— 主 agent 裁决 (i) 的合成口径：
        - schema_version=1 + requests[]（arrival：turn0=absolute session
          arrival；turn>0=after_request(同 session 上一 queue_index, interval)
@@ -32,9 +33,6 @@
 覆盖同目录。fail-closed：请求队列为空/占位（request-neutral 占位 csv）时
 exit 1 并说明。
 
-sh_1.0 附加：face_lut.csv（合同⑨冻结 LUT）——由 face_scheduler 的
-build_instances + FaceLut 直接构建（与请求规划无关），口径 =
-plan.lut.export_csv（FaceLut 构建导出）。
 """
 
 import hashlib
@@ -55,7 +53,6 @@ from generate_face_trace import load_face_trace_config  # noqa: E402  (READ-ONLY
 
 PREFIX = "llama2_7b_inference"
 REPO_VARIANT = "astra-sim-sh_2.0"
-WRITE_FACE_LUT = False
 
 
 def _config_digest8(config_csv: Path) -> str:
@@ -69,21 +66,11 @@ def _derive_manifest_requests(config):
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
             history = 0
-        else:
-            history = last_final_by_session.get(spec.session_id, 0)
-            prefix = getattr(spec, "prefix_tokens", None)
-            if prefix is not None:
-                # sidecar_restore 变体:history = min(prefix, 上一请求 final)
-                #（《120档问题分析报告》§4 已验证同式)
-                history = min(int(prefix), history)
-        if getattr(spec, "input_tokens_total", None) is not None:
-            # sidecar_restore 变体:context = prefix + new(sidecar 给全量)
-            context = int(spec.input_tokens_total)
-        elif spec.turn_index == 0:
-            # recompute 变体:turn-0 队列 prefill 已折入 prefix
+            # recompute 单口径:turn-0 队列 prefill 已折入 prefix
             context = int(spec.prefill_length)
         else:
-            # recompute 变体后续 turn:context = 驻留 history + 新 prefill
+            history = last_final_by_session.get(spec.session_id, 0)
+            # recompute 单口径后续 turn:context = 驻留 history + 新 prefill
             context = history + int(spec.prefill_length)
         final = context + int(spec.decode_length)
         requests.append({
@@ -143,31 +130,6 @@ def _derive_metrics_requests(config):
     return records
 
 
-def _write_face_lut(config, output_dir: Path) -> None:
-    """sh_1.0 合同⑨冻结 LUT（FaceLut 构建，与请求规划无关）。"""
-    from face_scheduler import (  # noqa: E402
-        FaceInstanceSpec,
-        FaceLut,
-        build_instances,
-    )
-    specs = tuple(
-        FaceInstanceSpec(group.name, group.pg_name, group.ranks)
-        for group in config.inference_groups
-    )
-    topology = build_instances(config.hardware, specs)
-    requests = _derive_manifest_requests(config)
-    max_d_token = max(r["final_context_tokens"] for r in requests)
-    lut = FaceLut.build(
-        config.hardware,
-        config.model,
-        instance_sizes=(instance.size for instance in topology.instances),
-        p_chunk=config.prefill_chunk_size,
-        request_count=len(requests),
-        max_d_token=max_d_token,
-    )
-    lut.export_csv(output_dir / "face_lut.csv")
-
-
 def main() -> int:
     config = load_face_trace_config()
     if not config.request_queue:
@@ -202,9 +164,6 @@ def main() -> int:
         json.dumps(metrics_manifest, separators=(",", ":")) + "\n",
         encoding="utf-8")
 
-    if WRITE_FACE_LUT:
-        _write_face_lut(config, output_dir)
-
     runtime_note = (
         "runtime_config four files re-materialized by the config loader "
         "under generated/runtime_config/ (unchanged side effect)")
@@ -212,7 +171,6 @@ def main() -> int:
         "plan_dir": str(output_dir),
         "requests": len(manifest["requests"]),
         "sessions": manifest["selected_session_count"],
-        "face_lut": WRITE_FACE_LUT,
         "note": runtime_note,
     }))
     return 0

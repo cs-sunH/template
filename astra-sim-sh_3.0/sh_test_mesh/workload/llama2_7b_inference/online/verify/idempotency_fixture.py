@@ -7,8 +7,8 @@
   1. 第一次 = 正常应用(delivery_sequence 单调 +1);
   2. 第二次(同一 delta 原样重放)= 幂等重放:必须返回与第一次逐字段相等的
      batch(digest),且调度器状态零变更(不重新产生任何 assignment/KV
-     action/图节点;kv 事件计数、图节点计数、in-flight、账本、日志行、
-     digest 计数全部不动)。
+     action/图节点;KV 账本逐会话状态与逐 rank HBM 占用、图节点计数、
+     in-flight、provisional/committed 账本、日志行、digest 计数全部不动)。
 
 fail-closed 路径同样验证(不满足即非 0 退出):
   - 跳号(seq != last+1)抛 ValueError;
@@ -29,9 +29,16 @@ last_applied_sequence;reply cache 覆盖最后一笔交付)。
 delta(快速冒烟),缺省全量。
 
 本文件自 astra-sim-face 同名夹具整文件分发(R2 修复 07;含 response 消费
-即删的 has_any_response 判定),仅调度器装配段按本仓 online_service.py
-适配:Sh30OnlineScheduler(与本仓 online_service.py 相同的关键字装配),
-其余与 face 版逐字一致。
+即删的 has_any_response 判定),按本仓适配三处(其余与 face 版逐字一致):
+
+  1. 调度器装配段:Sh30OnlineScheduler(与本仓 online_service.py 相同的
+     关键字装配);
+  2. _snapshot 的 KV 口径:face 版读 kv_manager.events 事件流计数(本仓
+     KVCacheManager 无事件流),改用等价状态投影——逐会话 session_snapshots()
+     (含本仓三态账本的 resident_prefix_layers)+ 逐 rank hbm_snapshots()
+     的 kv_cache_bytes(形态对齐批 F1 sh_1.0 同名夹具);
+  3. --config 传参:与本仓 online_service.py 相同,args.config(str)统一
+     转 Path 再进 load_face_trace_config(裸传 str 会在 .exists() 处崩溃)。
 """
 
 import argparse
@@ -39,6 +46,7 @@ import copy
 import json
 import os
 import sys
+from pathlib import Path
 
 _ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -72,8 +80,24 @@ def _snapshot(scheduler, sink):
         "online_log_rows": len(scheduler.online_log_rows),
         "emitted_by_delivery": len(scheduler._emitted_by_delivery),
         "seen_acks": len(scheduler._seen_ack_delivery_seqs),
-        "kv_events": len(scheduler.kv_manager.events),
-        "kv_events_emitted": scheduler._kv_events_emitted,
+        # sh_3.0 适配(批 F2a 2026-08-21,形态对齐批 F1 sh_1.0):face 版此处读
+        # kv 事件水位(kv_manager.events 长度 + _kv_events_emitted);本仓
+        # KVCacheManager 无事件流水,KV 动作不经 kv_actions 批次通道,等价
+        # 幂等观测源 = 逐会话 KV 状态(位置/实例/上下文/字节/驻留前缀层数/
+        # 完成时刻/active)+ 逐 rank HBM KV 占用——任何重放误重入账都会
+        # 改变其中至少一项(reserve/prepare/expand/move/enforce/mark_complete
+        # 均落到会话或 rank 字节;重放误重跑策略会先撞基类 fail-closed)。
+        "kv_sessions": [
+            (snapshot.session_id, snapshot.location, snapshot.instance_index,
+             snapshot.context_tokens, snapshot.total_bytes,
+             snapshot.resident_prefix_layers, snapshot.last_completion_ns,
+             snapshot.active)
+            for snapshot in scheduler.kv_manager.session_snapshots()
+        ],
+        "kv_hbm_bytes": [
+            (snapshot.rank, snapshot.kv_cache_bytes)
+            for snapshot in scheduler.kv_manager.hbm_snapshots()
+        ],
         # 阶段 5 §8.2:provisional KV 账本也纳入幂等快照(重放不重复入账,
         # fail-closed 尝试不污染;ack 流把暂存条目逐笔转入 committed 层)。
         "provisional_kv_actions": sorted(
@@ -104,7 +128,10 @@ def main(argv=None) -> int:
     with open(manifest_path, "r", encoding="utf-8") as source:
         manifest = json.load(source)
     if args.config:
-        config = load_face_trace_config(args.config)
+        # args.config 是 str;loader 签名是 Path(默认参数 CONFIG_CSV_PATH 亦
+        # 为 Path),裸传 str 会在 .exists() 处崩溃——与本仓 online_service.py
+        # 相同,统一转 Path。
+        config = load_face_trace_config(Path(args.config))
     else:
         config = load_face_trace_config()
 

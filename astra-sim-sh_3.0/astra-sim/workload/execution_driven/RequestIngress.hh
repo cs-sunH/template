@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-RequestIngress -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 1).
+RequestIngress -- execution-driven mechanism layer (wscllm phase 1).
 
 Request-neutral ingress (方案 §4 步骤 1-2 操作 2). Thread contract: external
 producers (injection thread, later the step-1-7 bridge reader) only write the

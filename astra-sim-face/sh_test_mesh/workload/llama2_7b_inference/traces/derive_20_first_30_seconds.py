@@ -19,6 +19,11 @@ astra_compute_20_first_3_minutes_request_queue_recompute.csv lineage):
 Output columns match the simulator request-queue format:
 session_id,turn_index,request_id,prefill_length,decode_length,
 session_arrival_time_ns,inter_request_interval_ns,description
+
+Usage: derive_20_first_30_seconds.py [source] [recompute_queue]
+                                      [canonical_sidecar] [window_ns]
+(window_ns defaults to 30e9; the canonical sidecar is written next to the
+recompute queue.)
 """
 
 import csv
@@ -46,7 +51,6 @@ SIDECAR_COLUMNS = [
     "digest",
 ]
 
-
 def row_digest(row: list[str]) -> str:
     """Deterministic digest of the canonical 8-column queue row (B0 input
     equivalence check key)."""
@@ -57,6 +61,15 @@ def main() -> None:
     source = sys.argv[1] if len(sys.argv) > 1 else SOURCE
     output = sys.argv[2] if len(sys.argv) > 2 else OUTPUT
     sidecar = sys.argv[3] if len(sys.argv) > 3 else SIDECAR
+    window_ns = int(sys.argv[4]) if len(sys.argv) > 4 else WINDOW_NS
+    if window_ns == WINDOW_NS:
+        description = DESCRIPTION
+    else:
+        window_s = window_ns // 1_000_000_000
+        description = (
+            f"compute_20 first-{window_s}-seconds window; "
+            "turn-0 prefix recomputed as prefill work"
+        )
 
     n_sessions = 0
     n_requests = 0
@@ -73,7 +86,7 @@ def main() -> None:
         reader = csv.DictReader(fin)
         writer = csv.writer(fout)
         sidecar_writer = csv.writer(scout)
-        writer.writerow([
+        queue_header = [
             "session_id",
             "turn_index",
             "request_id",
@@ -82,7 +95,8 @@ def main() -> None:
             "session_arrival_time_ns",
             "inter_request_interval_ns",
             "description",
-        ])
+        ]
+        writer.writerow(queue_header)
         sidecar_writer.writerow(SIDECAR_COLUMNS)
 
         current_sid = None
@@ -96,13 +110,13 @@ def main() -> None:
                 current_sid = row["session_id"]
                 turn_index = 0
                 prev_arrival = int(row["arrival_time"])
-                active = prev_arrival < WINDOW_NS
+                active = prev_arrival < window_ns
                 if not active:
                     continue
                 n_sessions += 1
             elif active:
                 arrival = prev_arrival + prev_gap
-                if arrival >= WINDOW_NS:
+                if arrival >= window_ns:
                     active = False
                     continue
                 prev_arrival = arrival
@@ -143,7 +157,7 @@ def main() -> None:
                 decode,
                 session_arrival,
                 interval,
-                DESCRIPTION,
+                description,
             ]
             writer.writerow(row_out)
             sidecar_writer.writerow([
@@ -170,6 +184,10 @@ def main() -> None:
     print(f"decode range: {min_decode}-{max_decode}")
     print(f"max in-window arrival: {max_arrival / 1e9:.6f} s")
     print(f"rows with timing not multiple of 1000 ns: {non_1000}")
+    print(f"recompute queue: {output}")
+    print(f"canonical sidecar: {sidecar}")
+    print("[next-steps] 将 trace_config 的 request_queue_csv 指向 "
+          f"{output}（recompute 单口径，turn-0 前缀已折入 prefill）")
 
 
 if __name__ == "__main__":

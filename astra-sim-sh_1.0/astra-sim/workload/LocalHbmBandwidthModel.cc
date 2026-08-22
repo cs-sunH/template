@@ -30,7 +30,7 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
     if (sys == nullptr || workload == nullptr) {
         throw std::invalid_argument("local HBM model requires Sys and Workload");
     }
-    if (sys->local_mem_bw <= 0) {
+    if (sys->local_mem_bw <= 0 || sys->peak_perf <= 0) {
         throw std::invalid_argument(
             "local HBM sharing requires a positive local-mem-bw (the "
             "hbm-bandwidth-contention flag is auto-disabled for "

@@ -26,8 +26,8 @@ import sys
 from pathlib import Path
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_face_trace.py /
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置与
+# 发射模块在上一级。路径只做 import 用途(红线:generate_face_trace.py /
 # face_scheduler.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -103,7 +103,7 @@ def main(argv=None) -> int:
     # 根因 #5(蓝本裁决 2026-08-15 第三项):strategy 模式保持物理跨 request 链。
     graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
     # face 阶段 1-6 只做主变体 session_lru_recompute(legacy 第二变体在

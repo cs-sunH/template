@@ -1,26 +1,13 @@
 #!/usr/bin/env python3
-"""Generate FACE-mapped Chakra ET traces for the configured wafer scenario."""
+"""Shared FACE configuration and GraphBatch emission helpers for online simulation."""
 
 from __future__ import annotations
 
-import csv
-import dataclasses
-import heapq
 import hashlib
-import io
-import json
-import multiprocessing as mp
-import os
-import pickle
-import queue as queue_module
-import shlex
-import shutil
 import sys
-import tempfile
-import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -32,61 +19,23 @@ if str(SH_TEST_DIR) not in sys.path:
     sys.path.insert(0, str(SH_TEST_DIR))
 
 from face_scheduler import (  # noqa: E402
-    DecodeCandidateCost,
     FaceHardware,
-    FaceInstanceSpec,
-    FaceLutEntry,
     FaceModel,
-    FacePlan,
-    FaceRequest,
-    FaceRequestPlan,
-    InstanceTaskLoadSnapshot,
-    KVAllocation,
     KVTransfer,
     KVTransferShard,
-    NodeHBMSnapshot,
-    PREFILL_CHUNK_SIZE,
-    SessionKVSnapshot,
-    kv_cache_bytes_for_tokens,
-    plan_face_requests,
-    set_iteration_stats_hook,
-    set_metrics_observer,
-)
-from metrics_integration import (  # noqa: E402
-    EVENT_DECODE_END,
-    EVENT_DECODE_START,
-    EVENT_MEMORY_ANCHOR_COMPLETE,
-    EVENT_PREFILL_END,
-    EVENT_PREFILL_START,
-    PlannerLutStatsAccumulator,
-    ServiceMetrics,
-    kv_event_payload_sh2,
-    resolve_metrics_detail,
-    write_planner_lut_stats,
 )
 from generate_trace import (  # noqa: E402
-    ChakraAttr,
-    GlobalMetadata,
     InferenceGroup,
-    PROJECT_ROOT,
-    REQUEST_QUEUE_COLUMNS,
     RemoteMemoryConfig,
     RequestSpec,
-    TraceCommand,
-    TraceCommandRecorder,
     TraceBuilder,
-    encode_message,
     load_config_rows,
     load_remote_memory_config,
     load_request_queue,
     parse_bool,
     parse_int,
     parse_nonnegative_int,
-    range_label,
-    request_queue_digest,
     sanitize_node_prefix,
-    transformer_pass,
-    transformer_pass_aggregated,
 )
 from config_resolver import (  # noqa: E402
     ResolvedHardware,
@@ -118,7 +67,7 @@ REQUIRED_CONFIG_KEYS = (
 OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
-    "request_queue_context_csv": "",
+    "prefill_chunk_size": "512",
 }
 SUPPORTED_CONFIG_KEYS = set(REQUIRED_CONFIG_KEYS) | set(OPTIONAL_CONFIG_DEFAULTS)
 INT_CONFIG_KEYS = {
@@ -133,7 +82,6 @@ INT_CONFIG_KEYS = {
 PATH_CONFIG_KEYS = {
     "output_dir",
     "request_queue_csv",
-    "request_queue_context_csv",
     "hardware_config",
     "system_template",
 }
@@ -158,7 +106,6 @@ class FaceTraceConfig:
     output_prefix: str
     output_dir: Optional[Path]
     request_queue_csv: Path
-    request_queue_context_csv: Optional[Path]
     request_queue: tuple[RequestSpec, ...]
     hardware_config: Path
     hardware_capacity_profile: str
@@ -173,6 +120,7 @@ class FaceTraceConfig:
     kv_reserve_context_tokens: int
     inference_groups: tuple[InferenceGroup, ...]
     request_queue_session_limit: int
+    prefill_chunk_size: int
     selected_session_ids: tuple[str, ...]
     source_request_count: int
     source_session_count: int
@@ -224,9 +172,13 @@ class TransferTagAllocator:
 
 def reconcile_pending_history_location(
     pending_gate: PendingHistoryGate,
-    request_plan: FaceRequestPlan,
+    request_plan: Any,
 ) -> None:
-    """Apply planner-side zero-context normalization to the ET history gate."""
+    """Apply the zero-context history-gate normalization.
+
+    ``request_plan`` is the online request-plan attribute surface (dict shim
+    exposing ``history_location_before`` / ``history_tokens_*`` / ``request_id``).
+    """
 
     history_before = request_plan.history_location_before
     if history_before is None or pending_gate.location == history_before.location:
@@ -267,6 +219,8 @@ def _parse_config_value(key: str, value: str) -> object:
         return parse_bool(value, key)
     if key == "request_queue_session_limit":
         return parse_nonnegative_int(value, key)
+    if key == "prefill_chunk_size":
+        return parse_int(value, key)
     if key == "trace_granularity":
         if value not in {"token_expanded", "request_aggregated"}:
             raise ValueError(
@@ -279,7 +233,7 @@ def _parse_config_value(key: str, value: str) -> object:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
         return value
     if key in PATH_CONFIG_KEYS:
-        if key in {"output_dir", "request_queue_context_csv"} and not value:
+        if key == "output_dir" and not value:
             return None
         if not value:
             raise ValueError(f"config key {key} must not be empty")
@@ -341,107 +295,6 @@ def select_first_session_requests(
     return selected_requests, selected_session_ids
 
 
-def load_request_prefix_tokens(
-    context_csv: Path,
-    requests: Sequence[RequestSpec],
-) -> tuple[RequestSpec, ...]:
-    """Attach exact per-request historical-prefix lengths from a sidecar CSV."""
-
-    if not context_csv.is_file():
-        raise FileNotFoundError(
-            f"request queue context CSV not found: {context_csv}"
-        )
-    required_columns = {
-        "session_id",
-        "turn_index",
-        "request_id",
-        "prefix_tokens",
-        "input_tokens_total",
-    }
-    metadata: dict[tuple[str, int, str], tuple[int, int]] = {}
-    with context_csv.open(newline="", encoding="utf-8-sig") as source:
-        reader = csv.DictReader(source)
-        if reader.fieldnames is None:
-            raise ValueError(f"request context CSV is empty: {context_csv}")
-        columns = {str(column).strip() for column in reader.fieldnames}
-        missing = sorted(required_columns - columns)
-        if missing:
-            raise ValueError(
-                "request context CSV is missing columns: " + ", ".join(missing)
-            )
-        for line_number, row in enumerate(reader, start=2):
-            session_id = str(row.get("session_id", "")).strip()
-            request_id = str(row.get("request_id", "")).strip()
-            turn_text = str(row.get("turn_index", "")).strip()
-            prefix_text = str(row.get("prefix_tokens", "")).strip()
-            input_text = str(row.get("input_tokens_total", "")).strip()
-            if not all((session_id, request_id, turn_text, prefix_text, input_text)):
-                raise ValueError(
-                    f"request context CSV line {line_number} has empty identity/context fields"
-                )
-            turn_index = parse_nonnegative_int(turn_text, "turn_index")
-            prefix_tokens = parse_nonnegative_int(prefix_text, "prefix_tokens")
-            input_tokens_total = parse_int(input_text, "input_tokens_total")
-            key = (session_id, turn_index, request_id)
-            if key in metadata:
-                raise ValueError(
-                    f"duplicate request context metadata for {request_id}"
-                )
-            metadata[key] = (prefix_tokens, input_tokens_total)
-
-    enriched: list[RequestSpec] = []
-    used_keys: set[tuple[str, int, str]] = set()
-    for request in requests:
-        key = (request.session_id, request.turn_index, request.request_id)
-        if key not in metadata:
-            raise ValueError(
-                f"request context CSV has no metadata for {request.request_id}"
-            )
-        prefix_tokens, input_tokens_total = metadata[key]
-        if input_tokens_total != prefix_tokens + request.prefill_length:
-            raise ValueError(
-                f"request {request.request_id} input_tokens_total does not equal "
-                "prefix_tokens + prefill_length"
-            )
-        enriched.append(
-            replace(
-                request,
-                prefix_tokens=prefix_tokens,
-                input_tokens_total=input_tokens_total,
-            )
-        )
-        used_keys.add(key)
-    extra_keys = set(metadata) - used_keys
-    if extra_keys:
-        raise ValueError(
-            "request context CSV contains requests absent from the ASTRA queue"
-        )
-    return tuple(enriched)
-
-
-def _require_sidecar_wiring(queue_csv: Path, context_csv) -> None:
-    """fail-closed（排查报告高-4①，2026-08-20）：sidecar_restore 物化的
-    plain 队列（伴生 *_request_context.csv 存在）必须接线
-    request_queue_context_csv，否则 turn-0 前缀既不重算也不恢复——静默
-    丢失（20 档口径 79 行、单行最大 169,395 token）。recompute 队列
-    （*_request_queue_recompute.csv，前缀已折入 prefill）与无伴生
-    context 的合成/测试队列不适用本守卫。"""
-    name = queue_csv.name
-    if name.endswith("_request_queue_recompute.csv"):
-        return
-    if not name.endswith("_request_queue.csv"):
-        return
-    sibling = queue_csv.with_name(
-        name[: -len("_request_queue.csv")] + "_request_context.csv")
-    if sibling.is_file() and not context_csv:
-        raise SystemExit(
-            "[fail-closed] 队列 {} 为 sidecar_restore 物化产物（伴生 {} 存在），"
-            "但 request_queue_context_csv 为空：turn-0 前缀将既不重算也不恢复"
-            "（静默丢失）。请将 trace_config 的 request_queue_context_csv 指向 "
-            "{}，或改用 *_request_queue_recompute.csv（recompute 口径）。".format(
-                name, sibling.name, sibling))
-
-
 def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfig:
     values, groups = load_config_rows(config_csv, SUPPORTED_CONFIG_KEYS)
 
@@ -459,28 +312,16 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
     }
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
-    # ED 改造阶段 0（步骤 0-1）：正式入口 fail-closed。必须在调用
-    # load_request_queue 之前拦截——该函数在文件缺失时会静默调用
-    # create_default_request_queue 生成随机 4-request 队列（request-neutral
-    # 红线）。随机 stub 保留仅供显式 fixture 使用。
-    if not request_queue_csv.exists():
+    # The online entry is fail-closed: the shared queue loader does not
+    # synthesize a request queue when materialized input is missing.
+    if not request_queue_csv.is_file():
         sys.exit(
             f"missing request queue: {request_queue_csv}；"
-            "request-neutral 仓库不绑定默认队列——请按方案文档 "
-            "(sh_3.0仓库改造详细执行方案.md §3 步骤 0-1) 物化 "
-            "sidecar_restore 三件套后在 trace_config.csv 指定"
+            "request-neutral 仓库不绑定默认队列——请按 "
+            "(traces/materialize_20_30s.py) 物化 "
+            "折入 recompute 队列后在 trace_config.csv 指定"
         )
     source_request_queue = load_request_queue(request_queue_csv)
-    request_queue_context_csv = parsed["request_queue_context_csv"]
-    _require_sidecar_wiring(request_queue_csv, request_queue_context_csv)
-    if request_queue_context_csv is not None:
-        request_queue_context_csv = _resolve_request_queue(
-            request_queue_context_csv
-        )
-        source_request_queue = load_request_prefix_tokens(
-            request_queue_context_csv,
-            source_request_queue,
-        )
     source_average_decode_length = sum(
         request.decode_length for request in source_request_queue
     ) / len(source_request_queue)
@@ -527,8 +368,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
             hardware_path,
             system_template,
     ]
-    if request_queue_context_csv is not None:
-        digest_paths.append(request_queue_context_csv)
     configuration_digest = _configuration_digest(tuple(digest_paths))
 
     return FaceTraceConfig(
@@ -545,7 +384,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         output_prefix=str(parsed["output_prefix"]),
         output_dir=parsed["output_dir"],
         request_queue_csv=request_queue_csv,
-        request_queue_context_csv=request_queue_context_csv,
         request_queue=request_queue,
         hardware_config=hardware_path,
         hardware_capacity_profile=hardware_capacity_profile,
@@ -560,6 +398,7 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
         inference_groups=groups,
         request_queue_session_limit=int(parsed["request_queue_session_limit"]),
+        prefill_chunk_size=int(parsed["prefill_chunk_size"]),
         selected_session_ids=selected_session_ids,
         source_request_count=len(source_request_queue),
         source_session_count=source_session_count,
@@ -571,160 +410,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
 
 
 
-
-
-def _transfer_trigger_time_ns(
-    request_plan: FaceRequestPlan,
-    transfer: KVTransfer,
-) -> int:
-    if transfer.phase == "history":
-        return request_plan.admission_time_ns
-    if transfer.phase in {"prefill", "prefill_decode", "decode"}:
-        return request_plan.prefill_complete_ns
-    if transfer.phase == "completion":
-        return request_plan.completion_ns
-    raise ValueError(f"unsupported KV transfer phase: {transfer.phase}")
-
-
-def _remote_store_transfers(
-    request_plan: FaceRequestPlan,
-) -> tuple[KVTransfer, ...]:
-    return tuple(
-        transfer
-        for transfer in (
-            *request_plan.history_evictions,
-            *request_plan.prefill_evictions,
-            *request_plan.decode_evictions,
-            *request_plan.completion_evictions,
-        )
-        if transfer.kind == "remote_store"
-    )
-
-
-def order_plans_for_static_emission(
-    plan: FacePlan,
-) -> tuple[FaceRequestPlan, ...]:
-    """Topologically order whole-request ET emission by KV causality.
-
-    Start-time order alone is insufficient when a long-running request later
-    evicts KV produced by a shorter request that started after it.  The ET
-    producer must be emitted before that store trigger, and every store must be
-    emitted before the affected session's following request consumes history.
-    Kahn ordering preserves those edges while retaining Prefill-start order as
-    the deterministic priority among otherwise independent requests.
-    """
-
-    plans = tuple(plan.requests)
-    by_id = {request.request_id: request for request in plans}
-    if len(by_id) != len(plans):
-        raise ValueError("FACE request IDs must be unique for ET emission")
-    successors: dict[str, set[str]] = {request.request_id: set() for request in plans}
-    indegree = dict.fromkeys(successors, 0)
-
-    def add_edge(source: FaceRequestPlan, target: FaceRequestPlan) -> None:
-        if source.request_id == target.request_id:
-            return
-        if target.request_id not in successors[source.request_id]:
-            successors[source.request_id].add(target.request_id)
-            indegree[target.request_id] += 1
-
-    session_plans: dict[str, list[FaceRequestPlan]] = {}
-    for request in plans:
-        session_plans.setdefault(request.session_id, []).append(request)
-    following_by_request_id: dict[str, FaceRequestPlan] = {}
-    for requests in session_plans.values():
-        requests.sort(key=lambda request: request.turn_index)
-        for current, following in zip(requests, requests[1:]):
-            add_edge(current, following)
-            following_by_request_id[current.request_id] = following
-
-    store_events_by_session: dict[
-        str,
-        list[tuple[int, int, FaceRequestPlan]],
-    ] = {}
-    for trigger in plans:
-        for sequence, transfer in enumerate(_remote_store_transfers(trigger)):
-            trigger_time_ns = _transfer_trigger_time_ns(trigger, transfer)
-            producers = [
-                candidate
-                for candidate in session_plans[transfer.session_id]
-                if candidate.completion_ns <= trigger_time_ns
-            ]
-            if not producers:
-                raise RuntimeError(
-                    f"remote store for session {transfer.session_id} has no "
-                    "completed KV producer"
-                )
-            producer = max(
-                producers,
-                key=lambda request: (
-                    request.completion_ns,
-                    request.turn_index,
-                    request.queue_index,
-                ),
-            )
-            add_edge(producer, trigger)
-            following = following_by_request_id.get(producer.request_id)
-            if following is not None:
-                following_admission_ns = getattr(
-                    following,
-                    "admission_time_ns",
-                    following.estimated_arrival_ns,
-                )
-                if trigger_time_ns > following_admission_ns:
-                    raise RuntimeError(
-                        "KV store trigger occurs after the affected session's "
-                        f"following request admission: {transfer.session_id}"
-                    )
-                add_edge(trigger, following)
-            store_events_by_session.setdefault(transfer.session_id, []).append(
-                (trigger_time_ns, sequence, trigger)
-            )
-
-    for events in store_events_by_session.values():
-        events.sort(
-            key=lambda item: (
-                item[0],
-                item[2].queue_index,
-                item[1],
-            )
-        )
-        for previous, following in zip(events, events[1:]):
-            add_edge(previous[2], following[2])
-
-    ready: list[tuple[int, int, str]] = []
-    for request in plans:
-        if indegree[request.request_id] == 0:
-            heapq.heappush(
-                ready,
-                (request.prefill_start_ns, request.queue_index, request.request_id),
-            )
-    ordered: list[FaceRequestPlan] = []
-    while ready:
-        _, _, request_id = heapq.heappop(ready)
-        request = by_id[request_id]
-        ordered.append(request)
-        for successor_id in sorted(successors[request_id]):
-            indegree[successor_id] -= 1
-            if indegree[successor_id] == 0:
-                successor = by_id[successor_id]
-                heapq.heappush(
-                    ready,
-                    (
-                        successor.prefill_start_ns,
-                        successor.queue_index,
-                        successor.request_id,
-                    ),
-                )
-    if len(ordered) != len(plans):
-        blocked = sorted(
-            request_id for request_id, degree in indegree.items() if degree > 0
-        )
-        raise RuntimeError(
-            "KV-causal static ET request ordering contains a cycle: "
-            + ", ".join(blocked[:8])
-        )
-    return tuple(ordered)
 
 
 def derive_prefill_work_tokens(
@@ -747,26 +432,9 @@ def derive_prefill_work_tokens(
         previous_final_context = 0
         for index in ordered:
             request = requests[index]
-            if request.prefix_tokens is None:
-                history_tokens = previous_final_context
-                prefill_context_tokens = history_tokens + request.prefill_length
-                request_work_tokens = request.prefill_length
-            else:
-                history_tokens = min(
-                    request.prefix_tokens,
-                    previous_final_context,
-                )
-                if request.input_tokens_total is None:
-                    raise ValueError(
-                        f"request {request.request_id} is missing input_tokens_total"
-                    )
-                prefill_context_tokens = request.input_tokens_total
-                request_work_tokens = prefill_context_tokens - history_tokens
-                if request_work_tokens <= 0:
-                    raise ValueError(
-                        f"session {session_id} request {request.request_id} has no "
-                        "Prefill work after prefix reuse"
-                    )
+            history_tokens = previous_final_context
+            prefill_context_tokens = history_tokens + request.prefill_length
+            request_work_tokens = request.prefill_length
             work_tokens[index] = request_work_tokens
             previous_final_context = (
                 prefill_context_tokens + request.decode_length
@@ -1218,7 +886,7 @@ def _emit_kv_transfer(
                         target_hbm_completion_node_id
                     ),
                     "target_hbm_bandwidth_policy": (
-                        "n_way_equal_split_with_all_local_hbm_users"
+                        "n_way_equal_split_with_all_active_hbm_users"
                     ),
                     "hbm_charge": (
                         "target_restore_write"
@@ -1383,7 +1051,7 @@ def main(argv=None) -> None:  # noqa: ARG001
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
     估算函数)。③④ 的输入物化入口是
-    plan_materializer.py(manifest/metrics/runtime_config/face_lut);
+    plan_materializer.py(manifest/metrics/runtime_config);
     静态 ET 生成入口不再存在。
     """
     raise SystemExit(

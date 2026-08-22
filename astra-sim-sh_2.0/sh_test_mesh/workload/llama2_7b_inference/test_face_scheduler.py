@@ -18,9 +18,8 @@ if str(MODULE_DIR) not in sys.path:
 from face_scheduler import (  # noqa: E402
     FaceHardware,
     FaceInstanceSpec,
-    FaceLut,
-    FaceLutEntry,
     FaceModel,
+    FaceRooflineEstimate,
     FaceRequest,
     InstanceTaskLoadSnapshot,
     KVAllocator,
@@ -33,6 +32,7 @@ from face_scheduler import (  # noqa: E402
     build_instances,
     deterministic_xy_route,
     estimate_decode_remaining_task_load_ns,
+    estimate_iteration_time_ns,
     estimate_model_weight_bytes,
     estimate_prefill_task_load_ns,
     kv_cache_bytes_for_tokens,
@@ -42,7 +42,6 @@ from face_scheduler import (  # noqa: E402
     model_weight_shard_bytes_by_tp_rank,
     nearest_edge_rank,
     physical_edge_ranks,
-    plan_face_requests,
     select_decode_instance,
     select_prefill_instance,
 )
@@ -55,7 +54,6 @@ from generate_face_trace import (  # noqa: E402
     _emit_tp_readiness_barrier,
     derive_prefill_work_tokens,
     load_face_trace_config,
-    order_plans_for_static_emission,
     reconcile_pending_history_location,
     select_first_session_requests,
 )
@@ -74,6 +72,11 @@ from generate_trace import (  # noqa: E402
     shard_extent,
     transformer_pass,
     transformer_pass_aggregated,
+)
+from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
+from metrics_integration import (  # noqa: E402
+    PlannerRooflineStatsAccumulator,
+    write_planner_roofline_stats,
 )
 
 
@@ -167,14 +170,6 @@ class FaceSchedulerTests(unittest.TestCase):
             ),
         )
 
-    def test_prefill_work_derivation_matches_prefix_reuse_rules(self) -> None:
-        requests = (
-            RequestSpec("s0", 0, "r0", 10, 5, 0, None, 0, 10),
-            RequestSpec("s0", 1, "r1", 4, 1, None, 100, 20, 24),
-            RequestSpec("s0", 2, "r2", 4, 1, None, 100, 8, 12),
-        )
-        self.assertEqual(derive_prefill_work_tokens(requests), (10, 9, 4))
-
     def test_trace_builder_can_stream_without_retaining_nodes(self) -> None:
         streamed = []
         builder = TraceBuilder(
@@ -205,13 +200,13 @@ class FaceSchedulerTests(unittest.TestCase):
         completion_ns: int | None,
         next_request_type: str | None = None,
     ) -> None:
-        before, transfer, evictions = manager.prepare_prefill(
+        before, prefix_transfer, transfer, evictions = manager.prepare_prefill(
             session_id=session_id,
             target_instance_index=instance_index,
             history_tokens=0,
             trigger_request_id=f"{session_id}_initial",
         )
-        if before is not None or transfer is not None or evictions:
+        if before is not None or prefix_transfer is not None or transfer is not None or evictions:
             raise AssertionError("new session unexpectedly required history movement")
         growth_evictions = manager.expand_prefill(
             session_id=session_id,
@@ -247,94 +242,6 @@ class FaceSchedulerTests(unittest.TestCase):
             select_first_session_requests(requests, 4)
         with self.assertRaises(ValueError):
             select_first_session_requests(requests, -1)
-
-    def test_exact_prefix_metadata_reuses_truncates_and_recomputes(self) -> None:
-        hardware, model, topology, _ = self._tiny_kv_manager(
-            capacity_bytes=10_000,
-            reserve_context_tokens=1,
-        )
-        specs = tuple(
-            FaceInstanceSpec(instance.name, instance.pg_name, instance.ranks)
-            for instance in topology.instances
-        )
-        plan = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=(
-                FaceRequest(
-                    0, "session", 0, "r0", 5, 1, 0, None, 10, 15
-                ),
-                FaceRequest(
-                    1, "session", 1, "r1", 3, 1, None, 1_000, 5, 8
-                ),
-                FaceRequest(
-                    2, "session", 2, "r2", 2, 1, None, 1_000, 12, 14
-                ),
-            ),
-            reserve_context_tokens=1,
-            record_iterations=False,
-        )
-        first, second, third = plan.requests
-        self.assertEqual(
-            (first.history_tokens_before, first.prefill_context_tokens),
-            (0, 15),
-        )
-        self.assertEqual(
-            (second.history_tokens_before, second.prefill_context_tokens),
-            (5, 8),
-        )
-        self.assertEqual(second.history_tokens_discarded, 11)
-        self.assertEqual(
-            (third.history_tokens_before, third.prefill_context_tokens),
-            (9, 14),
-        )
-        self.assertEqual(third.history_tokens_discarded, 0)
-        self.assertFalse(plan.iterations_recorded)
-        self.assertEqual(plan.iterations, ())
-
-    def test_static_emission_orders_kv_producer_before_store_trigger(self) -> None:
-        store = SimpleNamespace(
-            kind="remote_store",
-            phase="completion",
-            session_id="victim",
-        )
-
-        def request(
-            request_id: str,
-            session_id: str,
-            turn_index: int,
-            queue_index: int,
-            prefill_start_ns: int,
-            estimated_arrival_ns: int,
-            completion_ns: int,
-            completion_evictions: tuple[object, ...] = (),
-        ) -> SimpleNamespace:
-            return SimpleNamespace(
-                request_id=request_id,
-                session_id=session_id,
-                turn_index=turn_index,
-                queue_index=queue_index,
-                prefill_start_ns=prefill_start_ns,
-                estimated_arrival_ns=estimated_arrival_ns,
-                prefill_complete_ns=prefill_start_ns + 10,
-                completion_ns=completion_ns,
-                history_evictions=(),
-                prefill_evictions=(),
-                decode_evictions=(),
-                completion_evictions=completion_evictions,
-            )
-
-        trigger = request("trigger", "other", 0, 0, 0, 0, 300, (store,))
-        producer = request("producer", "victim", 0, 1, 100, 100, 200)
-        following = request("following", "victim", 1, 2, 310, 310, 320)
-        ordered = order_plans_for_static_emission(
-            SimpleNamespace(requests=(trigger, producer, following))
-        )
-        self.assertEqual(
-            [item.request_id for item in ordered],
-            ["producer", "trigger", "following"],
-        )
 
     def test_zero_context_truncation_reconciles_partial_history_gate(self) -> None:
         gate = PendingHistoryGate(
@@ -401,7 +308,6 @@ class FaceSchedulerTests(unittest.TestCase):
             / "astra_compute_20_first_30_seconds_request_queue.csv"
         ).resolve()
         self.assertEqual(config.request_queue_csv, expected_request_queue)
-        self.assertIsNone(config.request_queue_context_csv)
         self.assertEqual(config.request_queue_session_limit, 0)
         self.assertEqual(config.trace_granularity, "request_aggregated")
         self.assertEqual(config.source_request_count, 1177)
@@ -419,12 +325,6 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(
             {request.session_id for request in config.request_queue},
             {f"session_{index}" for index in range(112)},
-        )
-        self.assertTrue(
-            all(request.prefix_tokens is None for request in config.request_queue)
-        )
-        self.assertTrue(
-            all(request.input_tokens_total is None for request in config.request_queue)
         )
         first_request_indexes: dict[str, int] = {}
         for index, request in enumerate(config.request_queue):
@@ -765,13 +665,14 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertTrue(active.active)
         self.assertEqual(active.resident_prefix_layers, 4)
 
-        before, restore, restore_evictions = manager.prepare_prefill(
+        before, prefix_transfer, restore, restore_evictions = manager.prepare_prefill(
             session_id="second",
             target_instance_index=0,
             history_tokens=10,
             trigger_request_id="restore_suffix",
         )
         self.assertEqual(before.location, KVCacheManager.PARTIAL_HBM_REMOTE)
+        self.assertIsNone(prefix_transfer)
         self.assertEqual(restore_evictions, ())
         self.assertEqual(restore.kind, "remote_load")
         self.assertEqual((restore.layer_start, restore.layer_end), (2, 4))
@@ -1088,36 +989,6 @@ class FaceSchedulerTests(unittest.TestCase):
         _, _, _, manager = self._tiny_kv_manager(layers=5)
         self.assertEqual(manager.partial_resident_prefix_layers, 3)
 
-    def test_zero_token_truncation_normalizes_partial_cache_to_local(self) -> None:
-        _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=200,
-            reserve_context_tokens=1,
-            layers=4,
-        )
-        self._seed_local_session(
-            manager,
-            session_id="session",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=10,
-        )
-        transfer = manager._evict_suffix(
-            manager._sessions["session"],
-            phase="completion",
-            reason="test",
-            trigger_request_id="r0",
-        )
-        self.assertEqual(transfer.kind, "remote_store")
-        self.assertEqual(
-            manager.session_snapshot("session").location,
-            KVCacheManager.PARTIAL_HBM_REMOTE,
-        )
-        self.assertEqual(manager.truncate_history("session", 0), 10)
-        snapshot = manager.session_snapshot("session")
-        self.assertEqual(snapshot.location, KVCacheManager.LOCAL_HBM)
-        self.assertEqual(snapshot.resident_prefix_layers, 4)
-        self.assertEqual(snapshot.total_bytes, 0)
-
     def test_center_rank_nearest_edge_tie_and_xy_route_are_deterministic(self) -> None:
         hardware = FaceHardware(
             mesh_rows=3,
@@ -1155,26 +1026,28 @@ class FaceSchedulerTests(unittest.TestCase):
         )
 
         hbm_before_hit = manager.hbm_snapshots()
-        before, local_hit, evictions = manager.prepare_prefill(
+        before, prefix_transfer, local_hit, evictions = manager.prepare_prefill(
             session_id="session",
             target_instance_index=0,
             history_tokens=10,
             trigger_request_id="local_hit",
         )
         self.assertEqual(before.location, KVCacheManager.LOCAL_HBM)
+        self.assertIsNone(prefix_transfer)
         self.assertEqual(local_hit.kind, "local_hit")
         self.assertEqual(local_hit.shards, ())
         self.assertEqual(evictions, ())
         self.assertEqual(manager.hbm_snapshots(), hbm_before_hit)
 
         manager.mark_complete("session", 20)
-        before, noc_transfer, evictions = manager.prepare_prefill(
+        before, prefix_transfer, noc_transfer, evictions = manager.prepare_prefill(
             session_id="session",
             target_instance_index=1,
             history_tokens=10,
             trigger_request_id="noc_move",
         )
         self.assertEqual(before.instance_index, 0)
+        self.assertIsNone(prefix_transfer)
         self.assertEqual(noc_transfer.kind, "noc_migrate")
         self.assertEqual(evictions, ())
         self.assertEqual(
@@ -1221,13 +1094,14 @@ class FaceSchedulerTests(unittest.TestCase):
             (0, 0, 0, 0),
         )
 
-        before, remote_load, evictions = manager.prepare_prefill(
+        before, prefix_transfer, remote_load, evictions = manager.prepare_prefill(
             session_id="session",
             target_instance_index=0,
             history_tokens=10,
             trigger_request_id="remote_load",
         )
         self.assertEqual(before.location, KVCacheManager.REMOTE_MEMORY)
+        self.assertIsNone(prefix_transfer)
         self.assertEqual(remote_load.kind, "remote_load")
         self.assertEqual(evictions, ())
         self.assertEqual(
@@ -1250,140 +1124,92 @@ class FaceSchedulerTests(unittest.TestCase):
             (20, 20, 0, 0),
         )
 
-    def test_plan_uses_hbm_aware_decode_tie_and_records_kv_state(self) -> None:
-        hardware, model, topology, _ = self._tiny_kv_manager(
-            capacity_bytes=200,
-            reserve_context_tokens=80,
-        )
-        instance_specs = tuple(
-            FaceInstanceSpec(instance.name, instance.pg_name, instance.ranks)
-            for instance in topology.instances
-        )
-        plan = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=instance_specs,
-            requests=(
-                FaceRequest(
-                    0,
-                    "session",
-                    0,
-                    "request",
-                    10,
-                    1,
-                    0,
-                    None,
-                ),
-            ),
-            reserve_context_tokens=80,
-        )
-        request = plan.requests[0]
-
-        expected_prefill = select_prefill_instance(
-            (
-                InstanceTaskLoadSnapshot(0, 0, 0, 0, None),
-                InstanceTaskLoadSnapshot(1, 0, 0, 0, None),
-            ),
-            (True, True),
-        )
-        self.assertEqual(request.prefill_instance_index, expected_prefill)
-        self.assertEqual(request.prefill_assignment_key, (0, -1, 0))
-        self.assertEqual(
-            [snapshot.total_task_load_ns for snapshot in request.prefill_instance_loads],
-            [0, 0],
-        )
-        self.assertEqual(
-            request.decode_instance_index,
-            min(
-                (
-                    candidate
-                    for candidate in request.decode_candidates
-                    if candidate.hbm_feasible
-                ),
-                key=lambda cost: (
-                    cost.per_die_delta_ns,
-                    -cost.remaining_hbm_capacity_bytes,
-                    cost.instance_index,
-                ),
-            ).instance_index,
-        )
-
-        self.assertIsNone(request.history_location_before)
-        self.assertIsNone(request.history_transfer)
-        self.assertNotEqual(
-            request.decode_instance_index,
-            request.prefill_instance_index,
-        )
-        self.assertEqual(request.prefill_decode_transfer.kind, "noc_migrate")
-        self.assertEqual(len(request.completion_evictions), 1)
-        self.assertEqual(request.completion_evictions[0].kind, "remote_store")
-        self.assertEqual(
-            sum(
-                shard.bytes
-                for shard in request.completion_evictions[0].shards
-            ),
-            request.completion_evictions[0].total_bytes,
-        )
-        self.assertEqual(
-            request.kv_location_after_completion,
-            KVCacheManager.REMOTE_MEMORY,
-        )
-        self.assertIsNone(request.kv_instance_after_completion)
-        self.assertEqual(request.reserve_unmet_ranks, ())
-        self.assertEqual(len(request.hbm_after_completion), 4)
-        for snapshot in request.hbm_after_completion:
-            self.assertEqual(
-                snapshot.used_bytes,
-                snapshot.model_weight_bytes + snapshot.kv_cache_bytes,
-            )
-            self.assertEqual(
-                snapshot.remaining_bytes,
-                snapshot.capacity_bytes - snapshot.used_bytes,
-            )
-        self.assertEqual(
-            plan.final_session_states[0].location,
-            KVCacheManager.REMOTE_MEMORY,
-        )
-        self.assertEqual(plan.reserve_context_tokens, 80)
-
-    def test_plan_pins_partial_history_to_resident_prefix_instance(self) -> None:
-        hardware, model, topology, _ = self._tiny_kv_manager(
+    def test_partial_history_cross_instance_migrates_prefix_then_loads_suffix(self) -> None:
+        _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=116,
             reserve_context_tokens=4,
             layers=4,
         )
-        instance_specs = tuple(
-            FaceInstanceSpec(instance.name, instance.pg_name, instance.ranks)
-            for instance in topology.instances
+        self._seed_local_session(
+            manager,
+            session_id="session",
+            instance_index=0,
+            context_tokens=4,
+            completion_ns=10,
         )
-        plan = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=instance_specs,
-            requests=(
-                FaceRequest(0, "session", 0, "turn0", 2, 1, 0, None),
-                FaceRequest(1, "session", 1, "turn1", 2, 1, None, 1000),
+        evictions, reserve_unmet = manager.enforce_reserve(
+            instance_index=0,
+            trigger_request_id="force_partial",
+        )
+        self.assertEqual(reserve_unmet, ())
+        self.assertEqual(len(evictions), 1)
+        partial = manager.session_snapshot("session")
+        self.assertEqual(partial.location, KVCacheManager.PARTIAL_HBM_REMOTE)
+        self.assertEqual(partial.instance_index, 0)
+        self.assertEqual(partial.resident_prefix_layers, 2)
+
+        reservation_evictions = manager.reserve_request_capacity(
+            request_id="turn1",
+            session_id="session",
+            instance_index=1,
+            final_context_tokens=4,
+        )
+        self.assertEqual(reservation_evictions, ())
+        before, prefix_transfer, suffix_transfer, prepare_evictions = (
+            manager.prepare_prefill(
+                session_id="session",
+                target_instance_index=1,
+                history_tokens=4,
+                trigger_request_id="turn1",
+                reservation_request_id="turn1",
+            )
+        )
+
+        self.assertEqual(before, partial)
+        self.assertEqual(prepare_evictions, ())
+        self.assertIsNotNone(prefix_transfer)
+        self.assertEqual(prefix_transfer.kind, "noc_migrate")
+        self.assertEqual(prefix_transfer.phase, "history")
+        self.assertEqual(
+            prefix_transfer.reason,
+            "history_partial_prefix_migrate",
+        )
+        self.assertEqual(
+            (prefix_transfer.source_instance_index, prefix_transfer.target_instance_index),
+            (0, 1),
+        )
+        self.assertEqual(
+            (prefix_transfer.layer_start, prefix_transfer.layer_end),
+            (0, 2),
+        )
+        self.assertEqual(
+            (
+                prefix_transfer.resident_prefix_layers_before,
+                prefix_transfer.resident_prefix_layers_after,
             ),
-            reserve_context_tokens=4,
+            (2, 2),
         )
-        first, second = plan.requests
+        self.assertEqual(suffix_transfer.kind, "remote_load")
         self.assertEqual(
-            first.kv_location_after_completion,
-            KVCacheManager.PARTIAL_HBM_REMOTE,
-        )
-        self.assertEqual(first.completion_evictions[0].layer_start, 2)
-        self.assertEqual(second.history_location_before.location,
-                         KVCacheManager.PARTIAL_HBM_REMOTE)
-        self.assertEqual(second.prefill_affinity_reason, "resident_prefix_layers")
-        self.assertEqual(
-            second.prefill_instance_index,
-            first.decode_instance_index,
+            (suffix_transfer.source_instance_index, suffix_transfer.target_instance_index),
+            (None, 1),
         )
         self.assertEqual(
-            (second.history_transfer.layer_start,
-             second.history_transfer.layer_end),
+            (suffix_transfer.layer_start, suffix_transfer.layer_end),
             (2, 4),
         )
+
+        restored = manager.session_snapshot("session")
+        self.assertEqual(restored.location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(restored.instance_index, 1)
+        self.assertEqual(restored.resident_prefix_layers, 4)
+        self.assertEqual(
+            tuple(snapshot.kv_cache_bytes for snapshot in manager.hbm_snapshots()),
+            (0, 0, 32, 32),
+        )
+        manager.release_request_capacity_reservation("turn1")
+
+
 
     @unittest.skipUnless(
         _MATERIALIZED,
@@ -1738,6 +1564,154 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertIn(prefix_compute.id, suffix_compute.data_deps)
         self.assertIn(ready_node.id, suffix_compute.data_deps)
 
+    def test_graph_batch_cross_instance_partial_history_pipelines_suffix_restore(self) -> None:
+        hardware, _, _, _ = self._tiny_kv_manager(
+            capacity_bytes=116,
+            reserve_context_tokens=4,
+            layers=4,
+        )
+        groups = (
+            SimpleNamespace(name="ins0", pg_name="1", ranks=(0, 1)),
+            SimpleNamespace(name="ins1", pg_name="2", ranks=(2, 3)),
+        )
+        config = SimpleNamespace(
+            npus_count=4,
+            inference_groups=groups,
+            remote_operand_loads=False,
+            trace_granularity="request_aggregated",
+            prefill_chunk_size=4,
+            layers=4,
+            hidden_size=2,
+            ffn_size=2,
+            vocab_size=2,
+            bytes_per_elem=1,
+            num_heads=2,
+            mlp_variant="gelu",
+            hardware=hardware,
+            remote_memory=SimpleNamespace(edge_npus=(0, 1, 2, 3)),
+            request_queue=(
+                RequestSpec("session", 1, "turn1", 2, 1, None, 1000),
+            ),
+        )
+        prefix_transfer = KVTransfer(
+            kind="noc_migrate",
+            phase="history",
+            reason="history_partial_prefix_migrate",
+            session_id="session",
+            trigger_request_id="turn1",
+            source_instance_index=0,
+            target_instance_index=1,
+            total_bytes=32,
+            shards=tuple(
+                KVTransferShard(
+                    source_rank=source_rank,
+                    target_rank=target_rank,
+                    edge_rank=None,
+                    bytes=16,
+                    noc_path=deterministic_xy_route(
+                        hardware, source_rank, target_rank
+                    ),
+                    layer_start=0,
+                    layer_end=2,
+                )
+                for source_rank, target_rank in ((0, 2), (1, 3))
+            ),
+            model_layers=4,
+            layer_start=0,
+            layer_end=2,
+            resident_prefix_layers_before=2,
+            resident_prefix_layers_after=2,
+        )
+        suffix_transfer = KVTransfer(
+            kind="remote_load",
+            phase="history",
+            reason="history_remote_suffix_restore",
+            session_id="session",
+            trigger_request_id="turn1",
+            source_instance_index=None,
+            target_instance_index=1,
+            total_bytes=32,
+            shards=tuple(
+                KVTransferShard(
+                    source_rank=edge_rank,
+                    target_rank=target_rank,
+                    edge_rank=edge_rank,
+                    bytes=16,
+                    noc_path=deterministic_xy_route(
+                        hardware, edge_rank, target_rank
+                    ),
+                    layer_start=2,
+                    layer_end=4,
+                )
+                for edge_rank, target_rank in ((2, 2), (3, 3))
+            ),
+            model_layers=4,
+            layer_start=2,
+            layer_end=4,
+            resident_prefix_layers_before=2,
+            resident_prefix_layers_after=4,
+        )
+        request_plan = {
+            "queue_index": 0,
+            "session_id": "session",
+            "turn_index": 1,
+            "request_id": "turn1",
+            "prefill_instance_index": 1,
+            "history_tokens_before": 4,
+            "prefill_context_tokens": 6,
+            "history_location_before": SimpleNamespace(
+                location="partial_hbm_remote",
+                instance_index=0,
+                resident_prefix_layers=2,
+            ),
+            "history_prefix_transfer": prefix_transfer,
+            "history_transfer": suffix_transfer,
+            "history_evictions": (),
+            "prefill_evictions": (),
+        }
+        graph = GraphBatchBuilder(config)
+        graph.begin_batch()
+        graph.pending_history["turn1"] = PendingHistoryGate(
+            source_instance_index=0,
+            timer_gates=(None, None),
+            location="partial_hbm_remote",
+        )
+        members = graph.emit_prefill_batch(request_plan)
+        self.assertEqual(set(members), {2, 3})
+
+        for rank in groups[1].ranks:
+            builder = graph.builders[rank]
+            nodes = builder.nodes
+
+            def node_ids(fragment: str) -> list[int]:
+                return [
+                    node["id"] for node in nodes
+                    if fragment in node["name"]
+                ]
+
+            prefix_ready = max(node_ids("prefill_prefix_ready_barrier"))
+            suffix_ready = max(node_ids("prefill_suffix_ready_barrier"))
+            suffix_restore = max(node_ids("history_transfer_action"))
+            prefix_nodes = node_ids("prefill_first_chunk_prefix")
+            suffix_nodes = node_ids("prefill_first_chunk_suffix")
+            prefix_first = min(prefix_nodes)
+            prefix_last = max(prefix_nodes)
+            suffix_first = min(suffix_nodes)
+            parents = {
+                edge["from"] for edge in builder.edges
+                if edge["to"] == prefix_first
+            }
+            self.assertIn(prefix_ready, parents)
+            self.assertNotIn(suffix_restore, parents)
+            self.assertNotIn(suffix_ready, parents)
+
+            suffix_parents = {
+                edge["from"] for edge in builder.edges
+                if edge["to"] == suffix_first
+            }
+            self.assertIn(prefix_last, suffix_parents)
+            self.assertIn(suffix_ready, suffix_parents)
+
     def test_aggregated_transformer_pass_preserves_expanded_totals(self) -> None:
         spans = ((3, 7), (1, 11), (5, 19))
         parameters = {
@@ -1880,17 +1854,9 @@ class FaceSchedulerTests(unittest.TestCase):
             0,
         )
 
-    def test_plan_assigns_prefill_by_running_and_queued_roofline_load(self) -> None:
-        hardware = FaceHardware(
-            mesh_rows=2,
-            mesh_cols=2,
-            local_hbm_capacity_bytes=1_000_000_000,
-            local_hbm_bandwidth_gbps=100.0,
-            d2d_bandwidth_gbps=200.0,
-            peak_perf_tflops=1.0,
-            d2d_latency_ns=0,
-            local_hbm_latency_ns=0,
-        )
+
+    def test_decode_uses_exact_roofline_tokens_and_is_deterministic(self) -> None:
+        hardware, topology = line_topology()
         model = FaceModel(
             layers=2,
             hidden_size=16,
@@ -1900,50 +1866,71 @@ class FaceSchedulerTests(unittest.TestCase):
             bytes_per_elem=2,
             mlp_variant="swiglu",
         )
-        specs = (
-            FaceInstanceSpec("ins0", "1", (0, 1)),
-            FaceInstanceSpec("ins1", "2", (2, 3)),
-        )
-        plan = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=(
-                FaceRequest(0, "s0", 0, "r0", 9000, 2, 0, None),
-                FaceRequest(1, "s1", 0, "r1", 1000, 2, 1, None),
-                FaceRequest(2, "s2", 0, "r2", 1000, 2, 2, None),
-            ),
-            reserve_context_tokens=1,
-            average_decode_length=10.0,
-        )
-        first, second, third = plan.requests
-        self.assertEqual(first.prefill_instance_index, 0)
-        self.assertEqual(second.prefill_instance_index, 1)
-        third_loads = third.prefill_instance_loads
-        self.assertGreater(third_loads[0].running_prefill_task_load_ns, 0)
-        self.assertGreater(third_loads[0].queued_prefill_task_load_ns, 0)
-        self.assertGreater(third_loads[1].running_prefill_task_load_ns, 0)
-        self.assertEqual(
-            third.prefill_instance_index,
-            min(third_loads, key=lambda load: load.ordering_key).instance_index,
-        )
+        graph = WeightedInstanceGraph(topology)
+        kwargs = {
+            "hardware": hardware,
+            "model": model,
+            "topology": topology,
+            "graph": graph,
+            "fixed_p_chunk": 64,
+            "prefill_instance_index": 1,
+            "has_prefill_work": (True, False, False),
+            "decode_token_lengths": ((383,), (), ()),
+            "new_request_token_length": 384,
+            "remaining_hbm_capacity_bytes": (100, 100, 100),
+            "hbm_feasible_instances": (True, True, True),
+        }
+        selected, costs = select_decode_instance(**kwargs)
+        repeated_selected, repeated_costs = select_decode_instance(**kwargs)
 
-    def test_lut_exact_filters_and_nearest_token_tie(self) -> None:
-        lut = FaceLut(
-            (
-                FaceLutEntry(2, 0, 1, 256, 10),
-                FaceLutEntry(2, 0, 1, 512, 20),
-                FaceLutEntry(2, 64, 1, 256, 30),
-            )
+        self.assertEqual(selected, repeated_selected)
+        self.assertEqual(costs, repeated_costs)
+        first = costs[0]
+        self.assertIsInstance(first.current_roofline, FaceRooflineEstimate)
+        self.assertEqual(first.current_roofline.d_token, 383)
+        self.assertEqual(first.updated_roofline.d_token, 384)
+        self.assertEqual(first.current_roofline.p_chunk, 64)
+        self.assertEqual(
+            first.current_roofline.iteration_time_ns,
+            estimate_iteration_time_ns(
+                hardware,
+                model,
+                instance_size=2,
+                p_chunk=64,
+                d_batch=1,
+                d_token=383,
+            ),
         )
-        row = lut.lookup(instance_size=2, p_chunk=0, d_batch=1, d_token=384)
-        self.assertEqual(row.d_token, 256)
-        with self.assertRaises(KeyError):
-            lut.lookup(instance_size=2, p_chunk=0, d_batch=2, d_token=384)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "face_lut.csv"
-            lut.export_csv(output)
-            self.assertIn("iteration_time_ns", output.read_text(encoding="utf-8"))
+        self.assertEqual(first.current_roofline.source, "analytical_roofline")
+
+    def test_roofline_observability_bins_token_lengths(self) -> None:
+        accumulator = PlannerRooflineStatsAccumulator()
+        accumulator.record_roofline_iteration(
+            FaceRooflineEstimate(
+                instance_size=2,
+                p_chunk=64,
+                d_batch=1,
+                d_token=383,
+                iteration_time_ns=17,
+            ),
+            10,
+            27,
+        )
+        records = accumulator.to_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["type"], "planner_roofline_iteration_stats")
+        self.assertEqual(records[0]["source"], "planner_roofline")
+        self.assertEqual(records[0]["kv_bin"], 512)
+        self.assertNotIn("kv_length", records[0])
+        with tempfile.TemporaryDirectory() as temporary:
+            sidecar = write_planner_roofline_stats(
+                accumulator, output_dir=Path(temporary)
+            )
+            self.assertEqual(sidecar.name, "planner_roofline_stats.json")
+            self.assertEqual(
+                json.loads(sidecar.read_text(encoding="utf-8"))["source"],
+                "planner_roofline",
+            )
 
     def test_weighted_schedulable_range_changes_after_update(self) -> None:
         hardware, topology = line_topology()
@@ -1954,65 +1941,73 @@ class FaceSchedulerTests(unittest.TestCase):
         after = graph.schedulable_instances(0, hardware.schedulable_distance_limit)
         self.assertEqual(tuple(index for index, _ in after), (0, 1))
 
-    def test_decode_per_die_cost_and_hbm_capacity_tie(self) -> None:
-        _, topology = line_topology()
-        graph = WeightedInstanceGraph(topology)
-        lut = FaceLut(
-            (
-                FaceLutEntry(2, 0, 0, 0, 0),
-                FaceLutEntry(2, 0, 1, 256, 100),
-                FaceLutEntry(2, 0, 2, 256, 300),
-            )
+    def test_decode_roofline_candidate_hbm_invariants(self) -> None:
+        hardware, topology = line_topology()
+        model = FaceModel(
+            layers=2,
+            hidden_size=16,
+            ffn_size=32,
+            num_heads=4,
+            vocab_size=32,
+            bytes_per_elem=2,
+            mlp_variant="swiglu",
         )
+        graph = WeightedInstanceGraph(topology)
         selected, costs = select_decode_instance(
+            hardware=hardware,
+            model=model,
             topology=topology,
             graph=graph,
-            lut=lut,
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((256,), (), ()),
-            new_request_token_length=256,
-            remaining_hbm_capacity_bytes=(1_000, 100, 300),
+            decode_token_lengths=((), (), ()),
+            new_request_token_length=257,
+            remaining_hbm_capacity_bytes=(100, 500, 300),
             hbm_feasible_instances=(True, True, True),
         )
-        self.assertEqual(selected, 2)
+        self.assertEqual(selected, 1)
         self.assertEqual([cost.instance_index for cost in costs], [0, 1, 2])
         self.assertEqual(
             [cost.remaining_hbm_capacity_bytes for cost in costs],
-            [1_000, 100, 300],
+            [100, 500, 300],
         )
-        self.assertGreater(costs[0].per_die_delta_ns, costs[1].per_die_delta_ns)
-        self.assertEqual(costs[1].per_die_delta_ns, costs[2].per_die_delta_ns)
-
-        selected_equal_hbm, _ = select_decode_instance(
-            topology=topology,
-            graph=graph,
-            lut=lut,
-            fixed_p_chunk=64,
-            prefill_instance_index=1,
-            has_prefill_work=(False, False, False),
-            decode_token_lengths=((256,), (), ()),
-            new_request_token_length=256,
-            remaining_hbm_capacity_bytes=(1_000, 300, 300),
-            hbm_feasible_instances=(True, True, True),
+        self.assertTrue(all(cost.updated_roofline.d_token == 257 for cost in costs))
+        self.assertTrue(all(cost.current_roofline.d_token == 0 for cost in costs))
+        self.assertEqual(
+            {cost.per_die_delta_ns for cost in costs},
+            {costs[0].per_die_delta_ns},
         )
-        self.assertEqual(selected_equal_hbm, 1)
 
         selected_with_capacity_filter, filtered_costs = select_decode_instance(
+            hardware=hardware,
+            model=model,
             topology=topology,
             graph=graph,
-            lut=lut,
             fixed_p_chunk=64,
             prefill_instance_index=1,
             has_prefill_work=(False, False, False),
-            decode_token_lengths=((256,), (), ()),
-            new_request_token_length=256,
-            remaining_hbm_capacity_bytes=(1_000, 100, 300),
-            hbm_feasible_instances=(True, True, False),
+            decode_token_lengths=((), (), ()),
+            new_request_token_length=257,
+            remaining_hbm_capacity_bytes=(100, 500, 300),
+            hbm_feasible_instances=(True, False, True),
         )
-        self.assertEqual(selected_with_capacity_filter, 1)
-        self.assertFalse(filtered_costs[2].hbm_feasible)
+        self.assertEqual(selected_with_capacity_filter, 2)
+        self.assertFalse(filtered_costs[1].hbm_feasible)
+        with self.assertRaises(ValueError):
+            select_decode_instance(
+                hardware=hardware,
+                model=model,
+                topology=topology,
+                graph=graph,
+                fixed_p_chunk=64,
+                prefill_instance_index=1,
+                has_prefill_work=(False, False, False),
+                decode_token_lengths=((), (), ()),
+                new_request_token_length=257,
+                remaining_hbm_capacity_bytes=(100, 500, 300),
+                hbm_feasible_instances=(False, False, False),
+            )
 
     def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
         _, topology = line_topology()
@@ -2046,163 +2041,8 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(allocation2.pieces[0].instance_index, 2)
 
-    def test_hbm_blocked_request_waits_until_active_session_completes(self) -> None:
-        hardware = FaceHardware(
-            mesh_rows=1,
-            mesh_cols=2,
-            local_hbm_capacity_bytes=60,
-            local_hbm_bandwidth_gbps=1.0,
-            d2d_bandwidth_gbps=2.0,
-            peak_perf_tflops=1.0,
-            d2d_latency_ns=0,
-            local_hbm_latency_ns=0,
-        )
-        model = FaceModel(
-            layers=1,
-            hidden_size=2,
-            ffn_size=2,
-            num_heads=2,
-            vocab_size=2,
-            bytes_per_elem=1,
-            mlp_variant="gelu",
-        )
-        plan = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=(FaceInstanceSpec("only", "1", (0, 1)),),
-            requests=(
-                FaceRequest(0, "active", 0, "active_0", 10, 5, 0, None),
-                FaceRequest(1, "waiting", 0, "waiting_0", 10, 5, 0, None),
-            ),
-            reserve_context_tokens=0,
-        )
-        active, waiting = plan.requests
-        self.assertEqual(active.admission_time_ns, 0)
-        self.assertEqual(waiting.estimated_arrival_ns, 0)
-        self.assertEqual(waiting.admission_time_ns, active.completion_ns)
-        self.assertEqual(waiting.hbm_wait_ns, active.completion_ns)
-        self.assertGreaterEqual(waiting.prefill_start_ns, waiting.admission_time_ns)
-        self.assertTrue(
-            any(
-                transfer.kind == "remote_store"
-                and transfer.session_id == "active"
-                for transfer in waiting.history_evictions
-            )
-        )
-        self.assertTrue(
-            all(snapshot.remaining_bytes >= 0 for snapshot in plan.final_hbm_states)
-        )
 
-    def test_request_larger_than_empty_instance_does_not_wait_forever(self) -> None:
-        hardware = FaceHardware(1, 2, 60, 1.0, 2.0, 1.0, 0, 0)
-        model = FaceModel(1, 2, 2, 2, 2, 1, "gelu")
-        with self.assertRaisesRegex(ValueError, "cannot fit on any eligible empty"):
-            plan_face_requests(
-                hardware=hardware,
-                model=model,
-                instance_specs=(FaceInstanceSpec("only", "1", (0, 1)),),
-                requests=(
-                    FaceRequest(0, "oversized", 0, "oversized_0", 30, 1, 0, None),
-                ),
-                reserve_context_tokens=0,
-            )
 
-    @unittest.skipUnless(
-        _MATERIALIZED,
-        "materialized 30s input absent (request-neutral bare repo)",
-    )
-    def test_checked_in_shape_and_requests_plan_deterministically(self) -> None:
-        config = load_face_trace_config()
-        hardware = config.hardware
-        model = config.model
-        specs = tuple(
-            FaceInstanceSpec(group.name, group.pg_name, group.ranks)
-            for group in config.inference_groups
-        )
-        requests = (
-            FaceRequest(0, "session_0", 0, "session_0_request_0", 497, 42, 0, None),
-            FaceRequest(
-                1,
-                "session_0",
-                1,
-                "session_0_request_1",
-                494,
-                58,
-                None,
-                1_000_000_000,
-            ),
-            FaceRequest(2, "session_1", 0, "session_1_request_0", 241, 57, 0, None),
-            FaceRequest(
-                3,
-                "session_1",
-                1,
-                "session_1_request_1",
-                152,
-                46,
-                None,
-                1_000_000_000,
-            ),
-        )
-        first = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=requests,
-        )
-        second = plan_face_requests(
-            hardware=hardware,
-            model=model,
-            instance_specs=specs,
-            requests=requests,
-        )
-        self.assertEqual(first.p_chunk, 512)
-        self.assertEqual(len(first.requests), 4)
-        self.assertTrue(first.iterations)
-        signature = [
-            (
-                plan.request_id,
-                plan.estimated_arrival_ns,
-                plan.prefill_instance_index,
-                plan.decode_instance_index,
-                plan.completion_ns,
-            )
-            for plan in first.requests
-        ]
-        self.assertEqual(
-            signature,
-            [
-                (
-                    plan.request_id,
-                    plan.estimated_arrival_ns,
-                    plan.prefill_instance_index,
-                    plan.decode_instance_index,
-                    plan.completion_ns,
-                )
-                for plan in second.requests
-            ],
-        )
-        by_id = {plan.request_id: plan for plan in first.requests}
-        self.assertEqual(
-            by_id["session_0_request_1"].estimated_arrival_ns,
-            by_id["session_0_request_0"].completion_ns + 1_000_000_000,
-        )
-        self.assertEqual(
-            by_id["session_1_request_1"].estimated_arrival_ns,
-            by_id["session_1_request_0"].completion_ns + 1_000_000_000,
-        )
-        for plan in first.requests:
-            self.assertGreaterEqual(plan.prefill_start_ns, plan.estimated_arrival_ns)
-            self.assertGreater(plan.completion_ns, plan.prefill_complete_ns)
-            self.assertTrue(plan.decode_candidates)
-            self.assertIn(
-                plan.decode_instance_index,
-                [candidate.instance_index for candidate in plan.decode_candidates],
-            )
-            for candidate in plan.decode_candidates:
-                self.assertLessEqual(
-                    candidate.weighted_distance,
-                    hardware.schedulable_distance_limit,
-                )
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ CLI:
      bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
 
 strategy 模式(步骤 1-9 的 WscLlmOnlineScheduler):真实策略(关感知)在
-在线骨架中运行,无决策日志(决策由策略实时产出)。
+在线骨架中运行,决策日志逐批写 online_decision_log.jsonl(决策由策略实时产出)。
 """
 
 import argparse
@@ -27,8 +27,8 @@ import sys
 from pathlib import Path
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块
-# 在上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py /
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置与
+# 发射模块在上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py /
 # wsc_llm_scheduler.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,7 +109,7 @@ def main(argv=None) -> int:
     # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
     graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
     # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体

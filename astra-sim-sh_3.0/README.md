@@ -3,8 +3,7 @@
 > 本仓为 Execution-Driven 改造后的**裸仓库终态**：仅保留路径③（strategy 关感知）
 > 与路径④（strategy 开感知）两条在线仿真路线；离线静态（①）与 replay（②）
 > 已删除。仓库 request-neutral：不带任何 request 队列，正式入口缺失输入
-> fail-closed。全部改造/验证/清理过程记录见仓内《sh_3.0改造执行实录.md》
-> 与工作区根目录《五仓改造终态汇总.md》。
+> fail-closed。
 >
 > 本仓是 ASTRA-sim 2.0 的晶圆级芯片（Wafer-Scale Chip, WSC）推理仿真改造仓。
 > 五个同源仓 `astra-sim-face / astra-sim-wscllm / astra-sim-sh_1.0 / astra-sim-sh_2.0 / astra-sim-sh_3.0`
@@ -91,16 +90,18 @@ instance，每实例同时承担 prefill 与 decode）；分配上首请求避�
 
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
-| astra-sim-face | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die LUT 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 未启用（NO_MEMORY_EXPANSION） |
+| astra-sim-face | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 未启用（NO_MEMORY_EXPANSION） |
 | astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
-| astra-sim-sh_1.0 | 统一实例 | prefill HBM 可行过滤 + 剩余 chunk 最少；decode 按 LUT per-die 代价 | LOCAL_HBM/REMOTE_MEMORY 两态；整 session 粒度逐出；恢复＝远端全量取回 | 启用（全部边缘芯粒挂端口） |
-| astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡；decode 按 LUT 代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
+| astra-sim-sh_1.0 | 统一实例 | prefill HBM 可行过滤 + 剩余 chunk 最少；decode 按 per-die Roofline 增量代价 | LOCAL_HBM/REMOTE_MEMORY 两态；整 session 粒度逐出；恢复＝远端全量取回 | 启用（全部边缘芯粒挂端口） |
+| astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | **astra-sim-sh_3.0（本仓）** | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
 五仓还共享同一套 Execution-Driven 在线仿真机制层（`astra-sim/workload/execution_driven/`：
 RequestIngress / DecisionMailbox / DecisionBridge / GraphBatchCommitter 等）：策略决策由
 Python 在线服务层实时给出，计时由 C++ 物理时钟推进；各仓仅保留路径③（strategy 关感知）
-与路径④（strategy 开感知）两条在线路线。具体用法见各仓 `README_使用说明.md`。
+与路径④（strategy 开感知）两条在线路线。五仓在线决策均不再使用任何离线 LUT
+（残留 LUT 查表已随静态链路一并删除）：face / sh_1.0 / sh_2.0 的 decode 候选代价由
+在线 Roofline 模型即时计算（`per_die_delta_ns`），决策确定可复算复放。
 
 ### G. 本地 HBM 带宽模型（N 用户严格均分，2026-08-19 泛化）
 
@@ -156,19 +157,19 @@ Python 在线服务层实时给出，计时由 C++ 物理时钟推进；各仓�
 历史日志、通用示例、上游测试集与第三方依赖自带的文档/测试目录已经移除。
 
 ```bash
-# 1. 生成 54-rank Chakra ET
-bash sh_test_mesh/run_scripts/generate_trace.sh
+# 1. 物化在线运行所需 plan-dir（runtime config、manifest、metrics manifest；
+#    不生成 Chakra .et）
+cd sh_test_mesh/workload/llama2_7b_inference
+python3 plan_materializer.py
+cd ../../..
 
-# 2. 构建并运行 congestion-aware 后端
-bash sh_test_mesh/run_scripts/build_analytical_aware.sh
-bash sh_test_mesh/run_scripts/run_sh_test_aware.sh
-
-# congestion-unaware 对照组将 aware 替换为 unaware
+# 2. 以已构建的 online congestion-aware 后端运行两条动态路径
+bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <absolute_request_csv>
+bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <absolute_request_csv>
 ```
 
 `yaml-cpp` 已作为最小源码依赖保存在 `extern/helper/yaml-cpp`，CMake 配置时不再
-从网络下载。详细仿真机制见 `该仓库的仿真特性介绍.md`，本次清理和等价重构记录
-见 `仓库清理与等价重构说明.md`。
+从网络下载。策略细节见《request实例映射与KV冷热管理策略说明.md》。
 
 [ASTRA-sim](https://astra-sim.github.io/) is a distributed AI system simulator. It models the end-to-end software and hardware stack of modern AI systems - encompassing workload scheduling, collective communication algorithms, and hardware architectures (compute/memory/network). Through a suite of APIs, it enables plug-and-play of external open/proprietary components for modeling different parts of the AI system. This provides end-to-end multi-fidelity simulation capabilities for aiding in design and deployment of next-generation distributed AI systems. 
 
@@ -202,12 +203,12 @@ We appreciate your interest and support in ASTRA-sim!
 
 ## 1. 本仓是什么
 
-- **策略语义**：三段式准入：首请求避边缘 / LOCAL·PARTIAL sticky / REMOTE 边缘实例负载均衡（2026-08-18 起由全集收窄为边缘实例集合）；decode 固定 prefill 同实例；三态 KV；sidecar_restore
+- **策略语义**：三段式准入：首请求避边缘 / LOCAL·PARTIAL sticky / REMOTE 边缘实例负载均衡（2026-08-18 起由全集收窄为边缘实例集合）；decode 固定 prefill 同实例；三态 KV；turn-0 前缀折入 recompute（KV 账本动态记账）
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），五仓接口一致。
 - **验证证据**：Tier B 等价、感知开/关决策逐字节一致、分层账本对账、
-  机制 fixtures——详见实录与根目录报告。
+  机制 fixtures。
 
 ## 2. 快速开始
 
@@ -218,7 +219,8 @@ cmake -S build/astra_analytical -B build/astra_analytical/build_congestion_aware
 cmake --build build/astra_analytical/build_congestion_aware -j
 
 # ② 物化输入（唯一允许源 = agent-traces/tracelab/astra_compute_20.csv 前 30 秒，
-#    arrival_time < 30e9 ns；物化器：materialize_20_30s.py（产 queue+sidecar 双件））
+#    arrival_time < 30e9 ns；物化器：materialize_20_30s.py（产折入 queue +
+#    canonical digest 两件，turn-0 前缀已折入 prefill_length））
 #    产物放 sh_test_mesh/workload/llama2_7b_inference/traces/，
 #    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
 
@@ -231,7 +233,7 @@ bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <绝对�
 
 # ⑤ 指标后处理 + ④对账
 bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
-python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/sh30_ledger_reconcile.py --expected <请求数>（工具内含 frozen 比对）
+python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/sh30_ledger_reconcile.py --run-dir <run_dir> --manifest <plan目录>/manifest.json（请求数期望由 manifest 推导）
 
 # ⑥ 一键清空测试记录（还原裸仓）
 bash sh_test_mesh/run_scripts/clean_test_records.sh [--full]
@@ -257,9 +259,9 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - `astra-sim/workload/execution_driven/`：在线机制层（C++）
 - `sh_test_mesh/workload/llama2_7b_inference/online/`：在线调度器/构图器/服务层（Python）
 - `.../online/verify/`：对账与验证工具
-- `sh_test_mesh/run_scripts/`：全部 runner 与命令速查（README_COMMANDS.md）
-- `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化；PROVENANCE.md 已于 2026-08-20 按用户指示删除，provenance 以物化器 stdout 为准）
-- `sh_test_mesh/tests/` + workload 根：pytest（基线：40+33（另 1 失败为历史预存））
+- `sh_test_mesh/run_scripts/`：全部 runner 脚本
+- `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
+- `sh_test_mesh/tests/` + workload 根：pytest（基线：37+33 = 70 passed，无预存失败）
 
 ## 6. 边界与纪律
 
@@ -269,9 +271,47 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - 策略文件（face_scheduler.py（策略与 KV 语义同文件））为保留对象，勿改。
 - 改动机制层后请跑 §4 fixtures + §2 ⑤ 对账再交付。
 
+## 7. Online execution adaptation
 
-## 残留补清（2026-08-18，主 agent 执行，工作树未提交）
+在线策略路线（③/④）是实时宿主调度器：调度器进程内逐决策边界做映射决策，
+把结果作为 per-rank 图批次发射给执行驱动引擎，决策不预先固化；每 tick 先
+处理 completion 批（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），
+再处理 arrival 批，最后跑一次准入/发射 pass
+（`sh_test_mesh/workload/llama2_7b_inference/online/sh30_online_scheduler.py:405-429`）。
 
-删①②主链后的验收工具类残留清理：build_analytical_aware.sh（目标已删脚本必坏）、
-run_metric_microbench.sh + generate_metric_microbench.py（microbench=①族工具链）、
-( [ sh_3.0 = sh_3.0 ] && echo "b3_canonical_compare.py（对照①离线产物）" )( [ sh_3.0 = wscllm ] && echo "tier_b_compare.py（②族 oracle）" )；README_COMMANDS 悬空引用行同步清理。保留定性：clean_history.sh（清 generated/results，③④ 同用）、run_metrics_postprocess 链（③④共用）、contracts/tier_b 报告/实录（历史记录载体）。剩余文字性提及均为注释或历史文档，无功能性依赖。
+- 决策边界与仓内路由：ARRIVAL 落账 pending_admissions 后由准入 pass 重查
+  （HBM 可行掩码 + task-load 三分量快照 + edge_free 掩码选择 prefill 实例；
+  `:455-462`、`:632-680`）；PREFILL_DRAIN 将
+  decode 固定为 prefill 同实例（selected = state_index，`:486-488`）；
+  DECODE_COMPLETION / REQUEST_COMPLETE 完成 KV 收尾（typed 两类两段逐出）与
+  下一 turn 排程（`:524`、`:542`）。
+- request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
+  （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
+  聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
+  恒等，只压缩重复层/chunk/token 与集合通信启动次数
+  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:1089-1115`）；
+  在线发射仅支持该粒度，其它粒度 fail-closed
+  （`online/graph_batch_builder.py:608-611`）。
+- 发射并发骨架（本仓形态：批齐发-等完成）：就绪实例一次发射整批——qp 队首
+  prefill 整段 + 全部 active_decode 成员各自的 decode 整段，随后置 busy 等
+  待物理完成（`sh30_online_scheduler.py:776-793`）；busy 在 PREFILL_DRAIN
+  （`:470`）/ DECODE_COMPLETION（`:533`）边界复位，复位后仍有排队工作的
+  实例重入就绪 frontier 等下一批；PREFILL_DRAIN 边界新入 active_decode 的
+  decode 段即时发射（`:521-522`）。
+- 接栅栏与段末屏障：段发射不做块末恢复/段内清链，per-rank `previous_id`
+  无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
+  统一；`online/graph_batch_builder.py:717-719`），跨请求 P2P 与集合通信
+  参与序不会反转成环；prefill 段以 TP 组
+  `*_prefill_chunks_aggregated_end_barrier` 收尾（`:670`），decode 段以 TP 组
+  `*_decode_request_end_barrier` 收尾（`:779`）。
+- 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
+  turn-0 源前缀折入该行 prefill_length（整段重算口径；无第二输入文件，
+  会话 KV 自 turn-0 prefill 记账起由运行时账本动态维护，
+  `traces/materialize_20_30s.py:3-37`）；manifest 仅携带队列派生的
+  history_tokens_before 推导值（`plan_materializer.py:62-87`）；运行时账本为
+  `KVCacheManager`（`sh30_online_scheduler.py:346`；`face_scheduler.py:1226`）：
+  驻留命中直接复用、跨实例历史先迁移、被逐出则窗口内重算。
+- long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
+  范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
+  64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
+  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:71-81`）。

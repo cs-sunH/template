@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """test_sh20_task_load_snapshot.py -- 在线 task-load running 聚合偏差修复的
-最小合成单元测试（《sh_2.0偏差修改的执行方案.md》；背景见
+最小合成单元测试（背景见
 《5仓库本该一致却不同排查报告.md》高-2 裁决）。
 
 修复前：running 分量把在飞请求全部剩余聚合成一个"大 chunk"（context 取段末

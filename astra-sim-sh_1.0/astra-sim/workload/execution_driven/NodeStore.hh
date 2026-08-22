@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-NodeStore -- execution-driven mechanism layer (sh_1.0 port; blueprint wscllm phase 1).
+NodeStore -- execution-driven mechanism layer (wscllm phase 1).
 
 Minimal dynamic node store (方案 §4 步骤 1-4). First version supports only
 "the current request's current stage": a GraphBatch adds a batch of nodes,
@@ -73,14 +73,14 @@ struct InjectedUnfinishedEntry {
     uint64_t comm_bytes = 0;                  // sum of bytes (send/recv/coll)
     uint64_t estimated_remaining_ns = 0;      // sum of runtime_ns (compute
                                               // service estimate; comm has no
-                                              // duration model (n/a in both repos) --
+                                              // duration model in wscllm --
                                               // counted in comm_bytes only)
 };
 
 /// Per-rank injected-unfinished summary at a delivery epoch (phase 3 感知,
 /// --sensing-enabled). Classification per contract ⑥: compute ops / comm
 /// bytes / estimated remaining service / resource state, all traceable to
-/// request/stage/generation. Query/audit data only -- the sh_1.0 strategy's
+/// request/stage/generation. Query/audit data only -- the wscllm strategy's
 /// red-line decision inputs (Python queue ledger + KV ledger + static route)
 /// never consume it.
 struct RankInjectedSummary {
@@ -122,6 +122,11 @@ class NodeStore {
     /// Full record (GraphSource::lookup backing).
     std::optional<OnlineNode> node(uint64_t node_id) const;
 
+    /// Zero-copy full record (GraphSource::lookup_ptr / for_each_dep_free
+    /// backing). Nodes are never erased, so the returned pointer stays
+    /// stable for the node's lifetime.
+    const OnlineNode* node_ptr(uint64_t node_id) const;
+
     /// Reverse index (watch/fence).
     std::optional<NodeStoreMeta> meta_for(uint64_t node_id) const;
 
@@ -159,8 +164,11 @@ class NodeStoreGraphSource : public GraphSource {
     const NodeStore& store() const { return store_; }
 
     std::vector<NodeView> dep_free_nodes() override;
+    void for_each_dep_free(
+        const std::function<void(const NodeView&)>& consume) override;
     void finish_node(uint64_t node_id) override;
     std::optional<NodeView> lookup(uint64_t node_id) override;
+    const NodeView* lookup_ptr(uint64_t node_id) override;
     void take_node(uint64_t node_id) override;
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
         uint64_t) override {

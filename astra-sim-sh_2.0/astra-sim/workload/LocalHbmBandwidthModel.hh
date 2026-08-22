@@ -7,8 +7,8 @@ LICENSE file in the root directory of this source tree.
 #define __LOCAL_HBM_BANDWIDTH_MODEL_HH__
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "astra-sim/system/Callable.hh"
@@ -21,41 +21,41 @@ class Workload;
 class WorkloadLayerHandlerData;
 
 /**
- * Per-NPU fluid HBM model with N-way equal-split bandwidth sharing.
+ * Per-NPU fluid HBM model with N-way strict equal-split bandwidth sharing.
  *
- * Every HBM user on a rank runs as a job in this model. While N jobs have
- * outstanding HBM bytes, each receives exactly full_rate / N of the rank's
- * configured HBM bandwidth (strict equal split; reads and writes share one
- * bus and one total bandwidth, no peak/sustained distinction). As soon as
- * any job consumes its remaining HBM bytes the survivors are re-split
- * immediately (event-driven reallocation). Job kinds:
+ * Every HBM user on a rank competes in one fluid model. Job kinds:
+ *   - COMPUTE     : inference COMP node (bytes = tensor_size; ops progress
+ *                   at peak_perf in parallel, preserving Roofline's
+ *                   max(compute time, memory time) semantics),
+ *   - RESTORE     : KV-restore DMA write (serial graph semantics unchanged),
+ *   - COMM_READ   : NoC p2p send-side endpoint HBM read (bytes = comm size),
+ *   - COMM_WRITE  : NoC p2p recv-side endpoint HBM write (bytes = comm size),
+ *   - POOL_READ   : off-chip pool endpoint HBM read (bytes = tensor_size),
+ *   - POOL_WRITE  : off-chip pool endpoint HBM write (bytes = tensor_size).
  *
- *   COMPUTE     inference COMP: bytes = tensor_size, ops drained at peak
- *               perf in parallel (dual constraint, Roofline
- *               max(compute, memory) semantics preserved)
- *   RESTORE     KV-restore DMA write (serial semantics unchanged)
- *   COMM_READ   NoC p2p send endpoint: sender reads comm bytes from HBM
- *   COMM_WRITE  NoC p2p recv endpoint: receiver writes comm bytes to HBM
- *   POOL_READ   off-chip pool store endpoint: edge rank reads from HBM
- *   POOL_WRITE  off-chip pool load endpoint: edge rank writes to HBM
+ * All outstanding jobs strictly share the rank's single configured HBM
+ * bandwidth: each active byte streamer receives full_rate/N. When any job
+ * consumes its remaining HBM bytes it completes immediately and the
+ * survivors are re-split (full_rate/N') at the same event -- no reservation,
+ * no work conservation loss. Each job pays sys->local_mem_latency once at
+ * start (the pre-existing convention).
  *
- * local_mem_latency is charged once per job at issue (existing convention).
- * Multi-hop NoC traffic through a rank never enters this model (only data
- * endpoints are charged); HardwareResource guarantees at most one in-flight
- * COMP and serializes restore DMAs through the single hbm_dma slot, so the
- * model itself no longer rejects same-kind concurrency.
+ * Reads and writes share one bus and one aggregate bandwidth scalar
+ * (system key "local-mem-bw"); there is no peak/sustained distinction.
  */
 class LocalHbmBandwidthModel : public Callable {
   public:
-    enum class JobKind : int {
+    enum class JobKind {
         COMPUTE = 0,
-        RESTORE = 1,
-        COMM_READ = 2,
-        COMM_WRITE = 3,
-        POOL_READ = 4,
-        POOL_WRITE = 5,
+        RESTORE,
+        COMM_READ,
+        COMM_WRITE,
+        POOL_READ,
+        POOL_WRITE,
+        KIND_COUNT,
     };
-    static constexpr int kJobKindCount = 6;
+    static constexpr size_t kJobKindCount =
+        static_cast<size_t>(JobKind::KIND_COUNT);
 
     LocalHbmBandwidthModel(Sys* sys, Workload* workload);
 
@@ -64,16 +64,17 @@ class LocalHbmBandwidthModel : public Callable {
                        WorkloadLayerHandlerData* wlhd);
     void issue_restore(uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
-    void issue_comm_read(uint64_t bytes, WorkloadLayerHandlerData* wlhd);
-    void issue_comm_write(uint64_t bytes, WorkloadLayerHandlerData* wlhd);
-    void issue_pool_read(uint64_t bytes, WorkloadLayerHandlerData* wlhd);
-    void issue_pool_write(uint64_t bytes, WorkloadLayerHandlerData* wlhd);
+    void issue_comm_read(uint64_t bytes,
+                         WorkloadLayerHandlerData* wlhd);
+    void issue_comm_write(uint64_t bytes,
+                          WorkloadLayerHandlerData* wlhd);
+    void issue_pool_read(uint64_t bytes,
+                         WorkloadLayerHandlerData* wlhd);
+    void issue_pool_write(uint64_t bytes,
+                          WorkloadLayerHandlerData* wlhd);
     void call(EventType type, CallData* data) override;
 
     bool has_active_jobs() const;
-    size_t active_job_count() const {
-        return jobs.size();
-    }
 
     // Read-only side-band counters (implementation doc sec.9.4).  They are
     // accumulated inside advance_to() from the already-computed step_ns and
@@ -88,32 +89,30 @@ class LocalHbmBandwidthModel : public Callable {
         return this->hbm_shared_ns_;
     }
     double compute_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::COMPUTE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)];
     }
     double restore_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::RESTORE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)];
     }
     double comm_read_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::COMM_READ)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_READ)];
     }
     double comm_write_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::COMM_WRITE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_WRITE)];
     }
     double pool_read_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::POOL_READ)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_READ)];
     }
     double pool_write_bytes_served() const {
-        return this->kind_bytes_served_[static_cast<int>(JobKind::POOL_WRITE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_WRITE)];
     }
-    // Peak number of simultaneously active jobs (all kinds, incl. the
-    // memory-latency-only phase) and the count of equal-share
-    // redistributions: every membership change that leaves at least one
-    // active bandwidth user (a job joining a non-empty set, or a completion
-    // leaving survivors behind) recomputes the full_rate/N split and is
-    // counted once (中-4④, unified with face).
+    // Peak number of simultaneously active jobs (any phase) on this rank.
     uint64_t peak_concurrent_jobs() const {
         return this->peak_concurrent_jobs_;
     }
+    // Number of equal-split reallocations: every job issue that joined
+    // already-active jobs plus every job completion that left survivors
+    // (each changes full_rate/N for the remaining streams).
     uint64_t redistribution_events() const {
         return this->redistribution_events_;
     }
@@ -136,7 +135,14 @@ class LocalHbmBandwidthModel : public Callable {
         uint64_t generation;
     };
 
-    void issue_job(Job&& job);
+    static constexpr size_t kind_index(JobKind kind) {
+        return static_cast<size_t>(kind);
+    }
+
+    void issue_job(JobKind kind,
+                   uint64_t num_ops,
+                   uint64_t tensor_size,
+                   WorkloadLayerHandlerData* wlhd);
     void advance_to(Tick now);
     void schedule_next_transition();
     static bool memory_done(const Job& job);
@@ -144,7 +150,12 @@ class LocalHbmBandwidthModel : public Callable {
 
     Sys* sys;
     Workload* workload;
-    std::vector<Job> jobs;  // insertion order; completion preserves it
+    // Active jobs in issue order. The old two-slot (compute/restore)
+    // representation and its "second same-kind job throws" guards were
+    // removed with the N-way generalization; HardwareResource's single
+    // hbm_dma slot still structurally guarantees at most one in-flight
+    // restore per rank.
+    std::vector<Job> jobs;
     Tick last_update_tick;
     uint64_t event_generation;
 
@@ -153,7 +164,7 @@ class LocalHbmBandwidthModel : public Callable {
     // them while scheduling the next transition.
     double hbm_busy_ns_ = 0.0;
     double hbm_shared_ns_ = 0.0;
-    std::array<double, kJobKindCount> kind_bytes_served_ = {};
+    std::array<double, kJobKindCount> bytes_served_by_kind_ = {};
     uint64_t peak_concurrent_jobs_ = 0;
     uint64_t redistribution_events_ = 0;
 };

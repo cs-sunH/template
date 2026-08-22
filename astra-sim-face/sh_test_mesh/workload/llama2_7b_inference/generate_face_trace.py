@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""Generate FACE-mapped Chakra ET traces for the configured wafer scenario."""
+"""Shared FACE configuration and GraphBatch-emission primitives for online runs."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
 import json
-import os
-import shlex
-import shutil
 import sys
-import tempfile
-import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -28,49 +23,21 @@ if str(SH_TEST_DIR) not in sys.path:
 from face_scheduler import (  # noqa: E402
     DecodeCandidateCost,
     FaceHardware,
-    FaceInstanceSpec,
-    FaceLutEntry,
+    FaceRooflineEstimate,
     FaceModel,
-    FacePlan,
-    FaceRequest,
-    FaceRequestPlan,
-    KVAllocation,
     kv_cache_bytes_for_tokens,
-    plan_face_requests,
 )
-import face_scheduler  # noqa: E402
 from session_kv_manager import NOC_MIGRATE, RECOMPUTE  # noqa: E402
-import session_kv_manager  # noqa: E402
-from metrics_integration import (  # noqa: E402
-    EVENT_DECODE_END,
-    EVENT_DECODE_START,
-    EVENT_MEMORY_ANCHOR_COMPLETE,
-    EVENT_PREFILL_END,
-    EVENT_PREFILL_START,
-    PlannerLutStatsAccumulator,
-    ServiceMetrics,
-    kv_event_payload_legacy,
-    kv_event_payload_session_lru,
-    resolve_metrics_detail,
-    write_planner_lut_stats,
-)
 from generate_trace import (  # noqa: E402
-    ChakraAttr,
-    GlobalMetadata,
     InferenceGroup,
-    PROJECT_ROOT,
-    REQUEST_QUEUE_COLUMNS,
     RequestSpec,
     TraceBuilder,
     clean_csv_row,
-    encode_message,
     load_request_queue,
     parse_bool,
     parse_int,
     parse_nonnegative_int,
     parse_rank_spec,
-    range_label,
-    request_queue_digest,
     sanitize_node_prefix,
     shard_extent,
     transformer_pass,
@@ -358,10 +325,10 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
 
     request_queue_csv = _resolve_request_queue(parsed["request_queue_csv"])
     if not request_queue_csv.is_file():
-        # fail-closed (request-neutral): missing input must abort before
-        # load_request_queue can silently fall back to the random 4-request
-        # stub (generate_trace.py create_default_request_queue), which would
-        # also WRITE that stub to disk.
+        # fail-closed (request-neutral): missing input must abort at the
+        # official entry point with a materialization hint
+        # (load_request_queue itself is also fail-closed and never
+        # synthesizes a queue).
         sys.exit(
             f"missing request queue: {request_queue_csv}; "
             "materialize the input via traces/derive_20_first_30_seconds.py "
@@ -482,7 +449,7 @@ def _paired_transfer(
     timer_gates: Optional[dict[int, Optional[int]]] = None,
 ) -> list[dict[str, object]]:
     if len(source_group.ranks) != len(target_group.ranks):
-        raise ValueError("FACE ET adapter requires equal TP for direct KV shard pairing")
+        raise ValueError("FACE direct KV shard pairing requires equal TP degree")
     if source_group.name == target_group.name:
         if timer_gates is not None:
             for rank in target_group.ranks:
@@ -540,7 +507,7 @@ def _paired_transfer(
 
 
 
-def _lut_entry_dict(entry: FaceLutEntry) -> dict[str, object]:
+def _roofline_estimate_dict(entry: FaceRooflineEstimate) -> dict[str, object]:
     return {
         "instance_size": entry.instance_size,
         "p_chunk": entry.p_chunk,
@@ -555,33 +522,11 @@ def _candidate_dict(candidate: DecodeCandidateCost) -> dict[str, object]:
     return {
         "instance_index": candidate.instance_index,
         "weighted_distance": candidate.weighted_distance,
-        "current_lut": _lut_entry_dict(candidate.current_lut),
-        "updated_lut": _lut_entry_dict(candidate.updated_lut),
+        "current_roofline": _roofline_estimate_dict(candidate.current_roofline),
+        "updated_roofline": _roofline_estimate_dict(candidate.updated_roofline),
         "delta_time_ns": candidate.delta_time_ns,
         "per_die_delta_ns": candidate.per_die_delta_ns,
     }
-
-
-
-
-KV_CACHE_EVENT_COLUMNS = (
-    "event_index",
-    "planner_time_ns",
-    "phase",
-    "event_type",
-    "reason",
-    "trigger_request_id",
-    "session_id",
-    "source_instance_index",
-    "target_instance_index",
-    "context_tokens",
-    "total_bytes",
-    "shard_bytes",
-    "last_completion_ns",
-    "instance_remaining_before_bytes",
-    "instance_remaining_after_bytes",
-    "insufficient_ranks",
-)
 
 
 
@@ -748,7 +693,7 @@ def main(argv=None) -> None:  # noqa: ARG001
 
     本模块保留的仅是③④在线路径只读 import 的符号(config 装载/发射辅助/
     估算函数)。③④ 的输入物化入口是
-    plan_materializer.py(manifest/metrics/runtime_config/face_lut);
+    plan_materializer.py(manifest/metrics/runtime_config);
     静态 ET 生成入口不再存在。
     """
     raise SystemExit(

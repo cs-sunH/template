@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- sh_3.0 在线 GraphBatch 构图器（方案 §4 步骤 1-8 操作 4）。
 
-阶段 1 最关键的对齐点：复用 generator 发射逻辑的节点结构。per-request 发射
+阶段 1 最关键的对齐点：复用共享发射原语的节点结构。per-request 发射
 （generate_face_trace.py 模块级发射助手函数）组成
 （_emit_kv_transfer / _emit_tp_readiness_barrier /
 _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——
@@ -9,7 +9,7 @@ _emit_tp_point_to_point_readiness_barrier / transformer_pass_aggregated）——
 builder）驱动，保证节点属性、插入顺序、rank ownership 跨 request 链一致
 （节点级审计口径）。
 
-与离线（一次 per-request 全段写出）的刻意差异（合同① 两段式发射边界）：
+与纯调度参考的刻意差异（合同① 两段式发射边界）：
   - prefill 段（ARRIVAL 边界提交）= 到达/interval gate → history_evictions →
     history_transfer（含 partial 流水恢复全部节点）→ prefill_evictions →
     prefill readiness barrier → prefill 段（含 end barrier）；
@@ -22,12 +22,12 @@ builder）驱动，保证节点属性、插入顺序、rank ownership 跨 reques
 在线语义差异（刻意，注释标注）：
   - timer gate 始终发射节点（结构保留）但 runtime_ns=0：到达时间由 C++ 的
     arrival alarm（future_alarms）替代；
-  - timer gate 的 duration 语义与离线同参（离线 duration=admission_time_ns /
-    interval + hbm_wait_ns；0 时离线不发射 gate 节点，在线同款跳过）；
-  - pending_history / deferred_session_locations 账本与离线 writer 同构
+  - timer gate 的 duration 语义与共享参考同参（duration=admission_time_ns /
+    interval + hbm_wait_ns；0 时不发射 gate 节点，在线同款跳过）；
+  - pending_history / deferred_session_locations 账本与共享调度语义同构
     （跨请求的 arrival/interval gate 关联）；
   - partial 流水恢复的 chain_checkpoint/restore_chain 段内分支并行机制
-    原样支持（generate_face_trace.py:2388-2391/:2435-2436 语义）；
+    原样支持；
   - strategy 保持物理链与真实 MEM/HBM 物理时长。
 """
 
@@ -35,8 +35,8 @@ import os
 import sys
 
 # --------------------------------------------------------------------------
-# import 路径：本文件位于 workload/llama2_7b_inference/online/，离线写出模块
-# 在上一级。路径只做 import 用途（红线：generate_face_trace.py /
+# import 路径：本文件位于 workload/llama2_7b_inference/online/，共享发射与
+# 配置模块在上一级。路径只做 import 用途（红线：generate_face_trace.py /
 # face_scheduler.py 只读 import 与注释）。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +46,13 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _path)
 
 from generate_trace import (  # noqa: E402
+    ALL_REDUCE,
+    COMM_COLL_NODE,
+    COMM_RECV_NODE,
+    COMM_SEND_NODE,
     COMP_NODE,
+    MEM_LOAD_NODE,
+    MEM_STORE_NODE,
     transformer_pass_aggregated,
 )
 from generate_face_trace import (  # noqa: E402
@@ -62,19 +68,19 @@ from generate_face_trace import (  # noqa: E402
 
 
 class OnlineTraceBuilder:
-    """与离线 TraceBuilder 同构的在线侧每-rank builder。
+    """与共享 TraceBuilder 接口同构的在线侧每-rank builder。
 
     同一接口面：timer_gate / arm_timer_gate / arm_dependency /
     chain_checkpoint / restore_chain / comp / all_reduce / comm_send /
     comm_recv / mem_store / mem_load / local_hbm_kv_restore / next_id /
-    previous_id / node_count——离线助手函数可直接驱动。
+    previous_id / node_count——共享助手函数可直接驱动。
 
     与 TraceBuilder 的差异：节点发射为 GraphBatch nodes[] dict（而非
-    ChakraNode 字节流），依赖记录为 parent_edges[]（离线 .et 的 data_deps
+    ChakraNode 对象），依赖记录为 parent_edges[]（共享 builder 的 data_deps
     内联在节点里，在线按边列表携带）；timer_gate 忽略 duration
     （runtime_ns=0，alarm 替代等待）。
 
-    per-rank id 自 0 起全局递增（跨批次），与离线 .et 每 rank id 序列一致。
+    per-rank id 自 0 起全局递增，跨批次保持连续。
     """
 
     def __init__(self, rank: int, *, remote_operand_loads: bool):
@@ -146,13 +152,13 @@ class OnlineTraceBuilder:
         if timer_node_id is not None:
             self.pending_extra_dependencies.append(int(timer_node_id))
 
-    # 与 TraceBuilder.arm_dependency（generate_trace.py:715）同构。
+    # 与共享 TraceBuilder.arm_dependency 同构。
     def arm_dependency(self, node_id) -> None:
         if node_id is not None:
             self.pending_extra_dependencies.append(int(node_id))
 
-    # 与离线 TraceBuilder.chain_checkpoint/restore_chain
-    # （generate_trace.py:732/:737）同构（sh_2.0 在线版同款完整恢复）：
+    # 与共享 TraceBuilder.chain_checkpoint/restore_chain
+    # 同构（sh_2.0 在线版同款完整恢复）：
     # partial 流水恢复的段内分支并行机制（prefix 计算与 suffix 恢复并行）。
     # checkpoint 同时捕获 previous_id 与 pending_extra_dependencies，
     # restore 两者一并回滚——分支内新 arm 的依赖不泄漏到恢复点之后。
@@ -174,15 +180,15 @@ class OnlineTraceBuilder:
                    after_node_id=None):
         """在线 timer gate：发射节点（runtime_ns=0，is_timer_op）。
 
-        与离线 TraceBuilder.timer_gate（generate_trace.py:735-760）同构：
-          - duration_ns == 0 → 直接返回 after_node_id，不发射节点
-            （离线 :707-709 同款；interval==0 的 request 在离线 .et 中没有
-            interval gate 节点，在线也必须没有）；
+        与共享 TraceBuilder.timer_gate 同构：
+        - duration_ns == 0 → 直接返回 after_node_id，不发射节点
+            （共享接口同款；interval==0 的 request 不产生 interval gate
+            节点）；
           - 否则直接创建节点（不经 _new_node）——不链 previous_id、不消费
             pending_extra_dependencies、不更新 previous_id；仅
             after_node_id 依赖（interval gate 依赖上一 request 完成
             barrier 节点）。
-        离线语义（duration = admission/interval 等待）由 C++ arrival alarm
+        调度参考语义（duration = admission/interval 等待）由 C++ arrival alarm
         （future_alarms）替代——gate 只保留结构与依赖，保持时长会双重等待。
         """
         if duration_ns < 0 or duration_ns % 1000 != 0:
@@ -231,7 +237,6 @@ class OnlineTraceBuilder:
             node["compute"]["remote_weight_bytes"] = self._uint64(remote_read_size)
 
     def all_reduce(self, name: str, comm_size: int, pg_name: str) -> None:
-        from generate_trace import ALL_REDUCE, COMM_COLL_NODE
         node = self._new_node(name, COMM_COLL_NODE)
         node["coll"]["comm_type"] = ALL_REDUCE
         node["coll"]["bytes"] = self._uint64(comm_size)
@@ -241,7 +246,6 @@ class OnlineTraceBuilder:
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
                   comm_tag: int, hbm_charge: bool = True) -> None:
-        from generate_trace import COMM_SEND_NODE
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
@@ -251,7 +255,6 @@ class OnlineTraceBuilder:
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
                   comm_tag: int, hbm_charge: bool = True) -> None:
-        from generate_trace import COMM_RECV_NODE
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
@@ -261,7 +264,6 @@ class OnlineTraceBuilder:
 
     def mem_store(self, name: str, tensor_size: int, *,
                   hbm_access_mode: int = 0) -> None:
-        from generate_trace import MEM_STORE_NODE
         node = self._new_node(name, MEM_STORE_NODE)
         node["mem"]["tensor_size"] = self._uint64(tensor_size)
         node["mem"]["hbm_access_mode"] = int(hbm_access_mode)
@@ -269,7 +271,6 @@ class OnlineTraceBuilder:
 
     def mem_load(self, name: str, tensor_size: int, *,
                  hbm_access_mode: int = 0) -> None:
-        from generate_trace import MEM_LOAD_NODE
         node = self._new_node(name, MEM_LOAD_NODE)
         node["mem"]["tensor_size"] = self._uint64(tensor_size)
         node["mem"]["hbm_access_mode"] = int(hbm_access_mode)
@@ -277,7 +278,6 @@ class OnlineTraceBuilder:
 
     def local_hbm_kv_restore(self, name: str, tensor_size: int) -> None:
         """发射目标-HBM DMA 写节点（is_local_hbm_kv_restore 路由）。"""
-        from generate_trace import MEM_LOAD_NODE
         node = self._new_node(name, MEM_LOAD_NODE)
         node["mem"]["tensor_size"] = self._uint64(tensor_size)
         node["mem"]["is_local_hbm_kv_restore"] = True
@@ -305,8 +305,7 @@ class GraphBatchBuilder:
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
         self.tag_allocator = TransferTagAllocator()
-        # 与离线 writer 同构的跨请求 gate 账本（generate_face_trace.py
-        # :2425-2457）。
+        # 跨请求 history gate 账本（request_id → PendingHistoryGate）。
         self.pending_history = {}
         self.pending_request_by_session = {}
         self.deferred_session_locations = {}
@@ -317,10 +316,6 @@ class GraphBatchBuilder:
         # request_id -> decode 完成节点 per rank（completion 批的
         # completion_eviction trigger gate 与 interval gate after_node_id）。
         self._decode_completion_nodes = {}
-        # session_id -> (decode_instance_index, {rank: end_barrier_id})
-        # （completion_gates 账本，下一 turn interval gate 的 after_node_id
-        # 来源；与离线 writer 同构）。
-        self.completion_gates = {}
         self.batch = None  # 当前批次累加器（由 begin_batch 建立）
         # request_id -> 跨阶段连续的 action 序号（离线 writer 的 per-
         # request action_sequence 闭包在两段式发射下的等价物：prefill/
@@ -378,8 +373,8 @@ class GraphBatchBuilder:
 
     def emit_completion_batch(self, request_plan: dict) -> dict:
         """completion 批（DECODE_COMPLETION/REQUEST_COMPLETE 边界）：
-        completion_evictions + 下一 turn interval gate 的依赖登记（离线
-        writer 的 :3061-3110 段在线复刻）。返回空成员（无 watch）。"""
+        completion_evictions + 下一 turn interval gate 的依赖登记。
+        返回空成员（无 watch）。"""
         self._set_context(request_plan, "completion", 1)
         marker = self._mark()
         self._emit_completion(request_plan)
@@ -395,7 +390,8 @@ class GraphBatchBuilder:
     # ------------------------------------------------- per-request 发射主体 --
 
     def _mark_pending_history_store(self, transfer) -> None:
-        """离线 writer 的 mark_pending_history_store（:2432-2449）。"""
+        """remote_store 发射后的会话位置登记
+        （resident_prefix_layers_after 折算 location）。"""
         if transfer.resident_prefix_layers_after == 0:
             location = "remote_memory"
         elif transfer.resident_prefix_layers_after < transfer.model_layers:
@@ -407,11 +403,28 @@ class GraphBatchBuilder:
         if pending_request_id is None:
             self.deferred_session_locations[session_id] = location
             return
-        self.pending_history[pending_request_id].location = location
+        gate = self.pending_history.get(pending_request_id)
+        if gate is None:
+            # Backport 2026-08-16 (对比报告 §5.2, verified in the 3-min
+            # test copies): an in-flight turn-0 request has its session key
+            # registered in pending_request_by_session at prefill emission
+            # WITHOUT a pending_history gate (turn-0's gate is built inline
+            # as "new_session" and never stored; turn>0 gates are popped at
+            # arrival). When another request's completion eviction
+            # (remote_store) targets this session, the old direct subscript
+            # raised KeyError (20/50 档 delivery 3575/1553 两起历史事故,
+            # sh_2.0 改造实录登记). Defer to
+            # session completion instead -- mirroring the turn>0 no-entry
+            # semantics above (offline planner equivalence: the eviction
+            # applies to the session state; the next turn's
+            # history_location_before reflects the post-eviction location).
+            self.deferred_session_locations[session_id] = location
+            return
+        gate.location = location
 
     def _emit_prefill(self, request_plan: dict) -> dict:
-        """离线 writer 的 turn-gates / history / prefill 块（:2465-2862 的
-        在线复刻）。request_plan 为 dict（strategy 自在线账本；
+        """turn-gates / history / prefill 块的在线发射。
+        request_plan 为 dict（strategy 自在线账本；
         字段与 FaceRequestPlan 同名）。"""
         builders = self.builders
         config = self.config
@@ -446,7 +459,7 @@ class GraphBatchBuilder:
                 self._mark_pending_history_store(transfer)
             return record
 
-        # ---- arrival / interval gate（离线 :2382-2421 预置 + :2470-2489）----
+        # ---- arrival / interval gate（turn-0 到达 timer / turn>0 pending gate）----
         if request_plan["turn_index"] == 0:
             # 在线：turn-0 arrival timer gate 在本批次发射（runtime=0，
             # 到达时间由 C++ arrival alarm 替代；duration 语义与离线同参：
@@ -456,9 +469,8 @@ class GraphBatchBuilder:
                 arrival = request.session_arrival_time_ns
             if arrival is None:
                 raise RuntimeError("first request lost its session arrival")
-            # 离线 writer 的 turn-0 gate 命名用短前缀（:2404-2409：
-            # q{queue:04d}_{request_id}，无 session/turn 段）——canonical 命名
-            # name 键逐字节一致前提。
+            # turn-0 gate 命名用短前缀（q{queue:04d}_{request_id}，
+            # 无 session/turn 段）——canonical 命名 name 键逐字节一致前提。
             short_prefix = (
                 f"q{request_plan['queue_index']:04d}_"
                 f"{sanitize_node_prefix(request_plan['request_id'])}")
@@ -482,8 +494,8 @@ class GraphBatchBuilder:
             self.pending_request_by_session.pop(request_plan["session_id"],
                                                 None)
         # sh_3.0 裁决（登记合同⑦/§13，两模式统一）：pending-gate location
-        # 是 writer 侧的派生缓存（离线依赖 order_plans_for_static_emission
-        # 全局 KV 因果预排序保持与 planner 一致）；在线按决策边界序发射时，
+        # 是 writer 侧的派生缓存（历史静态实现曾用全局 KV 因果预排序
+        # 保持与 planner 一致）；当前在线路径以 kv_manager 权威账本/图依赖为准，
         # 触发 request 的准入/完成逐出（reserve/prepare/expand/enforce）与
         # gate 注册/消费的相对顺序不同，缓存会滞后于权威账本（strategy 权威
         # = kv_manager 快照,即 history_location_before 本身）。故弹出 gate 时统一归一化到
@@ -497,7 +509,7 @@ class GraphBatchBuilder:
             reconcile_pending_history_location(
                 pending_gate, _as_plan(request_plan))
 
-        # ---- history_evictions（离线 :2510-2518）----
+        # ---- history_evictions ----
         history_eviction_trigger = TransferTriggerGate(
             control_instance_index=pending_gate.source_instance_index,
             node_gates=pending_gate.timer_gates,
@@ -513,7 +525,7 @@ class GraphBatchBuilder:
         )
         suffix_ready_nodes_by_rank = {}
 
-        # ---- history_transfer（离线 :2520-2549）----
+        # ---- history_transfer ----
         if _as_plan(request_plan).history_transfer is None:
             if request_plan["turn_index"] != 0:
                 raise RuntimeError(
@@ -530,11 +542,11 @@ class GraphBatchBuilder:
             emit_transfer(_as_plan(request_plan).history_transfer,
                           "history_transfer", gate=pending_gate)
 
-        # ---- prefill_evictions（离线 :2551-2552）----
+        # ---- prefill_evictions ----
         for transfer in request_plan["prefill_evictions"]:
             emit_transfer(transfer, "prefill_evictions")
 
-        # ---- readiness barrier / partial 流水恢复（离线 :2554-2658）----
+        # ---- readiness barrier / partial 流水恢复 ----
         if partial_history_restore:
             history_transfer = _as_plan(request_plan).history_transfer
             history_before = request_plan["history_location_before"]
@@ -599,12 +611,16 @@ class GraphBatchBuilder:
                 builders=builders, group=prefill_group,
                 name=f"{prefix}_prefill_kv_ready_barrier")
 
-        # ---- prefill 段（离线 :2796-2862，request_aggregated）----
+        # ---- prefill 段（request_aggregated）----
         tensor_parallel = len(prefill_group.ranks)
         prefill_tokens_to_process = (
             request_plan["prefill_context_tokens"]
             - request_plan["history_tokens_before"]
         )
+        if prefill_tokens_to_process <= 0:
+            raise ValueError(
+                f"request {request_plan['request_id']} has no Prefill work tokens"
+            )
         if config.trace_granularity != "request_aggregated":
             raise RuntimeError(
                 "online emission supports request_aggregated granularity "
@@ -684,8 +700,8 @@ class GraphBatchBuilder:
         return prefill_last_node_by_rank
 
     def _emit_decode(self, request_plan: dict) -> dict:
-        """离线 writer 的 decode_evictions / pd transfer / decode 段块
-        （:2864-3030 的在线复刻，request_aggregated）。"""
+        """decode_evictions / pd transfer / decode 段块的在线发射
+        （request_aggregated）。"""
         builders = self.builders
         config = self.config
         group_by_index = self.group_by_index
@@ -787,17 +803,10 @@ class GraphBatchBuilder:
             request_plan["decode_instance_index"],
             decode_completion_nodes,
         )
-        # completion_gates 账本（interval gate 的 after_node_id 来源）。
-        self.completion_gates[request_plan["session_id"]] = (
-            request_plan["decode_instance_index"],
-            {rank: builders[rank].previous_id
-             for rank in decode_group.ranks},
-        )
         return decode_last_node_by_rank
 
     def _emit_completion(self, request_plan: dict) -> None:
-        """离线 writer 的 completion_evictions + 下一 turn interval gate 段
-        （:3032-3110 的在线复刻）。"""
+        """completion_evictions + 下一 turn interval gate 段的在线发射。"""
         builders = self.builders
         config = self.config
         request = config.request_queue[request_plan["queue_index"]]
@@ -882,9 +891,7 @@ class GraphBatchBuilder:
 
     @property
     def p_chunk(self) -> int:
-        # PREFILL_CHUNK_SIZE = 512（face_scheduler.py:22，合同⑨ 固定配置）。
-        from face_scheduler import PREFILL_CHUNK_SIZE
-        return PREFILL_CHUNK_SIZE
+        return self.config.prefill_chunk_size
 
     next_plan = {}
     _plan_resolver = staticmethod(lambda request_id: None)
@@ -926,13 +933,9 @@ class _PlanShim:
             raise AttributeError(name) from exc
 
 
-_PLAN_SHIMS = {}
-
-
 def _as_plan(request_plan: dict):
-    key = id(request_plan)
-    shim = _PLAN_SHIMS.get(key)
-    if shim is None or shim._plan is not request_plan:
-        shim = _PlanShim(request_plan)
-        _PLAN_SHIMS[key] = shim
-    return shim
+    # _PlanShim 为纯代理（仅 _plan 字段 + __getattr__ 转发，无状态），每
+    # 次直接构造（每请求约 5 次调用的对象构造开销可忽略）——不用 id() 做
+    # 模块级缓存：id 复用隐患 + 强引用把每请求 plan 永久钉在内存（O(N)
+    # 驻留，R4-11）。
+    return _PlanShim(request_plan)

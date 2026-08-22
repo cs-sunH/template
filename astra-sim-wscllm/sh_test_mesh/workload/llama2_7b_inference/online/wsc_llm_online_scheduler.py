@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """wsc_llm_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9)。
 
-以 _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py:1667-2207)为蓝本
+以 _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py)为蓝本
 迁移,保持决策顺序逐行对应(每处迁移用 `# offline: wsc_llm_scheduler.py:XXXX`
 注释标注)。离线事件循环与在线边界的一一对应:
 
@@ -48,14 +48,14 @@ tick、网络竞争)在阶段 1 即真实生效,只负责推进完成边界。
 
 与离线蓝图的刻意差异(real-online 语义,合同⑦ Tier B real-online 验收):
   - 计时/迭代粒度:离线 LUT 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
-    request-aggregated 构图(prefill 整段 + decode 整段,与离线 ET 粒度一致,
-    方案 §4 步骤 1-9 操作 1);
+    request-aggregated 构图(prefill 整段 + decode 整段,与历史规划的工作量
+    粒度一致,方案 §4 步骤 1-9 操作 1);
   - 实例 busy 语义:离线 prefill 实例 busy 覆盖逐 chunk 迭代,decode 实例
     busy 覆盖整批迭代;在线 busy 覆盖"一个 prefill/decode 整段在飞";
   - decode 段发射:离线整批 active_decode 一次迭代;在线一次发射
     active_decode 队首整段,完成后再发射下一个(per-rank 物理链天然
-    串行化同实例 decode 段,与离线 .et 的跨 request 物理链同构——strategy
-    模式保持物理跨 request 链,不适用 replay 的 LUT 时钟裁决);
+    串行化同实例 decode 段；strategy 模式保持动态跨 request 链，
+    不适用 replay 的 LUT 时钟裁决);
   - 完成顺序:真实完成 tick 决定(网络竞争、物理链),不要求与离线决策
     序列 exact(合同⑦:real-online 只验不变量与差异可解释性)。
 """
@@ -66,8 +66,8 @@ import sys
 from collections import deque
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py / wsc_llm_
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置、
+# 发射与调度模块在上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py / wsc_llm_
 # scheduler.py / session_kv_manager.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +102,7 @@ from wsc_llm_scheduler import (  # noqa: E402
 
 
 class _OnlineInstanceState:
-    """在线实例账本(离线 _InstanceRuntime,wsc_llm_scheduler.py:1699-1702 的
+    """在线实例账本(离线 _InstanceRuntime,wsc_llm_scheduler.py 的
     在线子集):qp = prefill FCFS 队列(deque),active_decode = 已准入 decode
     列表,busy = 一个整段在飞。"""
 
@@ -213,7 +213,7 @@ def _kv_event_dict(event) -> dict:
 class WscLlmOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:真实策略(关感知)在在线骨架中运行。
 
-    蓝本: _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py:1667-2207),
+    蓝本: _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py),
     kv_cache_policy == "session_lru_recompute"(主变体)。拓扑 / 静态路由 /
     KV 账本(与离线同一函数、同参数)在 __init__ 一次性构建,运行期策略输入
     全部来自这些 Python 账本(关感知)。
@@ -239,7 +239,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用)
 
         # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(alpha 默认 1.0,与离线同参)。
-        # offline: wsc_llm_scheduler.py:1682-1683
+        # offline: wsc_llm_scheduler.py
         specs = tuple(
             WscLlmInstanceSpec(
                 name=group.name,
@@ -255,7 +255,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             self.topology, alpha=1.0)
 
         # 蓝图 :1694-1698:KV 账本(reserve_context_tokens 同参)。
-        # offline: wsc_llm_scheduler.py:1694-1698
+        # offline: wsc_llm_scheduler.py
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
@@ -263,7 +263,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         )
 
         # 蓝图 :1699-1702:实例账本。
-        # offline: wsc_llm_scheduler.py:1699-1702
+        # offline: wsc_llm_scheduler.py
         self.instances = [
             _OnlineInstanceState(index=instance.index,
                                   phase_role=instance.phase_role)
@@ -274,13 +274,13 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 事件喂入)。阶段 4 §7.3:键含 queue_index,同 tick 到期项按冻结
         # 队列序稳定弹出(与 C++ 序列化的 arrivals 冻结队列序一致);
         # 消费规则 tick <= current_tick(见 _drain_arrival_heap)。
-        # offline: wsc_llm_scheduler.py:1703-1704
+        # offline: wsc_llm_scheduler.py
         self.arrival_heap = []
         self._sequence = 0
 
         # 蓝图 :1723-1725:等待 decode 准入登记(按实例)。
         # §7.3:deque 替换 list.pop(0)。
-        # offline: wsc_llm_scheduler.py:1723-1725
+        # offline: wsc_llm_scheduler.py
         self.waiting_decode_admissions = {
             instance.index: deque() for instance in self.topology.instances
         }
@@ -294,14 +294,14 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 恒为空;结束审计必须为空)。
         self._admission_retry_ready = set()
         # 蓝图 :1729-1732:容量 epoch / 准入门控。
-        # offline: wsc_llm_scheduler.py:1729-1732
+        # offline: wsc_llm_scheduler.py
         self.capacity_epoch = [0 for _ in self.topology.instances]
         self.prefill_attempt_epoch = {}
         self.decode_admission_epoch = [-1 for _ in self.topology.instances]
         self.decode_admission_dirty = set()
 
         # 请求运行账本(queue_index 序;manifest 事实 policy-independent)。
-        # offline: wsc_llm_scheduler.py:1684(runtimes 由
+        # offline: wsc_llm_scheduler.py(runtimes 由
         # _validate_and_expand_requests 构造;在线输入事实直接来自 manifest)。
         self.runtimes = [
             _OnlineRequestRuntime(record)
@@ -342,7 +342,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         tick = delta["tick"]
 
         # ---- completion 批(离线 priority 0;同 tick 先于 arrival)----
-        # offline: wsc_llm_scheduler.py:2006-2072
+        # offline: wsc_llm_scheduler.py
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
@@ -358,13 +358,13 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                         stage, request_id))
 
         # ---- arrival 批(离线 priority 1)----
-        # offline: wsc_llm_scheduler.py:2074-2090
+        # offline: wsc_llm_scheduler.py
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
 
         # ---- 准入/发射 pass(离线 start_ready_iterations,计时部分删除)----
-        # offline: wsc_llm_scheduler.py:1915-1996
+        # offline: wsc_llm_scheduler.py
         self._admit_pass(tick)
 
         # ---- kv 动作流:本批次 kv_manager 新产出的账本事件 ----
@@ -381,7 +381,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         """离线 arrival 批单条(:2074-2090):选择 prefill 实例 + 静态路由 +
         qp 入队。快照在 append 之前取(ordering_key 反映选择时刻的排队深度)。
 
-        offline: wsc_llm_scheduler.py:2074-2090
+        offline: wsc_llm_scheduler.py
         """
         runtime.estimated_arrival_ns = tick  # :2079
         snapshots = self._prefill_snapshots()  # :2080
@@ -405,7 +405,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         """离线 prefill 完成分支(:2014-2038):实例空闲 + qp 出队 + 等待
         decode 准入登记 + dirty。
 
-        offline: wsc_llm_scheduler.py:2014-2038
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
@@ -434,7 +434,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         mark_complete + 快照。下一次 arrival 排程在 REQUEST_COMPLETE 边界
         (同 tick,见 _on_request_complete)。
 
-        offline: wsc_llm_scheduler.py:2040-2066
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
@@ -487,7 +487,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         now + 该 turn 的 inter_request_interval_ns 注册未来 alarm
         (向 ingress,不再 push 到事件堆)。
 
-        offline: wsc_llm_scheduler.py:2067-2072
+        offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
         # §7.3:_runtime_index O(1) 定位(替换 O(N) 全量扫描)。
@@ -548,7 +548,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         逐字节不变)。frontier 在到达/完成(设)与发射(清)时增量维护,
         单批访问条目数 = 到期/受影响条目数,与总 request 数无关。
 
-        offline: wsc_llm_scheduler.py:1915-1996
+        offline: wsc_llm_scheduler.py
         """
         self._try_admit_waiting_decodes(tick)  # :1917
         for instance_index in sorted(self._ready_frontier):  # §7.3 frontier
@@ -583,7 +583,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         """离线 try_admit_prefill(:1746-1849),逐行对应;无逐 chunk 计时/
         剩余块账本(聚合粒度)。
 
-        offline: wsc_llm_scheduler.py:1746-1849
+        offline: wsc_llm_scheduler.py
         """
         if runtime.admitted_prefill:  # :1748-1749
             return True
@@ -679,7 +679,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     def _try_admit_waiting_decodes(self, now_ns: int) -> None:
         """离线 try_admit_waiting_decodes(:1851-1913),逐行对应。
 
-        offline: wsc_llm_scheduler.py:1851-1913
+        offline: wsc_llm_scheduler.py
         """
         ready_targets = tuple(
             instance_index
@@ -763,7 +763,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         """聚合粒度发射 prefill 整段(与离线 ET 按 request 整段一致;
         离线逐 chunk 迭代在在线不存在)。watch 注册 PREFILL_DRAIN。
 
-        offline: wsc_llm_scheduler.py:1927-1952(发射对象为整段而非 chunk)
+        offline: wsc_llm_scheduler.py(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_prefill_batch(plan)
@@ -820,7 +820,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         barrier)。watch 注册 DECODE_COMPLETION(C++ 同 fire 推
         DECODE_COMPLETION + REQUEST_COMPLETE 两条 completed_groups)。
 
-        offline: wsc_llm_scheduler.py:1953-1973(发射对象为整段而非 chunk)
+        offline: wsc_llm_scheduler.py(发射对象为整段而非 chunk)
         """
         plan = self._plan_dict(runtime)
         members = self.graph.emit_decode_batch(plan)

@@ -4,7 +4,7 @@
 #   - online_service 显式传 --config trace_config_legacy.csv(kv_cache_policy
 #     =legacy,显式不依赖代码默认值;总改造计划 §9.4);
 #   - C++ 侧 workload 前缀 / metrics_manifest 指向调用方物化的 legacy 基线
-#     目录(<legacy_gen>,与运行同源对照物;物化规则见方案文档 §3 步骤 0-1);
+#     目录(<legacy_gen>,与运行同源对照物;物化规则见 traces/derive_20_first_30_seconds.py);
 #   - 归档 kv_event_payload_legacy.json(legacy allocator run-end 终值,
 #     run-end 审计件,随 results/ 归档)。
 # Usage: bash run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
@@ -14,9 +14,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
 RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 wscllm仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
+REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
-LEGACY_GEN=${3:?"legacy_gen 必填(request-neutral:请按方案文档 §3 步骤 0-1 物化 legacy 基线目录后显式传入)"}
+LEGACY_GEN=${3:?"legacy_gen 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化 legacy 基线目录后显式传入)"}
 ET_PREFIX=${LEGACY_GEN}/llama2_7b_wsc_llm_inference
 ET_DIR=$(dirname "${ET_PREFIX}")
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # sh_1.0 phase-1 step-1-10 官方在线 runner:strategy 模式(真实策略,实时物理)。
 # Usage: bash run_online_strategy.sh <run_dir> <request_csv>
-# request-neutral(裸仓库):仓库不预置输入队列;request_csv 由调用方按方案文档
-# §3 步骤 0-1 物化后必填传入(缺失即 fail-closed)。
+# request-neutral(裸仓库):仓库不预置输入队列;request_csv 由调用方按
+# traces/derive_20_first_30_seconds.py 物化后必填传入(缺失即 fail-closed)。
 # 流程(C++ 先起建桥,Python 服务后起,等退出码,
 # 收日志,[METRIC] 行经 run_metrics_postprocess.sh 后处理)。
 set -euo pipefail
@@ -11,7 +11,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
 RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按方案文档 sh_1.0仓库改造详细执行方案.md §3 步骤 0-1 物化输入后显式传入)"}
+REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
 # Bare-repo restore (2026-08-16, phase 7): the baseline/20_30s archive is
 # deleted; resolve the single generated dir dynamically (the dir name

@@ -44,16 +44,16 @@ void record_node_terminal(
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
     ExecutionDriven::ExecutionMode mode, int rank, uint64_t node_id,
     ExecutionDriven::NodeTerminalStatus status) {
-    std::optional<ExecutionDriven::NodeView> nv;
+    const ExecutionDriven::NodeView* nv = nullptr;
     if (mode == ExecutionDriven::ExecutionMode::Online) {
-        nv = graph_source->lookup(node_id);
+        nv = graph_source->lookup_ptr(node_id);
     }
     ExecutionDriven::CompletionObserver::instance().record_node_terminal(
         rank, node_id,
-        (nv.has_value() && !nv->request_id.empty()) ? nv->request_id.c_str()
+        (nv != nullptr && !nv->request_id.empty()) ? nv->request_id.c_str()
                                                     : nullptr,
-        (nv.has_value() && !nv->stage.empty()) ? nv->stage.c_str() : nullptr,
-        nv.has_value() ? nv->generation : 0, Sys::boostedTick(), status);
+        (nv != nullptr && !nv->stage.empty()) ? nv->stage.c_str() : nullptr,
+        nv != nullptr ? nv->generation : 0, Sys::boostedTick(), status);
 }
 
 }  // namespace
@@ -61,6 +61,7 @@ void record_node_terminal(
 Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                    ExecutionDriven::ExecutionMode execution_mode,
                    std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
+    this->workload_logger_ = LoggerFactory::get_logger("workload");
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
 
@@ -86,7 +87,7 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                     "Unknown workload file: " + workload_filename +
                     " access error";
             }
-            LoggerFactory::get_logger("workload")->critical(error_msg);
+            workload_logger_->critical(error_msg);
             exit(EXIT_FAILURE);
         }
         this->et_feeder = new ETFeeder(workload_filename);
@@ -115,7 +116,7 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
     // recordStart/recordEnd never run in online mode).
     if (this->sys->track_local_mem &&
         execution_mode == ExecutionDriven::ExecutionMode::Online) {
-        LoggerFactory::get_logger("workload")
+        workload_logger_
             ->critical("track_local_mem is not supported in online mode "
                        "(step 1-8; the local_mem tracker is ETFeederNode-"
                        "bound)");
@@ -234,7 +235,7 @@ void Workload::issue_dep_free_nodes() {
     // call() gates this behind the execution mode; online mode issues only
     // through the post-commit deferred path (steps 1-6/1-11), which calls
     // this function directly per rank.
-    for (const auto& nv : graph_source_->dep_free_nodes()) {
+    graph_source_->for_each_dep_free([&](const auto& nv) {
         if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
             // Step 1-8: online availability check on the NodeView
             // (et_node is nullptr in online mode). Strategy mode keeps the
@@ -249,11 +250,11 @@ void Workload::issue_dep_free_nodes() {
                 issue(nv);
             }
         }
-    }
+    });
 }
 
 void Workload::issue(const ExecutionDriven::NodeView& node) {
-    auto logger = LoggerFactory::get_logger("workload");
+    auto logger = workload_logger_;
     if (sys->trace_enabled) {
         logger->debug("issue,sys->id={}, tick={}, node->id={}, "
                       "node->name={}, node->type={}",
@@ -374,7 +375,7 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
     if (hbm_endpoint_charge_active() &&
         node.mem.hbm_access_mode != 0 && node.mem.tensor_size > 0) {
         WorkloadLayerHandlerData* hbm_wlhd =
-            begin_hbm_join(node.global_id, wlhd, EventType::General);
+            begin_hbm_join(node.global_id, EventType::General);
         if (node.mem.hbm_access_mode == 1) {
             local_hbm_bandwidth_model->issue_pool_read(
                 node.mem.tensor_size, hbm_wlhd);
@@ -526,7 +527,7 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     op_stat.memory_utilization =
         (perf / operational_intensity) / sys->local_mem_bw;
     op_stat.is_memory_bound = perf < sys->peak_perf;
-    LoggerFactory::get_logger("workload")
+    workload_logger_
         ->debug("operation_intensity={}, perf={}, elapsed_time={} "
                 "local_mem_latency_ns={} "
                 "compute_utilization={} memory_utilization={} tensor_size={} "
@@ -648,7 +649,7 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     // routing assumption).
     if (hbm_endpoint_charge_active() && node.comm.hbm_charge && size > 0) {
         WorkloadLayerHandlerData* hbm_wlhd = begin_hbm_join(
-            node.global_id, sehd->wlhd, EventType::PacketSent);
+            node.global_id, EventType::PacketSent);
         local_hbm_bandwidth_model->issue_comm_read(size, hbm_wlhd);
     }
     sys->front_end_sim_send(0, Sys::dummy_data, size, UINT8, dst, tag, &snd_req,
@@ -681,7 +682,7 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     // double charging.
     if (hbm_endpoint_charge_active() && node.comm.hbm_charge && size > 0) {
         WorkloadLayerHandlerData* hbm_wlhd = begin_hbm_join(
-            node.global_id, rcehd->wlhd, EventType::PacketReceived);
+            node.global_id, EventType::PacketReceived);
         local_hbm_bandwidth_model->issue_comm_write(size, hbm_wlhd);
     }
     sys->front_end_sim_recv(0, Sys::dummy_data, size, UINT8, src, tag, &rcv_req,
@@ -696,51 +697,83 @@ bool Workload::hbm_endpoint_charge_active() const {
 
 WorkloadLayerHandlerData* Workload::begin_hbm_join(
     uint64_t node_id,
-    WorkloadLayerHandlerData* network_side_wlhd,
     EventType terminal_event) {
-    // One join state per node id; the network/port side is identified by its
-    // wlhd pointer (the pointer is the callback cookie the network stack /
-    // AnalyticalRemoteMemory hands back untouched).
-    hbm_join_pending_[node_id] =
-        HbmJoinState{node_id, terminal_event, false, false};
-    hbm_join_wlhd_sides_[network_side_wlhd] = HbmJoinSide::NetworkPort;
+    // One join state per node id; the local-HBM side is identified by its
+    // wlhd pointer (the pointer is the callback cookie the
+    // LocalHbmBandwidthModel hands back untouched), stored inside the live
+    // join state (R4-13: no standalone pointer-keyed side map -- a side
+    // that never fires leaves no dangling key behind). The network/port
+    // side needs no registration: it is whatever cookie is not the stored
+    // HBM-side one.
     WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
     hbm_wlhd->sys_id = sys->id;
     hbm_wlhd->workload = this;
     hbm_wlhd->node_id = node_id;
-    hbm_join_wlhd_sides_[hbm_wlhd] = HbmJoinSide::LocalHbm;
+    hbm_join_pending_[node_id] =
+        HbmJoinState{node_id, terminal_event, false, false, hbm_wlhd};
     return hbm_wlhd;
 }
 
 bool Workload::consume_hbm_join_event(WorkloadLayerHandlerData* wlhd) {
-    auto side_it = hbm_join_wlhd_sides_.find(wlhd);
-    if (side_it == hbm_join_wlhd_sides_.end()) {
-        return false;  // not a joined side: normal single-sided completion
-    }
-    const HbmJoinSide side = side_it->second;
-    hbm_join_wlhd_sides_.erase(side_it);
     const uint64_t node_id = wlhd->node_id;
-    delete wlhd;
-
     auto state_it = hbm_join_pending_.find(node_id);
     if (state_it == hbm_join_pending_.end()) {
-        // Both sides already accounted (duplicate delivery): drop silently;
-        // the terminal path ran exactly once and must never run again.
-        return true;
+        // Fail-closed fire-after guard (R8-7): a re-delivery of the most
+        // recently fired join's local-HBM-side cookie means the model fired
+        // the same HBM job twice -- the ordinary terminal path would finish
+        // an already-completed node a second time. Every other arrival
+        // here is a normal single-sided completion (no join ever armed).
+        if (wlhd == last_fired_hbm_side_wlhd_ &&
+            node_id == last_fired_hbm_join_node_) {
+            workload_logger_
+                ->critical("HBM job completion for node {} has no pending "
+                           "join entry (double fire or missing issue)",
+                           node_id);
+            exit(EXIT_FAILURE);
+        }
+        return false;  // not a joined side: normal single-sided completion
     }
+    // Side classification against the live join's stored cookie (node ids
+    // are globally unique and never reused, so keying by node id is
+    // equivalent to the old per-cookie identity).
+    const HbmJoinSide side =
+        (wlhd == state_it->second.hbm_side_wlhd) ? HbmJoinSide::LocalHbm
+                                                 : HbmJoinSide::NetworkPort;
+    delete wlhd;
+
     HbmJoinState& state = state_it->second;
+    // Fail-closed same-side guard (R8-7): each side must arrive exactly
+    // once; a same-side second arrival for a live join is a model-layer
+    // mechanism violation (the flags below would otherwise be silently
+    // re-set and the arrival swallowed).
     if (side == HbmJoinSide::NetworkPort) {
+        if (state.network_done) {
+            workload_logger_
+                ->critical("duplicate network-side completion for node "
+                           "id={}",
+                           node_id);
+            exit(EXIT_FAILURE);
+        }
         state.network_done = true;
     } else {
+        if (state.local_hbm_done) {
+            workload_logger_
+                ->critical("duplicate local-HBM job completion for node "
+                           "id={}",
+                           node_id);
+            exit(EXIT_FAILURE);
+        }
         state.local_hbm_done = true;
     }
     if (!state.network_done || !state.local_hbm_done) {
         return true;  // first side only; the node is still in flight
     }
     // Both sides fired: run the shared terminal body exactly once. The join
-    // entries are erased first so the terminal body (which may re-enter
+    // entry is erased first so the terminal body (which may re-enter
     // Workload::call synchronously) can never observe a stale join.
     const EventType terminal_event = state.terminal_event;
+    last_fired_hbm_side_wlhd_ = state.hbm_side_wlhd;
+    last_fired_hbm_join_node_ = node_id;
     hbm_join_pending_.erase(state_it);
     finish_general_node(node_id, terminal_event);
     return true;
@@ -750,18 +783,18 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
     // Step 1-8: online mode has no ETFeederNode handle (et_node ==
     // nullptr); the online branch releases / records through the
     // NodeView. The static branch below stays byte-identical.
-    std::optional<ExecutionDriven::NodeView> nv;
+    const ExecutionDriven::NodeView* nv = nullptr;
     shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        nv = graph_source_->lookup(node_id);
-        if (!nv.has_value()) {
-            LoggerFactory::get_logger("workload")
+        nv = graph_source_->lookup_ptr(node_id);
+        if (nv == nullptr) {
+            workload_logger_
                 ->critical("callback for unknown online node id={}",
                            node_id);
             exit(EXIT_FAILURE);
         }
         if (sys->trace_enabled) {
-            LoggerFactory::get_logger("workload")
+            workload_logger_
                 ->debug("callback,sys->id={}, tick={}, node->id={}, "
                         "node->name={}, node->type={}",
                         sys->id, Sys::boostedTick(), node_id,
@@ -777,7 +810,7 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
         node = graph_source_->et_node(node_id);
 
         if (sys->trace_enabled) {
-            LoggerFactory::get_logger("workload")
+            workload_logger_
                 ->debug("callback,sys->id={}, tick={}, node->id={}, "
                         "node->name={}, node->type={}",
                         sys->id, Sys::boostedTick(), node->id(),
@@ -843,7 +876,7 @@ void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
                          ExecutionDriven::NodeTerminalStatus::Skipped);
     // Step 1-4: the GraphSource is the sole dependency-state owner.
     graph_source_->finish_node(node_id);
-    auto logger = LoggerFactory::get_logger("workload");
+    auto logger = workload_logger_;
     logger->debug("callback,sys->id={}, tick={}, node->id={}, "
                   "node->name={}, node->type={}",
                   sys->id, Sys::boostedTick(), node.global_id, node.name,
@@ -854,9 +887,10 @@ void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
     // track_local_mem + Online).
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        const auto nv = graph_source_->lookup(node_id);
-        if (!nv.has_value()) {
-            LoggerFactory::get_logger("workload")
+        const ExecutionDriven::NodeView* nv =
+            graph_source_->lookup_ptr(node_id);
+        if (nv == nullptr) {
+            workload_logger_
                 ->critical("skip_invalid for unknown online node id={}",
                            node_id);
             exit(EXIT_FAILURE);
@@ -891,18 +925,18 @@ void Workload::call(EventType event, CallData* data) {
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.
-        std::optional<ExecutionDriven::NodeView> nv;
+        const ExecutionDriven::NodeView* nv = nullptr;
         shared_ptr<Chakra::FeederV3::ETFeederNode> node = nullptr;
         if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-            nv = graph_source_->lookup(node_id);
-            if (!nv.has_value()) {
-                LoggerFactory::get_logger("workload")
+            nv = graph_source_->lookup_ptr(node_id);
+            if (nv == nullptr) {
+                workload_logger_
                     ->critical("collective callback for unknown online node "
                                "id={}", node_id);
                 exit(EXIT_FAILURE);
             }
             if (sys->trace_enabled) {
-                LoggerFactory::get_logger("workload")
+                workload_logger_
                     ->debug("callback,sys->id={}, tick={}, node->id={}, "
                             "node->name={}, node->type={}",
                             sys->id, Sys::boostedTick(), node_id,
@@ -920,7 +954,7 @@ void Workload::call(EventType event, CallData* data) {
             node = graph_source_->et_node(node_id);
 
             if (sys->trace_enabled) {
-                LoggerFactory::get_logger("workload")
+                workload_logger_
                     ->debug("callback,sys->id={}, tick={}, node->id={}, "
                             "node->name={}, node->type={}",
                             sys->id, Sys::boostedTick(), node->id(),
@@ -975,7 +1009,7 @@ void Workload::call(EventType event, CallData* data) {
             // directly (steps 1-6/1-11). Reaching this in online mode is a
             // mechanism violation: fail closed.
             if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-                LoggerFactory::get_logger("workload")
+                workload_logger_
                     ->critical("bare General event (fire) reached "
                                "Workload::call in online mode; the "
                                "post-commit path issues dep-free nodes "
@@ -1034,7 +1068,7 @@ void Workload::fire() {
 
 void Workload::report() {
     Tick curr_tick = Sys::boostedTick();
-    LoggerFactory::get_logger("workload")
+    workload_logger_
         ->info("sys[{}] finished, {} cycles, exposed communication {} cycles.",
                sys->id, curr_tick, curr_tick - hw_resource->tics_gpu_ops);
     stats->post_processing();
@@ -1046,7 +1080,7 @@ void Workload::report() {
             this->sys->local_mem_trace_filename);
         auto [peak_mem_usage, unit] =
             this->local_mem_usage_tracker->getPeakMemUsageFormatted();
-        auto logger = LoggerFactory::get_logger("workload");
+        auto logger = workload_logger_;
         logger->info("sys[{}] peak memory usage: {:.2f} {}", sys->id,
                      peak_mem_usage, unit);
         this->local_mem_usage_tracker.reset();
@@ -1069,7 +1103,7 @@ CommunicatorGroup* Workload::extract_comm_group(
 
     int comm_group_id = std::stoi(comm_group_name);
     if (comm_groups.find(comm_group_id) == comm_groups.end()) {
-        LoggerFactory::get_logger("workload")
+        workload_logger_
             ->critical(
                 "For rank {} ET node {}, communicator group {} not found",
                 sys->id, node.global_id, comm_group_id);

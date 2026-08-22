@@ -2,7 +2,7 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-OnlineStatsCounters -- execution-driven mechanism layer (sh30 (wscllm-blueprint) phase 6).
+OnlineStatsCounters -- execution-driven mechanism layer (wscllm phase 6).
 Phase-6 (方案 §9.1) per-run mechanism counters, C++ side.
 
 方案 §9.1: "C++ 侧挂进 MetricCollector 或独立 counters 结构"。本结构是独立

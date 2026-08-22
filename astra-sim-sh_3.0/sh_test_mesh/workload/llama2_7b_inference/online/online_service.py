@@ -17,7 +17,7 @@ CLI:
      bridge_dir(每次 GraphBatch 产出顺带写 digest 行;决策行同批追加)。
 
 strategy 模式(步骤 1-9 的 Sh30OnlineScheduler):真实策略(关感知)在
-在线骨架中运行,无决策日志(决策由策略实时产出)。
+在线骨架中运行,决策日志逐批写 online_decision_log.jsonl(决策由策略实时产出)。
 """
 
 import argparse
@@ -28,8 +28,8 @@ from pathlib import Path
 
 # --------------------------------------------------------------------------
 # import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块
-# 在上一级。路径只做 import 用途(红线:generate_wsc_llm_trace.py /
-# wsc_llm_scheduler.py 只读 import 与注释)。
+# 在上一级。路径只做 import 用途(红线:generate_face_trace.py /
+# face_scheduler.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -93,7 +93,7 @@ def main(argv=None) -> int:
     with open(manifest_path, "r", encoding="utf-8") as source:
         manifest = json.load(source)
 
-    # 缺省用 workload 默认 trace_config.csv(load_wsc_llm_trace_config 的
+    # 缺省用 workload 默认 trace_config.csv(load_face_trace_config 的
     # 默认参数);args.config 为 None 时不得传入(参数类型是 Path,None 会
     # 在 .exists() 处崩溃)。
     if args.config:
@@ -106,14 +106,12 @@ def main(argv=None) -> int:
     # strategy 模式保持物理跨 request 链(根因 #5 裁决:物理链为③④口径)。
     graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
-    # 步骤 1-9:真实策略(关感知,默认);无决策日志,决策实时产出。
+    # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
-    # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——主变体
-    # session_lru_recompute -> WscLlmOnlineScheduler;第二变体 legacy ->
-    # WscLlmLegacyOnlineScheduler(WSC Relevant(P,D) 静态域 + FCFS 队头
-    # 阻塞)。分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式
-    # 传 kv_cache_policy;构造器各自 fail-closed 校验)。
+    # 阶段 7 §10.6(本仓 sh_3.0 口径):strategy 模式单变体,无
+    # kv_cache_policy 分发——直接构造 Sh30OnlineScheduler(构造器
+    # fail-closed 校验;--mode choices 唯一取值 strategy)。
     # sh_3.0 单变体：三段式准入 + decode 同实例 + 三态 KV
     # （Sh30OnlineScheduler 独立实现，无第二策略分支）。
     scheduler = Sh30OnlineScheduler(

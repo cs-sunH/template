@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """graph_batch_builder.py -- 在线 GraphBatch 构图器(方案 §4 步骤 1-8 操作 4)。
 
-阶段 1 最关键的对齐点:复用 generator 发射逻辑的节点结构。per-request 发射
+阶段 1 最关键的对齐点:复用共享发射原语的节点结构。per-request 发射
 (generate_face_trace.py 模块级函数)由
 助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
 transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
-  - 节点属性、插入顺序、rank ownership 跨 request 链结构一致(节点级审计口径);
-  - per-rank 节点 id 跨批次全局递增(与 generator per-rank id 序列一致);
+  - 节点属性、插入顺序、rank ownership 和跨 request 链结构稳定(节点级审计口径);
+  - per-rank 节点 id 跨批次全局递增;
   - interval gate 的 after_node_id 指向上一 request 的完成 barrier 节点 id
     (completion_gates 账本,跨批次解析)。
 
@@ -17,8 +17,8 @@ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceB
     arrival alarm(future_alarms)替代,gate 不再等待——保持时长会双重等待;
   - 每 request 拆两次发射:ARRIVAL 边界发射 prefill 整段(含 gates/history/
     recompute/barrier),PREFILL_DRAIN 边界发射 decode 整段(含 transfer 3000/
-    decode/end barrier)——离线同 request 一次写完,但 per-rank id 序列一致;
-  - watch 锚点与离线 metrics 锚点一致:PREFILL_DRAIN = prefill_bounds 每 rank
+    decode/end barrier);
+  - watch 锚点遵循共享 metrics 口径:PREFILL_DRAIN = prefill_bounds 每 rank
     末节点(排除 end barrier),DECODE_COMPLETION = end barrier 前每 rank 的
     decode 末节点(离线 doc sec.6.2/6.3/6.4 口径)。
 """
@@ -27,8 +27,8 @@ import os
 import sys
 
 # --------------------------------------------------------------------------
-# import 路径:本文件位于 workload/llama2_7b_inference/online/,离线写出模块在
-# 上一级。路径只做 import 用途(红线:generate_face_trace.py / face_
+# import 路径:本文件位于 workload/llama2_7b_inference/online/,共享配置与
+# 发射模块在上一级。路径只做 import 用途(红线:generate_face_trace.py / face_
 # scheduler.py 只读 import 与注释)。
 # --------------------------------------------------------------------------
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,15 +56,15 @@ from generate_face_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
 
 
 class OnlineTraceBuilder:
-    """与离线 TraceBuilder 同构的在线侧每-rank builder。
+    """与共享 TraceBuilder API 同构的在线侧每-rank builder。
 
     同一接口面:timer_gate / arm_timer_gate / comp / all_reduce / comm_send /
-    comm_recv / next_id / previous_id / node_count——离线助手函数可直接驱动。
+    comm_recv / next_id / previous_id / node_count——共享助手函数可直接驱动。
     与 TraceBuilder 的差异:节点发射为 GraphBatch nodes[] dict(而非 ChakraNode
-    字节流),依赖记录为 parent_edges[](离线 .et 的 data_deps 内联在节点里,
-    在线按边列表携带);timer_gate 忽略 duration(runtime_ns=0,alarm 替代等待)。
+    对象),依赖记录为 parent_edges[](而非节点内联 data_deps);timer_gate
+    忽略 duration(runtime_ns=0,alarm 替代等待)。
 
-    per-rank id 自 0 起全局递增(跨批次),与离线 .et 每 rank id 序列一致。
+    per-rank id 自 0 起全局递增并跨批次保留。
     """
 
     def __init__(self, rank: int, *, remote_operand_loads: bool):
@@ -136,16 +136,15 @@ class OnlineTraceBuilder:
                    after_node_id=None):
         """在线 timer gate:发射节点(runtime_ns=0,is_timer_op)。
 
-        与离线 TraceBuilder.timer_gate(generate_trace.py:697-719)完全同构:
+        与共享 TraceBuilder.timer_gate 的结构契约一致:
           - duration_ns == 0 → 直接返回 after_node_id,不发射节点
-            (离线 :707-709 同款;inter_request_interval_ns==0 的 request
-            在离线 .et 中没有 interval gate 节点,在线也必须没有);
+            (inter_request_interval_ns==0 的 request 不应多出 interval gate);
           - 否则直接创建节点(不经 _new_node)——不链 previous_id、不消费
             pending_extra_dependencies、不更新 previous_id;仅
             after_node_id 依赖(interval gate 依赖上一 request 完成
             barrier)。
-        离线语义(duration = 到达时刻/interval,gate 等待)由 C++ arrival
-        alarm(future_alarms)替代——gate 只保留结构与依赖,保持时长会双重
+        到达时刻/interval 的等待由 C++ arrival alarm(future_alarms)承担——
+        gate 只保留结构与依赖,保持时长会双重
         等待(见步骤 1-8 设计分析)。
         """
         if duration_ns < 0 or duration_ns % 1000 != 0:
@@ -235,8 +234,7 @@ class GraphBatchBuilder:
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
         # session_id -> (decode_instance_index, {rank: end_barrier_id});
-        # 与离线 writer 的 completion_gates 账本同构(interval gate 的
-        # after_node_id 来源)。
+        # completion_gates 保存动态跨 turn interval gate 的 after_node_id 来源。
         self.completion_gates = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -273,8 +271,12 @@ class GraphBatchBuilder:
         strategy 恒走 roofline 物理时钟。
 
         返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点 id}
-        (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier)。
+        (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。
         """
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
         self._set_context(request_plan, "prefill", 0)
         # strategy 模式保持物理跨 request 链(根因 #5 裁决):within-request 串行化;
         # decode 段 frontier 接续(2026-08-19 统一,见 _emit_decode);
@@ -289,7 +291,7 @@ class GraphBatchBuilder:
         decode 整段 / decode_request_end_barrier)(PREFILL_DRAIN 决策的图)。
 
         返回 DECODE_COMPLETION watch 成员:{rank: end barrier 前的 decode
-        末节点 id}(离线 doc sec.6.4 口径)。
+        末节点 id}(共享 DECODE_COMPLETION 锚点口径)。
         """
         self._set_context(request_plan, "decode", 1)
         marker = self._mark()
@@ -306,8 +308,7 @@ class GraphBatchBuilder:
     # ------------------------------------------------- per-request 发射主体 --
 
     def _emit_prelim(self, request_plan: dict) -> dict:
-        """离线 writer 的 turn-gates/history/barrier/current_prefill 块
-        (generate_face_trace.py:1093-1213 的在线复刻)。"""
+        """发射动态 GraphBatch 的 turn-gates/history/barrier/current-prefill 块。"""
         builders = self.builders
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
         prefix = _prefix_of(request_plan)
@@ -316,8 +317,7 @@ class GraphBatchBuilder:
             if request.session_arrival_time_ns is None:
                 raise RuntimeError("first request lost its session arrival")
             # 在线:timer gate runtime=0,到达时间由 C++ arrival alarm 替代。
-            # duration 传真实 session_arrival_time_ns(离线同参):0 时离线
-            # 不发射 gate 节点,在线同款跳过。
+            # duration 传真实 session_arrival_time_ns；0 时不发射 gate 节点。
             timers = {
                 rank: builders[rank].timer_gate(
                     "{}_arrival_timer_gate".format(prefix),
@@ -333,9 +333,8 @@ class GraphBatchBuilder:
                     "later request has no completion interval gate")
             previous_index, previous_nodes = previous
             previous_group = self.group_by_index[previous_index]
-            # duration 传真实 inter_request_interval_ns(离线同参):0 时离线
-            # 不发射 interval gate 节点(返回 after_node_id 直接作依赖),
-            # 在线同款跳过——与离线 .et 节点数/依赖逐字节一致。
+            # duration 传真实 inter_request_interval_ns；0 时不发射 interval
+            # gate 节点，直接以 after_node_id 建立依赖。
             timers = {
                 rank: builders[rank].timer_gate(
                     "{}_interval_timer_gate".format(prefix),
@@ -391,27 +390,25 @@ class GraphBatchBuilder:
             initial_context_tokens=request_plan["history_tokens_before"],
         )
         # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
-        # (与离线 EVENT_PREFILL_END 锚点一致,排除 end barrier)。
+        # (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。
         members = {rank: bounds[1] for rank, bounds in prefill_bounds.items()}
         return members
 
     def _emit_decode(self, request_plan: dict) -> dict:
-        """离线 writer 的 transfer 3000 + decode 整段 + end barrier 块
-        (generate_face_trace.py:1215-1275 的在线复刻)。"""
+        """发射动态 GraphBatch 的 transfer-3000、decode 和 end-barrier 块。"""
         builders = self.builders
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
         decode_group = self.group_by_index[request_plan["decode_instance_index"]]
         prefix = _prefix_of(request_plan)
         # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,对齐 sh_1.0/
         # sh_2.0)] strategy **不做任何块末恢复/段内清链**:per-rank
-        # previous_id 无条件接续当前 frontier(= 离线 writer 跨 request
-        # 物理链同构),per-rank 发行序 = 全局发射序——任意两个发射段在
+        # previous_id 无条件接续当前 frontier，per-rank 发行序 = 全局发射序——
+        # 任意两个发射段在
         # 所有共享 rank 上的相对次序一致,跨请求 P2P(send/recv tag 匹配)
         # 与 collective 参与序不可能反转成环。transfer3000 的 comm_send
         # (prefill rank)链当前 frontier(经 per-rank 全序传递性仍包含本
         # request 的 prefill 块末);comm_recv(decode rank)链当前 frontier
-        # (跨 request 边,含上一 request 的 decode end barrier),与离线
-        # .et 的 recv 链"上一完整 request 块末"同构。(2026-08-15 的
+        # (跨 request 边,含上一 request 的 decode end barrier)。(2026-08-15 的
         # own-prefill-end 恢复 / None-restore 裁决自此废止。)
         _paired_transfer(
             config=self.config, builders=builders,
@@ -440,8 +437,8 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
             )
-            # 离线 doc sec.6.4: completion candidate = end barrier 前每 rank
-            # 的 decode 末节点(DECODE_COMPLETION watch 成员)。
+            # completion candidate = end barrier 前每 rank 的 decode 末节点
+            # (DECODE_COMPLETION watch 成员)。
             members[rank] = builders[rank].previous_id
             builders[rank].all_reduce(
                 "{}_decode_request_end_barrier".format(prefix), 1,
@@ -458,8 +455,7 @@ class GraphBatchBuilder:
     # ------------------------------------------------- legacy 变体发射(10.6) --
 
     def emit_prefill_batch_legacy(self, request_plan: dict) -> dict:
-        """legacy 变体 prefill 整段(离线 legacy writer 的在线复刻:
-        generate_face_trace.py legacy 分支 :1530-1701 区段)。
+        """legacy 变体的动态 GraphBatch prefill 整段。
 
         与 session_lru 路径的结构差异(legacy 语义,不得抹平):
           - turn-0:global_arrival_timer_gate(同构);
@@ -469,6 +465,10 @@ class GraphBatchBuilder:
             prefill_chunks_aggregated_end_barrier(bytes=pass_count)。
         返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点}。
         """
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
         self._set_context(request_plan, "prefill", 0)
         builders = self.builders
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]

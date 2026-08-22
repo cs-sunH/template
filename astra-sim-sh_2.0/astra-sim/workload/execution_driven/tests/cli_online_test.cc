@@ -176,9 +176,11 @@ int main() {
                .find("--online-mode") != std::string::npos);
 
     // R11: phase-7 §10.4 --request-window-rows / --request-max-arrival-ns
-    // (defaults: 128 rows / unbounded arrival window -- backport fix
-    // 2026-08-16 对比报告 §5.1; the old 30e9 default silently rejected
-    // later turn-0 rows of longer inputs)
+    // (defaults: 128 rows / 0 = UNBOUNDED arrival window -- backport fix
+    // 2026-08-16, sh_2.0测试 §5.1: the old 30e9 default burned the 30s
+    // acceptance window into the code and silently dropped over-window
+    // requests; the bound is now explicit-only and its drops fail-close
+    // the run-end completion audit)
     assert(parse_ok({"--online-mode", "strategy"}, out));
     assert(out.request_window_rows == 128);
     assert(out.request_max_arrival_ns == 0);

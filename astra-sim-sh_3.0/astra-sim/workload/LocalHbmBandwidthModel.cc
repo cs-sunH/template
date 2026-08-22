@@ -218,6 +218,13 @@ void LocalHbmBandwidthModel::issue_job(
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
     advance_to(Sys::boostedTick());
+    if (tensor_size == 0) {
+        // Zero-byte endpoints never create an HBM job (the Workload layer
+        // already guards this); reaching here is a wiring bug, not a data
+        // property: fail closed instead of silently stalling the node.
+        throw std::runtime_error(
+            "local HBM model refused a zero-byte job");
+    }
     const bool joins_active_jobs = !jobs.empty();
     jobs.push_back(Job{
         kind,

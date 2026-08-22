@@ -39,7 +39,7 @@ Expected state-transition log across all scenarios: 2 (scenario 1), 4
 (scenario 2), 2 (scenario 3), 2 (scenario 4; the log records the NEW state
 of each transition, initial IDLE is not an entry).
 
-Build (from template/astra-sim-sh_3.0):
+Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -pthread -I extern/network_backend/analytical/include/astra-network-analytical \
       -I . astra-sim/workload/execution_driven/tests/ingress_idle_fixture.cc \
       astra-sim/workload/execution_driven/RequestIngress.cc \

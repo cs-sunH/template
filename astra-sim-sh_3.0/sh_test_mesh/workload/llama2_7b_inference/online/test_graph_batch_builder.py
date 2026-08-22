@@ -2,10 +2,10 @@
 """test_graph_batch_builder.py -- 在线 chain_checkpoint/restore_chain 完整
 同构修正的行为钉子测试。
 
-背景（《5仓库本该一致却不同排查报告.md》低危表 L10 行 +
-《低-10sh_3.0restore_chain完整同构修正执行方案.md》§4.1，2026-08-20）：
+背景（《5仓库本该一致却不同排查报告.md》低危表 L10 行，
+2026-08-20）：
 sh_3.0 在线 OnlineTraceBuilder.chain_checkpoint/restore_chain 原只存/回
-previous_id，与离线蓝本（generate_trace.py:732-744）和 sh_2.0 在线版
+previous_id，与离线蓝本（generate_trace.py）和 sh_2.0 在线版
 （:153-158）的"双捕获/双回滚"不同构。补齐后 checkpoint 同时捕获
 previous_id 与 pending_extra_dependencies，restore 两者一并回滚——分支内
 新 arm 的依赖不泄漏到恢复点之后。本测试钉住该语义，并回归恒空场景

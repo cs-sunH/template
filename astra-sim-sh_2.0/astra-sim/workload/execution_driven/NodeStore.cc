@@ -101,6 +101,11 @@ std::optional<OnlineNode> NodeStore::node(uint64_t node_id) const {
     return it->second.node;
 }
 
+const OnlineNode* NodeStore::node_ptr(uint64_t node_id) const {
+    const auto it = nodes_.find(node_id);
+    return it == nodes_.end() ? nullptr : &it->second.node;
+}
+
 std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
     const auto it = nodes_.find(node_id);
     if (it == nodes_.end()) {
@@ -218,12 +223,28 @@ std::vector<NodeView> NodeStoreGraphSource::dep_free_nodes() {
     return views;
 }
 
+void NodeStoreGraphSource::for_each_dep_free(
+    const std::function<void(const NodeView&)>& consume) {
+    // resolve_free_nodes() returns a snapshot (vector by value), so
+    // consume() may safely mutate the free set / release dependencies.
+    for (const auto node_id : store_.resolve_free_nodes()) {
+        const OnlineNode* node = store_.node_ptr(node_id);
+        if (node != nullptr) {
+            consume(*node);
+        }
+    }
+}
+
 void NodeStoreGraphSource::finish_node(uint64_t node_id) {
     store_.finish_node(node_id);
 }
 
 std::optional<NodeView> NodeStoreGraphSource::lookup(uint64_t node_id) {
     return store_.node(node_id);
+}
+
+const NodeView* NodeStoreGraphSource::lookup_ptr(uint64_t node_id) {
+    return store_.node_ptr(node_id);
 }
 
 void NodeStoreGraphSource::take_node(uint64_t node_id) {

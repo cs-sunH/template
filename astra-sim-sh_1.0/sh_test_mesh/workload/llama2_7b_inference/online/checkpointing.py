@@ -2,7 +2,7 @@
 
 总体方案 §5.6:检查点只保存恢复所需的窗口位置、活动账本、KV 元数据、
 ingress sequence 和最近的幂等状态,采用临时文件加原子替换,只保留有界
-数量的检查点。本模块是 sh_1.0 的落地件:
+数量的检查点。本模块是该设计的落地件:
 
 - `write_checkpoint(path, payload, keep)`:把 `payload`(可 JSON 序列化的
   dict)原子写入 `path`——先写 `<path>.tmp` 再 `os.replace`(读者永远看

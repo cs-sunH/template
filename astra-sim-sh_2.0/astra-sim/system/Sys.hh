@@ -8,8 +8,6 @@ LICENSE file in the root directory of this source tree.
 
 #include <chrono>
 
-#include <memory>
-
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/Callable.hh"
@@ -35,7 +33,6 @@ class OfflineGreedy;
 
 namespace ExecutionDriven {
 class GraphSource;
-enum class ExecutionMode;
 }  // namespace ExecutionDriven
 
 class Sys : public Callable {
@@ -70,6 +67,11 @@ class Sys : public Callable {
 
     // Constructor / Destructor
     // -------------------------------------------------
+    // execution_mode/graph_source: step-1-2 execution-mode factory
+    // (ExecutionMode.hh / GraphSource.hh). The Static default keeps the
+    // legacy main.cc call site and the byte-for-byte static behavior
+    // unchanged; Online mode never constructs the ETFeeder and never
+    // requires .et files.
     Sys(int id,
         std::string workload_configuration,
         std::string comm_group_configuration,
@@ -268,13 +270,12 @@ class Sys : public Callable {
     // workload
     Workload* workload;
 
-    // step-1-2 execution-mode factory state (see constructor comment):
-    // online mode injects the dynamic GraphSource at Sys creation and never
-    // constructs the ETFeeder (strategy keeps real physics).
+    // step-1-2 execution-mode factory state (see constructor comment).
     ExecutionDriven::ExecutionMode execution_mode_ =
         ExecutionDriven::ExecutionMode::Static;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-
+    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
+    // --online-mode replay; strategy mode keeps real physics (false).
     // roofline model
     bool roofline_enabled;
     double peak_perf;
@@ -289,13 +290,13 @@ class Sys : public Callable {
     uint64_t remote_mem_latency;
     double pipeline_tile_fraction;
     bool hbm_kv_restore_bandwidth_sharing;
-    // sh_2.0 N-way HBM contention master switch (system key
-    // "hbm-bandwidth-contention", default true; forced false when
-    // local-mem-bw <= 0). true: the N-way equal-split LocalHbmBandwidthModel
-    // takes over every HBM user (COMP, KV restore, NoC p2p comm endpoints,
-    // off-chip pool endpoints). false: legacy behavior is fully preserved,
-    // including the two-user 50/50 semantics of the old
-    // hbm-kv-restore-bandwidth-sharing flag (A/B baseline).
+    // N-way equal-split HBM contention (system key "hbm-bandwidth-contention",
+    // code default true): true = the LocalHbmBandwidthModel takes over every
+    // HBM user on the rank (COMP, KV restore, NoC p2p comm endpoints, pool
+    // endpoints) under full_rate/N strict equal split; false = the legacy
+    // behavior is fully preserved (the old "hbm-kv-restore-bandwidth-sharing"
+    // two-user 50/50 semantics remain available for A/B). local-mem-bw <= 0
+    // auto-disables the flag.
     bool hbm_bandwidth_contention;
     AstraRemoteMemoryAPI* remote_mem;
 

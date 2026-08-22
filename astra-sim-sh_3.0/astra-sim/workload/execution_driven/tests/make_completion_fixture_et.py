@@ -77,6 +77,12 @@ COMM_GROUP = (
     / "face_case5_config_c__validation-160gib__edge_remote_memory_pool"
     / "comm_group.json"
 )
+# Ranks with a configured PER_NPU_MEMORY_EXPANSION port (remote_memory.json
+# npu-ids; 26 edge ranks) -- only these get the remote-mem fixture node.
+REMOTE_PORT_RANKS = frozenset(
+    [0, 1, 2, 3, 4, 5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41, 42,
+     47, 48, 49, 50, 51, 52, 53]
+)
 
 
 def uint64_attr(name: str, value: int) -> ChakraAttr:
@@ -144,7 +150,6 @@ def main() -> None:
             # ranks (edge_remote_memory_pool profile, npu-ids); non-port
             # ranks must not emit a remote MEM node (AnalyticalRemoteMemory
             # fails closed with "no configured remote-memory port").
-            REMOTE_PORT_RANKS = [0, 1, 2, 3, 4, 5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41, 42, 47, 48, 49, 50, 51, 52, 53]
             nodes = [invalid, comp, coll]
             if rank in REMOTE_PORT_RANKS:
                 remote_mem = ChakraNode()

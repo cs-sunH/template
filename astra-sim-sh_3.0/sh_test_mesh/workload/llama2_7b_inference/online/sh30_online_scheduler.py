@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """sh30_online_scheduler.py -- sh_3.0 关感知策略调度器（strategy 模式，步骤 1-9）。
 
-以 plan_face_requests（face_scheduler.py:3529-4211）为蓝本迁移，保持决策顺序
+以已移除的离线 plan_face_requests（2026-08-21 离线 planner 清除批删去）为蓝本迁移，保持决策顺序
 逐行对应（每处迁移用 `# offline: face_scheduler.py:XXXX` 注释标注）。离线事件
 循环与在线边界的一一对应：
 
@@ -17,12 +17,15 @@
     下一 turn arrival（:4000-4006）                 _on_request_complete（同 tick）
   completion_order 批（:4008-4042）               _on_request_complete
     mark_complete / enforce_reserve / 快照          同名调用逐行迁移
-  arrival 批（:4044-4058）                        _on_arrival（truncate_history →
-                                                 pending_admissions → retry）
+  arrival 批（:4044-4058）                        _on_arrival（记 arrival →
+                                                 pending_admissions → retry；
+                                                 truncate_history 已随 sidecar
+                                                 机制移除，recompute 单口径下
+                                                 恒 no-op）
   admit_waiting_requests（:4060-4061）            _admit_pass 同 tick 末尾复查
   start_ready_iterations（:3833-3890）            _admit_pass 的发射部分：
-                                                 **LUT 计时部分删除**（:3853-3858
-                                                 lookup 与 :3885-3890 推事件），
+                                                 **直接 Roofline 计时部分删除**（:3853-3858
+                                                 估算与 :3885-3890 推事件），
                                                  排队/配对语义（busy 判定、
                                                  FCFS qp、active_decode 成员）
                                                  原样保留于账本逻辑。
@@ -35,7 +38,7 @@ task_load_snapshot 三分量（Roofline 估计服务时间；queued 分量逐行
 （KVCacheManager 只读复用，红线 #6-#9）。不新增任何 C++ 状态读取。
 
 与离线蓝图的刻意差异（real-online 语义，合同⑦）：
-  - 计时/迭代粒度：离线 LUT 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
+  - 计时/迭代粒度：离线直接 Roofline 时钟 + 逐 chunk 迭代 -> 在线真实完成事件 +
     request-aggregated 构图（prefill 整段 + decode 整段，与离线 ET 粒度
     一致）；
   - decode 段发射：离线一次 iteration 混合 qp[0] chunk + 全部 active
@@ -64,7 +67,6 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _path)
 
 from face_scheduler import (  # noqa: E402
-    PREFILL_CHUNK_SIZE,
     FaceInstanceSpec,
     KVCacheManager,
     edge_free_instance_mask,
@@ -80,108 +82,6 @@ from online.online_scheduler_base import (  # noqa: E402
     STAGE_REQUEST,
     OnlineSchedulerBase,
 )
-# ---- build_plan_dict 族(共享 plan 构造符号,被本调度器与对账工具消费) ----
-
-class _LocationShim:
-    """history_location_before 的 dict -> 属性面 shim（builder/
-    reconcile_pending_history_location 消费）。"""
-
-    __slots__ = ("location", "instance_index", "resident_prefix_layers",
-                 "total_bytes", "context_tokens")
-
-    def __init__(self, record):
-        self.location = record["location"]
-        self.instance_index = record["instance_index"]
-        self.resident_prefix_layers = record["resident_prefix_layers"]
-        self.total_bytes = record["total_bytes"]
-        self.context_tokens = record["context_tokens"]
-
-
-def _shard_from_dict(shard: dict) -> KVTransferShard:
-    return KVTransferShard(
-        source_rank=shard["source_rank"],
-        target_rank=shard["target_rank"],
-        edge_rank=shard["edge_rank"],
-        bytes=shard["bytes"],
-        noc_path=tuple(shard["noc_path"]),
-        layer_start=shard["layer_start"],
-        layer_end=shard["layer_end"],
-    )
-
-
-def _transfer_from_dict(record: dict) -> KVTransfer:
-    return KVTransfer(
-        kind=record["kind"],
-        phase=record["phase"],
-        reason=record["reason"],
-        session_id=record["session_id"],
-        trigger_request_id=record["trigger_request_id"],
-        source_instance_index=record["source_instance_index"],
-        target_instance_index=record["target_instance_index"],
-        total_bytes=record["total_bytes"],
-        shards=tuple(
-            _shard_from_dict(shard) for shard in record["shards"]),
-        model_layers=record["model_layers"],
-        layer_start=record["layer_start"],
-        layer_end=record["layer_end"],
-        resident_prefix_layers_before=record["resident_prefix_layers_before"],
-        resident_prefix_layers_after=record["resident_prefix_layers_after"],
-    )
-
-
-def _transfers(records, key):
-    return tuple(
-        _transfer_from_dict(record)
-        for record in records["transfers_by_stage"][key])
-
-
-def build_plan_dict(record: dict) -> dict:
-    """manifest 逐请求记录 -> graph_batch_builder 消费的 plan dict。"""
-    timing = record["planned_timing_ns"]
-    history_location = record.get("history_location_before")
-    pd_records = record["transfers_by_stage"]["prefill_decode_transfer"]
-    return {
-        "request_id": record["request_id"],
-        "session_id": record["session_id"],
-        "turn_index": record["turn_index"],
-        "queue_index": record["queue_index"],
-        "prefill_length": record["prefill_length"],
-        "decode_length": record["decode_length"],
-        "prefill_instance_index":
-            record["prefill_assignment"]["instance_index"],
-        "decode_instance_index":
-            record["decode_assignment"]["instance_index"],
-        "prefill_affinity_reason":
-            record["prefill_assignment"].get("affinity_reason"),
-        "history_tokens_before": record["history_tokens_before"],
-        "prefill_context_tokens": record["prefill_context_tokens"],
-        "final_context_tokens": record["final_context_tokens"],
-        "admission_time_ns": timing["hbm_admission"],
-        "hbm_wait_ns": timing["hbm_wait"],
-        "history_source_instance_index":
-            record["history_source_instance_index"],
-        "history_transfer_bytes": record["history_transfer_bytes"],
-        "history_tokens_discarded": record["history_tokens_discarded"],
-        "history_location_before": (
-            None if history_location is None
-            else _LocationShim(history_location)),
-        "history_evictions":
-            _transfers(record, "history_evictions"),
-        "history_transfer": (
-            _transfer_from_dict(record["transfers_by_stage"]
-                                ["history_transfer"][0])
-            if record["transfers_by_stage"]["history_transfer"] else None),
-        "prefill_evictions": _transfers(record, "prefill_evictions"),
-        "decode_evictions": _transfers(record, "decode_evictions"),
-        "prefill_decode_transfer": (
-            _transfer_from_dict(pd_records[0]) if pd_records else None),
-        "completion_evictions": _transfers(record, "completion_evictions"),
-        "kv_location_after_completion":
-            record["completion_kv_location"]["location"],
-        "kv_instance_after_completion":
-            record["completion_kv_location"]["instance_index"],
-    }
-
 
 
 class _OnlineInstanceState:
@@ -253,6 +153,8 @@ class _OnlineRequestRuntime:
         self.decode_instance_index = None
         self.history_source_instance_index = None
         self.history_transfer_bytes = 0
+        # recompute 单口径下恒 0（截断通道已随 sidecar 移除）；字段保留
+        # 以稳定 decision_log/manifest 输出 schema。
         self.history_tokens_discarded = 0
         self.history_location_before = None
         self.history_transfer = None
@@ -271,8 +173,8 @@ class _OnlineRequestRuntime:
         self.completed = False
 
     def plan_dict(self) -> dict:
-        """graph_batch_builder 消费的 plan 字段（与 replay 的
-        build_plan_dict 同构；KV 决策字段在准入/完成时已落账本）。"""
+        """graph_batch_builder 消费的 plan 字段（KV 决策字段在准入/完成时
+        已落账本）。"""
         return {
             "request_id": self.request_id,
             "session_id": self.session_id,
@@ -307,7 +209,7 @@ class _OnlineRequestRuntime:
 class Sh30OnlineScheduler(OnlineSchedulerBase):
     """strategy 变体：sh_3.0 三段式准入 + decode 同实例 + 三态 KV（关感知）。
 
-    蓝本：plan_face_requests（face_scheduler.py:3529-4211）。拓扑 / edge_free
+    蓝本：已移除的离线 plan_face_requests。拓扑 / edge_free
     掩码 / KV 账本（与离线同一函数、同参数）在 __init__ 一次性构建，运行期
     策略输入全部来自这些 Python 账本。
     """
@@ -325,16 +227,19 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         if mode != "strategy":
             raise ValueError("Sh30OnlineScheduler requires mode == 'strategy'")
         self.graph = graph
-        self.p_chunk = PREFILL_CHUNK_SIZE  # offline: face_scheduler.py:3545
+        p_chunk = int(config.prefill_chunk_size)
+        if p_chunk <= 0:
+            raise ValueError("online path requires an explicit positive p_chunk")
+        self.p_chunk = p_chunk
 
-        # offline: face_scheduler.py:3562-3569 的 build_instances 同参。
+        # offline: face_scheduler.py 的 build_instances 同参。
         specs = tuple(
             FaceInstanceSpec(group.name, group.pg_name, group.ranks)
             for group in config.inference_groups
         )
         self.topology = build_instances(
             config.hardware, specs, require_equal_size=True)
-        # offline: face_scheduler.py:3577-3580 的 edge_free_mask/edge_mask
+        # offline: face_scheduler.py 的 edge_free_mask/edge_mask
         # 一次性计算。
         self.kv_manager = KVCacheManager(
             self.topology,
@@ -387,7 +292,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
         self.arrival_heap = []
         self._sequence = 0
-        # offline: face_scheduler.py:3602 的 pending_admissions FIFO。
+        # offline: face_scheduler.py 的 pending_admissions FIFO。
         self.pending_admissions = deque()
         self.completed_requests = 0
         # §7.3 ready frontier：非忙且有排队工作的实例集合。
@@ -400,7 +305,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         completion_order 处理）先于 arrival 批（priority 1），最后
         admit + start_ready_iterations（:4060-4062）。"""
         tick = delta["tick"]
-        # ---- completion 批（offline: face_scheduler.py:3946-4081）----
+        # ---- completion 批（offline: face_scheduler.py）----
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
@@ -414,17 +319,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 raise ValueError(
                     "unknown completion stage {!r} for request {!r}".format(
                         stage, request_id))
-        # ---- arrival 批（offline: face_scheduler.py:4083-4097）----
+        # ---- arrival 批（offline: face_scheduler.py）----
         for arrival in delta["arrivals"]:
             self._push_arrival(arrival, tick)
         self._drain_arrival_heap(tick)
-        # ---- 准入/发射 pass（offline: face_scheduler.py:4099-4101）----
+        # ---- 准入/发射 pass（offline: face_scheduler.py）----
         self._admit_pass(tick)
 
     # ------------------------------------------------------------- 边界 --
 
     def _push_arrival(self, arrival: dict, tick: int) -> None:
-        """offline: face_scheduler.py:3585-3592 push_event(time_ns, 1,
+        """offline: face_scheduler.py push_event(time_ns, 1,
         "arrival", index) 的在线等价（ingress ARRIVAL 事件喂入）。"""
         runtime = self.runtime_by_request_id[arrival["request_id"]]
         heapq.heappush(
@@ -434,7 +339,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._sequence += 1
 
     def _drain_arrival_heap(self, tick: int) -> None:
-        """offline: face_scheduler.py:3931-3944 同 tick 批 + (priority,
+        """offline: face_scheduler.py 同 tick 批 + (priority,
         sequence) 排序（:3903）。"""
         due = []
         while self.arrival_heap and self.arrival_heap[0][0] <= tick:
@@ -446,21 +351,16 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self._on_arrival(runtime, tick)
 
     def _on_arrival(self, runtime, tick: int) -> None:
-        """offline: face_scheduler.py:4083-4097 arrival 批单条。"""
+        """offline: face_scheduler.py arrival 批单条。"""
         if runtime.estimated_arrival_ns is not None:
             raise RuntimeError(
                 "request arrival was delivered more than once")
         runtime.estimated_arrival_ns = tick
-        runtime.history_tokens_discarded = self.kv_manager.truncate_history(
-            runtime.session_id,
-            runtime.history_tokens_before,
-            trigger_request_id=runtime.request_id,
-        )
         self.pending_admissions.append(runtime)
         self._retry = True
 
     def _on_prefill_drain(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:3970-4023 prefill 末 chunk 完成分支
+        """offline: face_scheduler.py prefill 末 chunk 完成分支
         （decode 固定同实例 :3944-3949），逐行迁移；构图替换为 decode 整段
         发射（聚合粒度）。"""
         runtime = self.runtime_by_request_id[request_id]
@@ -473,7 +373,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self._ready_frontier.add(state.index)
         else:
             self._ready_frontier.discard(state.index)
-        # offline: face_scheduler.py:3976-3979（expand_prefill）
+        # offline: face_scheduler.py（expand_prefill）
         runtime.prefill_evictions = self.kv_manager.expand_prefill(
             session_id=runtime.session_id,
             instance_index=state.index,
@@ -481,7 +381,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request_id,
             reservation_request_id=runtime.request_id,
         )
-        # offline: face_scheduler.py:3983-3988（decode 固定 prefill 同实例）
+        # offline: face_scheduler.py（decode 固定 prefill 同实例）
         selected = state.index
         runtime.decode_instance_index = selected
         reservation_move_evictions = (
@@ -520,7 +420,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._emit_decode(runtime, tick)
 
     def _on_decode_complete(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:4025-4038 decode 完成分支（下一次
+        """offline: face_scheduler.py decode 完成分支（下一次
         arrival 排程移至 _on_request_complete，同 tick 同顺序）。"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
@@ -538,11 +438,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self.completed_requests += 1
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
-        """offline: face_scheduler.py:4039-4081（completion_order 批：下一
+        """offline: face_scheduler.py（completion_order 批：下一
         turn arrival 排程 :4000-4006 + mark_complete :4016-4020 +
         enforce_reserve :4021-4031 + 快照 :4032-4042）。"""
         runtime = self.runtime_by_request_id[request_id]
-        # offline: face_scheduler.py:4055-4081 先 mark_complete /
+        # offline: face_scheduler.py 先 mark_complete /
         # enforce_reserve / 快照（completion_evictions 与终态 KV location
         # 落账本），再发射 interval gate（离线 writer :3064+ 同序）。
         # typed eviction：在线 runtime 是 manifest 派生账本（无 FaceRequest
@@ -577,7 +477,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             if interval is None:
                 raise RuntimeError(
                     "validated later request lost its interval")
-            # offline: face_scheduler.py:4045 push_event(now + interval, 1,
+            # offline: face_scheduler.py push_event(now + interval, 1,
             # "arrival", following) -> 在线 future alarm（alarm 时刻语义
             # 不变：完成 tick + interval）。
             self._batch["future_alarms"].append({
@@ -611,14 +511,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 准入 --
 
     def _admit_pass(self, tick: int) -> None:
-        """offline: face_scheduler.py:4099-4101（admit_waiting_requests +
-        start_ready_iterations 的排队/发射部分；LUT 计时删除）。"""
+        """offline: face_scheduler.py（admit_waiting_requests +
+        start_ready_iterations 的排队/发射部分；直接 Roofline 计时删除）。"""
         self._retry = False
         self._admit_waiting_requests(tick)
         self._start_ready_emissions(tick)
 
     def _admit_waiting_requests(self, now_ns: int) -> None:
-        """offline: face_scheduler.py:3864-3870 admit_waiting_requests，
+        """offline: face_scheduler.py admit_waiting_requests，
         逐行对应（blocked FIFO 重排语义保留）。"""
         blocked = deque()
         while self.pending_admissions:
@@ -628,7 +528,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self.pending_admissions.extend(blocked)
 
     def _try_admit_request(self, runtime, now_ns: int) -> bool:
-        """offline: face_scheduler.py:3717-3862 try_admit_request，逐行
+        """offline: face_scheduler.py try_admit_request，逐行
         迁移（三段式准入 + HBM 过滤 + reserve/prepare + qp 入队）。"""
         if runtime.estimated_arrival_ns is None:
             raise RuntimeError("request cannot be admitted before arrival")
@@ -772,8 +672,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     # ------------------------------------------------------------- 发射 --
 
     def _start_ready_emissions(self, now_ns: int) -> None:
-        """offline: face_scheduler.py:3872-3929 start_ready_iterations 的
-        发射部分（LUT 计时删除；busy/FCFS/active_decode 配对语义保留）。
+        """offline: face_scheduler.py start_ready_iterations 的
+        发射部分（直接 Roofline 计时删除；busy/FCFS/active_decode 配对语义保留）。
         §7.3 ready frontier：只访问非忙且有排队工作的实例（sorted 保持
         实例 index 序 = 离线 :3835 的循环序）。"""
         for instance_index in sorted(self._ready_frontier):
@@ -792,7 +692,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
     def _emit_prefill(self, runtime, tick: int) -> None:
         """聚合粒度发射 prefill 整段（watch 注册 PREFILL_DRAIN；
-        offline: face_scheduler.py:3875-3885 的发射对象为整段而非 chunk）。"""
+        offline: face_scheduler.py 的发射对象为整段而非 chunk）。"""
         plan = runtime.plan_dict()
         members = self.graph.emit_prefill_batch(plan)
         runtime.prefill_emitted = True
@@ -869,7 +769,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
     def _prefill_chunk_task_load_ns(self, *, instance_size, chunk_tokens,
                                     context_tokens) -> int:
-        """offline: face_scheduler.py:3605-3620（缓存同款）。"""
+        """offline: face_scheduler.py（缓存同款）。"""
         key = (instance_size, chunk_tokens, context_tokens)
         if key not in self._prefill_task_cache:
             self._prefill_task_cache[key] = estimate_prefill_task_load_ns(
@@ -879,7 +779,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         return self._prefill_task_cache[key]
 
     def _task_load_snapshot(self, state, now_ns: int):
-        """offline: face_scheduler.py:3660-3715 task_load_snapshot 的在线
+        """offline: face_scheduler.py task_load_snapshot 的在线
         子集。三分量口径（合同⑥），每个请求恰计一次：
           - queued_prefill：逐 chunk Roofline 求和（函数逐行复用
             :3612-3638；仅未发射请求 = 全量剩余 chunk，与离线

@@ -716,7 +716,7 @@ class SessionKVCacheManager:
         chiplet projection stays exactly removable), then each original
         segment is removed from the source ranks under its own key (doc
         sec.7.4/7.6).  Target add precedes source release, matching the
-        static ET ordering."""
+        dynamic GraphBatch transfer dependency ordering."""
 
         recorder = self._metrics_recorder
         if recorder is None:
@@ -1214,8 +1214,8 @@ class SessionKVCacheManager:
             )
         )
         before = self._remaining(target_instance_index)
-        # The static ET makes each receive precede source release.  Planner
-        # state is advanced atomically after the target has been admitted.
+        # The dynamic transfer contract admits target shards before releasing
+        # the source; planner state advances atomically after that admission.
         self._add_shards(target_instance_index, history_shards)
         self._remove_shards(source_instance, history_shards)
         state.instance_index = target_instance_index
