@@ -167,6 +167,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         # task-load 逐 chunk 估计缓存（同款 key 与已移除的离线 plan_face_requests 的
         # prefill_task_cache / sh_3.0 在线版一致）。
         self._prefill_task_cache: dict[tuple[int, int, int], int] = {}
+        # 改法A：estimate_decode_remaining_task_load_ns 的全参 key memo
+        # （与 _prefill_task_cache 同款；见 _decode_task_load_ns_cached）。
+        self._decode_task_load_cache = {}
 
         # offline: face_scheduler.py（topology）
         specs = tuple(
@@ -200,6 +203,20 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self.arrival_heap = []
         self._sequence = 0
         self.pending_admissions = deque()
+
+        # 改法D：KV 账本纪元重试门（face capacity_epoch 的调度器全局版——
+        # sh 系列 try_admit 的全部 False 判据是"全账本 HBM 可行性纯函数
+        # ∧ 静态掩码"，实例账本（qp/busy/active_decode）只影响选哪个、
+        # 不影响能不能）。_kv_ledger_epoch 在 9 个 KV 变更点后各 bump 一次；
+        # _admit_attempt_epoch 记录各 pending 条目上次失败时的纪元
+        # （sh_2.0 的 key = request_index，pending 队列元素即 index），
+        # 纪元未变则该条目本批跳过重试（重试必返同样的 False）。
+        self._kv_ledger_epoch = 0
+        self._admit_attempt_epoch = {}
+        # 影子验证开关（SH_ADMIT_GATE_VERIFY=1）：门跳过的条目仍完整评估
+        # 并断言必返 False——验证跑零收益、全检查；不设或非"1"则正常运行。
+        self._admit_gate_verify = (
+            os.environ.get("SH_ADMIT_GATE_VERIFY") == "1")
 
         self.runtime_by_request_id = {
             runtime.request.request_id: runtime for runtime in self.runtimes}
@@ -292,6 +309,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：expand_prefill 后 bump
         # offline: face_scheduler.py（select_decode_instance；精确 Roofline
         # 增量代价按当前候选状态直接计算）
         has_prefill_work = [bool(instance.qp) for instance in self.instances]
@@ -330,6 +348,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 target_instance_index=selected,
             )
         )
+        self._bump_kv_ledger_epoch()  # 改法D：move_request_capacity_reservation 后 bump
         # offline: face_scheduler.py
         (runtime.prefill_decode_transfer,
          decode_move_evictions) = self.kv_manager.move_prefill_to_decode(
@@ -338,6 +357,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：move_prefill_to_decode 后 bump
         # offline: face_scheduler.py
         decode_growth_evictions = self.kv_manager.expand_decode(
             session_id=runtime.request.session_id,
@@ -346,6 +366,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：expand_decode 后 bump
         runtime.decode_evictions = (
             reservation_move_evictions + decode_move_evictions
             + decode_growth_evictions
@@ -357,6 +378,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         )
         self.kv_manager.release_request_capacity_reservation(
             runtime.request.request_id)
+        self._bump_kv_ledger_epoch()  # 改法D：release_request_capacity_reservation 后 bump
         # offline: face_scheduler.py
         self.instances[selected].active_decode.append(index)
         runtime.decode_start_ns = tick
@@ -425,12 +447,14 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             tick,
             next_request_type=runtime.request.next_trigger_type,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：mark_complete 后 bump
         # offline: face_scheduler.py（enforce_reserve）
         (runtime.completion_evictions,
          runtime.reserve_unmet_ranks) = self.kv_manager.enforce_reserve(
             instance_index=runtime.decode_instance_index,
             trigger_request_id=runtime.request.request_id,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：enforce_reserve 后 bump
         # offline: face_scheduler.py（快照）
         completion_snapshot = self.kv_manager.session_snapshot(
             runtime.request.session_id)
@@ -474,6 +498,11 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
 
     # ------------------------------------------------------------- 准入 --
 
+    def _bump_kv_ledger_epoch(self) -> None:
+        """改法D：KV 账本纪元 +1。仅调度器的 9 个 KV 变更点后调用
+        （见各调用处注释）；可行性读取与 _check_invariants 只读、不 bump。"""
+        self._kv_ledger_epoch += 1
+
     def _try_admit_request(self, request_index: int, now_ns: int) -> bool:
         """离线 try_admit_request（:3676-3762）的逐行复刻。"""
         runtime = self.runtimes[request_index]
@@ -508,6 +537,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             instance_index=selected,
             final_context_tokens=runtime.final_context_tokens,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：reserve_request_capacity 后 bump
         runtime.prefill_instance_index = selected
         runtime.prefill_assignment_key = selected_snapshot.ordering_key
         runtime.prefill_instance_loads = snapshots
@@ -522,6 +552,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
             reservation_request_id=runtime.request.request_id,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：prepare_prefill 后 bump
         runtime.history_evictions = admission_evictions + prepare_evictions
         if runtime.request.turn_index > 0:
             if runtime.history_location_before is None:
@@ -546,8 +577,30 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         blocked = deque()
         while self.pending_admissions:
             request_index = self.pending_admissions.popleft()
-            if not self._try_admit_request(request_index, now_ns):
+            if (self._admit_attempt_epoch.get(request_index)
+                    == self._kv_ledger_epoch):
+                if self._admit_gate_verify:
+                    # 影子断言：门判跳过 ≡ 重试必返 False。
+                    if self._try_admit_request(request_index, now_ns):
+                        raise RuntimeError(
+                            "admit gate equivalence violated: request {} was "
+                            "admitted on a skipped retry (kv epoch {})".format(
+                                request_index, self._kv_ledger_epoch))
+                    self._admit_attempt_epoch[request_index] = (
+                        self._kv_ledger_epoch)
+                    blocked.append(request_index)
+                    continue
+                # 改法D：上次失败以来 KV 账本未变 → False 判据输入未变，
+                # 重试必返同样的 False，跳过（FIFO 位置不变）。
                 blocked.append(request_index)
+                continue
+            if not self._try_admit_request(request_index, now_ns):
+                self._admit_attempt_epoch[request_index] = (
+                    self._kv_ledger_epoch)
+                blocked.append(request_index)
+            else:
+                self._admit_attempt_epoch.pop(
+                    request_index, None)  # 成功即清除（有界）
         self.pending_admissions.extend(blocked)
 
         for state in self.instances:
@@ -614,6 +667,28 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             )
         return self._prefill_task_cache[key]
 
+    def _decode_task_load_ns_cached(self, *, instance_size,
+                                    current_context_tokens, generated_tokens,
+                                    average_decode_length,
+                                    running_step_fraction_remaining):
+        """改法A：estimate_decode_remaining_task_load_ns 的全参 key memo
+        （与 _prefill_task_cache 同款）。key 含今天恒定的 generated_tokens/
+        fraction/ADL——阶段 3 引入真实进度后自然分区，key 结构不变；
+        hardware/model 为运行期不可变量，经绑定不入 key。"""
+        key = (instance_size, current_context_tokens, generated_tokens,
+               average_decode_length, running_step_fraction_remaining)
+        cached = self._decode_task_load_cache.get(key)
+        if cached is None:
+            cached = estimate_decode_remaining_task_load_ns(
+                self.config_hardware(), self.config_model(),
+                instance_size=instance_size,
+                current_context_tokens=current_context_tokens,
+                generated_tokens=generated_tokens,
+                average_decode_length=average_decode_length,
+                running_step_fraction_remaining=running_step_fraction_remaining)
+            self._decode_task_load_cache[key] = cached
+        return cached
+
     def _task_load_snapshot(self, state: _OnlineInstanceState,
                             now_ns: int) -> InstanceTaskLoadSnapshot:
         """离线 task_load_snapshot（face_scheduler.py 起）的在线复刻。
@@ -653,9 +728,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             runtime = self.runtimes[request_index]
             generated_tokens = (
                 runtime.current_decode_token - runtime.prefill_context_tokens)
-            active_decode_load_ns += estimate_decode_remaining_task_load_ns(
-                self.config_hardware(),
-                self.config_model(),
+            active_decode_load_ns += self._decode_task_load_ns_cached(
                 instance_size=instance_size,
                 current_context_tokens=runtime.current_decode_token,
                 generated_tokens=generated_tokens,
@@ -770,3 +843,7 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "run ended with {} unconsumed arrival events".format(
                     len(self.arrival_heap)))
+        if self._admit_attempt_epoch:
+            raise RuntimeError(
+                "strategy run ended with stale admit attempt epochs: "
+                "{}".format(sorted(self._admit_attempt_epoch)[:5]))

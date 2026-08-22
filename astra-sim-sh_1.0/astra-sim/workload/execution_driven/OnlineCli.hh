@@ -49,6 +49,17 @@ online entry must parse its own family explicitly:
                         stays the decision channel only.
   --bridge-dir          reserved for the step-1-7 decision bridge; parsed and
                         stored but unused in step 1-2.
+  --bridge-timeout-ms   optional decision-bridge response-wait poll timeout
+                        in milliseconds (0 = wait forever, the frozen
+                        default). When > 0, a Python decision side stalled
+                        longer than the timeout aborts the run fail-closed
+                        with the standard Python-side-died diagnostics
+                        (long-run wedge watchdog, 2026-08-22 wedge-diagnosis
+                        recommendation; the value must exceed both the
+                        workload's worst single-decision time and the
+                        Python-side startup FIFO-open wait -- practical
+                        lower bound is seconds, suggest >= 10000;
+                        opt-in only).
   --close-input         mark the input closed after the CSV is fully drained
                         (otherwise the service stays ACTIVE waiting for the
                         step-1-7 bridge).
@@ -88,6 +99,10 @@ struct OnlineCliOptions {
     std::string mode;
     bool close_input = false;
     std::string bridge_dir;
+    // Decision-bridge response-wait poll timeout (ms; 0 = wait forever, the
+    // frozen default). Long-run wedge watchdog, opt-in only (2026-08-22
+    // wedge-diagnosis recommendation).
+    int bridge_timeout_ms = 0;
     std::string request_queue_csv;
     // Step 1-10: optional external-producer FIFO (IDLE fixture injection).
     std::string command_fifo;

@@ -75,6 +75,9 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler.model = model
     scheduler.average_decode_length = 10.0
     scheduler._prefill_task_cache = {}
+    # 改法A（decode 估算全参 memo）：_task_load_snapshot 的 active_decode 段
+    # 改读 _decode_task_load_ns_cached，脚手架同步装配其缓存字典。
+    scheduler._decode_task_load_cache = {}
     return scheduler
 
 

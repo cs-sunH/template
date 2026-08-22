@@ -29,6 +29,20 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
+
+# 长跑楔死看门狗（2026-08-22 楔死诊断建议，可选）：设 BRIDGE_TIMEOUT_MS
+# 为正毫秒数时向 C++ 桥传 --bridge-timeout-ms——Python 决策侧停滞超时即
+# fail-closed abort（cpp.log 出现 Python side died 行），替代"永等+外部盲杀"。
+# 值必须大于本负载最慢单决策耗时，且大于 Python 服务启动的 FIFO 开启
+# 等待（实际下界是秒级，建议 ≥10000=10s——过小会在启动窗口 abort C++，
+# Python 侧将阻塞在 fifo open）；缺省不设 = 永等（冻结默认）。
+# 监督纪律：终止长跑用 SIGTERM（kill <pid>），勿用 SIGINT/Ctrl-C——后者会
+# 冻结健康瞬态造成"楔死"伪影（2026-08-22 诊断结论）；疑似楔死时先保留
+# bridge 目录盘态与双方 /proc/<pid>/stack 再清理。
+BRIDGE_TIMEOUT_ARGS=()
+if [[ -n "${BRIDGE_TIMEOUT_MS:-}" ]]; then
+  BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
+fi
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 
 rm -rf "${RUN_DIR}"
@@ -40,6 +54,7 @@ cd "${PROJECT}"
   --online-mode strategy \
   --sensing-enabled \
   --bridge-dir "${RUN_DIR}/bridge" \
+  "${BRIDGE_TIMEOUT_ARGS[@]}" \
   --request-queue-csv "${REQUEST_CSV}" \
   --close-input \
   --workload-configuration="${ET_PREFIX}" \

@@ -757,6 +757,15 @@ class GraphBatchBuilder:
         duration = admission_time_ns(0 时不发射节点,timer_gate 同款跳过)。"""
         if request_plan["turn_index"] != 0:
             raise RuntimeError("arrival gate is a turn-0-only structure")
+        # turn-0 gate duration 先做 µs 下取整：admission_time_ns 是准入
+        # 时刻的虚拟 tick（Roofline 任意 ns 粒度，如 153516157242），
+        # timer_gate 的离线同构校验要求整 µs（duration_ns % 1000 != 0
+        # 即 raise）。该 duration 不进节点（runtime_ns=0、不存储），仅
+        # 驱动校验与 0 跳过，下取整对既有通过路径零影响；消除
+        # 2026-08-22 30s 窗 delivery seq=1145 确定性崩溃（阻塞 turn-0
+        # 在非 µs 对齐 tick 准入时触发）。
+        duration = request_plan["admission_time_ns"]
+        duration -= duration % 1000
         group = self.group_by_index[request_plan["prefill_instance_index"]]
         prefix = (
             f"q{request_plan['queue_index']:04d}_"
@@ -765,7 +774,7 @@ class GraphBatchBuilder:
         timers = tuple(
             self.builders[rank].timer_gate(
                 f"{prefix}_global_arrival_timer_gate",
-                request_plan["admission_time_ns"],
+                duration,
             )
             for rank in group.ranks
         )

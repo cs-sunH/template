@@ -124,6 +124,18 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             (record["session_id"], record["turn_index"]): record
             for record in manifest["requests"]
         }
+        # 改法D：KV 账本纪元重试门（face capacity_epoch 的调度器全局版——
+        # sh 系列 try_admit 的全部 False 判据是"全账本 HBM 可行性纯函数
+        # ∧ 静态掩码"，实例账本（qp/busy/active_decode）只影响选哪个、
+        # 不影响能不能）。_kv_ledger_epoch 在 9 个 KV 变更点后各 bump 一次；
+        # _admit_attempt_epoch 记录各 pending 条目上次失败时的纪元，
+        # 纪元未变则该条目本批跳过重试（重试必返同样的 False）。
+        self._kv_ledger_epoch = 0
+        self._admit_attempt_epoch = {}
+        # 影子验证开关（SH_ADMIT_GATE_VERIFY=1）：门跳过的条目仍完整评估
+        # 并断言必返 False——验证跑零收益、全检查；不设或非"1"则正常运行。
+        self._admit_gate_verify = (
+            os.environ.get("SH_ADMIT_GATE_VERIFY") == "1")
 
     # ------------------------------------------------------------- 策略 --
 
@@ -245,6 +257,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             final_context_tokens=runtime.final_context_tokens,
             now_ns=now_ns,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 1/9
         runtime.prefill_instance_index = selected
         runtime.prefill_assignment_key = selected_snapshot.ordering_key
         runtime.admission_time_ns = now_ns
@@ -257,6 +270,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=request_id,
             now_ns=now_ns,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 2/9
         runtime.history_evictions = admission_evictions + prepare_evictions
         if request.turn_index > 0:
             if runtime.history_location_before is None:
@@ -277,9 +291,33 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         blocked = deque()
         while self.pending_admissions:
             request_id = self.pending_admissions.popleft()
-            if not self.try_admit_request(request_id, now_ns):
+            if (self._admit_attempt_epoch.get(request_id)
+                    == self._kv_ledger_epoch):
+                if not self._admit_gate_verify:
+                    # 改法D：上次失败以来 KV 账本未变 → False 判据输入未变，
+                    # 重试必返同样的 False，跳过（FIFO 位置不变）。
+                    blocked.append(request_id)
+                    continue
+                # 影子断言：门判跳过 ≡ 重试必返 False。
+                if self.try_admit_request(request_id, now_ns):
+                    raise RuntimeError(
+                        "admit gate equivalence violated: request {} was "
+                        "admitted on a skipped retry (kv epoch {})".format(
+                            request_id, self._kv_ledger_epoch))
+                self._admit_attempt_epoch[request_id] = self._kv_ledger_epoch
                 blocked.append(request_id)
+                continue
+            if not self.try_admit_request(request_id, now_ns):
+                self._admit_attempt_epoch[request_id] = self._kv_ledger_epoch
+                blocked.append(request_id)
+            else:
+                self._admit_attempt_epoch.pop(request_id, None)  # 成功即清除（有界）
         self.pending_admissions.extend(blocked)
+
+    def _bump_kv_ledger_epoch(self) -> None:
+        """改法D：KV 账本纪元 +1。仅调度器的 9 个 KV 变更点后调用
+        （见各调用处注释）；可行性读取与 _check_invariants 只读、不 bump。"""
+        self._kv_ledger_epoch += 1
 
     # ------------------------------------------------- PREFILL_DRAIN(段 2) --
 
@@ -309,6 +347,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=request_id,
             now_ns=tick,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 3/9
         has_prefill = [bool(instance.qp) for instance in self.instances]
         active_tokens = [
             [self._runtimes[rid].current_decode_token
@@ -343,6 +382,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 now_ns=tick,
             )
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 4/9
         (runtime.prefill_decode_transfer, decode_move_evictions) = (
             self.kv_manager.move_prefill_to_decode(
                 session_id=runtime.request.session_id,
@@ -352,6 +392,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 now_ns=tick,
             )
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 5/9
         decode_growth_evictions = self.kv_manager.expand_decode(
             session_id=runtime.request.session_id,
             instance_index=selected,
@@ -360,6 +401,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=request_id,
             now_ns=tick,
         )
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 6/9
         runtime.decode_evictions = (
             reservation_move_evictions + decode_move_evictions
             + decode_growth_evictions)
@@ -368,6 +410,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             request_id=request_id,
         )
         self.kv_manager.release_request_capacity_reservation(request_id)
+        self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 7/9
         self.instances[selected].active_decode.append(request_id)
         # online: start_ready_iterations 的 decode 起始记账(:2927-2928)。
         runtime.decode_start_ns = tick
@@ -419,6 +462,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         for request_id in completion_order:
             self.kv_manager.mark_complete(
                 self._runtimes[request_id].request.session_id, tick)
+            self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 8/9
         # offline: :3099-3110 再全部 enforce_reserve
         for request_id in completion_order:
             runtime = self._runtimes[request_id]
@@ -428,6 +472,7 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 trigger_request_id=request_id,
                 now_ns=tick,
             )
+            self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 9/9
         # 完成快照(离线 :3111-3121)。
         for request_id in completion_order:
             runtime = self._runtimes[request_id]
@@ -632,6 +677,10 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                     incomplete[:5]))
         if any(state.qp or state.active_decode for state in self.instances):
             raise RuntimeError("online run ended with non-idle instance state")
+        if self._admit_attempt_epoch:
+            raise RuntimeError(
+                "strategy run ended with stale admit attempt epochs: "
+                "{}".format(sorted(self._admit_attempt_epoch)[:5]))
 
 
 class _OnlineRuntime:

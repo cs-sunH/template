@@ -469,6 +469,15 @@ class GraphBatchBuilder:
                 arrival = request.session_arrival_time_ns
             if arrival is None:
                 raise RuntimeError("first request lost its session arrival")
+            # turn-0 gate duration 先做 µs 下取整：admission_time_ns 是准入
+            # 时刻的虚拟 tick（Roofline 任意 ns 粒度，如 153516157242），
+            # timer_gate 的离线同构校验要求整 µs（duration_ns % 1000 != 0
+            # 即 raise）。该 duration 不进节点（runtime_ns=0、不存储），仅
+            # 驱动校验与 0 跳过，下取整对既有通过路径零影响；消除
+            # 2026-08-22 30s 窗 delivery seq=1145 确定性崩溃（阻塞 turn-0
+            # 在非 µs 对齐 tick 准入时触发）。
+            duration = arrival
+            duration -= duration % 1000
             # turn-0 gate 命名用短前缀（q{queue:04d}_{request_id}，
             # 无 session/turn 段）——canonical 命名 name 键逐字节一致前提。
             short_prefix = (
@@ -476,7 +485,7 @@ class GraphBatchBuilder:
                 f"{sanitize_node_prefix(request_plan['request_id'])}")
             timers = tuple(
                 builders[rank].timer_gate(
-                    f"{short_prefix}_global_arrival_timer_gate", arrival)
+                    f"{short_prefix}_global_arrival_timer_gate", duration)
                 for rank in prefill_group.ranks
             )
             pending_gate = PendingHistoryGate(

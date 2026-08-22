@@ -875,7 +875,9 @@ int main(int argc, char* argv[]) {
     // even when the run delivers nothing (IDLE fixture / zero-request runs),
     // so a zero-delivery run still terminates Python via EOF at exit.
     FileDecisionBridge::ensure_bridge_dir(online_cli.bridge_dir);
-    FileDecisionBridge bridge(online_cli.bridge_dir);  // timeout 0 (wait)
+    FileDecisionBridge bridge(online_cli.bridge_dir,
+                              online_cli.bridge_timeout_ms);
+    // timeout 0 = wait forever (frozen default; --bridge-timeout-ms opt-in).
     bridge.open_notify();
 
     // Step 1-5: the online CompletionObserver hook. It records completion

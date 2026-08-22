@@ -26,6 +26,10 @@ token):
   R10 phase 3: --sensing-enabled is a boolean feature flag, default OFF
        (感知开关必须经显式 feature flag 进入,阶段 6 前默认关); value form
        rejected; typos in the --sensing- family are hard errors.
+  R11 wedge watchdog (2026-08-22 wedge-diagnosis recommendation):
+       --bridge-timeout-ms is a non-negative integer (0 = wait forever,
+       the frozen default; both inline and separate value forms legal;
+       negative / garbage / over-int-range values are hard errors).
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I . astra-sim/workload/execution_driven/tests/cli_online_test.cc \
@@ -138,6 +142,25 @@ int main() {
     assert(parse_ok({"--online-mode", "strategy", "--bridge-dir", "/tmp/bridge"},
                     out));
     assert(out.bridge_dir == "/tmp/bridge");
+
+    // R11: --bridge-timeout-ms parsed and stored (both value forms); default
+    // 0 = wait forever; negative / garbage / over-int-range are hard errors.
+    assert(parse_ok({"--online-mode", "strategy",
+                     "--bridge-timeout-ms=300000"}, out));
+    assert(out.bridge_timeout_ms == 300000);
+    assert(parse_ok({"--online-mode", "strategy", "--bridge-timeout-ms",
+                     "300000"}, out));
+    assert(out.bridge_timeout_ms == 300000);
+    assert(parse_ok({"--online-mode", "strategy"}, out));
+    assert(out.bridge_timeout_ms == 0);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--bridge-timeout-ms=-1"})
+               .find("non-negative integer") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--bridge-timeout-ms=x"})
+               .find("non-negative integer") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--bridge-timeout-ms=99999999999"})
+               .find("int range") != std::string::npos);
 
     // R7: typos in the online family are hard errors
     assert(parse_error({"--online-mode", "strategy", "--request-qeue-csv=/x"})

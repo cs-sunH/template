@@ -51,6 +51,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     bool close_input = false;
     bool sensing_enabled = false;
     std::string bridge_dir;
+    int bridge_timeout_ms = 0;
     std::string request_queue_csv;
     std::string command_fifo;
     size_t request_window_rows = 128;
@@ -122,9 +123,11 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 command_fifo = value;
             }
         } else if (name == "--request-window-rows" ||
-                   name == "--request-max-arrival-ns") {
+                   name == "--request-max-arrival-ns" ||
+                   name == "--bridge-timeout-ms") {
             // Phase 7 §10.4: WindowedTraceReader knobs (window high water /
-            // turn-0 arrival upper bound). Non-negative integers.
+            // turn-0 arrival upper bound) + the bridge poll watchdog.
+            // Non-negative integers.
             if (!has_inline_value) {
                 if (i + 1 >= argc) {
                     error = "option " + name + " requires a value";
@@ -143,6 +146,13 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             }
             if (name == "--request-window-rows") {
                 request_window_rows = static_cast<size_t>(parsed);
+            } else if (name == "--bridge-timeout-ms") {
+                if (parsed > 2147483647ULL) {
+                    error = "option --bridge-timeout-ms exceeds int range, "
+                            "got: " + value;
+                    return false;
+                }
+                bridge_timeout_ms = static_cast<int>(parsed);
             } else {
                 request_max_arrival_ns = static_cast<uint64_t>(parsed);
             }
@@ -167,6 +177,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     out.mode = mode;
     out.close_input = close_input;
     out.bridge_dir = bridge_dir;
+    out.bridge_timeout_ms = bridge_timeout_ms;
     out.request_queue_csv = request_queue_csv;
     out.command_fifo = command_fifo;
     out.sensing_enabled = sensing_enabled;
