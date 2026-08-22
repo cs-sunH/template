@@ -120,7 +120,7 @@ fi
 # remote_fifo_ledger.jsonl(remote FIFO 实账本层逐交付快照,C++ 侧写出)。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log remote_fifo_ledger; do
+for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log remote_fifo_ledger train_ledger; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))

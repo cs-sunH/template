@@ -40,6 +40,11 @@ uint64_t WatchRegistry::register_stage_watch(
     identity_to_watch_.emplace(std::move(identity), watch_id);
     // Phase 4: per-request watch-id index (REQUEST_COMPLETE-commit removal).
     request_to_watch_ids_[request_id].push_back(watch_id);
+    // 拼 batch 适配(2026-08-22):列车哨兵入独立索引(fired 后由
+    // drain_fired_sentinels 回收,不依赖逐请求的 REQUEST_COMPLETE)。
+    if (request_id.rfind("batch_train_", 0) == 0) {
+        sentinel_watch_ids_.push_back(watch_id);
+    }
     return watch_id;
 }
 
@@ -153,10 +158,27 @@ void WatchRegistry::remove_watches_for_request(const std::string& request_id) {
     }
 }
 
+void WatchRegistry::drain_fired_sentinels() {
+    // 拼 batch 适配(2026-08-22):已 fire 的哨兵逐个移除(remove_watch
+    // 自带 identity/索引维护);未 fire 者留在列表头部等待下一轮。
+    size_t kept = 0;
+    for (size_t i = 0; i < sentinel_watch_ids_.size(); ++i) {
+        const uint64_t watch_id = sentinel_watch_ids_[i];
+        const auto it = watches_.find(watch_id);
+        if (it != watches_.end() && it->second.fired) {
+            remove_watch(watch_id);
+            continue;
+        }
+        sentinel_watch_ids_[kept++] = watch_id;
+    }
+    sentinel_watch_ids_.resize(kept);
+}
+
 void WatchRegistry::remove_all() {
     watches_.clear();
     identity_to_watch_.clear();
     request_to_watch_ids_.clear();
+    sentinel_watch_ids_.clear();
 }
 
 void WatchRegistry::set_fire_notifier(WatchFireNotifier notifier) {

@@ -170,6 +170,13 @@ class WatchRegistry {
     /// all empty).
     void remove_watches_for_request(const std::string& request_id);
 
+    /// 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch
+    /// (request_id 前缀 "batch_train_" 的批命名空间 watch)。哨兵不挂
+    /// 在任何请求上,REQUEST_COMPLETE 的逐请求回收覆盖不到;不回收则
+    /// T_max/oracle 模式下 run-end 空注册表审计必红。只清已 fire 者
+    /// (在飞列车的哨兵保留)。O(存活哨兵数)。
+    void drain_fired_sentinels();
+
     void remove_all();
 
     /// Fire notification (step 1-6 wires this to the DecisionMailbox push).
@@ -186,6 +193,9 @@ class WatchRegistry {
     // scan).
     std::unordered_map<std::string, std::vector<uint64_t>>
         request_to_watch_ids_;
+    // 拼 batch 适配(2026-08-22):哨兵 watch id 列表(drain_fired_
+    // sentinels 的 O(存活) 索引;普通请求 watch 不进此表)。
+    std::vector<uint64_t> sentinel_watch_ids_;
     std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;
 };

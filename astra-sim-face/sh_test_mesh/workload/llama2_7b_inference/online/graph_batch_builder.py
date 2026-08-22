@@ -9,18 +9,33 @@ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceB
 
   - 节点属性、插入顺序、rank ownership 和跨 request 链结构稳定(节点级审计口径);
   - per-rank 节点 id 跨批次全局递增;
-  - interval gate 的 after_node_id 指向上一 request 的完成 barrier 节点 id
-    (completion_gates 账本,跨批次解析)。
+  - interval gate 的 after_node_id 指向上一同 session request 所在列车 end
+    barrier 节点 id(completion_gates 账本,跨批次解析)。
+
+拼 batch 改造(2026-08-22,设计文档《层次 B Continuous Batching 改造》§3.2;
+sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段串行"重构为
+"实例迭代级列车"——decode 互拼、decode 与 prefill chunk 混拼、chunk 之间
+不拼、批成员只在迭代(列车)边界变化。strategy 路径的两段发射:
+  - 准入动作(emit_admission_batch)= 到达/interval timer gates + history
+    迁移(NOC_MIGRATE)或 control 触发链 + history readiness 屏障;prefill
+    主体(recompute 段 + 当前段 chunk)不再在此发射——移入实例迭代列车;
+  - 迭代列车(emit_iteration_train)= joiner 的 prefill→decode 迁移(3000
+    类 paired transfer,face 统一实例同实例时零节点)+ join/pstart 起始
+    标记(指标锚点)+ 折叠列车体(成员×迭代 span,weight_passes = 迭代数:
+    权重每迭代只读一次)+ drain/exit/哨兵标记节点(挂 PREFILL_DRAIN /
+    DECODE_COMPLETION watch)+ 每列车一个共享 end barrier;
+  - completion_gates 账本:exit 成员所在列车的 end barrier 即下一同 session
+    turn 的 interval gate after_node_id 来源。
 
 在线语义差异(刻意,注释标注):
   - timer gate 始终发射节点(结构保留)但 runtime_ns=0:到达时间由 C++ 的
     arrival alarm(future_alarms)替代,gate 不再等待——保持时长会双重等待;
-  - 每 request 拆两次发射:ARRIVAL 边界发射 prefill 整段(含 gates/history/
-    recompute/barrier),PREFILL_DRAIN 边界发射 decode 整段(含 transfer 3000/
-    decode/end barrier);
-  - watch 锚点遵循共享 metrics 口径:PREFILL_DRAIN = prefill_bounds 每 rank
-    末节点(排除 end barrier),DECODE_COMPLETION = end barrier 前每 rank 的
-    decode 末节点(离线 doc sec.6.2/6.3/6.4 口径)。
+  - watch 锚点(拼 batch 改造起由列车标记承载):PREFILL_DRAIN = drain 标记
+    节点(列车体后、end barrier 前),DECODE_COMPLETION/REQUEST_COMPLETE =
+    exit 标记节点(同位置);C++ watch fire 自动同时推 DECODE_COMPLETION +
+    REQUEST_COMPLETE(共享机制不变);
+  - legacy 变体(10.6)不经列车:emit_prefill_batch_legacy / emit_decode_batch
+    保留旧 request-aggregated 结构(legacy 语义保留对象,不得抹平)。
 """
 
 import os
@@ -47,7 +62,6 @@ from generate_trace import (  # noqa: E402
 )
 from generate_face_trace import (  # noqa: E402
     _emit_control_trigger,
-    _emit_prefill_stage,
     _paired_transfer,
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
@@ -265,30 +279,221 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------------- 发射 --
 
-    def emit_prefill_batch(self, request_plan: dict) -> dict:
-        """发射 request 的 prefill 整段(ARRIVAL 决策的图)。
+    def emit_admission_batch(self, request_plan: dict) -> None:
+        """发射 request 的准入动作(ARRIVAL 边界;拼 batch 改造,2026-08-22):
+        到达/interval timer gates + history 迁移(NOC_MIGRATE paired transfer)
+        或 control 触发链 + history readiness 屏障。
 
-        strategy 恒走 roofline 物理时钟。
-
-        返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点 id}
-        (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。
-        """
+        prefill 主体(recompute 段 + 当前段 chunk 序列)与 PREFILL_DRAIN
+        watch 不再在此发射——移入实例迭代列车(emit_iteration_train 的折叠
+        体与 drain 标记);本方法无 watch 返回值(调度器在列车发射处注册)。
+        [根因 #5 裁决,strategy 死锁修复统一(2026-08-19)] 的无条件 frontier
+        接续语义不变:准入动作链到该 rank 当前 frontier(实例列车在飞时物理
+        排在列车后)。"""
         if self.config.trace_granularity != "request_aggregated":
             raise RuntimeError(
                 "online emission supports request_aggregated granularity only "
                 f"(got {self.config.trace_granularity!r})")
         self._set_context(request_plan, "prefill", 0)
-        # strategy 模式保持物理跨 request 链(根因 #5 裁决):within-request 串行化;
-        # decode 段 frontier 接续(2026-08-19 统一,见 _emit_decode);
-        # 同 session interval gate。
         marker = self._mark()
-        members = self._emit_prelim(request_plan)
+        self._emit_admission_actions(request_plan)
         self._collect(marker)
-        return members
+
+    def emit_iteration_train(self, train_plan: dict) -> dict:
+        """发射一趟实例迭代列车(拼 batch 改造核心,2026-08-22;设计文档
+        §3.2"迭代列车聚合发射";sh_1.0 母本同构,face 发射原语适配)。
+
+        train_plan(调度器冻结的成员快照)字段:
+          train_id          批命名空间 id("batch_train_i<实例>_<序号>";
+                            共享体节点归属,物理完成与逻辑请求完成分离)
+          instance_index    列车所在实例
+          stage             "decode"(有 decode 成员,含混合迭代)或
+                            "prefill"(纯 prefill 列车)
+          joiners           新成员 request_plan 列表(prefill→decode 迁移
+                            3000 类 paired transfer,face 统一实例同实例时
+                            零节点)——迁移节点先于列车体
+          pass_spans        成员×迭代展开的 (tokens, kv) 平铺列表
+          iterations        迭代数(= weight_passes:权重字节 ×迭代数,
+                            与批成员数无关;激活/KV/AR 逐 span 精确)
+          prefill_start_member 队列头首个 chunk 在本列车时的成员 plan
+                            (prefill_start 指标锚点)
+          drain_members     本列车内完成最后 prefill chunk 的请求 plan 列表
+          exit_members      本列车内退出 decode 的成员 plan 列表
+          sentinel          T_max 截断且无自然 drain/exit 标记时为真
+                            (哨兵标记承载完成信号)
+
+        每实例 rank 上的结构(链序;face 与母本的差异点:joiner 迁移用
+        face 的 _paired_transfer(3000)而非母本 _emit_kv_transfer,且无
+        共享 readiness 屏障——face 统一实例同实例迁移零节点,跨实例迁移
+        经 per-rank 物理链天然栅栏,face 旧 decode 发射同款结构):
+          [joiner 迁移 ...] → [join/pstart 起始标记 ...] → 17 类聚合体节点
+          (transformer_pass_aggregated, weight_passes=iterations) →
+          [drain 标记 ...] → [exit 标记 ...] → [哨兵标记 ...] → 共享 end
+          barrier。
+
+        返回 {"drain_members": {request_id: {rank: 标记节点 id}},
+              "exit_members": {request_id: {rank: 标记节点 id}},
+              "sentinel_members": {rank: 标记节点 id} 或 {},
+              "block_ends": {rank: end barrier 节点 id}}——标记即
+        PREFILL_DRAIN / DECODE_COMPLETION watch 成员(标记是列车体后、
+        end barrier 前的真实节点);block_ends = exit 成员所在列车 end
+        barrier(completion_gates 账本写入口径,下一同 session turn 的
+        interval gate after_node_id 来源)。"""
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
+        instance_index = train_plan["instance_index"]
+        group = self.group_by_index[instance_index]
+        train_id = train_plan["train_id"]
+        stage = train_plan["stage"]
+        generation = 1 if stage == "decode" else 0
+        iterations = int(train_plan["iterations"])
+        marker = self._mark()
+
+        # ---- joiner 迁移(face 3000 类 paired transfer;上下文
+        #      (joiner, decode, 1) = decode_start 指标锚点) ----
+        joiners = list(train_plan.get("joiners", ()))
+        for joiner in joiners:
+            self._set_context(joiner, "decode", 1)
+            prefill_group = self.group_by_index[
+                joiner["prefill_instance_index"]]
+            decode_group = self.group_by_index[
+                joiner["decode_instance_index"]]
+            _paired_transfer(
+                config=self.config, builders=self.builders,
+                queue_index=joiner["queue_index"], category=3000,
+                name="{}_prefill_to_decode_kv".format(_prefix_of(joiner)),
+                source_group=prefill_group, target_group=decode_group,
+                total_bytes=kv_cache_bytes_for_tokens(
+                    self.config.model, joiner["prefill_context_tokens"]),
+            )
+
+        # ---- 起始标记节点(指标锚点;§3.5:decode_start = 请求加入后
+        #      第一个迭代所在列车节点;prefill_start = 请求首个 chunk
+        #      所在列车的首节点。joiner 迁移零节点(face 统一实例)时这是
+        #      唯一锚点;迁移有节点时 min-tick 语义取更早者,不冲突) ----
+        for joiner in joiners:
+            self._set_context(joiner, "decode", 1)
+            for rank in group.ranks:
+                self._emit_train_marker(
+                    rank, "{}_join_{}".format(
+                        train_id, sanitize_node_prefix(
+                            joiner["request_id"])))
+        prefill_start_member = train_plan.get("prefill_start_member")
+        if prefill_start_member is not None:
+            self._set_context(prefill_start_member, "prefill", 0)
+            for rank in group.ranks:
+                self._emit_train_marker(
+                    rank, "{}_pstart_{}".format(
+                        train_id, sanitize_node_prefix(
+                            prefill_start_member["request_id"])))
+
+        # ---- 折叠列车体(17 类聚合节点;weight_passes = 迭代数) ----
+        for builder in self.builders.values():
+            builder.set_context(train_id, stage, generation)
+        tensor_parallel = len(group.ranks)
+        for relative_rank, rank in enumerate(group.ranks):
+            transformer_pass_aggregated(
+                self.builders[rank],
+                phase=train_id,
+                pass_spans=train_plan["pass_spans"],
+                layers=self.config.layers,
+                hidden_size=self.config.hidden_size,
+                ffn_size=self.config.ffn_size,
+                tensor_parallel=tensor_parallel,
+                pg_name=group.pg_name,
+                vocab_size=self.config.vocab_size,
+                bytes_per_elem=self.config.bytes_per_elem,
+                num_heads=self.config.num_heads,
+                tensor_parallel_rank=relative_rank,
+                mlp_variant=self.config.mlp_variant,
+                weight_passes=iterations,
+            )
+
+        # ---- drain / exit 标记(列车体后、end barrier 前;每成员每 rank
+        #      1 个小节点,承载该请求的 PREFILL_DRAIN / DECODE_COMPLETION
+        #      watch 与指标 end 锚点;物理完成时刻 = 标记完成时刻) ----
+        drain_members = {}
+        for member in train_plan.get("drain_members", ()):
+            request_id = member["request_id"]
+            self._set_context(member, "prefill", 0)
+            drain_members[request_id] = {
+                rank: self._emit_train_marker(
+                    rank, "{}_drain_{}".format(
+                        train_id, sanitize_node_prefix(request_id)))
+                for rank in group.ranks
+            }
+        exit_members = {}
+        for member in train_plan.get("exit_members", ()):
+            request_id = member["request_id"]
+            self._set_context(member, "decode", 1)
+            exit_members[request_id] = {
+                rank: self._emit_train_marker(
+                    rank, "{}_exit_{}".format(
+                        train_id, sanitize_node_prefix(request_id)))
+                for rank in group.ranks
+            }
+
+        # ---- 哨兵标记(T_max 截断且无自然 drain/exit 标记的列车):
+        #      request_id = train_id(批命名空间),C++ eligibility 经
+        #      batch_train_ 前缀放行;fire 后经四类 reason 通道送回,
+        #      调度器按 train_id 核销 ----
+        sentinel_members = {}
+        if train_plan.get("sentinel"):
+            # 哨兵 watch 固定 (train_id, prefill, 0):decode stage 的 fire
+            # 会同时推 REQUEST_COMPLETE(main_online 的 stage→reason 映射)
+            # 并触发 ServiceCoordinator 完成计账下溢;prefill stage 只推
+            # 一条 PREFILL_DRAIN,Python 侧按 train_id 路由核销。
+            for builder in self.builders.values():
+                builder.set_context(train_id, "prefill", 0)
+            sentinel_members = {
+                rank: self._emit_train_marker(
+                    rank, "{}_sentinel".format(train_id))
+                for rank in group.ranks
+            }
+
+        # ---- 共享 end barrier(每列车一个,替代每请求一个) ----
+        for builder in self.builders.values():
+            builder.set_context(train_id, stage, generation)
+        for rank in group.ranks:
+            self.builders[rank].all_reduce(
+                "{}_end_barrier".format(train_id),
+                iterations,
+                group.pg_name,
+            )
+        block_ends = {
+            rank: self.builders[rank].previous_id for rank in group.ranks}
+        if any(node_id is None for node_id in block_ends.values()):
+            raise RuntimeError("train end barrier node IDs were not generated")
+
+        # ---- completion_gates 账本:exit 成员所在列车的 end barrier 即
+        #      下一同 session turn 的 interval gate after_node_id(face
+        #      旧 decode end barrier 的同款口径) ----
+        for member in train_plan.get("exit_members", ()):
+            self.completion_gates[member["session_id"]] = (
+                instance_index, dict(block_ends))
+
+        self._collect(marker)
+        return {
+            "drain_members": drain_members,
+            "exit_members": exit_members,
+            "sentinel_members": sentinel_members,
+            "block_ends": block_ends,
+        }
+
+    def _emit_train_marker(self, rank: int, name: str) -> int:
+        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
+        self.builders[rank].comp(name, 1, 1)
+        return self.builders[rank].previous_id
 
     def emit_decode_batch(self, request_plan: dict) -> dict:
         """发射 request 的 decode 整段(含 prefill_to_decode transfer 3000 /
-        decode 整段 / decode_request_end_barrier)(PREFILL_DRAIN 决策的图)。
+        decode 整段 / decode_request_end_barrier)。
+
+        拼 batch 改造(2026-08-22)起 strategy 路径不经此方法(decode 移入
+        迭代列车,见 emit_iteration_train);保留供 legacy 变体(10.6,
+        request-aggregated 旧结构,legacy 语义保留对象)。
 
         返回 DECODE_COMPLETION watch 成员:{rank: end barrier 前的 decode
         末节点 id}(共享 DECODE_COMPLETION 锚点口径)。
@@ -307,8 +512,16 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------- per-request 发射主体 --
 
-    def _emit_prelim(self, request_plan: dict) -> dict:
-        """发射动态 GraphBatch 的 turn-gates/history/barrier/current-prefill 块。"""
+    def _emit_admission_actions(self, request_plan: dict) -> None:
+        """发射在线请求的准入动作:到达/interval gates、history 迁移与
+        readiness 屏障(拼 batch 改造,2026-08-22:recompute 段与当前
+        prefill 段的 chunk 主体移入实例迭代列车,见 emit_iteration_train)。
+
+        [根因 #5 裁决,strategy 死锁修复统一(2026-08-19)]:strategy 不做
+        任何块末恢复/段内清链——per-rank previous_id 无条件接续当前
+        frontier,per-rank 发行序 = 全局发射序,跨实例 P2P 与 collective
+        参与序不可能反转成环;同 session 串行化由 interval gate
+        (after_node_id 显式编码)保留。"""
         builders = self.builders
         prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
         prefix = _prefix_of(request_plan)
@@ -372,27 +585,13 @@ class GraphBatchBuilder:
                     source_group=previous_group, target_group=prefill_group,
                     timer_gates=timers,
                 )
-        if request_plan["history_action"] == RECOMPUTE:
-            _emit_prefill_stage(
-                config=self.config, builders=builders, group=prefill_group,
-                prefix=prefix, stage="history_recompute",
-                tokens=request_plan["history_recompute_tokens"],
-                initial_context_tokens=0,
-            )
         for rank in prefill_group.ranks:
             builders[rank].all_reduce(
                 "{}_history_tp_ready_barrier".format(prefix), 1,
                 prefill_group.pg_name)
-        prefill_bounds = _emit_prefill_stage(
-            config=self.config, builders=builders, group=prefill_group,
-            prefix=prefix, stage="current_prefill",
-            tokens=request_plan["prefill_length"],
-            initial_context_tokens=request_plan["history_tokens_before"],
-        )
-        # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
-        # (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。
-        members = {rank: bounds[1] for rank, bounds in prefill_bounds.items()}
-        return members
+        # prefill 主体(recompute 段 + 当前段 chunk spans)自拼 batch 改造
+        # (2026-08-22)起移入 emit_iteration_train 的折叠体与 drain 标记;
+        # 此处止于准入动作(到达 gates/历史迁移/屏障)。
 
     def _emit_decode(self, request_plan: dict) -> dict:
         """发射动态 GraphBatch 的 transfer-3000、decode 和 end-barrier 块。"""

@@ -140,7 +140,7 @@ served bytes（compute / comm_read / comm_write）、峰值并发作业数、均
 
 ## 1. 本仓是什么
 
-- **策略语义（保留对象，未改动）**：FACE 原始映射：加权实例图 + per-die Roofline 增量代价选择 decode 实例（平局轮流裁决）；RESIDENT/EVICTED 两态 + LRU recompute；无远端内存；prefix 走 recompute；session 驻留状态/字节数由运行时 KV 账本（SessionKVManager）动态维护，无 sidecar
+- **策略语义（保留对象，未改动）**：FACE 原始映射：加权实例图 + per-die Roofline 增量代价选择 decode 实例（平局轮流裁决）；RESIDENT/EVICTED 两态 + LRU recompute；无远端内存；prefix 走 recompute；session 驻留状态/字节数由运行时 KV 账本（SessionKVCacheManager）动态维护，无 sidecar
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），五仓接口一致。
@@ -198,7 +198,9 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - `.../online/verify/`：对账与验证工具
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
-- `sh_test_mesh/tests/` + workload 根：pytest（基线：17+33 = 50 passed，无预存失败）
+- `sh_test_mesh/tests/` + workload 根 + online/：pytest（基线：17+33+20 = 70 passed，
+  无预存失败；2026-08-22 拼 batch 改造新增 online/test_weight_passes.py(4) +
+  online/test_train_machinery.py(9) + online/test_graph_batch_builder.py(7)）
 
 ## 6. 边界与纪律
 
@@ -208,39 +210,70 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - 策略文件（face_scheduler.py / session_kv_manager.py）为保留对象，勿改。
 - 改动机制层后请跑 §4 fixtures + §2 ⑤ 对账再交付。
 
-## 7. Online execution adaptation
+## 7. Online execution adaptation（拼 batch 迭代列车版，2026-08-22）
 
 在线策略路线（③/④）是实时宿主调度器：调度器进程内逐决策边界做映射决策，
 把结果作为 per-rank 图批次发射给执行驱动引擎，决策不预先固化；每 tick 先
-处理 completion 批（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），
-再处理 arrival 批，最后跑一次准入/发射 pass
-（`sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py:341-371`）。
+核销已完成列车（标记 watch 驱动的 completion 批：PREFILL_DRAIN /
+DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/完成，
+再处理 arrival 批，最后跑一次准入/发射 pass（冻结并发射各空闲实例的下一趟
+迭代列车；`sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py`
+的 `run_variant_policy` → `_finalize_completed_trains` → `_on_prefill_drain` →
+`_on_decode_complete` → arrivals → `_admit_pass`）。
 
+- 迭代列车（拼 batch 核心，设计文档《层次 B Continuous Batching 改造》§3.2；
+  sh_1.0 定型版为母本）：层次 B 从"请求级大段串行"重构为"实例迭代级列车"——
+  decode 互拼（一趟列车 B 个成员各推进 participation 个 token，权重每迭代
+  只读一次）、decode 与 prefill chunk 混拼（每迭代 ≤1 chunk，FCFS 队列头，
+  chunk 之间不互拼）、批成员只在列车边界变化。每实例状态机：qp（FCFS
+  prefill 队列）/ active_decode（批成员表）/ pending_decode_ready（KV 就绪
+  待加入）/ in_flight_train（唯一在飞列车，冻结成员快照 + membership_digest；
+  busy 门 = "一个列车在飞"）。列车终点 = 队列头 prefill drain（剩余 chunk 数，
+  先验）或全部 decode 工作耗尽；交付默认 T_max=8（2026-08-22 §7.4 A2 对拍裁决：无上限 TTFT -67.3%、16 仍 -19.1%、8 全指标 ≤1.3%——"固定为使位移 ≤5% 的最大值"，原则 1 优先于节点数；SH_TRAIN_MAX_ITER 可覆盖，0=不设限；截断且无自然标记的列车发哨兵标记承载完成信号）（SH_TRAIN_MAX_ITER 正整数 =
+  上限，截断列车无自然标记时发射哨兵标记承载完成信号）。
 - 决策边界与仓内路由：`_on_arrival` 按离线同款选择键选 prefill 实例入 FCFS
-  队列（`:383-402`）；`_on_prefill_drain` 复位实例 busy，以全局 9 实例快照经
-  加权图候选 + Roofline per-die 代价动态选择 decode 实例（统一实例，P/D 可
-  同可异；`:404-451`）；`_on_decode_complete` 出队并落 KV 完成账本（`:453`）；
-  `_on_request_complete` 排下一 turn 的 arrival alarm（`:507`）。
-- request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
-  （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
-  聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
-  恒等，只压缩重复层/chunk/token 与集合通信启动次数
-  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:973-996`）；
-  在线发射仅支持该粒度，其它粒度 fail-closed
-  （`online/graph_batch_builder.py:276-279`）。
-- 发射并发骨架（本仓形态：实例单段在飞 busy 门）：实例账本 `busy` 语义为
-  "一个 prefill/decode 整段在飞"（`face_online_scheduler.py:112-126`）；
-  准入/发射 pass 只服务非忙实例，prefill 队首整段优先、否则发射
-  active_decode 队首整段，发射即置忙并移出就绪 frontier（`:562-599`）；
-  busy 只在 PREFILL_DRAIN（`:415`）/ DECODE_COMPLETION（`:466`）边界复位，
-  同实例下一个段须等上一个整段物理完成（per-rank 物理链天然串行化同实例
-  段）；统一实例 qp 与 active_decode 可并存。
-- 接栅栏与段末屏障：decode 段发射不做块末恢复/段内清链，per-rank
-  `previous_id` 无条件接续当前 frontier（per-rank 发行序 = 全局发射序，
-  2026-08-19 五仓统一；`online/graph_batch_builder.py:403-412`），跨请求
-  P2P 与集合通信参与序不会反转成环；每个 decode 段以 TP 组
-  `*_decode_request_end_barrier` 收尾（`:443-445`）；KV 准备段后另有 TP 组
-  `*_history_tp_ready_barrier`（`:382-385`）。
+  队列；`_on_prefill_drain` 以全局 9 实例快照经加权图候选 + Roofline per-die
+  代价动态选择 decode 实例（统一实例，P/D 可同可异；批口径适配 =
+  active_tokens 输入用列车核销后闭式推进的 current_decode_token，
+  select_decode_instance/estimate_iteration_time_ns 本体不动——保留对象
+  红线）；decode 准入（KV 迁移 + 容量增长）在 drain 时点完成后成员进入
+  pending_decode_ready，待加入 decode 实例的下一列车（3000 类 prefill→decode
+  迁移随加入列车发射）；`_on_decode_complete` 落 KV 完成账本
+  （active_decode 出队移至列车核销）；`_on_request_complete` 排下一 turn 的
+  arrival alarm。
+- request_aggregated 折算口径 + weight_passes：每趟列车按 rank 折成 17 类
+  算子节点（13 类层内算子 + attention/MLP 两个 All-Reduce + final norm +
+  logits），聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与
+  成员×迭代 token 展开总量恒等，只压缩重复层/chunk/token 与集合通信启动
+  次数；`transformer_pass_aggregated` 的 `weight_passes` 参数（默认 =
+  len(spans) 与历史 batch=1 串行口径逐字节一致）由列车传**迭代数**——
+  权重字节 ×迭代数、与批成员数无关（激活/KV/AR 逐 span 精确；陷阱 1
+  防护，online/test_weight_passes.py 的 A0 夹具）；在线发射仅支持该粒度，
+  其它粒度 fail-closed。
+- 发射并发骨架（本仓形态：实例单列车在飞门）：实例账本 busy 门 =
+  `in_flight_train`（一个列车在飞）；准入/发射 pass 只服务就绪 frontier 的
+  非忙实例：qp 头部 prefill 准入在服务时点逐头部尝试（容量纪元门防重试
+  风暴，face 策略保留），准入成功发射准入动作（gates/history 迁移/
+  readiness 屏障，无 prefill 主体），再冻结列车（头部 chunk × 迭代 +
+  active_decode 成员混拼；准入失败退化为纯 decode 列车）；列车核销时闭式
+  推进（成员 token / chunk 进度 / current_decode_token，决策边界上与逐
+  token 精确值逐点一致，无逐 token 热路径循环）。
+- 接栅栏与段末屏障：列车发射不做块末恢复/段内清链，per-rank `previous_id`
+  无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
+  统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟列车一个共享 TP 组
+  `batch_train_i*_*_end_barrier`（替代每请求一个）+ 列车体后、barrier 前的
+  drain/exit/哨兵标记节点（承载 PREFILL_DRAIN / DECODE_COMPLETION watch，
+  C++ watch fire 自动同时推 DECODE_COMPLETION + REQUEST_COMPLETE）+ join/
+  pstart 起始标记（指标锚点）；准入动作以 TP 组 `*_history_tp_ready_barrier`
+  收尾。列车台账 train_ledger.jsonl 每次发射一行（§7.3 不变量断言输入，
+  runner 归档至 results/）。
+- C++ 机制层批节点适配（拼 batch，2026-08-22）：GraphBatchCommitter 的
+  watch 覆盖规则放宽为单向（每个 watch 的 (request_id, stage) 必须被本批
+  节点覆盖；批可携带批命名空间共享体/end-barrier 与无 watch 的 joiner/
+  准入节点——sh_1.0 同款规则，设计文档 §3.1-2），列车哨兵 watch
+  （"batch_train_" 前缀）绕过单请求 in-flight 资格检查；计时/事件/网络
+  代码零改动。C++ 侧夹具：graph_batch_committer_test.cc Part I/J（两请求
+  列车 / 混合 drain+exit 标记 + 哨兵探针）。
 - 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（整段重算口径，
   `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的

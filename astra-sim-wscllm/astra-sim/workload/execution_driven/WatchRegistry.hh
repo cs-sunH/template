@@ -170,6 +170,10 @@ class WatchRegistry {
     /// all empty).
     void remove_watches_for_request(const std::string& request_id);
 
+    /// 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch
+    /// (request_id 前缀 "batch_train_")。O(存活哨兵数)。
+    void drain_fired_sentinels();
+
     void remove_all();
 
     /// Fire notification (step 1-6 wires this to the DecisionMailbox push).
@@ -186,6 +190,8 @@ class WatchRegistry {
     // scan).
     std::unordered_map<std::string, std::vector<uint64_t>>
         request_to_watch_ids_;
+    // 拼 batch 适配(2026-08-22):哨兵 watch id 索引。
+    std::vector<uint64_t> sentinel_watch_ids_;
     std::vector<WatchFire> fired_;
     WatchFireNotifier notifier_;
 };

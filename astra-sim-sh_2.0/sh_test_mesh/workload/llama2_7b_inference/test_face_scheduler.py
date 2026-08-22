@@ -1676,8 +1676,36 @@ class FaceSchedulerTests(unittest.TestCase):
             timer_gates=(None, None),
             location="partial_hbm_remote",
         )
-        members = graph.emit_prefill_batch(request_plan)
-        self.assertEqual(set(members), {2, 3})
+        # 拼 batch 改造（2026-08-22）重订：prefill 主体自准入段移入实例
+        # 迭代列车（emit_admission_batch 只发动作；两段式流水信息登记在
+        # _partial_first_chunk，由首 chunk 所在列车按层段拆分消费）。
+        graph.emit_admission_batch(request_plan)
+        partial = graph._partial_first_chunk["turn1"]
+        self.assertEqual(partial["suffix_start"], 2)
+        self.assertEqual(set(partial["suffix_ready_nodes_by_rank"]), {2, 3})
+        self.assertFalse(
+            any("first_chunk" in node["name"]
+                for rank in groups[1].ranks
+                for node in graph.builders[rank].nodes),
+            "admission must not emit the prefill body (train-owned)")
+        result = graph.emit_iteration_train({
+            "train_id": "batch_train_i1_1",
+            "instance_index": 1,
+            "stage": "prefill",
+            "joiners": [],
+            "pass_spans": [(2, 6)],
+            "iterations": 1,
+            "prefill_start_member": {"request_id": "turn1"},
+            "drain_members": [{"request_id": "turn1"}],
+            "exit_members": [],
+            "partial_first_chunk_count": 1,
+        })
+        self.assertEqual(set(result["drain_members"]["turn1"]), {2, 3})
+        self.assertNotIn("turn1", graph._partial_first_chunk)  # 恰一次消费
+        # 列车 emit 后 ledger 语义保留：seg1 = drain 列车 post-barrier。
+        self.assertIn("turn1", graph._block_ends)
+        self.assertEqual(
+            set(graph._block_ends["turn1"]["seg1"]), {2, 3})
 
         for rank in groups[1].ranks:
             builder = graph.builders[rank]
@@ -1692,18 +1720,28 @@ class FaceSchedulerTests(unittest.TestCase):
             prefix_ready = max(node_ids("prefill_prefix_ready_barrier"))
             suffix_ready = max(node_ids("prefill_suffix_ready_barrier"))
             suffix_restore = max(node_ids("history_transfer_action"))
-            prefix_nodes = node_ids("prefill_first_chunk_prefix")
-            suffix_nodes = node_ids("prefill_first_chunk_suffix")
+            prefix_nodes = node_ids("batch_train_i1_1_first_chunk_prefix")
+            suffix_nodes = node_ids("batch_train_i1_1_first_chunk_suffix")
             prefix_first = min(prefix_nodes)
             prefix_last = max(prefix_nodes)
             suffix_first = min(suffix_nodes)
+            pstart = min(node_ids("batch_train_i1_1_pstart_turn1"))
             parents = {
                 edge["from"] for edge in builder.edges
                 if edge["to"] == prefix_first
             }
-            self.assertIn(prefix_ready, parents)
+            # 列车内 pstart 标记在体节点前（prefill_start 锚点）——prefix
+            # 层段经 pstart 链回准入 checkpoint 位（= prefix ready 屏障）。
+            self.assertEqual(parents, {pstart})
+            pstart_parents = {
+                edge["from"] for edge in builder.edges
+                if edge["to"] == pstart
+            }
+            self.assertIn(prefix_ready, pstart_parents)
             self.assertNotIn(suffix_restore, parents)
+            self.assertNotIn(suffix_restore, pstart_parents)
             self.assertNotIn(suffix_ready, parents)
+            self.assertNotIn(suffix_ready, pstart_parents)
 
             suffix_parents = {
                 edge["from"] for edge in builder.edges

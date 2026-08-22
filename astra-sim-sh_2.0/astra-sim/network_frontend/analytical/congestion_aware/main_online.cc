@@ -419,6 +419,9 @@ void ed_commit_cb(void* arg) {
         driver->watch_registry->remove_watches_for_request(request_id);
     }
 
+    // ---- 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch ----
+    driver->watch_registry->drain_fired_sentinels();
+
     // ---- Commit ack: Python's provisional ledger finalizes ----
     driver->bridge->send_commit_ack(batch.batch_id,
                                     batch.source_delivery_sequence, true);

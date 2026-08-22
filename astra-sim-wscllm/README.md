@@ -139,7 +139,7 @@ comm_write）、`hbm_peak_concurrent_jobs`、`hbm_redistribution_events`、真�
 
 ## 1. 本仓是什么
 
-- **策略语义（保留对象，未改动）**：PD 分离：6P:3D + StaticPdMapping 静态路由；session_lru_recompute（默认）与 legacy（FCFS 队头阻塞 + kv_event_payload_legacy.json）双变体；RESIDENT/EVICTED 两态；session 驻留状态/字节数由运行时 KV 账本（SessionKVManager）动态维护，无 sidecar
+- **策略语义（保留对象，未改动）**：PD 分离：6P:3D + StaticPdMapping 静态路由；session_lru_recompute（默认）与 legacy（FCFS 队头阻塞 + kv_event_payload_legacy.json）双变体；RESIDENT/EVICTED 两态；session 驻留状态/字节数由运行时 KV 账本（SessionKVCacheManager）动态维护，无 sidecar
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），五仓接口一致。
@@ -215,37 +215,65 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 
 在线策略路线（③/④）是实时宿主调度器：调度器进程内逐决策边界做映射决策，
 把结果作为 per-rank 图批次发射给执行驱动引擎，决策不预先固化；每 tick 先
-处理 completion 批（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），
-再处理 arrival 批，最后跑一次准入/发射 pass
-（`sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py:338-378`）。
+处理 completion 批（拼 batch 改造起先核销已完成列车
+`_finalize_completed_trains`，再 PREFILL_DRAIN / DECODE_COMPLETION /
+REQUEST_COMPLETE 逐请求账本），再处理 arrival 批，最后跑一次准入/发射
+pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py` 的
+`run_variant_policy`）。
 
 - 决策边界与仓内路由：`_on_arrival` 按 prefill 实例最小占用选择并入队，同时
-  经静态 P→D 路由固定 decode 目标（不随运行时负载重选；`:380-402`）；
-  `_on_prefill_drain` 复位实例 busy 并登记等待 decode 准入（容量 epoch/dirty
-  门控下重查，固定静态映射不 remap；`:404-430`）；`_on_decode_complete`
-  出队并落 KV 完成账本（`:432`）；`_on_request_complete` 排下一 turn 的
-  arrival alarm（`:485`）。
+  经静态 P→D 路由固定 decode 目标（不随运行时负载重选）；`_on_prefill_drain`
+  复位 P 实例 busy 并登记等待 decode 准入（容量 epoch/dirty 门控下重查，
+  固定静态映射不 remap）；`_on_decode_complete` 落 KV 完成账本（拼 batch
+  改造后 active_decode 出队与 busy 复位移至列车核销）；`_on_request_complete`
+  排下一 turn 的 arrival alarm。
 - request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
   聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
   恒等，只压缩重复层/chunk/token 与集合通信启动次数
-  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:973-996`）；
-  在线发射仅支持该粒度，其它粒度 fail-closed
-  （`online/graph_batch_builder.py:276-279`）。decode 段按请求各自聚合成
-  节点集，而非一条跨请求融合批节点（`:434`）。
-- 发射并发骨架（本仓形态：实例单段在飞 busy 门）：实例账本 `busy` 语义为
-  "一个 prefill/decode 整段在飞"（`wsc_llm_online_scheduler.py:107-121`）；
-  准入/发射 pass 只服务非忙实例，prefill-only 实例发射 qp 队首整段、
-  decode-only 实例发射 active_decode 队首整段，发射即置忙并移出就绪
-  frontier（`:541-580`）；busy 只在 PREFILL_DRAIN（`:414`）/
-  DECODE_COMPLETION（`:445`）边界复位，同实例下一个段须等上一个整段物理
-  完成（per-rank 物理链天然串行化同实例段）。
-- 接栅栏与段末屏障：decode 段发射不做块末恢复/段内清链，per-rank
+  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py` 的
+  `transformer_pass_aggregated`）；在线发射仅支持该粒度，其它粒度
+  fail-closed（`online/graph_batch_builder.py`）。拼 batch 改造
+  （2026-08-22）起聚合函数新增 `weight_passes` 参数（默认 `len(spans)`，
+  与历史 batch=1 串行口径逐字节一致；迭代列车传迭代数：一个迭代同时算
+  B 个成员各 1 token，**权重每迭代只读一次**，激活/KV/AR 逐 span 精确；
+  `online/test_weight_passes.py` A0 夹具钉住 B=1/B=2 同迭代权重字节相等）。
+  D 侧 decode 发射为实例迭代列车（跨成员共享体节点，见下），P 侧 prefill
+  保持整段聚合（chunk 序列，每 chunk 恰读一遍权重，chunk 之间不互拼）。
+- 发射并发骨架（拼 batch 改造形态，2026-08-22；§3.6 PD 分离豁免 = 仅
+  decode 互拼、无混合迭代）：busy 门按 phase_role 分裂——prefill-only
+  实例保持"一个 prefill 整段在飞"（逐 chunk 不拼，发射骨架与改造前一致）；
+  decode-only 实例 = "一个迭代列车在飞"（`in_flight_train` 冻结成员快照 +
+  membership_digest）。准入/发射 pass 只服务空闲实例：D 实例把全部
+  `active_decode` 成员冻结成一趟列车（迭代数 = max 剩余 token，交付默认
+  T_max=8：2026-08-22 §7.4 A2 对拍裁决——无上限 TTFT -67.3%、16 仍
+  -19.1%、8 全指标 ≤1.3%，"固定为使位移 ≤5% 的最大值"，原则 1 优先于
+  节点数；SH_TRAIN_MAX_ITER 可覆盖，0=不设限；截断且无 exit 标记的
+  列车发哨兵标记承载完成信号；退出成员先验、不截断列车），经
+  `emit_iteration_train`（`online/graph_batch_
+  builder.py`）一次发射：joiner 的 transfer 3000 迁移 + join 标记 →
+  17 类聚合体节点（`weight_passes`=迭代数）→ exit 标记（承载
+  DECODE_COMPLETION watch 与 completion 指标锚点）→ 共享 end barrier；
+  列车内**绝不混入 prefill chunk span**（无混合迭代）。完成核销
+  （`_finalize_completed_trains`）逐信号路由 + 幂等：同列车 exit 标记
+  watch 跨 tick fire 时首个信号核销（成员 `decode_tokens_consumed` 闭式
+  推进恰一次、退出成员移出 active_decode），后续信号清 pending 集合，
+  陈旧错配 fail-closed；核销后同 tick 即可冻结下一列车（连续 batching）。
+  列车台账 `train_ledger.jsonl`：D 侧行 member_iterations>0，P 侧行
+  prefill_chunks>0，两类字段互斥（无混合列车）。legacy 变体
+  （kv_cache_policy=legacy）不走列车，保留旧两段式 `emit_decode_batch`。
+- 接栅栏与段末屏障：列车/段发射不做块末恢复/段内清链，per-rank
   `previous_id` 无条件接续当前 frontier（per-rank 发行序 = 全局发射序，
-  2026-08-19 五仓统一；`online/graph_batch_builder.py:407-416`），跨请求
-  P2P 与集合通信参与序不会反转成环；每个 decode 段以 TP 组
-  `*_decode_request_end_barrier` 收尾（`:448`）；KV 准备段后另有 TP 组
-  `*_history_tp_ready_barrier`（`:388`）。
+  2026-08-19 五仓统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟
+  D 侧列车以 TP 组 `batch_train_*_end_barrier`（bytes=迭代数）收尾，下一
+  turn 的 interval gate `after_node_id` 指向它（completion_gates 账本，
+  post-barrier 口径与旧整段发射一致）；KV 准备段后另有 TP 组
+  `*_history_tp_ready_barrier`。C++ 机制层适配（2026-08-22，照 sh_1.0
+  母本先例）：`GraphBatchCommitter` 的 node/watch coverage 校验从双向
+  等式放宽为单向包含（每个 watch 必须有节点覆盖；列车共享体/end barrier
+  的批命名空间节点与 joiner 迁移节点不要求配 watch）——计时/事件/网络
+  代码与 MetricCollector/WatchRegistry 零改动（批命名空间锚点注册静默
+  跳过），机制夹具见 `graph_batch_committer_test.cc` Part I/J。
 - 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（整段重算口径，
   `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的

@@ -234,7 +234,9 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - `.../online/verify/`：对账与验证工具
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
-- `sh_test_mesh/tests/` + workload 根：pytest（基线：35 skip6+33 = 68 passed+6 skipped，无预存失败）
+- `sh_test_mesh/tests/` + workload 根：pytest（拼 batch 改造后基线：
+  93 passed + 6 skipped，无预存失败；新增 weight_passes / 列车机制 /
+  列车发射钉子 / task-load 新折算专项）
 
 ## 6. 边界与纪律
 
@@ -248,34 +250,56 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 
 在线策略路线（③/④）是实时宿主调度器：调度器进程内逐决策边界做映射决策，
 把结果作为 per-rank 图批次发射给执行驱动引擎，决策不预先固化；每 tick 先
-处理 completion 批（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），
-再处理 arrival 批（冻结队列序入 arrival heap），最后跑一次准入/发射 pass
-（`sh_test_mesh/workload/llama2_7b_inference/online/sh20_online_scheduler.py:219-238`）。
+核销已完成列车（train_id + membership_digest 核验 → 冻结成员闭式推进 →
+退出成员移出批 → 推进 prefill chunk），再处理 completion 批
+（PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE），再处理 arrival 批
+（冻结队列序入 arrival heap），最后跑一次准入 pass 并为各空闲实例冻结发射
+下一列车（`sh_test_mesh/workload/llama2_7b_inference/online/sh20_online_scheduler.py`）。
 
 - 决策边界与仓内路由：ARRIVAL 落账 pending_admissions 后由准入 pass 重查
-  （HBM 可行掩码过滤 + task-load 三分量快照选择 prefill 实例；`:242-270`、
-  `:463-489`）；PREFILL_DRAIN 复位实例 busy，以精确 Roofline per-die 增量代价
-  选择 decode 实例（`:272-357`）；DECODE_COMPLETION / REQUEST_COMPLETE 完成
-  KV 收尾、completion 段发射与下一 turn 排程（`:390`、`:403-461`）。
+  （HBM 可行掩码过滤 + task-load 三分量快照选择 prefill 实例）；PREFILL_
+  DRAIN 以精确 Roofline per-die 增量代价选择 decode 实例，drain 决策完成后
+  成员进入 pending_decode_ready（迁移随加入列车发射）；DECODE_COMPLETION /
+  REQUEST_COMPLETE 按 completion_order 完成 KV 收尾、completion 段发射与
+  下一 turn 排程（active_decode 移除与 token 终值推进移至列车核销）。
 - request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
   聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
-  恒等，只压缩重复层/chunk/token 与集合通信启动次数
-  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:1061-1087`）；
-  在线发射仅支持该粒度，其它粒度 fail-closed
-  （`online/graph_batch_builder.py:709-712`）。
-- 发射并发骨架（本仓形态：prefill busy 门 + decode 无门）：实例账本 `busy`
-  覆盖"一个 prefill 整段在飞"（`sh20_online_scheduler.py:22-49`）；准入/
-  发射 pass 只为非忙实例发射 qp 队首 prefill 整段，发射即置忙（`:539-580`）；
-  decode 段在 PREFILL_DRAIN 边界决策后直接发射，不受 busy 门（`:359-362`，
-  strategy 保持物理跨 request 链，per-rank previous_id 天然串行化同实例段）；
-  busy 在 PREFILL_DRAIN（`:278`）复位。
-- 接栅栏与段末屏障：段发射不做块末恢复/段内清链，per-rank `previous_id`
-  保持接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
-  统一；`online/graph_batch_builder.py:823-830`），跨请求 P2P 与集合通信
-  参与序不会反转成环；prefill 段以 TP 组
-  `*_prefill_chunks_aggregated_end_barrier` 收尾（`:782`），decode 段以 TP 组
-  `*_decode_request_end_barrier` 收尾（`:903`）。
+  恒等，只压缩重复层/chunk/token 与集合通信启动次数；权重字节按
+  `weight_passes` 口径计（默认 = span 数，历史 batch=1 串行口径逐字节
+  不变；迭代列车传迭代数——权重每物理前向只读一次，与批成员数无关，
+  2026-08-22 拼 batch 改造，`generate_trace.py`）；在线发射仅支持该粒度，
+  其它粒度 fail-closed（`online/graph_batch_builder.py`）。
+- 发射并发骨架（本仓形态：迭代列车拼 batch，2026-08-22 改造）：连续
+  batching——decode 互拼、decode 与 prefill chunk 混拼（每迭代 ≤1
+  chunk）、chunk 之间不拼、批成员只在迭代（列车）边界变化。每实例
+  状态机 = FCFS prefill 队列 / active_decode 批成员表 /
+  pending_decode_ready（KV 就绪待加入）/ in_flight_train（唯一在飞
+  列车 + train_id/membership_digest，busy 门 = 一个列车在飞）；列车
+  终点 = 下一个不可预测事件（队列头 prefill drain / 全部工作耗尽），
+  交付默认 T_max=8（2026-08-22 §7.4 A2 对拍裁决：无上限 TTFT -67.3%、16 仍 -19.1%、8 全指标 ≤1.3%——"固定为使位移 ≤5% 的最大值"，原则 1 优先于节点数；SH_TRAIN_MAX_ITER 可覆盖，0=不设限；截断且无自然标记的列车发哨兵标记承载完成信号）。发射 = 准入动作（到达 gates/历史迁移/逐出/屏障）→
+  迭代列车（joiner 迁移 + 共享 readiness barrier + 折叠列车体
+  （weight_passes=迭代数）+ drain/exit 标记节点 + 每列车一个共享 end
+  barrier）→ 完成段（completion_evictions + 下一 turn interval
+  gates）。列车账本核销幂等（同列车标记 watch 跨 tick fire、事件拆
+  交付），推进量全部闭式；`train_ledger.jsonl` 落每列车审计行
+  （§7.3 不变量断言输入，runner 归档）。
+- sh_2.0 特性在列车形态下的保留（策略公式/阈值/KV 语义/映射规则不动）：
+  三态 KV 与两阶段类型感知逐出的调用链逐行保留（drain 边界）；
+  partial 前缀两段式迁移——admission 发射 prefix noc_migrate →
+  prefix ready barrier → suffix remote_load 恢复 → suffix ready
+  barrier（chain checkpoint/restore 保持恢复分支与主链并行），首
+  chunk 所在列车按层段拆分发射（prefix 层段不等恢复，suffix 层段
+  arm 依赖 suffix ready 节点；合成覆盖见
+  `online/verify/train_a1_eviction_fixture.py`）；task-load 三分量
+  中 active decode 分量按 decode_tokens_consumed 闭式迭代级剩余量
+  折算（"整段不可分 fraction=1.0"旧口径作废；打分公式与阈值不动）。
+- 接栅栏与段末屏障：发射不做块末恢复/段内清链，per-rank `previous_id`
+  无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
+  统一），列车作为整体接续 frontier，跨请求 P2P 与集合通信参与序不会
+  反转成环；列车以 TP 组共享 `*_end_barrier` 收尾，drain/exit 标记
+  （列车体后、barrier 前）承载 PREFILL_DRAIN / DECODE_COMPLETION watch
+  与指标锚点（"barrier 前末节点"口径的列车化延续）。
 - 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（整段重算口径；无第二输入文件，
   会话 KV 自 turn-0 prefill 记账起由运行时账本动态维护，

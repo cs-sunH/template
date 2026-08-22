@@ -497,8 +497,13 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            "] unknown status: " + name;
                 }
             }
-            // eligibility (against the delta-facts-first tracking state)
-            if (stage == "prefill") {
+            // eligibility (against the delta-facts-first tracking state).
+            // 拼 batch 适配(2026-08-22):列车哨兵 watch(request_id =
+            // "batch_train_..." 批命名空间,T_max 截断列车的完成信号)不
+            // 对应任何单请求,绕过 in-flight/prefill-drained 资格检查。
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // batch sentinel: train-scoped, no request eligibility.
+            } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
                     return "prefill watch[" + std::to_string(watch_index) +
                            "] for request " + request_id +
@@ -543,6 +548,17 @@ std::optional<std::string> GraphBatchCommitter::validate(
         }
         for (const auto& node_key : node_stages) {
             if (watch_stages.count(node_key) != 0) {
+                continue;
+            }
+            // 拼 batch 适配(2026-08-22,母本 sh_1.0 定型版同款裁决):列车
+            // 共享体节点(折叠列车体/共享 end barrier,request_id = "batch_
+            // train_..." 批命名空间,§3.1"批节点归属 + watch 侧成员表")
+            // 不对应任何单请求,绕过 node-only 段的 stage 边界资格检查
+            // ——其 watch 语义由列车 drain/exit 标记节点(真实成员
+            // request_id)承载,fire 后事件经四类 reason 通道送回 Python
+            // 侧按 train_id 核销。
+            if (node_key.first.rfind("batch_train_", 0) == 0) {
+                // batch namespace body: train-scoped, no request eligibility.
                 continue;
             }
             const bool eligible = (node_key.second == "decode")

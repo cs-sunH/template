@@ -916,6 +916,7 @@ def transformer_pass_aggregated(
     layer_start: int = 0,
     layer_end: Optional[int] = None,
     include_output: bool = True,
+    weight_passes: Optional[int] = None,
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -924,6 +925,19 @@ def transformer_pass_aggregated(
     ``num_ops``, ``tensor_size``, optional remote-read bytes, and All-Reduce
     payload bytes from those expanded calls.  What is intentionally compressed
     is the number of layer, chunk/token, and collective invocations.
+
+    ``weight_passes`` (拼 batch 口径, 2026-08-22): the number of physical
+    forward passes that read the model weights.  The default ``None`` (=
+    ``len(pass_spans)``) keeps the historical byte-exact behavior -- every
+    span is one weight-reading pass (batch=1 serial semantics; the offline
+    fixtures and the five-repo consistency audit depend on it).  An
+    iteration-train caller passes the ITERATION COUNT instead: a train of k
+    iterations with B decode members carries k+B spans but reads the weights
+    only k times (once per iteration, shared by all batch members; 权重只读
+    一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
+    exact regardless of ``weight_passes``.  Layer-range calls (partial
+    prefix-restore pipelines) keep the default: one span over a layer slice
+    is exactly one weight-reading pass of that slice.
     """
 
     spans = tuple(pass_spans)
@@ -948,6 +962,16 @@ def transformer_pass_aggregated(
     for tokens, kv_length in spans:
         if tokens <= 0 or kv_length <= 0:
             raise ValueError("each pass span must contain positive tokens and kv_length")
+
+    if weight_passes is None:
+        weight_passes = len(spans)
+    if weight_passes <= 0:
+        raise ValueError("weight_passes must be positive")
+    if weight_passes > len(spans):
+        raise ValueError(
+            "weight_passes must not exceed the span count (one weight-reading "
+            "pass contributes at least one span)"
+        )
 
     if mlp_variant not in {"gelu", "swiglu"}:
         raise ValueError("mlp_variant must be gelu or swiglu")
@@ -1030,17 +1054,21 @@ def transformer_pass_aggregated(
         k_cache_bytes = tensor_bytes(kv_cache_elems, bytes_per_elem)
         v_cache_bytes = tensor_bytes(kv_cache_elems, bytes_per_elem)
 
+        # 拼批量权重基线拆分(2026-08-22):per-span 累加只含激活/KV/score
+        # 分量;权重分量(norm 参数/投影矩阵)每物理前向只读一次,统一在
+        # span 循环后按 weight_passes 计入(默认 = len(spans) 与历史
+        # batch=1 串行口径逐字节一致;迭代列车传迭代数,见 docstring)。
         add(
             layer_totals[attention_norm_name],
             norm_ops_factor * activation_elems,
-            3 * activation_bytes + norm_param_bytes,
-            activation_bytes + norm_param_bytes,
+            3 * activation_bytes,
+            activation_bytes,
         )
         add(
             layer_totals["attention_qkv_projection"],
             matmul_ops(tokens, 3 * attention_hidden_per_rank, hidden_size),
-            activation_bytes + qkv_weight_bytes + 3 * activation_shard_bytes,
-            activation_bytes + qkv_weight_bytes,
+            activation_bytes + 3 * activation_shard_bytes,
+            activation_bytes,
         )
         add(
             layer_totals["attention_qk_matmul"],
@@ -1069,8 +1097,8 @@ def transformer_pass_aggregated(
         add(
             layer_totals["attention_output_projection"],
             matmul_ops(tokens, hidden_size, attention_hidden_per_rank),
-            activation_shard_bytes + out_weight_bytes + activation_bytes,
-            activation_shard_bytes + out_weight_bytes,
+            activation_shard_bytes + activation_bytes,
+            activation_shard_bytes,
         )
         attention_collective_bytes += activation_bytes
         add(
@@ -1082,16 +1110,15 @@ def transformer_pass_aggregated(
         add(
             layer_totals[mlp_norm_name],
             norm_ops_factor * activation_elems,
-            3 * activation_bytes + norm_param_bytes,
-            activation_bytes + norm_param_bytes,
+            3 * activation_bytes,
+            activation_bytes,
         )
         add(
             layer_totals[mlp_projection_name],
             matmul_ops(tokens, mlp_projection_factor * ffn_per_rank, hidden_size),
             activation_bytes
-            + mlp_up_weight_bytes
             + mlp_projection_factor * ffn_shard_bytes,
-            activation_bytes + mlp_up_weight_bytes,
+            activation_bytes,
         )
         add(
             layer_totals[mlp_activation_name],
@@ -1102,8 +1129,8 @@ def transformer_pass_aggregated(
         add(
             layer_totals["mlp_down_projection"],
             matmul_ops(tokens, hidden_size, ffn_per_rank),
-            ffn_shard_bytes + mlp_down_weight_bytes + activation_bytes,
-            ffn_shard_bytes + mlp_down_weight_bytes,
+            ffn_shard_bytes + activation_bytes,
+            ffn_shard_bytes,
         )
         mlp_collective_bytes += activation_bytes
         add(
@@ -1115,8 +1142,8 @@ def transformer_pass_aggregated(
         add(
             final_layernorm,
             norm_ops_factor * activation_elems,
-            3 * activation_bytes + norm_param_bytes,
-            activation_bytes + norm_param_bytes,
+            3 * activation_bytes,
+            activation_bytes,
         )
         logits_output_bytes = tensor_bytes(
             tokens * vocab_per_rank, bytes_per_elem
@@ -1124,9 +1151,28 @@ def transformer_pass_aggregated(
         add(
             logits,
             matmul_ops(tokens, vocab_per_rank, hidden_size),
-            activation_bytes + logits_weight_bytes + logits_output_bytes,
-            activation_bytes + logits_weight_bytes,
+            activation_bytes + logits_output_bytes,
+            activation_bytes,
         )
+
+    # 权重分量按 weight_passes 计入(每个物理前向读一遍;与上方 span 循环
+    # 的激活/KV 分量求和后即为最终 category 总量)。weight_passes 缺省 =
+    # len(spans) 时与拆分前的历史总量逐字节相等。
+    weight_tensor_bytes = {
+        attention_norm_name: norm_param_bytes,
+        "attention_qkv_projection": qkv_weight_bytes,
+        "attention_output_projection": out_weight_bytes,
+        mlp_norm_name: norm_param_bytes,
+        mlp_projection_name: mlp_up_weight_bytes,
+        "mlp_down_projection": mlp_down_weight_bytes,
+    }
+    for category_name, weight_bytes in weight_tensor_bytes.items():
+        layer_totals[category_name][1] += weight_bytes * weight_passes
+        layer_totals[category_name][2] += weight_bytes * weight_passes
+    final_layernorm[1] += norm_param_bytes * weight_passes
+    final_layernorm[2] += norm_param_bytes * weight_passes
+    logits[1] += logits_weight_bytes * weight_passes
+    logits[2] += logits_weight_bytes * weight_passes
 
     def aggregate_comp(category_name: str) -> None:
         ops, tensor_size, remote_read = layer_totals[category_name]

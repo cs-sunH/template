@@ -134,6 +134,10 @@ def main(argv=None) -> int:
 
     _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME),
                  scheduler.online_log_rows)
+    # 拼 batch 列车台账(§7.3 不变量断言输入;每次列车发射一行)。
+    if getattr(scheduler, "train_ledger_rows", None):
+        _write_jsonl(os.path.join(args.bridge_dir, "train_ledger.jsonl"),
+                     scheduler.train_ledger_rows)
     if args.sensing:
         scheduler.dump_ledger(os.path.join(args.bridge_dir, "ledger.jsonl"))
         _write_jsonl(

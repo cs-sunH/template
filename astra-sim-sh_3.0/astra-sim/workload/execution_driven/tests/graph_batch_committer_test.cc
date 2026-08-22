@@ -38,6 +38,21 @@ future arrival) through:
           (rank, json id) -> store id map): commits and increments
           single_node_bridge_count -- the official path asserts this stays
           0 (方案 §8.3), the fixture proves the counter can be exercised.
+  Part H  拼 batch §3.1 前置验证,2026-08-22(照母本 sh_1.0 定型版移植):
+          a two-request decode train (shared aggregate body nodes under
+          the batch-namespace request_id "batch_train_0_1" -- NOT a real
+          request -- plus one exit marker per member per rank and one
+          per-train ALL_REDUCE end barrier) walks validate() + commit() +
+          the full watch-fire chain: both member decode watches fire, the
+          namespace body / barrier terminals feed nothing, in-flight/
+          prefill-drained tracking and the counters stay exact. Also
+          proves the one rule that DOES guard the schema boundary: a
+          member decode watch whose prefill never drained (no PREFILL_
+          DRAIN delta fact) is still rejected with zero side effects.
+  Part I  拼 batch §3.1 前置验证,2026-08-22 (variant): one train carrying
+          BOTH a drain marker (prefill watch, gen 0) and an exit marker
+          (decode watch, gen 1) of two DIFFERENT requests -- the mixed
+          prefill-chunk + decode-token folding case; both watches fire.
 
 Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
 touched_ranks field validates identically (has_touched_ranks == false).
@@ -55,6 +70,7 @@ Exit code 0 on ALL PASS.
 
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -753,6 +769,362 @@ void test_empty_comm_compute_batch(Fixture& f) {
            "G: graph_batch_count == 4");
 }
 
+// ------------------------------------- 拼 batch §3.1 前置验证, 2026-08-22 ----
+// (照母本 sh_1.0 定型版移植) Frozen batch-train schema (拼 batch 改造):
+//   - shared aggregate body node: request_id is the batch-namespace string
+//     ("batch_train_0_1" -- NOT a real request), stage "decode", gen 1,
+//     COMP node, any positive compute;
+//   - exit marker: one per exiting member per rank, real member id,
+//     stage "decode", gen 1, COMP, num_ops = tensor_size = 1; drain marker
+//     is the same shape with stage "prefill", gen 0;
+//   - one end barrier per train: COMM_COLL_NODE, coll.comm_type =
+//     ALL_REDUCE (1), bytes = iteration count, pg_name shared with the
+//     body collectives;
+//   - per-rank data edges body -> markers -> barrier.
+nlohmann::json train_body_node(int rank, uint64_t id,
+                               const std::string& train_ns) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", 4}, {"name", "train_body"},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", train_ns}, {"stage", "decode"}, {"generation", 1},
+        {"compute", {{"num_ops", 4096}, {"tensor_size", 8192},
+                     {"runtime_ns", 20000}}},
+        {"comm", comm_defaults()},
+        {"coll", coll_defaults()},
+    };
+}
+
+nlohmann::json train_marker_node(int rank, uint64_t id,
+                                 const std::string& req,
+                                 const std::string& stage) {
+    return {
+        {"rank", rank}, {"id", id},
+        {"type", 4}, {"name", stage == "decode" ? "train_exit_marker"
+                                                : "train_drain_marker"},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", req}, {"stage", stage},
+        {"generation", stage == "decode" ? 1 : 0},
+        {"compute", {{"num_ops", 1}, {"tensor_size", 1}, {"runtime_ns", 1}}},
+        {"comm", comm_defaults()},
+        {"coll", coll_defaults()},
+    };
+}
+
+nlohmann::json train_barrier_node(int rank, uint64_t id,
+                                  const std::string& train_ns,
+                                  uint64_t iterations) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", 7},
+        {"name", "train_end_barrier"},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", train_ns}, {"stage", "decode"}, {"generation", 1},
+        {"compute", {{"num_ops", 1}, {"tensor_size", 1}, {"runtime_ns", 1}}},
+        {"comm", comm_defaults()},
+        {"coll", {{"comm_type", 1}, {"bytes", iterations}, {"priority", 0},
+                  {"pg_name", "train_pg"},
+                  {"involved_dim", nlohmann::json::array({true, false})}}},
+    };
+}
+
+// One train batch over ranks {0, 1, 2}: per rank a body node (json id 0,
+// batch namespace), one marker per member (json ids 1..n -- decode markers
+// for exiting members, prefill markers for drain members), the end barrier
+// (json id n + 1, ALL_REDUCE, bytes = iterations) and the data edges
+// body -> every marker -> barrier (a per-rank diamond, acyclic). One watch
+// per member over that member's markers on all three ranks.
+struct TrainMember {
+    std::string request_id;
+    std::string stage;  // "decode" (exit) or "prefill" (drain)
+};
+
+GraphBatch train_batch(uint64_t batch_id, const std::string& train_ns,
+                       const std::vector<TrainMember>& members,
+                       uint64_t iterations) {
+    GraphBatch b;
+    b.batch_id = batch_id;
+    b.source_delivery_sequence = batch_id;
+    const uint64_t barrier_id = members.size() + 1;
+    for (int rank = 0; rank < 3; ++rank) {
+        b.nodes.push_back(train_body_node(rank, 0, train_ns));
+        for (size_t m = 0; m < members.size(); ++m) {
+            b.nodes.push_back(train_marker_node(rank, m + 1,
+                                                members[m].request_id,
+                                                members[m].stage));
+            b.parent_edges.push_back(data_edge(rank, 0, m + 1));
+            b.parent_edges.push_back(data_edge(rank, m + 1, barrier_id));
+        }
+        b.nodes.push_back(
+            train_barrier_node(rank, barrier_id, train_ns, iterations));
+    }
+    for (size_t m = 0; m < members.size(); ++m) {
+        nlohmann::json member_ids;
+        for (int rank = 0; rank < 3; ++rank) {
+            member_ids[std::to_string(rank)] = m + 1;
+        }
+        b.watches.push_back(
+            {{"request_id", members[m].request_id},
+             {"stage", members[m].stage},
+             {"generation", members[m].stage == "decode" ? 1 : 0},
+             {"members", std::move(member_ids)},
+             {"statuses", nlohmann::json::array({"Success", "Skipped"})}});
+    }
+    b.touched_ranks = nlohmann::json::array({0, 1, 2});
+    b.has_touched_ranks = true;
+    return b;
+}
+
+DecisionEvent arrival_event(const std::string& req) {
+    DecisionEvent ev;
+    ev.reason = DecisionReason::ARRIVAL;
+    ev.request_id = req;
+    ev.stage = "prefill";
+    ev.generation = 0;
+    ev.payload.session_id = "s1";
+    ev.payload.prefill_length = 32;
+    ev.payload.decode_length = 8;
+    return ev;
+}
+
+DecisionEvent drain_event(const std::string& req) {
+    DecisionEvent ev;
+    ev.reason = DecisionReason::PREFILL_DRAIN;
+    ev.request_id = req;
+    ev.stage = "prefill";
+    ev.generation = 0;
+    ev.payload.watch_member_count = 3;
+    return ev;
+}
+
+// Drive one committed node to terminal exactly like the online path would:
+// the NodeStore dependency release (Workload::call owns it in the real
+// system) plus the completion fact into the WatchRegistry
+// (online_completion_hook's job) with the store's OWN meta for the node.
+void drive_terminal(Fixture& f, int rank, uint64_t store_id,
+                    NodeTerminalStatus status) {
+    f.sources[rank]->store().finish_node(store_id);
+    const auto meta = f.sources[rank]->store().meta_for(store_id);
+    expect(meta.has_value(), "train: meta_for the driven node");
+    if (meta.has_value()) {
+        f.registry.on_node_terminal(
+            CompletionKey{rank, store_id, meta->generation}, *meta, status);
+    }
+}
+
+// ----------------------------------------------------------- Part H ------
+// The two-request decode train: epoch 1 lands the arrivals + req_A's
+// prefill drain (a zero-node accounting batch), epoch 2 commits the train
+// (req_B's prefill drain is a delta fact of the SAME epoch -- delta facts
+// first). The negative probe proves the schema boundary that still guards:
+// without req_B's drain fact, its decode watch is rejected (eligibility).
+void test_train_batch_two_members(Fixture& f) {
+    // Epoch h1: arrivals + req_A drain, zero-node batch (Part E style).
+    StateDelta h1;
+    h1.delivery_sequence = 4;
+    h1.delivery_epoch = 4;
+    h1.tick = 400;
+    h1.events.push_back(arrival_event("req_A"));
+    h1.events.push_back(arrival_event("req_B"));
+    h1.events.push_back(drain_event("req_A"));
+    GraphBatch setup;
+    setup.batch_id = 4;
+    setup.source_delivery_sequence = 4;
+    setup.touched_ranks = nlohmann::json::array();
+    setup.has_touched_ranks = true;
+    expect(!f.committer.validate(h1, setup).has_value(),
+           "H: epoch-1 zero-node setup batch validates clean");
+    f.committer.commit(h1, setup);
+    expect(f.committer.in_flight_requests() ==
+               std::set<std::string>({"r3", "r9", "req_A", "req_B"}),
+           "H: both train members in-flight after epoch 1");
+    expect(f.committer.prefill_drained_requests() ==
+               std::set<std::string>({"req_A"}),
+           "H: req_A prefill-drained after epoch 1");
+    expect(f.committer.counters().graph_batch_count == 5,
+           "H: graph_batch_count == 5 after the setup epoch");
+
+    // The train: 12 nodes (3 ranks x [body, exit marker req_A, exit marker
+    // req_B, end barrier]), 2 member decode watches.
+    const GraphBatch train =
+        train_batch(5, "batch_train_0_1",
+                    {{"req_A", "decode"}, {"req_B", "decode"}}, 8);
+
+    // Negative probe: the same train validated against an epoch whose delta
+    // carries NO req_B prefill drain -- the member decode watch eligibility
+    // rule must block it with zero side effects (this is the one rule the
+    // batch schema genuinely leans on; it is NOT relaxed by 拼 batch).
+    {
+        StateDelta no_drain_b;
+        no_drain_b.delivery_sequence = 5;
+        no_drain_b.delivery_epoch = 5;
+        no_drain_b.tick = 450;
+        const Snapshot before = snapshot_of(f);
+        const auto err = f.committer.validate(no_drain_b, train);
+        expect(err.has_value(),
+               "H: decode watch of a never-drained member is blocked");
+        if (err.has_value()) {
+            expect(err->find("whose prefill has not drained") !=
+                       std::string::npos,
+                   "H: the block is the decode-watch eligibility rule");
+        }
+        expect(snapshot_of(f) == before,
+               "H: blocked train left zero side effects");
+    }
+
+    // Epoch h2: req_B's prefill drain is a delta fact of the train epoch
+    // itself (delta facts first -- the realistic first-decode-train tick).
+    StateDelta h2;
+    h2.delivery_sequence = 5;
+    h2.delivery_epoch = 5;
+    h2.tick = 450;
+    h2.events.push_back(drain_event("req_B"));
+    expect(!f.committer.validate(h2, train).has_value(),
+           "H: two-request train batch validates clean (zero relaxation)");
+    f.committer.commit(h2, train);
+
+    const auto& c = f.committer.counters();
+    expect(c.graph_batch_count == 6, "H: graph_batch_count == 6");
+    expect(c.single_node_bridge_count == 1,
+           "H: single_node_bridge_count unchanged (12-node train)");
+    expect(c.total_nodes == 22, "H: total_nodes == 22 (10 + 12)");
+    expect(c.max_nodes_per_batch == 12, "H: max_nodes_per_batch == 12");
+    expect(c.total_watches == 5, "H: total_watches == 5 (3 + 2 members)");
+    expect(f.committer.in_flight_requests() ==
+               std::set<std::string>({"r3", "r9", "req_A", "req_B"}),
+           "H: train commit adds no arrivals");
+    expect(f.committer.prefill_drained_requests() ==
+               std::set<std::string>({"req_A", "req_B"}),
+           "H: req_B drained by the train epoch's own delta fact");
+    expect(f.registry.size() == 5,
+           "H: registry holds the 2 member watches (+3 legacy)");
+    expect(f.issue_calls ==
+               std::vector<int>({0, 1, 2, 0, 0, 0, 1, 2}),
+           "H: issue pass covered exactly the touched ranks {0, 1, 2}");
+    // Per-rank pending nodes after Part G: {5, 3, 2}; the train adds 4.
+    const size_t pending_after_g[3] = {5, 3, 2};
+    for (int rank = 0; rank < 3; ++rank) {
+        expect(f.sources[rank]->store().pending_count() ==
+                   pending_after_g[rank] + 4,
+               "H: per-rank store gained the 4 train nodes");
+    }
+
+    // Store-id translation: json ids 0..3 on each rank resolved through the
+    // persistent (rank, json id) -> store id map.
+    const auto& ids = f.committer.store_ids();
+    std::vector<uint64_t> body_ids;
+    std::vector<uint64_t> barrier_ids;
+    std::vector<std::vector<uint64_t>> marker_ids(2);  // [member][rank]
+    for (int rank = 0; rank < 3; ++rank) {
+        body_ids.push_back(ids.at(RankNodeKey{rank, 0}));
+        marker_ids[0].push_back(ids.at(RankNodeKey{rank, 1}));
+        marker_ids[1].push_back(ids.at(RankNodeKey{rank, 2}));
+        barrier_ids.push_back(ids.at(RankNodeKey{rank, 3}));
+    }
+
+    // Namespace terminals feed nothing: the body / barrier nodes carry the
+    // batch-namespace identity ("batch_train_0_1", decode, 1), which has no
+    // registered watch -- on_node_terminal is a no-op, no fire.
+    for (int rank = 0; rank < 3; ++rank) {
+        drive_terminal(f, rank, body_ids[rank], NodeTerminalStatus::Success);
+        drive_terminal(f, rank, barrier_ids[rank],
+                       NodeTerminalStatus::Success);
+    }
+    expect(f.registry.fired_and_drain().empty(),
+           "H: namespace body/barrier terminals fire no watch");
+
+    // Member markers feed the member watches (one Skipped terminal on the
+    // req_B train proves the {Success, Skipped} policy holds for markers).
+    for (int rank = 0; rank < 3; ++rank) {
+        drive_terminal(f, rank, marker_ids[0][rank],
+                       NodeTerminalStatus::Success);
+    }
+    for (int rank = 0; rank < 3; ++rank) {
+        drive_terminal(f, rank, marker_ids[1][rank],
+                       rank == 1 ? NodeTerminalStatus::Skipped
+                                 : NodeTerminalStatus::Success);
+    }
+    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    expect(fires.size() == 2, "H: both member decode watches fired");
+    std::set<std::string> fired_members;
+    for (const auto& fire : fires) {
+        expect(fire.stage == "decode" && fire.generation == 1,
+               "H: fire identity is the member decode stage");
+        expect(fire.member_count == 3,
+               "H: fire covers the member's markers on all 3 ranks");
+        expect(fire.member_ranks == std::vector<int>({0, 1, 2}),
+               "H: fire member_ranks == {0, 1, 2}");
+        fired_members.insert(fire.request_id);
+    }
+    expect(fired_members == std::set<std::string>({"req_A", "req_B"}),
+           "H: exactly req_A and req_B fired");
+
+    // The dependency chain closed: with body + markers finished on every
+    // rank, each rank's end barrier entered its free set.
+    for (int rank = 0; rank < 3; ++rank) {
+        const auto free = f.sources[rank]->store().resolve_free_nodes();
+        const std::set<uint64_t> free_set(free.begin(), free.end());
+        expect(free_set.count(barrier_ids[rank]) == 1,
+               "H: end barrier free after its train finished");
+    }
+}
+
+// ----------------------------------------------------------- Part I ------
+// Variant: ONE train folding a prefill chunk of req_C (drain marker,
+// prefill watch, gen 0) and a decode token of req_D (exit marker, decode
+// watch, gen 1) -- the mixed train. Both watches fire.
+void test_train_batch_drain_and_exit_markers(Fixture& f) {
+    StateDelta i1;
+    i1.delivery_sequence = 6;
+    i1.delivery_epoch = 6;
+    i1.tick = 500;
+    i1.events.push_back(arrival_event("req_C"));
+    i1.events.push_back(arrival_event("req_D"));
+    i1.events.push_back(drain_event("req_D"));
+
+    const GraphBatch train =
+        train_batch(6, "batch_train_2_3",
+                    {{"req_C", "prefill"}, {"req_D", "decode"}}, 4);
+    expect(!f.committer.validate(i1, train).has_value(),
+           "I: mixed drain+exit train validates clean (zero relaxation)");
+    f.committer.commit(i1, train);
+
+    const auto& c = f.committer.counters();
+    expect(c.graph_batch_count == 7, "I: graph_batch_count == 7");
+    expect(c.total_nodes == 34, "I: total_nodes == 34 (22 + 12)");
+    expect(c.total_watches == 7, "I: total_watches == 7 (5 + 2)");
+    expect(f.committer.in_flight_requests() ==
+               std::set<std::string>(
+                   {"r3", "r9", "req_A", "req_B", "req_C", "req_D"}),
+           "I: mixed-train members in-flight");
+    expect(f.committer.prefill_drained_requests() ==
+               std::set<std::string>({"req_A", "req_B", "req_D"}),
+           "I: req_D drained by the train epoch's own delta fact");
+    expect(f.registry.size() == 7, "I: registry holds both member watches");
+
+    const auto& ids = f.committer.store_ids();
+    for (int rank = 0; rank < 3; ++rank) {
+        drive_terminal(f, rank, ids.at(RankNodeKey{rank, 0}),
+                       NodeTerminalStatus::Success);  // body (namespace)
+        drive_terminal(f, rank, ids.at(RankNodeKey{rank, 1}),
+                       NodeTerminalStatus::Success);  // req_C drain marker
+        drive_terminal(f, rank, ids.at(RankNodeKey{rank, 2}),
+                       NodeTerminalStatus::Success);  // req_D exit marker
+    }
+    const std::vector<WatchFire> fires = f.registry.fired_and_drain();
+    expect(fires.size() == 2, "I: drain watch and exit watch both fired");
+    std::map<std::string, std::pair<std::string, uint64_t>> fired;
+    for (const auto& fire : fires) {
+        fired[fire.request_id] = {fire.stage, fire.generation};
+    }
+    expect(fired.count("req_C") == 1 &&
+               fired.at("req_C") ==
+                   std::make_pair(std::string("prefill"), uint64_t{0}),
+           "I: req_C fired its prefill drain watch (gen 0)");
+    expect(fired.count("req_D") == 1 &&
+               fired.at("req_D") ==
+                   std::make_pair(std::string("decode"), uint64_t{1}),
+           "I: req_D fired its decode exit watch (gen 1)");
+}
+
 }  // namespace
 
 int main() {
@@ -764,6 +1136,8 @@ int main() {
     test_zero_node_batch(f);
     test_single_node_batch(f);
     test_empty_comm_compute_batch(f);
+    test_train_batch_two_members(f);
+    test_train_batch_drain_and_exit_markers(f);
     if (g_ok) {
         std::printf("[graph_batch_committer_test] ALL PASS\n");
         return 0;

@@ -31,6 +31,11 @@ import time
 
 SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(online_contracts/state_delta_v1.md 为唯一权威)
 
+# 拼 batch 改造(2026-08-22):列车哨兵 watch 的批命名空间前缀。哨兵事件
+# (T_max 截断列车 / 逐迭代 oracle 的完成信号)不属于任何请求,不经
+# in-flight 核销,由变体的列车核销逻辑按 train_id 路由。
+BATCH_TRAIN_PREFIX = "batch_train_"
+
 # 完成边界 stage -> 语义(与 C++ build_request_json 的 completed_groups 一致)。
 STAGE_PREFILL = "prefill"
 STAGE_DECODE = "decode"
@@ -640,6 +645,8 @@ class OnlineSchedulerBase:
         for group in delta["completed_groups"]:
             self._profile_scan()  # §7.3:受影响条目(直接定位,非扫描)
             request_id = group["request_id"]
+            if request_id.startswith(BATCH_TRAIN_PREFIX):
+                continue  # 列车哨兵事件:变体侧按 train_id 核销
             stage = group["stage"]
             pending = self.in_flight.get(request_id)
             if pending is None:

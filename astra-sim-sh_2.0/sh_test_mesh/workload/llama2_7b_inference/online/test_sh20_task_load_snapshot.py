@@ -102,6 +102,7 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         scheduler.p_chunk = PREFILL_CHUNK_SIZE
         scheduler.config = types.SimpleNamespace(hardware=hardware, model=model)
         scheduler._prefill_task_cache = {}
+        scheduler._decode_task_load_cache = {}
         scheduler.average_decode_length = 10.0
         self.scheduler = scheduler
         self.hardware = hardware
@@ -113,12 +114,16 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         return list(range(len(runtimes)))
 
     def _state(self, *, index, qp=(), busy=False, active_decode=()):
+        """拼 batch 改造（2026-08-22）重订：busy 门 = 一个列车在飞
+        （in_flight_train 非 None）；running/queued 分量口径不变，仅
+        状态字段随列车状态机改名。"""
         state = _OnlineInstanceState(index=index)
         for request_index in qp:
             state.qp.append(request_index)
         for request_index in active_decode:
             state.active_decode.append(request_index)
-        state.busy = busy
+        state.in_flight_train = (
+            {"train_id": "stub"} if busy else None)
         return state
 
     def test_inflight_counted_exactly_once(self):
@@ -194,6 +199,38 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
             + runtime.prefill_tokens_to_process,
         )
         self.assertGreater(aggregate, manual)
+
+    def test_active_decode_uses_closed_form_remaining(self):
+        """拼 batch 改造（2026-08-22）active decode 物理折算重订：
+        旧口径"整段不可分（generated=0，剩余恒为全量 ADL）"作废——
+        generated_tokens = decode_tokens_consumed（列车核销闭式推进），
+        current_context_tokens = current_decode_token（= prefill_context +
+        consumed）。断言：consumed 推进后 active 分量严格下降；且快照值 ==
+        估算器按新口径的直接调用（公式/参数不动，仅折算输入换账本值）。"""
+        from face_scheduler import estimate_decode_remaining_task_load_ns
+
+        runtime = _make_runtime(0, prefill_tokens=512)
+        runtime.decode_tokens_consumed = 0
+        runtime.current_decode_token = runtime.prefill_context_tokens
+        idx, = self._bind(runtime)
+        state = self._state(index=0, active_decode=(idx,))
+        snap_before = self.scheduler._task_load_snapshot(state, 0)
+
+        # 列车核销闭式推进 5 个 token（决策边界口径）。
+        runtime.decode_tokens_consumed = 5
+        runtime.current_decode_token = (
+            runtime.prefill_context_tokens + 5)
+        snap_after = self.scheduler._task_load_snapshot(state, 0)
+        self.assertGreater(snap_before.active_decode_task_load_ns,
+                           snap_after.active_decode_task_load_ns)
+        expected = estimate_decode_remaining_task_load_ns(
+            self.hardware, self.model,
+            instance_size=self.scheduler.topology.instance(0).size,
+            current_context_tokens=runtime.current_decode_token,
+            generated_tokens=runtime.decode_tokens_consumed,
+            average_decode_length=self.scheduler.average_decode_length,
+            running_step_fraction_remaining=1.0)
+        self.assertEqual(snap_after.active_decode_task_load_ns, expected)
 
 
 if __name__ == "__main__":

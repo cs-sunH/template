@@ -483,8 +483,16 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            "] unknown status: " + name;
                 }
             }
-            // eligibility (against the delta-facts-first tracking state)
-            if (stage == "prefill") {
+            // eligibility (against the delta-facts-first tracking state).
+            // 拼 batch 适配(2026-08-22,照母本 sh_1.0 阶段 0 定型版):列车
+            // 哨兵 watch(request_id = "batch_train_..." 批命名空间,§3.1
+            // "批节点归属 + watch 侧成员表"的哨兵形态)不对应任何单请求,
+            // 绕过 in-flight/prefill-drained 资格检查——其成员是哨兵标记
+            // 节点,fire 后事件经四类 reason 通道送回 Python 侧按 train_id
+            // 核销。
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // batch sentinel: train-scoped, no request eligibility.
+            } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
                     return "prefill watch[" + std::to_string(watch_index) +
                            "] for request " + request_id +
@@ -501,24 +509,25 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
             ++watch_index;
         }
-        // sh_3.0 third emission boundary (contract ①): the completion batch
-        // (DECODE_COMPLETION/REQUEST_COMPLETE) emits completion_evictions and
-        // next-turn interval-gate nodes under stage "completion" with NO watch
-        // of its own (the decode watch already fired). Rule: watch coverage
-        // must be a subset of the node coverage, and any extra node stage
-        // must be "completion" (the wscllm-blueprint equality rule extended,
-        // registered in contract ①/⑤).
-        if (!std::includes(node_stages.begin(), node_stages.end(),
-                           watch_stages.begin(), watch_stages.end())) {
-            return "node (request_id, stage) coverage does not cover the "
-                   "watch coverage (every watch must reference nodes of "
-                   "this batch)";
-        }
-        for (const auto& entry : node_stages) {
-            if (watch_stages.count(entry) == 0 && entry.second != "completion") {
-                return "node stage coverage mismatch: (" + entry.first +
-                       ", " + entry.second +
-                       ") has no watch and is not a completion-stage node";
+        // sh_3.0 third emission boundary (contract ①) + 拼 batch 适配
+        // (2026-08-22): the coverage rule is one-directional here. Every
+        // watch's (request_id, stage) must be covered by this batch's nodes
+        // (an uncovered watch is always a bug), but a batch may carry nodes
+        // whose (request_id, stage) has no new watch -- the sh_3.0 completion
+        // batch (completion_evictions + next-turn interval gates, stage
+        // "completion") AND, since the iteration-train port, the admission
+        // batch (KV actions only; the PREFILL_DRAIN watch lives on the train
+        // drain marker) and the train batch itself (shared body nodes in the
+        // "batch_train_..." namespace + join/pstart anchor markers carry no
+        // decision watch; only drain/exit markers do). The former strict
+        // reverse direction (with the completion-stage exception, contract
+        // ①/⑤) is subsumed by the one-directional rule; deviation mirrored
+        // from the sh_1.0 stage-0 committer relaxation (设计文档 §3.1.2).
+        for (const auto& entry : watch_stages) {
+            if (node_stages.count(entry) == 0) {
+                return "watch (request_id, stage) {" + entry.first + "," +
+                       entry.second +
+                       "} has no node coverage in this batch";
             }
         }
 

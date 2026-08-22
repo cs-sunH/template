@@ -113,7 +113,7 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log; do
+for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))

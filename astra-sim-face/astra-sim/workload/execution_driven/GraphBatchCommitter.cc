@@ -477,8 +477,16 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            "] unknown status: " + name;
                 }
             }
-            // eligibility (against the delta-facts-first tracking state)
-            if (stage == "prefill") {
+            // eligibility (against the delta-facts-first tracking state).
+            // 拼 batch 适配(2026-08-22):列车哨兵 watch(request_id =
+            // "batch_train_..." 批命名空间,T_max 截断列车的完成信号,
+            // §3.1"批节点归属 + watch 侧成员表"的哨兵形态)不对应任何
+            // 单请求,绕过 in-flight/prefill-drained 资格检查——其成员
+            // 是哨兵标记节点,fire 后事件经四类 reason 通道送回 Python
+            // 侧按 train_id 核销。
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // batch sentinel: train-scoped, no request eligibility.
+            } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
                     return "prefill watch[" + std::to_string(watch_index) +
                            "] for request " + request_id +
@@ -495,10 +503,19 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
             ++watch_index;
         }
-        if (node_stages != watch_stages) {
-            return "node (request_id, stage) coverage does not match the "
-                   "watch coverage (a batch's nodes and its watches must "
-                   "reference the same (request, stage) set)";
+        // 拼 batch 适配(2026-08-22,sh_1.0 同款规则移植):覆盖规则改单向。
+        // 每个 watch 的 (request_id, stage) 必须被本批节点覆盖(未覆盖的
+        // watch 恒为 bug),但批可携带"有节点而无新 watch"的 (request_id,
+        // stage)——迭代列车的共享体/end-barrier 节点归属批命名空间
+        // ("batch_train_i*_*",非真实请求),joiner 迁移节点与准入动作
+        // 节点也无自己的 watch(其 watch 由列车 drain/exit 标记承载)。
+        // 旧的两段式批次仍满足更严的等式(对其零行为变化)。
+        for (const auto& entry : watch_stages) {
+            if (node_stages.count(entry) == 0) {
+                return "watch (request_id, stage) {" + entry.first + "," +
+                       entry.second +
+                       "} has no node coverage in this batch";
+            }
         }
 
         // ---- [assign] (opaque; structural only) ----

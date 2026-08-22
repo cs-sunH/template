@@ -4,9 +4,21 @@
 方案 §4 步骤 1-9:以已移除的离线 plan_face_requests(2026-08-21 清除)为蓝本
 逐行迁移(注释标注离线行号 `# offline: face_scheduler.py:XXXX`),保持决策
 顺序与调用链逐行对应;离线迭代计时(start_ready_iterations 推 iteration_
-complete 事件)删除,由 C++ 真实完成事件推进;实例内 PD 混合排队语义
-(FCFS qp / active_decode / busy / remaining_chunks 记账)原样保留于账本,
-不体现在图结构上(request-aggregated 三段式构图,合同④粒度口径)。
+complete 事件)删除,由 C++ 真实完成事件推进。
+
+拼 batch 改造(2026-08-22,设计文档《层次 B Continuous Batching 改造》
+§3.2"迭代列车聚合发射"):层次 B 从"请求级大段串行"重构为"实例迭代级列车"
+——decode 互拼、decode 与 prefill chunk 混拼、chunk 之间不拼、批成员只在
+迭代(列车)边界变化。每实例状态机(§3.2):qp(FCFS prefill 队列)/
+active_decode(批成员表)/pending_decode_ready(KV 就绪待加入)/
+in_flight_train(唯一在飞列车 + train_id/membership_digest);列车终点 =
+下一个不可预测事件(队列头 prefill drain / 全部工作耗尽),默认不设
+T_max(§3.2.8:加入延迟 ≤1 列车,由 §7.4 保真对拍量化治理)。边界原子
+提交顺序:核验 digest → 推进冻结成员 token → 退出成员移除 → 推进
+prefill chunk → 处理 drain/完成 → 合入 arrival → KV 就绪成员入批 →
+冻结下一列车成员 → 发射。决策边界仍是四类 reason(ARRIVAL/
+PREFILL_DRAIN/DECODE_COMPLETION/REQUEST_COMPLETE),由列车 drain/exit
+标记节点的 watch 驱动。
 
 红线(§0.4):策略判据全部只读 import 复用——KVCacheManager、
 select_prefill_instance、select_decode_instance、PrefillQueueSnapshot、
@@ -33,7 +45,9 @@ enforce_reserve——与离线 :3086-3110 的"先全部 mark_complete 再全部
 enforce_reserve"一致。
 """
 
+import hashlib
 import heapq
+import json
 import math
 import os
 import sys
@@ -132,6 +146,21 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         # 纪元未变则该条目本批跳过重试（重试必返同样的 False）。
         self._kv_ledger_epoch = 0
         self._admit_attempt_epoch = {}
+        # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
+        # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代(截断列车无自然
+        # drain/exit 标记时发射哨兵标记);0 = 不设限。
+        # 交付默认 = 8(2026-08-22 §7.4 A2 对拍裁决:2s 窗双跑,无上限时
+        # TTFT -67.3%/E2E -40.6%(加入延迟通道,§3.2.8 预判),T_max=16
+        # 仍 TTFT -19.1%,T_max=8 全指标位移 ≤1.3%——按"固定 T_max 为
+        # 使位移 ≤5% 的最大值"取 8;原则 1(保真)优先于节点数(§5 预算
+        # 核对见交付报告)。env 覆盖保留(0=无限,oracle/灵敏度复跑用)。
+        self._train_max_iter = int(
+            os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        # train_id -> instance_index(哨兵事件路由)。
+        self._train_instance_index = {}
+        # 拼 batch 列车台账(§7.3 不变量断言输入):每次列车发射一行,
+        # 由 online_service 落 bridge 目录 train_ledger.jsonl(审计产物)。
+        self.train_ledger_rows = []
         # 影子验证开关（SH_ADMIT_GATE_VERIFY=1）：门跳过的条目仍完整评估
         # 并断言必返 False——验证跑零收益、全检查；不设或非"1"则正常运行。
         self._admit_gate_verify = (
@@ -144,20 +173,30 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         # 同 tick 顺序(离线 :2970):completion(0)先于 arrival(1)。
         drained = []
         completed_now = []
+        sentinel_trains = []
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
+            if request_id.startswith("batch_train_"):
+                sentinel_trains.append(request_id)
+                continue
             if stage == STAGE_PREFILL:
                 drained.append(request_id)
             elif stage == STAGE_DECODE:
                 completed_now.append(request_id)
             elif stage == STAGE_REQUEST:
-                # REQUEST_COMPLETE 与 DECODE_COMPLETION 同 tick 交付;段 3
-                # 发射在 _complete_requests(下)一并处理。
+                # REQUEST_COMPLETE 与 DECODE_COMPLETION 同 tick 交付;完成
+                # 处理在 _complete_requests(下)一并处理。
                 continue
             else:
                 raise ValueError(
                     "unknown completion stage {!r}".format(stage))
+        # 拼 batch 列车账本(§3.2 边界原子提交顺序):先核销已完成列车
+        # (核验 train_id + membership_digest → 冻结成员推进 token → 退出
+        # 成员移出 active_decode → 推进 prefill chunk),再处理 drain/
+        # 完成/到达,最后冻结并发射各空闲实例的下一列车。
+        self._finalize_completed_trains(
+            drained, completed_now, sentinel_trains, tick)
         for request_id in drained:
             self._on_prefill_drain(request_id, tick)
         if completed_now:
@@ -167,6 +206,306 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         # offline: :3134-3136 retry_admissions -> admit_waiting_requests +
         # start_ready_iterations(在线无 iteration 计时;准入重查保留)。
         self.admit_waiting_requests(tick)
+        self._plan_and_emit_trains(tick)
+
+    # ------------------------------------------------------ 列车账本 --
+
+    def _finalize_completed_trains(self, drained, completed_now,
+                                   sentinel_trains, tick: int) -> None:
+        """核销本交付中标记 watch 已 fire 的列车(§3.2 原子提交的前半)。
+        drain/exit 标记节点是列车体后的最末真实节点,任一标记 watch fire
+        即列车物理主体完成。同一列车不同成员的标记 watch 可能跨 tick
+        fire、事件拆到不同交付——首个信号执行核销(账本推进恰一次),
+        后续信号只清已核销列车的 pending 集合(幂等);信号不属于任何
+        在飞/已核销列车即陈旧完成错配 fail-closed。推进量全部闭式
+        (每成员 participation 次 token,无逐 token 循环)。"""
+        signaled = {}
+        for request_id in drained:
+            runtime = self._runtimes[request_id]
+            signaled.setdefault(
+                runtime.prefill_instance_index, set()).add(request_id)
+        for request_id in completed_now:
+            runtime = self._runtimes[request_id]
+            signaled.setdefault(
+                runtime.decode_instance_index, set()).add(request_id)
+        for train_id in sentinel_trains:
+            instance_index = self._train_instance_index.pop(train_id, None)
+            if instance_index is None:
+                raise RuntimeError(
+                    "sentinel signal for unknown train {}".format(train_id))
+            signaled.setdefault(instance_index, set()).add(train_id)
+        for instance_index, signals in signaled.items():
+            state = self.instances[instance_index]
+            pending_signals = set(signals)
+            consumed = set()
+            train = state.in_flight_train
+            if train is not None:
+                inflight_hits = pending_signals & train["signal_set"]
+                if inflight_hits:
+                    # 该列车首个信号到达:核销(账本推进恰一次),残余
+                    # 信号(drain/exit 标记跨 tick fire)登记待收。
+                    iterations = train["iterations"]
+                    for request_id, participation in train["members"]:
+                        runtime = self._runtimes[request_id]
+                        runtime.decode_tokens_consumed += participation
+                        runtime.current_decode_token += participation
+                    for request_id in train["exit_set"]:
+                        if request_id not in state.active_decode:
+                            raise RuntimeError(
+                                "exiting member {} is not in the decode "
+                                "batch".format(request_id))
+                        state.active_decode.remove(request_id)
+                    for (request_id,
+                         chunk_tokens) in train["prefill_chunk_tokens"]:
+                        runtime = self._runtimes[request_id]
+                        runtime.prefill_tokens_completed += chunk_tokens
+                        runtime.remaining_chunks -= 1
+                    state.iteration_count += iterations
+                    state.in_flight_train = None
+                    state.finalized_trains.append({
+                        "train_id": train["train_id"],
+                        "pending": (train["signal_set"] - inflight_hits),
+                    })
+                    consumed |= inflight_hits
+                    pending_signals -= inflight_hits
+            # 已核销列车的后续信号对账(幂等清 pending,清空即出列表)。
+            for record in state.finalized_trains:
+                hits = pending_signals & record["pending"]
+                record["pending"] -= hits
+                consumed |= hits
+            state.finalized_trains = [
+                record for record in state.finalized_trains
+                if record["pending"]]
+            unresolved = pending_signals - consumed
+            if unresolved:
+                raise RuntimeError(
+                    "completion signals {} for instance {} match no "
+                    "in-flight or recently finalized train (stale "
+                    "completion mismatch)".format(
+                        sorted(unresolved), instance_index))
+
+    def _plan_train(self, state):
+        """冻结实例的下一列车成员快照(§3.2 构造规则)。
+
+        列车终点 = 下一个不可预测事件之前的最后一个完整迭代:队列头
+        prefill 的 drain 迭代(剩余 chunk 数,先验)或全部 decode 工作
+        耗尽(无 prefill 工作时 = max 剩余 token;默认不设 T_max,§3.2.8)。
+        成员退出不是列车边界(先验):退出成员在列车内挂 exit 标记。
+        每迭代至多 1 个 prefill chunk(FCFS 队列头);chunk 之间不互拼。
+        返回 None = 实例无工作。"""
+        qp_head = None
+        for request_id in state.qp:
+            # drain 事件跨交付未达的头部(remaining_chunks 已在列车核销
+            # 时清零,drain 决策事件尚在途中)不提供 chunk 工作;其后续
+            # 请求的 chunk 物理上已可开始(头部 prefill 主体已完成)。
+            if self._runtimes[request_id].remaining_chunks > 0:
+                qp_head = request_id
+                break
+        members = []
+        for request_id in state.active_decode:
+            runtime = self._runtimes[request_id]
+            remaining = (
+                runtime.request.decode_length - runtime.decode_tokens_consumed)
+            if remaining <= 0:
+                raise RuntimeError(
+                    "decode member {} has no remaining tokens".format(
+                        request_id))
+            members.append((request_id, runtime.prefill_context_tokens,
+                            runtime.decode_tokens_consumed, remaining))
+        natural_iterations = None
+        if qp_head is None:
+            if not members:
+                return None
+            natural_iterations = max(
+                remaining for _, _, _, remaining in members)
+        else:
+            head_runtime = self._runtimes[qp_head]
+            natural_iterations = head_runtime.remaining_chunks
+            if natural_iterations <= 0:
+                raise RuntimeError(
+                    "prefill queue head {} has no remaining chunks".format(
+                        qp_head))
+        iterations = natural_iterations
+        capped = False
+        if (self._train_max_iter and iterations > self._train_max_iter):
+            iterations = self._train_max_iter
+            capped = True
+        # span 展开(成员×迭代;KV 逐迭代 +1,退出截断,无 padding)。
+        # 聚合对 span 求和与顺序无关,故按 [chunk 序列]+[成员连续段]
+        # 平铺(总 span 数与旧 request-aggregated 同级,非新增热路径)。
+        pass_spans: list[tuple[int, int]] = []
+        chunk_records = []
+        if qp_head is not None:
+            head_runtime = self._runtimes[qp_head]
+            work = head_runtime.prefill_tokens_to_process
+            completed = head_runtime.prefill_tokens_completed
+            history = head_runtime.history_tokens_before
+            for _ in range(iterations):
+                chunk_tokens = min(self.p_chunk, work - completed)
+                if chunk_tokens <= 0:
+                    raise RuntimeError(
+                        "prefill queue head {} ran out of work inside the "
+                        "planned train".format(qp_head))
+                pass_spans.append(
+                    (chunk_tokens, history + completed + chunk_tokens))
+                chunk_records.append((qp_head, chunk_tokens))
+                completed += chunk_tokens
+        member_parts = []
+        exit_members = []
+        for request_id, context, consumed, remaining in members:
+            participation = min(remaining, iterations)
+            pass_spans.extend(
+                (1, context + consumed + step)
+                for step in range(1, participation + 1))
+            member_parts.append((request_id, participation))
+            if participation >= remaining:
+                exit_members.append(request_id)
+        # 队列头在列车内完成其全部剩余 chunk(列车长度 = 头部剩余 chunk
+        # 数)⇒ 列车终于头部 drain 迭代(drain 是先验已知的列车边界)。
+        # T_max 截断时头部未必 drain —— 重算。
+        drain_members = [qp_head] if (
+            qp_head is not None and not capped) else []
+        head_first_chunk = (
+            qp_head is not None
+            and self._runtimes[qp_head].prefill_tokens_completed == 0)
+        state.train_seq += 1
+        train_id = "batch_train_i{}_{}".format(state.index, state.train_seq)
+        signal_set = set(exit_members) | set(drain_members)
+        if capped and not drain_members and not exit_members:
+            signal_set.add(train_id)  # 哨兵:列车自身 id 即完成信号
+        snapshot = json.dumps(
+            {
+                "train_id": train_id,
+                "iterations": iterations,
+                "members": member_parts,
+                "exits": exit_members,
+                "drains": drain_members,
+                "chunks": chunk_records,
+                "capped": capped,
+            },
+            sort_keys=True,
+        )
+        return {
+            "train_id": train_id,
+            "iterations": iterations,
+            "members": member_parts,
+            "exit_members": exit_members,
+            "exit_set": set(exit_members),
+            "drain_members": drain_members,
+            "drain_set": set(drain_members),
+            "prefill_chunk_tokens": chunk_records,
+            "head_first_chunk": head_first_chunk,
+            "capped": capped,
+            "sentinel": bool(capped and not drain_members
+                             and not exit_members),
+            "pass_spans": pass_spans,
+            "signal_set": signal_set,
+            "membership_digest": hashlib.sha256(
+                snapshot.encode()).hexdigest(),
+        }
+
+    def _plan_and_emit_trains(self, tick: int) -> None:
+        """为每个空闲且有工作的实例冻结并发射下一列车(§3.2 原子提交
+        的后半:KV 就绪成员(pending_decode_ready,迁移随加入列车发射,
+        物理先于列车体)进入 active_decode → 冻结成员 → 发射)。
+        busy 门 = 一个列车在飞(§3.2):在飞实例跳过,不重复发射。"""
+        for state in self.instances:
+            if state.in_flight_train is not None:
+                continue  # busy 门:一个列车在飞
+            joiners = []
+            if state.pending_decode_ready:
+                joiners = list(state.pending_decode_ready)
+                state.pending_decode_ready.clear()
+                state.active_decode.extend(joiners)
+                for request_id in joiners:
+                    self._note_emitted(request_id, STAGE_DECODE)
+                    self._ledger_issue(
+                        request_id, tick, STAGE_DECODE, state.index)
+            plan = self._plan_train(state)
+            if plan is None:
+                continue
+            self._emit_train(state, plan, joiners, tick)
+
+    def _emit_train(self, state, plan, joiner_ids, tick: int) -> None:
+        """把冻结的列车计划交给构图器发射,注册 drain/exit 标记 watch,
+        并挂起 in_flight_train(busy 门 = 一个列车在飞)。"""
+        joiner_plans = []
+        for request_id in joiner_ids:
+            runtime = self._runtimes[request_id]
+            joiner_plan = self._plan_dict(runtime)
+            joiner_plan["prefill_instance_index"] = (
+                runtime.prefill_instance_index)
+            joiner_plan["decode_instance_index"] = (
+                runtime.decode_instance_index)
+            joiner_plan["decode_evictions"] = self._transfer_dicts(
+                runtime.decode_evictions)
+            joiner_plan["prefill_decode_transfer"] = (
+                self._transfer_dict_or_none(runtime.prefill_decode_transfer))
+            joiner_plan["prefill_drain_block_ends"] = dict(
+                runtime.drain_block_ends or {})
+            joiner_plans.append(joiner_plan)
+        stage = "decode" if (plan["members"] or joiner_ids) else "prefill"
+        qp_head = state.qp[0] if state.qp else None
+        prefill_start_member = None
+        if qp_head is not None and plan.get("head_first_chunk"):
+            prefill_start_member = {"request_id": qp_head}
+        result = self.graph.emit_iteration_train({
+            "train_id": plan["train_id"],
+            "instance_index": state.index,
+            "stage": stage,
+            "joiners": joiner_plans,
+            "pass_spans": plan["pass_spans"],
+            "iterations": plan["iterations"],
+            "prefill_start_member": prefill_start_member,
+            "sentinel": plan["sentinel"],
+            "drain_members": [{"request_id": request_id}
+                              for request_id in plan["drain_members"]],
+            "exit_members": [{"request_id": request_id}
+                             for request_id in plan["exit_members"]],
+        })
+        self._train_instance_index[plan["train_id"]] = state.index
+        for request_id, members in result["drain_members"].items():
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_PREFILL,
+                "generation": 0,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+            runtime = self._runtimes[request_id]
+            runtime.drain_block_ends = dict(result["block_ends"])
+        for request_id, members in result["exit_members"].items():
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_DECODE,
+                "generation": 1,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+        if plan["sentinel"]:
+            self._batch["watches"].append({
+                "request_id": plan["train_id"],
+                "stage": STAGE_PREFILL,   # 固定 prefill:单事件通道
+                "generation": 0,
+                "members": result["sentinel_members"],
+                "statuses": ["Success", "Skipped"],
+            })
+        state.in_flight_train = plan
+        self.train_ledger_rows.append({
+            "train_id": plan["train_id"],
+            "instance_index": state.index,
+            "tick": tick,
+            "iterations": plan["iterations"],
+            "member_count": len(plan["members"]),
+            "member_iterations": sum(
+                participation for _, participation in plan["members"]),
+            "joiners": list(joiner_ids),
+            "drains": list(plan["drain_members"]),
+            "exits": list(plan["exit_members"]),
+            "sentinel": plan["sentinel"],
+            "prefill_chunks": len(plan["prefill_chunk_tokens"]),
+            "pass_spans": len(plan["pass_spans"]),
+        })
 
     # ----------------------------------------------------------- ARRIVAL --
 
@@ -282,9 +621,11 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 self.config.model, runtime.history_tokens_before)
         self.instances[selected].qp.append(request_id)
         self.instances[selected].last_arrival_ns = now_ns
-        # 段 1 发射(在线:准入即发射 prefill 整段;物理串行化由图内
-        # per-rank previous_id 链承载,strategy 模式保持物理跨 request 链)。
-        self._emit_segment1(runtime, now_ns)
+        # 准入动作发射(拼 batch 改造:prefill 主体移入实例迭代列车,在
+        # _plan_and_emit_trains 处发射;此处只发到达 gates/历史迁移/逐出/
+        # 屏障,物理串行化仍由图内 per-rank previous_id 链承载,strategy
+        # 模式保持物理跨 request 链)。
+        self._emit_admission(runtime, now_ns)
         return True
 
     def admit_waiting_requests(self, now_ns: int) -> None:  # offline: :2903-2909
@@ -411,10 +752,14 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         )
         self.kv_manager.release_request_capacity_reservation(request_id)
         self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 7/9
-        self.instances[selected].active_decode.append(request_id)
+        # 拼 batch 改造(§3.2 KV 就绪栅栏):drain 决策(decode 实例选择/
+        # KV 迁移规划)在此完成,成员进入 pending_decode_ready,待加入
+        # decode 实例的下一列车(迁移随加入列车发射,物理先于列车体;
+        # restore/迁移列车中途完成的也只能等下列车边界)。
+        self.instances[selected].pending_decode_ready.append(request_id)
         # online: start_ready_iterations 的 decode 起始记账(:2927-2928)。
         runtime.decode_start_ns = tick
-        self._emit_segment2(runtime, tick)
+        self._emit_join_decision(runtime, tick)
 
     # ------------------------------------------ DECODE_COMPLETION(段 3) --
 
@@ -435,10 +780,9 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         # + 下一次 arrival 排程)。
         for request_id in completion_order:
             runtime = self._runtimes[request_id]
-            state = self.instances[runtime.decode_instance_index]
-            if request_id not in state.active_decode:
-                raise RuntimeError("decode queue membership was corrupted")
-            state.active_decode.remove(request_id)
+            # 拼 batch 改造:active_decode 移除已移至 _finalize_completed_
+            # trains(退出迭代在列车内先验已知,物理完成时刻 = exit 标记
+            # 节点完成时刻)。
             runtime.completion_ns = tick
             following = self._next_by_request.get(request_id)
             if following is not None:
@@ -522,7 +866,9 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             for t in (transfers or ())
         ]
 
-    def _emit_segment1(self, runtime, tick: int) -> None:
+    def _emit_admission(self, runtime, tick: int) -> None:
+        """准入动作发射 + 决策/账本记录(拼 batch 改造:PREFILL_DRAIN
+        watch 不再在此注册——移至覆盖其最后 chunk 的列车 drain 标记)。"""
         plan = self._plan_dict(runtime)
         plan["prefill_instance_index"] = runtime.prefill_instance_index
         plan["decode_instance_index"] = runtime.prefill_instance_index
@@ -536,19 +882,12 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             runtime.history_evictions)
         plan["prefill_evictions"] = self._transfer_dicts(
             runtime.prefill_evictions)
-        members = self.graph.emit_prefill_batch(plan)
-        self._batch["watches"].append({
-            "request_id": runtime.request.request_id,
-            "stage": STAGE_PREFILL,
-            "generation": 0,
-            "members": members,
-            "statuses": ["Success", "Skipped"],
-        })
+        self.graph.emit_admission_batch(plan)
         self._batch["assignments"].append({
             "request_id": runtime.request.request_id,
             "prefill_instance_index": runtime.prefill_instance_index,
             # 准入时刻 decode 实例未知(离线同款:decode 在 prefill 完成时
-            # 决策);占位 = prefill 实例,段 2 追加完整 assignment。
+            # 决策);占位 = prefill 实例,join 决策追加完整 assignment。
             "decode_instance_index": runtime.prefill_instance_index,
             "prefill_assignment_key": list(runtime.prefill_assignment_key),
         })
@@ -577,7 +916,10 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
         return None if transfer is None else self._transfer_dicts(
             [transfer])[0]
 
-    def _emit_segment2(self, runtime, tick: int) -> None:
+    def _emit_join_decision(self, runtime, tick: int) -> None:
+        """drain 边界的 decode 决策记录(拼 batch 改造:decode 段发射
+        移至加入列车,即 _plan_and_emit_trains → emit_iteration_train;
+        DECODE_COMPLETION watch 由列车 exit 标记承载)。"""
         plan = self._plan_dict(runtime)
         plan["prefill_instance_index"] = runtime.prefill_instance_index
         plan["decode_instance_index"] = runtime.decode_instance_index
@@ -585,14 +927,6 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             runtime.decode_evictions)
         plan["prefill_decode_transfer"] = self._transfer_dict_or_none(
             runtime.prefill_decode_transfer)
-        members = self.graph.emit_decode_batch(plan)
-        self._batch["watches"].append({
-            "request_id": runtime.request.request_id,
-            "stage": STAGE_DECODE,
-            "generation": 1,
-            "members": members,
-            "statuses": ["Success", "Skipped"],
-        })
         self._batch["assignments"].append({
             "request_id": runtime.request.request_id,
             "prefill_instance_index": runtime.prefill_instance_index,
@@ -617,13 +951,11 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
                 "decode_evictions": plan["decode_evictions"],
             },
         }, tick)
-        self._ledger_unissue(runtime.request.request_id, STAGE_PREFILL)
-        self._note_emitted(runtime.request.request_id, STAGE_DECODE)
+        # decode 发射(note_emitted/issue)移至加入列车处;prefill 层的
+        # unissue 已由基类 _settle_completions 在 drain 事件核销时完成。
         self._ledger_admit(runtime.request.request_id, tick, {
             "type": "active_decode",
             "instance_index": runtime.decode_instance_index})
-        self._ledger_issue(runtime.request.request_id, tick, STAGE_DECODE,
-                           runtime.decode_instance_index)
 
     def _emit_segment3(self, runtime, tick: int) -> None:
         plan = self._plan_dict(runtime)
@@ -675,7 +1007,9 @@ class Sh10OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "online run ended with incomplete requests: {}".format(
                     incomplete[:5]))
-        if any(state.qp or state.active_decode for state in self.instances):
+        if any(state.qp or state.active_decode or state.pending_decode_ready
+               or state.in_flight_train is not None
+               for state in self.instances):
             raise RuntimeError("online run ended with non-idle instance state")
         if self._admit_attempt_epoch:
             raise RuntimeError(
@@ -708,6 +1042,12 @@ class _OnlineRuntime:
         # 字段保留以维持输出 schema)。
         self.history_tokens_discarded = 0
         self.current_decode_token = prefill_context_tokens
+        # ---- 拼 batch 列车推进字段(2026-08-22;决策边界上闭式推进,
+        # 余额与逐 token 精确值逐点一致,供 select_decode_instance 的
+        # active_tokens / queue_snapshot 输入) ----
+        self.decode_tokens_consumed = 0  # 已物理完成 decode token 数
+        self.prefill_tokens_completed = 0  # 已物理完成 prefill token 数
+        self.drain_block_ends = None     # drain 列车 barrier(joiner 触发门)
         self.estimated_arrival_ns = None
         self.admission_time_ns = None
         self.prefill_instance_index = None
@@ -733,11 +1073,18 @@ class _OnlineRuntime:
 
 
 class _InstanceState:
-    """离线 _InstanceRuntime(:2707-2713);busy/iteration_count 为离线迭代计时
-    产物,在线不消费(图内物理串行化替代)。"""
+    """离线 _InstanceRuntime(:2707-2713)+ 拼 batch 列车状态机(§3.2)。
+    busy 门语义 = "一个列车在飞"(in_flight_train);iteration_count 为
+    已完成迭代数(列车核销时闭式推进)。"""
 
     def __init__(self, index):
         self.index = index
         self.qp = deque()
         self.active_decode = []
         self.last_arrival_ns = None
+        # ---- 拼 batch 列车账本(2026-08-22) ----
+        self.pending_decode_ready = []   # KV 就绪待加入下一列车的成员
+        self.in_flight_train = None      # 唯一在飞列车(冻结成员快照)
+        self.finalized_trains = []       # 已核销列车(待收后续跨交付信号)
+        self.iteration_count = 0         # 已完成迭代数
+        self.train_seq = 0               # 列车序号(命名/审计用)

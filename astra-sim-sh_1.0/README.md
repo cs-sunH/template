@@ -223,23 +223,33 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
   再全部 enforce_reserve（`:378-438`）。
 - request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
-  聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
-  恒等，只压缩重复层/chunk/token 与集合通信启动次数
-  （`sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:1118-1141`）；
+  聚合 FLOPs、激活/KV/HBM 字节、可选远端读与集合通信载荷与成员-迭代展开
+  总量恒等，只压缩重复层/chunk/token 与集合通信启动次数；权重字节按
+  `weight_passes` 口径计（默认 = span 数，历史 batch=1 串行口径逐字节
+  不变；迭代列车传迭代数——权重每物理前向只读一次，与批成员数无关，
+  2026-08-22 拼 batch 改造，`generate_trace.py:781-1055`）；
   在线发射仅支持该粒度，其它粒度 fail-closed
-  （`online/graph_batch_builder.py:429-432`）。
-- 发射并发骨架（本仓形态：全流水发射）：无实例 busy 门，三段式
-  （段 1 prefill 整段 / 段 2 decode 整段 / 段 3 完成段）在各自决策边界即时
-  发射——准入成功即发射段 1（`:271-273`），PREFILL_DRAIN 即发射段 2
-  （`:374`），完成处理即发射段 3（`:438`）；实例账本不含 busy 字段
-  （`:686-694`），同实例多 request 的 prefill 段并发执行，物理串行化全部由
-  图内 per-rank previous_id 链承载（`:295-299`）。
-- 接栅栏与段末屏障：段发射不做块末恢复/段内清链，per-rank `previous_id`
+  （`online/graph_batch_builder.py`）。
+- 发射并发骨架（本仓形态：迭代列车拼 batch，2026-08-22 改造）：连续
+  batching——decode 互拼、decode 与 prefill chunk 混拼（每迭代 ≤1
+  chunk）、chunk 之间不拼、批成员只在迭代（列车）边界变化。每实例
+  状态机 = FCFS prefill 队列 / active_decode 批成员表 /
+  pending_decode_ready（KV 就绪待加入）/ in_flight_train（唯一在飞
+  列车 + train_id/membership_digest，busy 门 = 一个列车在飞）；列车
+  终点 = 下一个不可预测事件（队列头 prefill drain / 全部工作耗尽），
+  默认不设 T_max。发射 = 准入动作（到达 gates/历史迁移/逐出/屏障）→
+  迭代列车（joiner 迁移 + 共享 readiness barrier + 折叠列车体
+  （weight_passes=迭代数）+ drain/exit 标记节点 + 每列车一个共享 end
+  barrier）→ 完成段（completion_evictions + 下一 turn interval
+  gates）。列车账本核销幂等（同列车标记 watch 跨 tick fire、事件拆
+  交付），推进量全部闭式；`train_ledger.jsonl` 落每列车审计行
+  （§7.3 不变量断言输入）。
+- 接栅栏与段末屏障：发射不做块末恢复/段内清链，per-rank `previous_id`
   无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
-  统一；`online/graph_batch_builder.py:436-438`、`:651`），跨请求 P2P 与
-  集合通信参与序不会反转成环；prefill 段以 TP 组
-  `*_prefill_chunks_aggregated_end_barrier` 收尾（`:617`），decode 段以 TP 组
-  `*_decode_request_end_barrier` 收尾（`:736`）。
+  统一），列车作为整体接续 frontier，跨请求 P2P 与集合通信参与序不会
+  反转成环；列车以 TP 组共享 `*_end_barrier` 收尾，drain/exit 标记
+  （列车体后、barrier 前）承载 PREFILL_DRAIN / DECODE_COMPLETION watch
+  与指标锚点（R2-2"barrier 前末节点"口径的列车化延续）。
 - KV 迁移/远端存取的图语义：会话内 NoC 迁移为配对 comm_send/comm_recv 传输
   节点加完成 ACK；edge 远端存取按 remote_store（comm_send 至 edge + edge
   `mem_store` + ACK）/ remote_load（edge `mem_load` + NoC 投递）表达，恢复

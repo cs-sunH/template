@@ -94,6 +94,9 @@ class BridgeServer:
         self.resp_notify = os.path.join(bridge_dir, "resp_notify.fifo")
         self._seen_requests = set()
         self._seen_acks = set()
+        # 单调快路径探针(2026-08-22):下一个期望的 request/ack seq。
+        self._next_req_probe = 0
+        self._next_ack_probe = 0
         # 缺陷 B 修复(2026-08-16):resp_notify 写端长连接 fd。serve_forever
         # 启动时一次打开(与 C++ open_notify 持有的常开读端配对),run 生命
         # 期持有,退出时关闭;_notify_response 只写不开。None = 尚未打开。
@@ -136,9 +139,37 @@ class BridgeServer:
         return None
 
     def _new_files(self):
-        """返回 (未处理 request seq 升序, 未处理 ack seq 升序)。"""
+        """返回 (未处理 request seq 升序, 未处理 ack seq 升序)。
+
+        单调快路径(拼 batch oracle 预备, 2026-08-22):官方协议下 request
+        与 commit_ack 的 seq 都严格 +1 单调(C++ 单在途背压),逐个 stat
+        下一个期望文件即可,O(1) 每轮——全量 listdir 随保留的 request_*
+        审计文件数二次方增长(3531 交付 ~12.5M 项访问;逐迭代 oracle 的
+        ~万级交付不可承受)。快路径未命中(乱序/预置文件,幂等 fixture
+        场景)回退全量 listdir,语义与改前一致。
+        """
         reqs = []
         acks = []
+        while True:
+            probe = os.path.join(
+                self.bridge_dir,
+                _REQUEST_PREFIX + str(self._next_req_probe) + _JSON_SUFFIX)
+            if not os.path.exists(probe):
+                break
+            if self._next_req_probe not in self._seen_requests:
+                reqs.append(self._next_req_probe)
+            self._next_req_probe += 1
+        while True:
+            probe = os.path.join(
+                self.bridge_dir,
+                _ACK_PREFIX + str(self._next_ack_probe) + _JSON_SUFFIX)
+            if not os.path.exists(probe):
+                break
+            if self._next_ack_probe not in self._seen_acks:
+                acks.append(self._next_ack_probe)
+            self._next_ack_probe += 1
+        if reqs or acks:
+            return sorted(reqs), sorted(acks)
         for name in os.listdir(self.bridge_dir):
             req_seq = self._seq_of(name, _REQUEST_PREFIX)
             if req_seq is not None and req_seq not in self._seen_requests:

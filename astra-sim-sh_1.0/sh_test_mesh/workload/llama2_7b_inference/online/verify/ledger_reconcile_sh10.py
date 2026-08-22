@@ -92,10 +92,19 @@ def main():
     total_watches = sum(d["watch_count"] for d in digests)
     m5 = re.search(r"phase-5 commit counters:.*total_watches=(\d+)", cpp)
     cpp_watches = int(m5.group(1)) if m5 else None
-    check("R2a watch 总量三方对平（digest 和 == cpp phase-5 == 2×请求）",
-          total_watches == 2 * args.expected
+    # 拼 batch 改造(2026-08-22,§4.4 对账口径):列车模型下 watch 总量 =
+    # 2×请求(每请求 drain + exit 标记 watch 各一)+ 哨兵 watch 数
+    # (T_max 截断且无自然标记的列车;train_ledger.jsonl 的 sentinel 行)。
+    # 旧三段式不变量(watch == 2N)在无哨兵时退化成立。
+    ledger_rows = jsonl("train_ledger.jsonl")
+    sentinel_watches = sum(
+        1 for row in ledger_rows if row.get("sentinel"))
+    expected_watches = 2 * args.expected + sentinel_watches
+    check("R2a watch 总量三方对平（digest 和 == cpp phase-5 == 2×请求+哨兵）",
+          total_watches == expected_watches
           and (cpp_watches is None or cpp_watches == total_watches),
-          f"digest={total_watches} cpp={cpp_watches} 2N={2 * args.expected}")
+          f"digest={total_watches} cpp={cpp_watches} "
+          f"2N+sentinel={expected_watches} (sentinel={sentinel_watches})")
     bound_bad = [d["delivery_sequence"] for d in digests
                  if not (0 <= d["watch_count"] <= len(d.get("ranks") or []))]
     ranks_bad = [d["delivery_sequence"] for d in digests

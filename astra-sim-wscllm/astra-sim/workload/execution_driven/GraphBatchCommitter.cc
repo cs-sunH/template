@@ -477,8 +477,13 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            "] unknown status: " + name;
                 }
             }
-            // eligibility (against the delta-facts-first tracking state)
-            if (stage == "prefill") {
+            // eligibility (against the delta-facts-first tracking state).
+            // 拼 batch 适配(2026-08-22):列车哨兵 watch(request_id =
+            // "batch_train_..." 批命名空间,T_max 截断列车的完成信号)不
+            // 对应任何单请求,绕过 in-flight/prefill-drained 资格检查。
+            if (request_id.rfind("batch_train_", 0) == 0) {
+                // batch sentinel: train-scoped, no request eligibility.
+            } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
                     return "prefill watch[" + std::to_string(watch_index) +
                            "] for request " + request_id +
@@ -495,10 +500,24 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
             ++watch_index;
         }
-        if (node_stages != watch_stages) {
-            return "node (request_id, stage) coverage does not match the "
-                   "watch coverage (a batch's nodes and its watches must "
-                   "reference the same (request, stage) set)";
+        // 拼 batch 列车适配(2026-08-22,照 sh_1.0 母本先例): the coverage
+        // rule is one-directional here. Every watch's (request_id, stage)
+        // must be covered by this batch's nodes (an uncovered watch is
+        // always a bug), but a batch may carry nodes whose (request_id,
+        // stage) has no new watch -- a D-side iteration train's shared body
+        // and end barrier live in the batch namespace ("batch_train_...",
+        // not a real request; the member exit watches carry the real
+        // request ids) and a joining member's transfer nodes need no watch
+        // until it exits in a later train. The historical two-segment
+        // batches still satisfy the stricter equality (no behavior change
+        // for them); the deviation matches the sh_1.0 relaxation recorded
+        // in sh_1.0改造执行实录.md.
+        for (const auto& entry : watch_stages) {
+            if (node_stages.count(entry) == 0) {
+                return "watch (request_id, stage) {" + entry.first + "," +
+                       entry.second +
+                       "} has no node coverage in this batch";
+            }
         }
 
         // ---- [assign] (opaque; structural only) ----

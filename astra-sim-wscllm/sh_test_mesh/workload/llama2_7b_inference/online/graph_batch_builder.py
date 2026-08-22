@@ -21,6 +21,20 @@ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceB
   - watch 锚点遵循共享 metrics 口径:PREFILL_DRAIN = prefill_bounds 每 rank
     末节点(排除 end barrier),DECODE_COMPLETION = end barrier 前每 rank 的
     decode 末节点(离线 doc sec.6.2/6.3/6.4 口径)。
+
+拼 batch 改造(2026-08-22,设计文档《层次 B Continuous Batching 改造》
+§3.2/§3.6 wscllm PD 分离豁免):D 侧 decode 发射从"每请求整段"重构为
+"实例迭代列车"(emit_iteration_train)——列车只含 decode 成员 span,一个
+迭代同时算 B 个成员各 1 token,权重每迭代只读一次(weight_passes=迭代数);
+列车内绝不混入 prefill chunk span。P 侧保持 emit_prefill_batch 现有整段
+骨架(逐 chunk 不拼:聚合调用 weight_passes 缺省 = len(spans) = chunk 数,
+每 chunk 恰读一遍权重,口径不变)。列车发射结构(每 decode 实例 rank):
+[joiner transfer 3000] → [join 标记] → 17 类聚合体节点(weight_passes=
+迭代数) → [exit 标记] → 共享 end barrier;DECODE_COMPLETION watch 成员 =
+exit 标记节点(列车体后、end barrier 前的真实节点);completion_gates
+账本 = 本列车 post-barrier 节点(下一 turn interval gate 的 after_node_id
+来源,与旧整段发射的 end-barrier 口径一致)。legacy 变体(kv_cache_
+policy=legacy)不走列车,保留 emit_decode_batch 旧两段式 API。
 """
 
 import os
@@ -454,6 +468,161 @@ class GraphBatchBuilder:
             {rank: builders[rank].previous_id for rank in decode_group.ranks},
         )
         return members
+
+    def emit_iteration_train(self, train_plan: dict) -> dict:
+        """发射一趟 D 侧 decode 迭代列车(拼 batch 改造核心,2026-08-22;
+        设计文档 §3.2"迭代列车聚合发射"+ §3.6 wscllm PD 分离豁免)。
+
+        wscllm 范围 = 仅 decode 互拼:列车只含 decode 成员 span,绝无
+        prefill chunk span(§3.6:P 侧逐 chunk 不拼,保持 emit_prefill_
+        batch 现有发射骨架——其聚合调用 weight_passes 缺省 = len(spans)
+        = chunk 数,与"chunk 之间不拼、每 chunk 读一遍权重"口径一致)。
+
+        train_plan(调度器冻结的成员快照)字段:
+          train_id          批命名空间 id("batch_train_i<实例>_<序号>";
+                            共享体节点归属,物理完成与逻辑请求完成分离)
+          instance_index    列车所在 decode 实例
+          joiners           新成员 request_plan 列表(含 prefill_instance_
+                            index/prefill_context_tokens)——transfer 3000
+                            迁移节点先于列车体(触发链 = per-rank frontier,
+                            与既有 _emit_decode 同款;drain 决策事件已在
+                            发射前交付,prefill 主体物理已完成)
+          pass_spans        成员×迭代展开的 (tokens, kv) 平铺列表
+          iterations        迭代数(= weight_passes:权重字节 ×迭代数,
+                            与批成员数无关;激活/KV/AR 逐 span 精确)
+          exit_members      本列车内退出 decode 的成员 plan 列表
+
+        每 decode 实例 rank 上的结构(链序):
+          [joiner transfer 3000 ...] → [join 标记 ...] → 17 类聚合体节点
+          (transformer_pass_aggregated, weight_passes=iterations) →
+          [exit 标记 ...] → 共享 end barrier。
+
+        返回 {"exit_members": {request_id: {rank: 标记节点 id}},
+              "block_ends": {rank: end barrier 节点 id}}——exit 标记即
+        DECODE_COMPLETION watch 成员(barrier 前末节点口径:标记是列车
+        体后、end barrier 前的真实节点);completion_gates 账本(下一
+        turn interval gate 的 after_node_id 来源)= 本列车 post-barrier
+        节点,与旧整段发射的 end-barrier 口径一致。"""
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
+        instance_index = train_plan["instance_index"]
+        decode_group = self.group_by_index[instance_index]
+        train_id = train_plan["train_id"]
+        iterations = int(train_plan["iterations"])
+        marker = self._mark()
+
+        # ---- joiner 迁移(transfer 3000;上下文 (joiner, decode, 1) =
+        #      decode_start 指标锚点之一;触发链 = per-rank frontier) ----
+        joiners = list(train_plan.get("joiners", ()))
+        for joiner in joiners:
+            self._set_context(joiner, "decode", 1)
+            prefill_group = self.group_by_index[
+                joiner["prefill_instance_index"]]
+            _paired_transfer(
+                config=self.config, builders=self.builders,
+                queue_index=joiner["queue_index"], category=3000,
+                name="{}_prefill_to_decode_kv".format(_prefix_of(joiner)),
+                source_group=prefill_group, target_group=decode_group,
+                total_bytes=kv_cache_bytes_for_tokens(
+                    self.config.model, joiner["prefill_context_tokens"]),
+            )
+
+        # ---- join 标记节点(decode_start 指标锚点;§3.5:请求加入后第一
+        #      个迭代所在列车节点。迁移有节点时 min-tick 语义取更早者,
+        #      不冲突;与五仓机制同构保留) ----
+        for joiner in joiners:
+            self._set_context(joiner, "decode", 1)
+            for rank in decode_group.ranks:
+                self._emit_train_marker(
+                    rank, "{}_join_{}".format(
+                        train_id,
+                        sanitize_node_prefix(joiner["request_id"])))
+
+        # ---- 折叠列车体(17 类聚合节点;weight_passes = 迭代数) ----
+        for builder in self.builders.values():
+            builder.set_context(train_id, "decode", 1)
+        tensor_parallel = len(decode_group.ranks)
+        for relative_rank, rank in enumerate(decode_group.ranks):
+            transformer_pass_aggregated(
+                self.builders[rank],
+                phase=train_id,
+                pass_spans=train_plan["pass_spans"],
+                layers=self.config.layers,
+                hidden_size=self.config.hidden_size,
+                ffn_size=self.config.ffn_size,
+                tensor_parallel=tensor_parallel,
+                pg_name=decode_group.pg_name,
+                vocab_size=self.config.vocab_size,
+                bytes_per_elem=self.config.bytes_per_elem,
+                num_heads=self.config.num_heads,
+                tensor_parallel_rank=relative_rank,
+                mlp_variant=self.config.mlp_variant,
+                weight_passes=iterations,
+            )
+
+        # ---- exit 标记(列车体后、end barrier 前;每成员每 rank 1 个小
+        #      节点,承载该请求的 DECODE_COMPLETION watch 与指标 completion
+        #      锚点;物理完成时刻 = 标记完成时刻) ----
+        exit_members = {}
+        for member in train_plan.get("exit_members", ()):
+            request_id = member["request_id"]
+            self._set_context(member, "decode", 1)
+            exit_members[request_id] = {
+                rank: self._emit_train_marker(
+                    rank, "{}_exit_{}".format(
+                        train_id, sanitize_node_prefix(request_id)))
+                for rank in decode_group.ranks
+            }
+
+        # ---- 哨兵标记(T_max 截断且无自然 exit 标记的列车):
+        #      request_id = train_id(批命名空间),固定 (prefill, 0) 单事件
+        #      通道(decode 通道双事件 + 计账下溢);fire 后经 PREFILL_DRAIN
+        #      通道送回,调度器按 train_id 核销 ----
+        sentinel_members = {}
+        if train_plan.get("sentinel"):
+            for builder in self.builders.values():
+                builder.set_context(train_id, "prefill", 0)
+            sentinel_members = {
+                rank: self._emit_train_marker(
+                    rank, f"{train_id}_sentinel")
+                for rank in decode_group.ranks
+            }
+
+        # ---- 共享 end barrier(每列车一个,替代每请求一个) ----
+        for builder in self.builders.values():
+            builder.set_context(train_id, "decode", 1)
+        for rank in decode_group.ranks:
+            self.builders[rank].all_reduce(
+                "{}_end_barrier".format(train_id),
+                iterations,
+                decode_group.pg_name,
+            )
+        block_ends = {
+            rank: self.builders[rank].previous_id for rank in decode_group.ranks}
+        if any(node_id is None for node_id in block_ends.values()):
+            raise RuntimeError("train end barrier node IDs were not generated")
+
+        # ---- completion gate 账本(post-barrier 口径,与旧整段发射一致):
+        #      每个退出成员的 session 记录本列车 barrier(下一 turn 的
+        #      interval gate after_node_id 指向它)。同 session 请求串行
+        #      (turn k+1 在 k 完成后才到达),无覆盖竞争。 ----
+        for member in train_plan.get("exit_members", ()):
+            self.completion_gates[member["session_id"]] = (
+                instance_index, dict(block_ends))
+
+        self._collect(marker)
+        return {
+            "exit_members": exit_members,
+            "sentinel_members": sentinel_members,
+            "block_ends": block_ends,
+        }
+
+    def _emit_train_marker(self, rank: int, name: str) -> int:
+        """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
+        self.builders[rank].comp(name, 1, 1)
+        return self.builders[rank].previous_id
 
 
 def _prefix_of(request_plan: dict) -> str:
