@@ -31,6 +31,7 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _p)
 
 from generate_trace import transformer_pass_aggregated  # noqa: E402
+from online.graph_batch_builder import first_token_split_enabled  # noqa: E402
 from online.wsc_llm_online_scheduler import (  # noqa: E402
     _OnlineInstanceState,
     _OnlineRequestRuntime,
@@ -315,6 +316,136 @@ class LayerABCrossCheckTest(unittest.TestCase):
         self.assertTrue(0.33 < ratio < 3.0,
                         f"Layer A/B time mirror out of tolerance: "
                         f"ratio={ratio:.2f}")
+
+
+class FirstTokenPlanTest(unittest.TestCase):
+    """WP9 首 token 拆分计划钉子(2026-08-26;debut 判定/开关/span 切分/
+    唤醒 no-op)。拆分逻辑钉子在显式 SH_FIRST_TOKEN_SPLIT=1 下运行
+    (开关读取是逐调用现场值;OFF 行为由本类第一个用例单独断言;
+    B4 缺省翻转后的开关姿态由 SplitEnvironmentTest 单独钉住)。"""
+
+    def setUp(self) -> None:
+        self._saved_split = os.environ.get("SH_FIRST_TOKEN_SPLIT")
+        os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
+
+    def tearDown(self) -> None:
+        if self._saved_split is None:
+            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+        else:
+            os.environ["SH_FIRST_TOKEN_SPLIT"] = self._saved_split
+
+    def test_debut_requires_zero_consumed_and_split_gate(self):
+        """debut 判定:joiner 且 decode_tokens_consumed == 0;迭代数 >= 2
+        才物理拆分,iterations == 1 退化为不拆车增强。"""
+        s = _bare_scheduler()
+        fresh = _runtime("rd", ctx=100, decode=4)
+        fresh.decode_train_joined = False
+        fresh.decode_tokens_consumed = 0
+        advanced = _runtime("re", ctx=100, decode=4)
+        advanced.decode_train_joined = False
+        advanced.decode_tokens_consumed = 2   # joiner 但已消耗:非 debut
+        state = s.instances[0]
+        for rt in (fresh, advanced):
+            state.active_decode.append(rt)
+            state.active_decode_lookup.add(rt)
+        plan = s._plan_train(state)
+        self.assertEqual(plan["iterations"], 4)   # 剩余 max(4, 2)
+        first_token = s._first_token_plan(plan, [fresh, advanced])
+        self.assertIsNotNone(first_token)
+        self.assertTrue(first_token["split"])
+        self.assertEqual(
+            [m["request_id"] for m in first_token["debut_marker_members"]],
+            ["rd"])
+        self.assertEqual(first_token["wakeup_id"],
+                         f"{plan['train_id']}_first_step")
+        # 开关关闭:None(行为与拆分上线前逐字节一致)。
+        os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
+        try:
+            self.assertIsNone(s._first_token_plan(plan, [fresh]))
+        finally:
+            # B4 缺省翻转(2026-08-26):缺省已改关,本用例后续断言
+            # (无 debut None / iterations==1 增强)仍需显式 "1" 运行。
+            os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
+        # 无 debut(joiner 全部已消耗):None。
+        self.assertIsNone(s._first_token_plan(plan, [advanced]))
+        # iterations == 1(decode_length=1 的 debut,唯一迭代):不拆车
+        # 增强——exit 标记改名携带 first_token 子串,无独立首步标记。
+        single = _runtime("rf", ctx=100, decode=1)
+        single.decode_train_joined = False
+        single.decode_tokens_consumed = 0
+        state2 = s.instances[1]
+        state2.active_decode.append(single)
+        state2.active_decode_lookup.add(single)
+        plan2 = s._plan_train(state2)
+        self.assertEqual(plan2["iterations"], 1)
+        first_token2 = s._first_token_plan(plan2, [single])
+        self.assertIsNotNone(first_token2)
+        self.assertFalse(first_token2["split"])
+        self.assertEqual(first_token2["debut_marker_members"], [])
+        self.assertEqual(first_token2["debut_exit_first_token"], ["rf"])
+
+    def test_split_spans_tmax_one_plus_seven(self):
+        """span 切分:8 迭代列车(1+7≤8)首步 = 每成员第 1 个 span,
+        余量 = 每成员剩余 7 个;总量与整列一致。"""
+        s = _bare_scheduler()
+        s._train_max_iter = 8
+        state = s.instances[0]
+        for rid, decode in (("rg", 9), ("rh", 20)):
+            rt = _runtime(rid, ctx=100, decode=decode)
+            rt.decode_train_joined = False
+            rt.decode_tokens_consumed = 0
+            state.active_decode.append(rt)
+            state.active_decode_lookup.add(rt)
+        plan = s._plan_train(state)
+        self.assertEqual(plan["iterations"], 8)   # T_max 截断(20→8)
+        self.assertTrue(plan["sentinel"])
+        first_token = s._first_token_plan(plan, list(state.active_decode))
+        self.assertEqual(len(first_token["first_spans"]), 2)
+        self.assertEqual(len(first_token["rest_spans"]), 14)
+        self.assertEqual(
+            len(first_token["first_spans"]) + len(first_token["rest_spans"]),
+            len(plan["pass_spans"]))
+        # 切分正确性:首步恰为各成员首 span(成员连续段平铺)。
+        spans = plan["pass_spans"]
+        self.assertEqual(first_token["first_spans"],
+                         [spans[0], spans[8]])
+        self.assertEqual(
+            first_token["rest_spans"], spans[1:8] + spans[9:])
+
+    def test_consume_first_step_wakeup_noop(self):
+        """no-op 交付路径(WP9_CONTRACT §3):唤醒 id 命中 _pending_first_
+        steps 即吞掉(返回实例索引,不进哨兵核销);未知/真哨兵 id 返回
+        None 交回核销逻辑。"""
+        s = _bare_scheduler()
+        s._pending_first_steps = {}
+        self.assertIsNone(s._consume_first_step_wakeup("batch_train_i0_9"))
+        s._pending_first_steps["batch_train_i0_1_first_step"] = 0
+        self.assertEqual(
+            s._consume_first_step_wakeup("batch_train_i0_1_first_step"), 0)
+        self.assertNotIn("batch_train_i0_1_first_step",
+                         s._pending_first_steps)   # 恰一次消费
+        self.assertIsNone(s._consume_first_step_wakeup(
+            "batch_train_i0_1_first_step"))        # 重复信号交回核销
+
+
+class SplitEnvironmentTest(unittest.TestCase):
+    """开关姿态(B4 起缺省关;显式 "1" 开)。
+
+    2026-08-26 B4 缺省翻转:B3_W 60s 门-2(决策等价)失败
+    (证据 /tmp/slo_wps/gates/B3_W.DONE、/tmp/slo_wps/b3/W/) → 默认
+    proxy 口径(train_interpolated,见 metrics_postprocess),拆分仅
+    显式 SH_FIRST_TOKEN_SPLIT=1 启用(研究/对拍)。"""
+
+    def test_default_off_and_explicit_on(self):
+        try:
+            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
+            self.assertFalse(first_token_split_enabled())
+            os.environ["SH_FIRST_TOKEN_SPLIT"] = "0"
+            self.assertFalse(first_token_split_enabled())
+            os.environ["SH_FIRST_TOKEN_SPLIT"] = "1"
+            self.assertTrue(first_token_split_enabled())
+        finally:
+            os.environ.pop("SH_FIRST_TOKEN_SPLIT", None)
 
 
 if __name__ == "__main__":

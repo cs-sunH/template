@@ -54,6 +54,9 @@ class OnlineSchedulerBase:
         digest_sink=None,
         mode: str = "replay",
         sensing: bool = False,
+        decision_log_sink=None,
+        profile_sink=None,
+        defensive_reply_cache: bool = False,
     ):
         self.mode = mode
         self.manifest = manifest
@@ -64,6 +67,13 @@ class OnlineSchedulerBase:
         }
         self.replay = replay
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
+        # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):
+        # decision_log_sink / profile_sink 提供时逐行 append+flush 写出,
+        # 调度器不再驻留行列表(online_log_count 保留供 seq 编号与结束
+        # 计数);缺省 None = 兼容旧路径(行仍缓冲在下列 rows 列表,供
+        # 测试/夹具直读)。
+        self.decision_log_sink = decision_log_sink
+        self.profile_sink = profile_sink
         # request-neutral 簿记。
         # pending fence 索引(阶段 4 §7.3):request_id -> set[str] 待办
         # stage(已完成 stage 从集合移除;REQUEST_COMPLETE 整体核销)。
@@ -79,11 +89,21 @@ class OnlineSchedulerBase:
         self.last_applied_sequence = -1
         # 最近一次已应用交付的 (seq, delta, batch) 副本(幂等重放的凭据;
         # 重复 delivery 深度比对 delta 后返回缓存 batch 的 digest)。
+        # B3(2026-08-23,批次B 移植自 sh_3.0 母本):生产路径默认引用缓存
+        # (不深拷)——C++ 单在途背压下无重复交付,重放返回路径
+        # (_gate_delivery_sequence)仍逐次 deepcopy,幂等语义不变;仅幂等
+        # fixture(defensive_reply_cache=True,显式开关)保留改前的双深拷
+        # 防御姿态。
+        self.defensive_reply_cache = bool(defensive_reply_cache)
         self._delivery_reply_cache = None
         # 已处理的 ack delivery_sequence(去重;与协议层文件去重一致,防御性)。
         self._seen_ack_delivery_seqs = set()
         self._batch = None        # 本批次累加器(每次 on_decision_batch 重建)
-        self.online_log_rows = []  # online_decision_log.jsonl 行(replay 模式)
+        # online_decision_log.jsonl 行(replay 模式)。M3 流式落盘起,
+        # 生产路径(decision_log_sink 提供)行即写即弃,不驻留本列表;
+        # online_log_count 恒维护(行号 seq 与结束计数用)。
+        self.online_log_rows = []
+        self.online_log_count = 0
         # ---------------------------------------------------------------- 阶段 3
         # 感知(方案 §6.1/§6.2;感知开关经显式 feature flag 进入,阶段 6 前默认关):
         #   --sensing(online_service.py)与 C++ --sensing-enabled 配对;开启后
@@ -185,13 +205,23 @@ class OnlineSchedulerBase:
             self._record_sensing_query(delta)
         self.run_variant_policy(delta)
         batch = self.build_graph_batch()
-        # §7.2:缓存本次已应用交付(幂等重放凭据;副本防对端 setdefault
-        # 污染缓存)。
-        self._delivery_reply_cache = {
-            "seq": delta["delivery_sequence"],
-            "delta": copy.deepcopy(delta),
-            "batch": copy.deepcopy(batch),
-        }
+        # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23,批次B
+        # 移植自 sh_3.0 母本):生产路径引用缓存(批对象/下一批 begin_batch
+        # 重建累加器,旧引用不被改写;delta 桥读后即弃);
+        # defensive_reply_cache=True(幂等 fixture)保留双深拷防御姿态
+        # ——副本防对端 setdefault 污染缓存。
+        if self.defensive_reply_cache:
+            self._delivery_reply_cache = {
+                "seq": delta["delivery_sequence"],
+                "delta": copy.deepcopy(delta),
+                "batch": copy.deepcopy(batch),
+            }
+        else:
+            self._delivery_reply_cache = {
+                "seq": delta["delivery_sequence"],
+                "delta": delta,
+                "batch": batch,
+            }
         self.last_applied_sequence = delta["delivery_sequence"]
         self._record_online_stats(delta, batch, time.monotonic_ns() - t0)
         return batch
@@ -249,13 +279,18 @@ class OnlineSchedulerBase:
                 self._batch["kv_actions"])
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
-        # 阶段 4 §7.3:本决策批扫描条目数入 profile。
-        self.profile_rows.append({
+        # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
+        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲,供 dump_profile)。
+        profile_row = {
             "delivery_sequence": delivery_sequence,
             "tick": self._batch["tick"],
             "scanned_entries": self._profile_batch["scanned_entries"],
             "full_scan_entries": self._profile_batch["full_scan_entries"],
-        })
+        }
+        if self.profile_sink is not None:
+            self.profile_sink(profile_row)
+        else:
+            self.profile_rows.append(profile_row)
         return batch
 
     # ------------------------------------------------------------- 校验/簿记 --
@@ -304,7 +339,9 @@ class OnlineSchedulerBase:
         self._profile_batch["full_scan_entries"] += count
 
     def dump_profile(self, path: str) -> None:
-        """把每决策批扫描条目数写为 profile.jsonl(阶段 4 §7.3 验收输入)。"""
+        """把每决策批扫描条目数写为 profile.jsonl(阶段 4 §7.3 验收输入)。
+        M3:生产路径由 profile_sink 逐行流式写出(online_service),本方法
+        仅服务缺省缓冲模式(测试/夹具)——流式模式下 rows 为空,不覆写。"""
         with open(path, "w", encoding="utf-8") as out:
             for row in self.profile_rows:
                 out.write(json.dumps(row, sort_keys=True) + "\n")
@@ -691,9 +728,12 @@ class OnlineSchedulerBase:
 
         replay 模式默认沿用离线记录的 decision 内容(重放的就是离线决策);
         变体可传入自产 decision。seq 用在线决策序(1 起),tick 用在线边界 tick。
+
+        M3 流式落盘:提供 decision_log_sink 时行即写即弃(online_log_count
+        恒维护行号);缺省缓冲在 online_log_rows(兼容测试/夹具直读)。
         """
         row = {
-            "seq": len(self.online_log_rows) + 1,
+            "seq": self.online_log_count + 1,
             "tick": tick,
             "priority": record.get("priority", 0),
             "kind": record["kind"],
@@ -701,7 +741,11 @@ class OnlineSchedulerBase:
             "decision": (
                 dict(record["decision"]) if decision is None else decision),
         }
-        self.online_log_rows.append(row)
+        self.online_log_count += 1
+        if self.decision_log_sink is not None:
+            self.decision_log_sink(row)
+        else:
+            self.online_log_rows.append(row)
 
     # --------------------------------------------------------------- digest --
 
@@ -718,7 +762,7 @@ class OnlineSchedulerBase:
             int(node["rank"])
             for node in batch["nodes"]
         })
-        return {
+        row = {
             "delivery_sequence": batch["batch_id"],
             "tick": self._batch["tick"],
             "reasons": self._batch["reasons"],
@@ -729,6 +773,12 @@ class OnlineSchedulerBase:
             "ranks": ranks,
             "content_sha256": hashlib.sha256(payload.encode()).hexdigest(),
         }
+        # WP9 首 token 拆分(2026-08-26):首步唤醒交付(ON-only 交付边界)
+        # 的 digest 行带 first_step 标记,供 ON/OFF 对拍剥离(变体在
+        # run_variant_policy 置位;缺省无此键 = 行与拆分上线前逐字节一致)。
+        if self._batch.get("first_step"):
+            row["first_step"] = True
+        return row
 
     # --------------------------------------------------------------- 收尾 --
 
@@ -776,7 +826,11 @@ class OnlineSchedulerBase:
         if seq in self._provisional_kv_actions:
             self._committed_kv_actions[seq] = self._provisional_kv_actions.pop(
                 seq)
-        emitted = self._emitted_by_delivery.get(seq)
+        # M4 核销即删(2026-08-23,批次B 移植自 sh_3.0 母本):
+        # _emitted_by_delivery 条目在 ack 层转移后即死重——get 改 pop 当场
+        # 弹出(重复 ack 已被上方去重门拦截,每 seq 至多弹出一次;条目
+        # 创建于 _start_batch,消费于此,无其他读者)。
+        emitted = self._emitted_by_delivery.pop(seq, None)
         if emitted is None:
             return
         for request_id, stage in emitted["requests"]:

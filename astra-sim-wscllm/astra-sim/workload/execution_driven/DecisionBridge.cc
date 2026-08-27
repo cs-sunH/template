@@ -532,14 +532,29 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
         batch.has_touched_ranks = true;
         batch.touched_ranks = resp["touched_ranks"];
     }
-    // Phase 6 (方案 §9.1): round-trip accounting. The response dump size
-    // equals the on-disk response file bytes (C++-side view).
+    // Phase 6 (方案 §9.1): round-trip accounting. B1 (2026-08-23): the
+    // response contribution to channel_bytes is the on-disk response file
+    // size (stat before the unlink), matching the request side's exact
+    // body-bytes count.
     stats_.roundtrip_count += 1;
     stats_.roundtrip_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - bridge_t0)
             .count();
-    stats_.channel_bytes += resp.dump().size();
+    // B1 (2026-08-23): the response's channel_bytes contribution is the
+    // REAL on-disk file size (stat, taken before the unlink below). The
+    // previous resp.dump().size() re-serialized the whole response just to
+    // count bytes and reported the compact-dump length, which is NOT the
+    // byte count that crossed the channel (the Python side writes spaced
+    // json.dump files; the request side already counts exact body bytes at
+    // write_file_atomic). Statistical field only (allowed-diff category):
+    // the value shifts slightly upward to the true bridged bytes.
+    struct stat response_stat {};
+    if (::stat(response_path(seq).c_str(), &response_stat) != 0) {
+        bridge_fatal("stat response " + response_path(seq) + ": " +
+                     std::strerror(errno));
+    }
+    stats_.channel_bytes += static_cast<uint64_t>(response_stat.st_size);
     // Phase 7 (方案 §10.3): intermediate-product lifecycle. The response
     // file is fully consumed (the batch is materialized above); delete it
     // right away so the bridge dir holds only the request files (the

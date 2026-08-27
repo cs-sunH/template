@@ -103,7 +103,9 @@ from generate_face_trace import (  # noqa: E402
     _candidate_dict,
     _eviction_dict,
     _transfer_dict,
+    _xy_route,
 )
+from online.graph_batch_builder import first_token_split_enabled  # noqa: E402
 from online.online_scheduler_base import (  # noqa: E402
     BATCH_TRAIN_PREFIX,
     STAGE_DECODE,
@@ -136,7 +138,8 @@ class _OnlineInstanceState:
 
     __slots__ = ("index", "qp", "active_decode", "active_decode_lookup",
                  "last_arrival_ns", "pending_decode_ready", "in_flight_train",
-                 "finalized_trains", "iteration_count", "train_seq")
+                 "finalized_trains", "iteration_count", "train_seq",
+                 "first_step_remainder")
 
     def __init__(self, *, index: int) -> None:
         self.index = index
@@ -148,8 +151,10 @@ class _OnlineInstanceState:
         self.pending_decode_ready = []   # KV 就绪待加入下一列车的成员
         self.in_flight_train = None      # 唯一在飞列车(冻结成员快照)
         self.finalized_trains = []       # 已核销列车(待收后续跨交付信号)
-        self.iteration_count = 0         # 已完成迭代数
+        self.iteration_count = 0         # 已完成迭代数(列车核销时闭式推进)
         self.train_seq = 0               # 列车序号(命名/审计用)
+        # ---- WP9 首 token 首步批拆分(2026-08-26) ----
+        self.first_step_remainder = None  # 首步批已发、余量批待发射的 train_plan
 
 
 class _OnlineRequestRuntime:
@@ -267,7 +272,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     """
 
     def __init__(self, *, manifest, config, graph, digest_sink=None,
-                 mode: str = "strategy", sensing: bool = False):
+                 decision_log_sink=None, train_ledger_sink=None,
+                 profile_sink=None, mode: str = "strategy",
+                 sensing: bool = False,
+                 defensive_reply_cache: bool = False):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -275,6 +283,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             digest_sink=digest_sink,
             mode=mode,
             sensing=sensing,
+            decision_log_sink=decision_log_sink,
+            profile_sink=profile_sink,
+            defensive_reply_cache=defensive_reply_cache,
         )
         if mode != "strategy":
             raise ValueError("FaceOnlineScheduler requires mode == 'strategy'")
@@ -346,8 +357,16 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
+        # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
+        # 唤醒 watch 的 id -> instance_index(首步批交付回声识别;fire 后
+        # 从哨兵核销通道剥离,余量批在 _plan_and_emit_trains 的 busy 分支
+        # 发射)。
+        self._pending_first_steps = {}
         # 拼 batch 列车台账(§7.3 不变量断言输入):每次列车发射一行,
         # 由 online_service 落 bridge 目录 train_ledger.jsonl(审计产物)。
+        # M3 流式落盘(2026-08-23):提供 train_ledger_sink 时行即写即
+        # 弃,不驻留本列表;缺省 None = 兼容旧路径(行仍缓冲)。
+        self.train_ledger_sink = train_ledger_sink
         self.train_ledger_rows = []
 
         # §7.3 ready frontier:非忙且有排队工作的实例集合(发射时清除,
@@ -416,6 +435,16 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 raise ValueError(
                     "unknown completion stage {!r} for request {!r}".format(
                         stage, request_id))
+        # WP9 首 token 拆分(2026-08-26):batch_train_*_first_step 唤醒
+        # 信号是"自己发射的首步批"的交付回声——无操作(不决策/不记账/
+        # 不写 decision_log),从哨兵核销通道剥离;余量批在
+        # _plan_and_emit_trains 的 busy 分支发射(本交付或任一后续交付,
+        # 余量节点经依赖边排在首步节点之后,早发不改物理序)。首步批的
+        # commit ack 走基类协议记账(ack_count/幂等门),变体侧零动作。
+        sentinel_trains = [
+            train_id for train_id in sentinel_trains
+            if not self._consume_first_step_wakeup(train_id)
+        ]
         # 拼 batch 列车账本(§3.2 边界原子提交顺序):先核销已完成列车
         # (核验 train_id + membership_digest → 冻结成员推进 token → 退出
         # 成员移出 active_decode → 推进 prefill chunk),再处理 drain/
@@ -450,6 +479,18 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             self._kv_events_emitted = len(events)
 
     # ------------------------------------------------------ 列车账本 --
+
+    def _consume_first_step_wakeup(self, train_id: str) -> bool:
+        """识别并吞掉自己发射的首步批唤醒信号(WP9,2026-08-26)。
+
+        首步批的唤醒 watch 用批命名空间 id("<train_id>_first_step",
+        batch_train_ 前缀),fire 后与真哨兵同通道送达。返回 True = 这是
+        首步唤醒(无操作,仅从哨兵核销列表剥离);False = 非首步 id
+        (真哨兵或未知 batch_train_ id,交回哨兵核销逻辑处理)。"""
+        if train_id not in self._pending_first_steps:
+            return False
+        self._pending_first_steps.pop(train_id)
+        return True
 
     def _finalize_completed_trains(self, drained, completed_now,
                                    sentinel_trains, tick: int) -> None:
@@ -505,6 +546,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                         runtime.remaining_chunks -= 1
                     state.iteration_count += iterations
                     state.in_flight_train = None
+                    # M4 核销即删(2026-08-23):列车核销后其 train_id→
+                    # 实例索引条目即死重(哨兵条目已在信号路由处弹出,
+                    # 此 pop 对其为幂等 no-op;全仓 grep 证实核销后无读者)。
+                    self._train_instance_index.pop(train["train_id"], None)
                     state.finalized_trains.append({
                         "train_id": train["train_id"],
                         "pending": (train["signal_set"] - inflight_hits),
@@ -669,7 +714,19 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         (try_admit_prefill,容量纪元门防重试风暴);准入失败时本列车退化
         为纯 decode(离线 :1524-1526"准入失败时服务 decode 队首"的同构
         映射)。§7.3:逐实例 serve 只访问 ready frontier(sorted 保持实例
-        index 序 = 离线 :1520 的循环序,决策确定性不受影响)。"""
+        index 序 = 离线 :1520 的循环序,决策确定性不受影响)。
+
+        WP9 拆分列车的余量批在 frontier 循环前的实例遍历中发射(首步
+        唤醒到达后的首个决策边界,或其后任一交付;余量节点经依赖边排
+        在首步节点之后,早发不改物理序)。face 实例 rank 组两两不交,
+        余量节点与其它实例本批节点无同 rank 交错;先于 frontier 循环
+        发射避免同实例准入动作节点插入首步体与余量体之间。"""
+        # WP9:两段式发射的后半(余量体 + drain/exit/哨兵标记 + end
+        # barrier;标记 watch 全部在本批注册,in_flight_train 语义恢复
+        # 整列口径)。
+        for state in self.instances:
+            if state.first_step_remainder is not None:
+                self._emit_train_remainder(state, tick)
         for instance_index in sorted(self._ready_frontier):  # §7.3 frontier
             self._profile_scan()  # §7.3:frontier 访问条目(就绪实例)
             state = self.instances[instance_index]
@@ -709,13 +766,20 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
     def _emit_train(self, state, plan, joiners, qp_head, tick: int) -> None:
         """把冻结的列车计划交给构图器发射,注册 drain/exit/哨兵标记
-        watch,并挂起 in_flight_train(busy 门 = 一个列车在飞)。"""
+        watch,并挂起 in_flight_train(busy 门 = 一个列车在飞)。
+
+        WP9(2026-08-26):列车含 debut 成员且拆分开启、迭代数 >= 2 时
+        两段式发射——本交付只发首步批(迁移/起始标记/首迭代体/first_
+        token 标记/唤醒标记),drain/exit/哨兵 watch、completion_gates
+        (构图器侧,随余量批 end barrier)与正常 train_ledger 行移至
+        余量批(_emit_train_remainder);成员选择/排序/KV 动作/挂点语义
+        全部不变。"""
         joiner_plans = [self._plan_dict(runtime) for runtime in joiners]
         stage = "decode" if (plan["members"] or joiners) else "prefill"
         prefill_start_member = None
         if qp_head is not None and plan.get("head_first_chunk"):
             prefill_start_member = {"request_id": qp_head.request_id}
-        result = self.graph.emit_iteration_train({
+        train_plan = {
             "train_id": plan["train_id"],
             "instance_index": state.index,
             "stage": stage,
@@ -732,7 +796,19 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 {"request_id": request_id,
                  "session_id": self.runtime_by_request_id[request_id].session_id}
                 for request_id in plan["exit_members"]],
-        })
+        }
+        first_token = self._first_token_plan(plan, joiners)
+        if first_token is not None:
+            train_plan["first_token"] = first_token
+            if first_token["split"]:
+                # WP9:joiner id 快照随 train_plan 走(余量批的台账行
+                # 需要与首步行相同的 joiners 记录;joiner_plans 只在
+                # 首步批消费)。
+                train_plan["joiner_ids_of_record"] = [
+                    runtime.request_id for runtime in joiners]
+                self._emit_train_first_step(state, plan, train_plan, tick)
+                return
+        result = self.graph.emit_iteration_train(train_plan)
         self._train_instance_index[plan["train_id"]] = state.index
         for request_id, members in result["drain_members"].items():
             self._batch["watches"].append({
@@ -760,7 +836,77 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             })
         state.in_flight_train = plan
         self._ready_frontier.discard(state.index)  # §7.3:发射即忙
-        self.train_ledger_rows.append({
+        self._emit_train_ledger_row(
+            state, plan,
+            [runtime.request_id for runtime in joiners], tick)
+
+    def _first_token_split_spans(self, plan):
+        """WP9 首/余量 span 组切分(机械操作,2026-08-26)。
+
+        首步 = [prefill 队头第 1 个 chunk] + [各 decode 成员第 1 个
+        span];余量 = [剩余 chunk] + [各成员剩余 span]。聚合节点对 span
+        求和与顺序无关,两组的激活/KV/AR 字节总量与整列一致;权重经
+        weight_passes(1 + iterations-1)合计不变。"""
+        spans = list(plan["pass_spans"])
+        chunk_count = len(plan["prefill_chunk_tokens"])
+        member_parts = plan["members"]
+        if chunk_count + sum(p for _, p in member_parts) != len(spans):
+            raise RuntimeError(
+                "train span layout does not match the frozen plan")
+        first_spans = spans[:1] if chunk_count else []
+        rest_spans = list(spans[1:chunk_count]) if chunk_count else []
+        offset = chunk_count
+        for _, participation in member_parts:
+            first_spans.append(spans[offset])
+            rest_spans.extend(spans[offset + 1:offset + participation])
+            offset += participation
+        return first_spans, rest_spans
+
+    def _first_token_plan(self, plan, joiners):
+        """WP9 首 token 观测计划(None = 开关关闭/无 debut,行为与拆分
+        上线前逐字节一致)。
+
+        debut 成员 = 本交付加入列车的 decode 成员(decode_tokens_consumed
+        == 0,计划期可知)。多 token debut 挂独立 first_token 标记;
+        decode_length=1 的 debut 其 exit 标记名附加 first_token 子串
+        (同节点 code 4/8 双锚点)。iterations >= 2 时物理拆两批(首步批
+        + 余量批),否则仅做不拆车的标记增强。"""
+        if not first_token_split_enabled():
+            return None
+        debut = [
+            runtime for runtime in joiners
+            if runtime.decode_tokens_consumed == 0]
+        if not debut:
+            return None
+        debut_marker_members = [
+            {"request_id": runtime.request_id}
+            for runtime in debut
+            if runtime.decode_length != 1]
+        debut_exit_first_token = [
+            runtime.request_id for runtime in debut
+            if runtime.decode_length == 1]
+        if plan["iterations"] >= 2:
+            first_spans, rest_spans = self._first_token_split_spans(plan)
+            return {
+                "split": True,
+                "first_spans": first_spans,
+                "rest_spans": rest_spans,
+                "debut_marker_members": debut_marker_members,
+                "debut_exit_first_token": debut_exit_first_token,
+                "wakeup_id": "{}_first_step".format(plan["train_id"]),
+            }
+        return {
+            "split": False,
+            "debut_marker_members": debut_marker_members,
+            "debut_exit_first_token": debut_exit_first_token,
+        }
+
+    def _emit_train_ledger_row(self, state, plan, joiner_ids, tick: int,
+                               first_step: bool = False) -> None:
+        """train_ledger 行(M3 流式落盘)。WP9:拆分列车的首步批先写
+        first_step=True 行(ON/OFF 对拍剥离标记),余量批再写正常行
+        (与整列发射的行同构)。"""
+        ledger_row = {
             "train_id": plan["train_id"],
             "instance_index": state.index,
             "tick": tick,
@@ -768,12 +914,81 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             "member_count": len(plan["members"]),
             "member_iterations": sum(
                 participation for _, participation in plan["members"]),
-            "joiners": [runtime.request_id for runtime in joiners],
+            "joiners": list(joiner_ids),
             "drains": list(plan["drain_members"]),
             "exits": list(plan["exit_members"]),
             "prefill_chunks": len(plan["prefill_chunk_tokens"]),
             "pass_spans": len(plan["pass_spans"]),
+        }
+        if first_step:
+            ledger_row["first_step"] = True
+        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省缓冲。
+        if self.train_ledger_sink is not None:
+            self.train_ledger_sink(ledger_row)
+        else:
+            self.train_ledger_rows.append(ledger_row)
+
+    def _emit_train_first_step(self, state, plan, train_plan,
+                               tick: int) -> None:
+        """WP9 首步批发射(两段式前半,2026-08-26):构图 + 唤醒 watch
+        注册 + busy 门挂起 + first_step 台账行。drain/exit/哨兵 watch
+        与正常台账行全部移至余量批。"""
+        first_token = train_plan["first_token"]
+        result = self.graph.emit_train_first_step(train_plan)
+        self._batch["watches"].append({
+            # 批命名空间唤醒 watch(哨兵同款单事件通道):首步批完成即
+            # 交付余量批;不挂任何请求,fire 事件在 run_variant_policy
+            # 的 _consume_first_step_wakeup 处无操作剥离。
+            "request_id": first_token["wakeup_id"],
+            "stage": STAGE_PREFILL,
+            "generation": 0,
+            "members": result["wakeup_members"],
+            "statuses": ["Success", "Skipped"],
         })
+        self._train_instance_index[plan["train_id"]] = state.index
+        state.in_flight_train = plan
+        state.first_step_remainder = train_plan
+        self._pending_first_steps[first_token["wakeup_id"]] = state.index
+        self._ready_frontier.discard(state.index)  # §7.3:发射即忙
+        self._emit_train_ledger_row(
+            state, plan, train_plan["joiner_ids_of_record"],
+            tick, first_step=True)
+
+    def _emit_train_remainder(self, state, tick: int) -> None:
+        """WP9 余量批发射(两段式后半,2026-08-26):余量体 + drain/
+        exit/哨兵标记 + end barrier,随后注册 drain/exit/哨兵 watch 与
+        正常台账行——与整列发射的后半完全同构(completion_gates 由构图
+        器随 end barrier 写入,口径不变)。"""
+        train_plan = state.first_step_remainder
+        state.first_step_remainder = None
+        plan = state.in_flight_train
+        result = self.graph.emit_train_remainder(train_plan)
+        for request_id, members in result["drain_members"].items():
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_PREFILL,
+                "generation": 0,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+        for request_id, members in result["exit_members"].items():
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_DECODE,
+                "generation": 1,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+        if plan["sentinel"]:
+            self._batch["watches"].append({
+                "request_id": plan["train_id"],
+                "stage": STAGE_PREFILL,   # 固定 prefill:单事件通道
+                "generation": 0,
+                "members": result["sentinel_members"],
+                "statuses": ["Success", "Skipped"],
+            })
+        self._emit_train_ledger_row(
+            state, plan, train_plan["joiner_ids_of_record"], tick)
 
     # ------------------------------------------------------------- 边界 --
 
@@ -899,6 +1114,24 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 ],
             },
         )
+        # M4 核销即删(2026-08-23):请求完成后其 KV 迁移/逐出对象、decode
+        # 候选代价与准入 HBM 快照等胖字段再无读者(全仓 grep 证实:
+        # admission_evictions 最后读者=准入决策行、completion_evictions=
+        # 上方完成决策行、decode_candidates/prefill_decode_transfer/
+        # decode_target_evictions=decode 准入链;history_transfer/
+        # hbm_before_request/hbm_after_completion 零读者;_on_request_
+        # complete 只读 next_request/interval)——置空即删,防随完成
+        # 请求数线性常驻。face 差异点:字段集与 sh_3.0 母本不同(face
+        # 无三分 evictions/prefill_instance_loads/drain_block_ends,
+        # 另有 decode_candidates 候选代价全记录与 hbm 快照)。
+        runtime.decode_candidates = ()
+        runtime.admission_evictions = ()
+        runtime.decode_target_evictions = ()
+        runtime.completion_evictions = ()
+        runtime.history_transfer = None
+        runtime.prefill_decode_transfer = None
+        runtime.hbm_before_request = None
+        runtime.hbm_after_completion = None
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
         """离线 decode 完成分支的下一次 arrival 排程(:1676-1681):
@@ -1146,6 +1379,13 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                         ],
                         "prefill_decode_transfer": _transfer_dict(
                             runtime.prefill_decode_transfer),
+                        # WP4 hopbytes 观测(WP9 任务 4,2026-08-26):prefill
+                        # →decode KV 迁移(列车头 3000 类)的逐 shard 物理
+                        # NoC 跳数(与构图发射同源 XY 路由,只读导出;
+                        # [] = 同实例零节点迁移)。A/B 剥离清单字段。
+                        "kv_noc_hops": self._kv_noc_hops(
+                            runtime.prefill_instance_index,
+                            runtime.decode_instance_index),
                     },
                 )
                 # 阶段 3 感知账本:admitted 层排队类型更新(active_decode;
@@ -1199,6 +1439,12 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     runtime.history_source_instance_index,
                 "history_transfer_bytes": runtime.history_transfer_bytes,
                 "history_recompute_tokens": runtime.history_recompute_tokens,
+                # WP4 hopbytes 观测(WP9 任务 4,2026-08-26):history KV
+                # 迁移的逐 shard 物理 NoC 跳数(与构图发射同源 XY 路由,
+                # 只读导出;[] = 无物理传输)。A/B 剥离清单字段。
+                "history_noc_hops": self._kv_noc_hops(
+                    runtime.history_source_instance_index,
+                    runtime.prefill_instance_index),
                 "admission_evictions": [
                     _eviction_dict(record)
                     for record in runtime.admission_evictions
@@ -1208,6 +1454,32 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         )
 
     # ------------------------------------------------------------- 助手 --
+
+    def _kv_noc_hops(self, source_instance_index,
+                     target_instance_index) -> list[int]:
+        """WP4 hopbytes 观测(WP9 任务 4,2026-08-26):KV 迁移发射的逐
+        TP shard 物理 NoC 跳数——与构图发射同源的 XY 路由口径
+        (generate_face_trace._xy_route,经 _paired_transfer 内部同函数
+        同输入计算;此处只读导出,不改路由/不改发射/不进策略判据)。
+
+        返回 [] = 无物理传输(同实例迁移零节点/无迁移动作/索引缺失);
+        非空 = per-shard 跳数(与 _paired_transfer 返回 routes[].noc_hops
+        同值)。face 9 实例为同构 3x2 rank 块,逐 shard 跳数恒一致;
+        通例保留逐 shard 表(Hop-Bytes = Σ shard_bytes × noc_hops,
+        shard_bytes 见 kv_actions 事件流)。"""
+        if (source_instance_index is None
+                or target_instance_index is None
+                or source_instance_index == target_instance_index):
+            return []
+        source = self.topology.instances[source_instance_index]
+        target = self.topology.instances[target_instance_index]
+        if len(source.ranks) != len(target.ranks):
+            raise RuntimeError(
+                "FACE direct KV shard pairing requires equal TP degree")
+        return [
+            len(_xy_route(self.config.hardware, source_rank, target_rank)) - 1
+            for source_rank, target_rank in zip(source.ranks, target.ranks)
+        ]
 
     def _plan_dict(self, runtime) -> dict:
         """graph_batch_builder 消费的 plan 字段(request 事实 + 在线决策)。"""
@@ -1310,6 +1582,15 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                or state.in_flight_train is not None
                for state in self.instances):
             raise RuntimeError("strategy run ended with non-idle instance state")
+        # WP9 拆分收尾断言:所有首步批的余量批都已发射、唤醒都已消费。
+        if any(state.first_step_remainder is not None
+               for state in self.instances):
+            raise RuntimeError(
+                "strategy run ended with an unflushed first-step remainder")
+        if self._pending_first_steps:
+            raise RuntimeError(
+                "strategy run ended with unconsumed first-step wakeups: "
+                "{!r}".format(sorted(self._pending_first_steps)))
         if any(state.finalized_trains for state in self.instances):
             raise RuntimeError(
                 "strategy run ended with unconsumed late train signals")

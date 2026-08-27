@@ -147,13 +147,48 @@ class MetricCollector {
     }
 
     const PerformanceCounters& counters() const {
-      return this->counters_;
+        return this->counters_;
+    }
+
+    // ---------------------------------------------------------------------
+    // SLO pipeline B2 observers (WP6/WP8/WP9; /tmp/slo_wps/plans/
+    // CPP_SPEC.md). WP6: observers outside the workload layer (the
+    // congestion-aware FluidScheduler link observer) emit their [METRIC]
+    // records through the same single-write channel. Read-only; callers
+    // must check enabled() first (records are never emitted in off mode).
+    void emit_observer_record(const std::string& json_line) const;
+
+    [[nodiscard]] const std::string& metric_repo_variant() const {
+        return this->repo_variant_;
+    }
+
+    [[nodiscard]] const std::string& metric_run_id() const {
+        return this->run_id_;
+    }
+
+    // WP8/WP6 sampling anchors loaded from the manifest ``slo_sampling``
+    // node (CPP_SPEC §A). A missing node or null values fall back to the
+    // documented provisional anchor (5,000,000 ns) with provisional=true;
+    // batch B4 replaces them with derived values. Every related record
+    // echoes the period actually used.
+    [[nodiscard]] uint64_t slo_watermark_period_ns() const {
+        return this->watermark_period_ns_;
+    }
+
+    [[nodiscard]] uint64_t slo_link_bucket_ns() const {
+        return this->link_bucket_ns_;
+    }
+
+    [[nodiscard]] bool slo_sampling_provisional() const {
+        return this->slo_sampling_provisional_;
     }
 
   private:
     MetricCollector() = default;
 
-    // Manifest event codes (doc sec.4.3).
+    // Manifest event codes (doc sec.4.3). Code 8 (FIRST_TOKEN_COMPLETE,
+    // WP9 /tmp/slo_wps/plans/WP9_CONTRACT.md §1) is the first-token marker
+    // complete edge: subject is the request, multiple ranks take the min.
     enum class EventCode : uint8_t {
         PREFILL_START_ISSUE = 1,
         PREFILL_END_COMPLETE = 2,
@@ -162,6 +197,7 @@ class MetricCollector {
         ITERATION_START_ISSUE = 5,
         ITERATION_END_COMPLETE = 6,
         MEMORY_ANCHOR_COMPLETE = 7,
+        FIRST_TOKEN_COMPLETE = 8,
     };
 
     struct NodeMetricEvent {
@@ -199,6 +235,17 @@ class MetricCollector {
         // Resolved at finalize time (doc sec.3.1: after_request arrivals use
         // the parent's actual completion, not a planner prediction).
         std::optional<Tick> resolved_arrival;
+        // WP9 (CPP_SPEC §C + WP9_CONTRACT §6 2026-08-27 ruling):
+        // manifest-request decode length, used only by the first-token
+        // checks (a completed decode_length==1 request reports the
+        // informational first_token_completion_skew_ns =
+        // completion_ns - first_token_ns; the former equality invariant was
+        // relaxed -- code 8 aggregates the min tick across TP ranks while
+        // completion aggregates the max). Optional: synthetic online
+        // manifests may omit it, in which case the skew field is not
+        // evaluable and the request record notes
+        // manifest_decode_length_missing.
+        std::optional<int64_t> decode_length;
     };
 
     struct IterationMetricState {
@@ -260,6 +307,36 @@ class MetricCollector {
         std::map<std::string, uint64_t> unresolved_by_reason;
     };
 
+    // WP8 (CPP_SPEC §B): per-rank bucketed watermark sample series, filled
+    // during the doc sec.7.8 delta replay. The step function is sampled at
+    // every ledger delta (event-driven) and at every watermark bucket
+    // boundary (periodic bottom line); bucket peaks are sparse (buckets
+    // that stayed zero are omitted at emit time). Areas use independent
+    // 128-bit accumulators so the timeavg cross-check against the direct
+    // replay integral is a real comparison, not a tautology.
+    struct WatermarkSeries {
+        // bucket index -> (resident peak bytes, committed peak bytes).
+        std::map<uint64_t, std::pair<uint64_t, uint64_t>> bucket_peaks;
+        // Buckets with actual occupancy activity (a delta applied inside
+        // the bucket or a nonzero segment covered by it). Coordinator
+        // ruling 2026-08-26: bucket records are emitted only for these,
+        // plus the first and last bucket of the window (always).
+        std::set<uint64_t> changed_buckets;
+        uint64_t resident_peak = 0;
+        uint64_t committed_peak = 0;
+        unsigned __int128 resident_area = 0;
+        unsigned __int128 committed_area = 0;
+        // Same integral from the pre-existing direct delta loop, kept for
+        // the <=1% timeavg cross-check (A-class criterion).
+        unsigned __int128 direct_resident_area = 0;
+        unsigned __int128 direct_committed_area = 0;
+        uint64_t capacity_violations = 0;
+        uint64_t sample_count = 0;
+        bool capacity_known = false;
+        int64_t capacity_bytes = 0;
+        bool replayed = false;  // rank appeared in the delta replay loop
+    };
+
     // Top-level ``microbenchmark`` manifest extension (doc sec.8): one point
     // per ET/run, so a run's per-rank num_ops/byte totals over the point's
     // active ranks are exactly that iteration's numerators.
@@ -279,9 +356,19 @@ class MetricCollector {
     // Doc sec.7.8: anchor every memory action to an actual ASTRA tick, replay
     // the per-rank ledger over [0, sim_end_tick], and emit the
     // capacity-time integral records. Also passes the planner peaks through
-    // (full detail only). Runs entirely at finalize time.
+    // (full detail only). Runs entirely at finalize time. fallback_ranks
+    // (the simulated Sys ids) extends the WP8 watermark universe to ranks
+    // with no planner ledger rows (online synthetic manifests carry none).
     MemoryReplayTotals emit_memory_records(Tick sim_end_tick,
-                                           bool full_detail);
+                                           bool full_detail,
+                                           const std::vector<int>& fallback_ranks);
+    // WP8 (CPP_SPEC §B): aggregate the per-rank watermark series to
+    // instance-level bucket peaks and emit the hbm_watermark /
+    // hbm_watermark_summary records (bucket detail full-only; the summary
+    // record emits in every non-off mode).
+    void emit_watermark_records(const std::map<int, WatermarkSeries>& series_by_rank,
+                                Tick sim_end_tick,
+                                bool full_detail);
 
     bool enabled_ = false;
     std::string detail_level_ = "off";
@@ -299,6 +386,17 @@ class MetricCollector {
     std::optional<std::string> request_mapping_digest_;
     std::optional<std::string> kv_event_digest_;
 
+    // Manifest ``slo_sampling`` node (CPP_SPEC §A): watermark/link-observer
+    // sampling anchors. Defaults are the documented provisional anchor
+    // (coordinator ruling 2026-08-26: 5,000,000 ns -- 1 ms measured 31,895
+    // bucket records on the S3 2s window and would overflow the 60s-window
+    // log budget); load_manifest overwrites them when the node carries real
+    // values and clears the provisional flag accordingly.
+    uint64_t watermark_period_ns_ = 5000000;
+    uint64_t link_bucket_ns_ = 5000000;
+    bool slo_sampling_provisional_ = true;
+    bool slo_sampling_from_manifest_ = false;
+
     std::vector<RequestMetricState> requests_;
     std::unordered_map<int64_t, size_t> request_index_by_queue_index_;
     // Phase-7 §10.3: request_id -> requests_ index, populated by the online
@@ -307,6 +405,9 @@ class MetricCollector {
     std::unordered_map<std::string, size_t> request_index_by_request_id_;
     std::map<int64_t, IterationMetricState> iterations_;
     std::vector<MemoryAnchorTick> memory_anchor_ticks_;
+    // WP9 (WP9_CONTRACT §1): subject (queue_index) -> min observed code-8
+    // first-token complete tick across ranks and re-registrations.
+    std::unordered_map<int64_t, Tick> first_token_ticks_;
     std::vector<MemoryAction> memory_actions_;
     // Raw manifest ``planner_memory_peaks`` payload, passed through with
     // scope/projection annotations at finalize (doc sec.7.7/7.8).

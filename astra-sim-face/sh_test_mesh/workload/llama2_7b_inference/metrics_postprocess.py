@@ -22,6 +22,14 @@ Output (sec.11.2/11.3):
   (sec.3.6) with full denominator provenance (``normalization_method``,
   ``normalization_group_id``, ``baseline_run_id``, ``denominator_*``).
 
+- ``request_metrics.csv``: one row per request, frozen column set
+  (B1/WP1; later work packages only fill ``NA`` placeholders, never add
+  columns).  Built from the ``type=request`` ``[METRIC]`` records (full
+  detail level only) joined fail-closed to the run's
+  ``metrics_manifest.json``/``manifest.json`` request entries by
+  ``queue_index``/``request_id``; ordering/decomposition invariants
+  (arrival <= completion, e2e == completion - arrival, stage sum == e2e)
+  are re-verified and any violation aborts.
 Failure conditions (sec.11.4, all abort with a non-zero exit):
 
 1. two conflicting summary records for the same run;
@@ -298,6 +306,625 @@ def _check_request_completion(run: Run) -> None:
             f"{claimed_incomplete} but the request records show "
             f"{incomplete_records} (sec.11.4)"
         )
+
+
+REQUEST_METRICS_COLUMNS = [
+    "queue_index",
+    "request_id",
+    "session_id",
+    "turn_index",
+    "request_type",
+    "terminal_status",
+    "arrival_ns",
+    "prefill_start_ns",
+    "prefill_end_ns",
+    "decode_start_ns",
+    "first_token_ns",
+    "first_token_source",
+    "completion_ns",
+    "queue_ns",
+    "prefill_ns",
+    "prefill_decode_gap_ns",
+    "decode_ns",
+    "e2e_ns",
+    "kv_hit_state",
+    "restore_start_ns",
+    "restore_complete_ns",
+    "pre_prefill_restore_ns",
+    "hidden_restore_ns",
+    "exposed_restore_stall_ns",
+    "hidden_ratio",
+    "prefill_length",
+    "decode_length",
+    "prefix_len",
+    "instructions",
+]
+
+REQUEST_TYPE_HUMAN = "human"
+REQUEST_TYPE_TOOL = "tool"
+REQUEST_TYPE_UNKNOWN = "unknown"
+NA = "NA"
+# WP9 首 token 来源标记(request_metrics.csv first_token_source;主规格
+# §3.1:A 类枚举 exact|train_interpolated|NA。exact = 事件码 8;NA =
+# 无事件且归档 train ledger 不可得;train_interpolated = B4 fallback
+# proxy,display-only,SLO 判定路径禁入)。
+FIRST_TOKEN_SOURCE_EXACT = "exact"
+FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED = "train_interpolated"
+
+
+def _int_or_na(value: Any) -> Any:
+    """Render a metrics JSON integer, or the frozen NA placeholder."""
+    if value is None:
+        return NA
+    return int(value)
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    """Metrics JSON integer or None (WP9 proxy arithmetic helper)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _manifest_request_entries(
+    run: Run,
+    metrics_manifest: dict[str, Any],
+    service_manifest: dict[str, Any],
+) -> tuple[dict[int, dict[str, Any]], dict[str, int]]:
+    """Per-request manifest entries keyed by queue_index (fail-closed join).
+
+    Merges the run's ``metrics_manifest.json`` (the C++ collector input)
+    with its sibling service ``manifest.json``.  Both must agree on
+    ``request_id`` whenever they carry it for the same ``queue_index``;
+    fields absent from one manifest are taken from the other.  Returns
+    ``(entries_by_queue_index, per_manifest_request_counts)``.
+    """
+    merged: dict[int, dict[str, Any]] = {}
+    counts: dict[str, int] = {}
+    for name, manifest in (
+        ("metrics_manifest.json", metrics_manifest),
+        ("manifest.json", service_manifest),
+    ):
+        requests = manifest.get("requests")
+        if not isinstance(requests, list):
+            counts[name] = 0
+            continue
+        counts[name] = len(requests)
+        for entry in requests:
+            if not isinstance(entry, dict) or "queue_index" not in entry:
+                raise PostprocessError(
+                    f"run {run.run_id}: {name} request entry without "
+                    "queue_index cannot be joined to the request records"
+                )
+            queue_index = entry["queue_index"]
+            if queue_index in merged:
+                previous = merged[queue_index]
+                if previous.get("request_id") != entry.get("request_id"):
+                    raise PostprocessError(
+                        f"run {run.run_id}: queue_index {queue_index} has "
+                        f"conflicting request_id across manifests "
+                        f"({previous.get('request_id')!r} vs "
+                        f"{entry.get('request_id')!r})"
+                    )
+                combined = dict(entry)
+                for key, value in previous.items():
+                    combined.setdefault(key, value)
+                merged[queue_index] = combined
+            else:
+                merged[queue_index] = dict(entry)
+    if not merged:
+        raise PostprocessError(
+            f"run {run.run_id}: no request entries found in either "
+            "metrics_manifest.json or manifest.json; the request records "
+            "cannot be joined (fail-closed)"
+        )
+    return merged, counts
+
+
+def _check_request_row_invariants(
+    run_id: str, record: dict[str, Any], queue_index: Any
+) -> None:
+    """Ordering/decomposition invariants on rows that carry values.
+
+    Checked only among the fields that are present: arrival <= first_token
+    <= completion (first_token skipped while NA), e2e == completion -
+    arrival, and queue+prefill+gap+decode == e2e.  Any violation aborts
+    (no silent clamping).
+    """
+    arrival = record.get("arrival_ns")
+    first_token = record.get("first_token_ns")
+    completion = record.get("completion_ns")
+    e2e = record.get("e2e_ns")
+    if arrival is None or completion is None:
+        return
+    if arrival > completion:
+        raise PostprocessError(
+            f"run {run_id}: queue_index {queue_index}: arrival_ns "
+            f"{arrival} > completion_ns {completion}"
+        )
+    if first_token is not None and not (arrival <= first_token <= completion):
+        raise PostprocessError(
+            f"run {run_id}: queue_index {queue_index}: first_token_ns "
+            f"{first_token} outside [arrival_ns {arrival}, "
+            f"completion_ns {completion}]"
+        )
+    if e2e is not None and e2e != completion - arrival:
+        raise PostprocessError(
+            f"run {run_id}: queue_index {queue_index}: e2e_ns {e2e} != "
+            f"completion_ns - arrival_ns ({completion} - {arrival} = "
+            f"{completion - arrival})"
+        )
+    parts = [
+        record.get("queue_ns"),
+        record.get("prefill_ns"),
+        record.get("prefill_decode_gap_ns"),
+        record.get("decode_ns"),
+    ]
+    if e2e is not None and all(part is not None for part in parts):
+        if sum(parts) != e2e:
+            raise PostprocessError(
+                f"run {run_id}: queue_index {queue_index}: stage breakdown "
+                f"{parts} sums to {sum(parts)} != e2e_ns {e2e}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# WP9 fallback (B4, 2026-08-26): train-interpolated first-token proxy.
+#
+# B3_FACE 60s gate-2 (decision equivalence) failed -- the split's physical
+# perturbation is amplified by the closed loop (see
+# /tmp/slo_wps/gates/B3_FACE.DONE, evidence /tmp/slo_wps/b3/FACE/) -- so the
+# default first-token source falls back to the spec 1.6 proxy
+# (SH_FIRST_TOKEN_SPLIT now defaults to "0"):
+#
+#   first_token_proxy = decode_start_ns
+#                     + (w1 / sum_i w_i) * (first_train_end_ns - decode_start_ns)
+#   w_i = W_bytes + KV_bytes(context + consumed + i)     [i = 1..N, 1-based]
+#
+# with the weight sum running over the train's iterations (i = 1..N,
+# N = the ledger row's train length; S3 cross-repo ruling).  The w_i mirror
+# the scheduler's own pass-span encoding for a train member: span step i is
+# (1, context + consumed + i).  The debut's first token completes with the
+# train's FIRST iteration, so the interpolation weight is iteration 1's
+# weight over the train's N iteration weights.  The debut joins decode
+# exactly once with consumed=0 (sticky decode; verified 1454/1454 joiner
+# entries == requests, each request joining exactly once, in the 60s
+# reference run), hence consumed=0.
+#
+# first_train_end_ns: the train ledger row's tick is the emission (start)
+# boundary; a face instance is busy until the train's end barrier completes
+# (busy gate = one train in flight, face_online_scheduler.py), so the NEXT
+# ledger row on the same instance is the first decision boundary after the
+# end barrier and is used as the train-end tick (last train of an instance
+# -> proxy not obtainable -> NA).  face mixed trains (prefill chunks of the
+# queue head interleaved with decode iterations) share the same busy gate;
+# the boundary therefore also covers the mixed-in chunk work of the train.
+# Degenerate 1-iteration trains (N=1 -> share=1) make the proxy equal that
+# next-emission boundary, which sits after the barrier tick recorded as
+# completion; such values are clamped to completion (the first token
+# physically cannot complete after the request) and flagged
+# "clamped_to_completion" in instructions.
+#
+# W_bytes / KV bytes per token: the repository's authoritative conversions
+# (face_scheduler.estimate_model_weight_bytes -- weights are read once per
+# iteration -- and kv_cache_bytes_for_tokens), parameterised by the
+# trace_config.csv model rows; no value is invented here.
+#
+# The proxy is a display metric ONLY: first_token_source=train_interpolated
+# is rejected from every SLO judgment path (slo_common
+# assert_no_proxy_columns; unit-tested in slo_tools/tests).
+# ---------------------------------------------------------------------------
+
+# The proxy reads the run's ARCHIVED audit ledger (results/train_ledger.
+# jsonl, moved there by the runner after its in-run postprocess step): the
+# in-run request_metrics.csv therefore stays NA when the split is off (no
+# exact events), and re-running the postprocessor over an archived run dir
+# fills the proxy.  This keeps run products and offline analysis distinct.
+TRAIN_LEDGER_CANDIDATES = (
+    Path("results") / "train_ledger.jsonl",
+)
+
+
+def _load_model_bytes() -> tuple[Optional[int], Optional[int]]:
+    """(W_bytes, kv_bytes_per_token) from this workload's trace_config.csv.
+
+    Returns (None, None) when the config or a model row is missing/invalid
+    (proxy then degrades to NA; nothing is fabricated).
+    """
+
+    try:
+        from face_scheduler import (
+            FaceModel,
+            estimate_model_weight_bytes,
+            kv_cache_bytes_for_tokens,
+        )
+    except ImportError:
+        return None, None
+    config_path = MODULE_DIR / "trace_config.csv"
+    values: dict[str, str] = {}
+    try:
+        with config_path.open(encoding="utf-8") as source:
+            reader = csv.DictReader(source)
+            for row in reader:
+                if row.get("kind") == "config":
+                    key = (row.get("key") or "").strip()
+                    if key:
+                        values[key] = (row.get("value") or "").strip()
+    except OSError:
+        return None, None
+
+    def _positive_int(key: str) -> Optional[int]:
+        raw = values.get(key)
+        try:
+            parsed = int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    model_kwargs: dict[str, Any] = {}
+    for key in ("layers", "hidden_size", "ffn_size", "num_heads",
+                "vocab_size", "bytes_per_elem"):
+        parsed = _positive_int(key)
+        if parsed is None:
+            return None, None
+        model_kwargs[key] = parsed
+    model_kwargs["mlp_variant"] = values.get("mlp_variant") or "gelu"
+    try:
+        model = FaceModel(**model_kwargs)
+        return estimate_model_weight_bytes(model), kv_cache_bytes_for_tokens(model, 1)
+    except ValueError:
+        return None, None
+
+
+class _TrainProxyIndex:
+    """Lazy per-run index over results/train_ledger.jsonl (read-only)."""
+
+    def __init__(self, run: Run):
+        self._run = run
+        self._loaded = False
+        # request_id -> (ledger_row_position, row) of its first (non
+        # first_step) train carrying it in joiners.
+        self.first_train_by_request: dict[str, tuple[int, dict[str, Any]]] = {}
+        # ledger row position -> tick of the next row on the same instance.
+        self.next_tick_by_position: dict[int, int] = {}
+
+    def available(self) -> bool:
+        self._ensure_loaded()
+        return self._available
+
+    def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        self._available = False
+        ledger_path: Optional[Path] = None
+        for candidate in TRAIN_LEDGER_CANDIDATES:
+            path = self._run.log_path.parent / candidate
+            if path.is_file():
+                ledger_path = path
+                break
+        if ledger_path is None:
+            return
+        rows: list[dict[str, Any]] = []
+        try:
+            with ledger_path.open(encoding="utf-8") as source:
+                for line in source:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    record = json.loads(line)
+                    if isinstance(record, dict):
+                        rows.append(record)
+        except (OSError, json.JSONDecodeError):
+            return
+        for position, row in enumerate(rows):
+            if row.get("first_step"):
+                # WP9 split-ON two-phase emission: the first_step row is a
+                # metrics-only pre-row; the remainder row of the same train
+                # carries the canonical joiners record.
+                continue
+            for request_id in row.get("joiners") or []:
+                if isinstance(request_id, str) and request_id not in (
+                        self.first_train_by_request):
+                    self.first_train_by_request[request_id] = (position, row)
+        next_by_instance: dict[Any, int] = {}
+        for position in range(len(rows) - 1, -1, -1):
+            instance = rows[position].get("instance_index")
+            if instance in next_by_instance:
+                self.next_tick_by_position[position] = next_by_instance[instance]
+            tick = rows[position].get("tick")
+            if isinstance(tick, int):
+                next_by_instance[instance] = tick
+        self._available = True
+
+
+_PROXY_MODEL_BYTES: Optional[tuple[Optional[int], Optional[int]]] = None
+
+
+def _model_bytes_cached() -> tuple[Optional[int], Optional[int]]:
+    global _PROXY_MODEL_BYTES
+    if _PROXY_MODEL_BYTES is None:
+        _PROXY_MODEL_BYTES = _load_model_bytes()
+    return _PROXY_MODEL_BYTES
+
+
+def _first_token_proxy_value(
+    index: _TrainProxyIndex,
+    record: dict[str, Any],
+    entry: dict[str, Any],
+) -> tuple[Optional[int], str]:
+    """(proxy_ns, note) for one request; (None, reason-note) when the proxy
+    is not obtainable from the archived artifacts."""
+
+    request_id = str(record.get("request_id") or "")
+    decode_start = _int_or_none(record.get("decode_start_ns"))
+    if decode_start is None:
+        return None, "proxy_unavailable:decode_start_ns"
+    found = index.first_train_by_request.get(request_id)
+    if found is None:
+        return None, "proxy_unavailable:no_train_ledger_joiner_row"
+    position, row = found
+    iterations = _int_or_none(row.get("iterations"))
+    if iterations is None or iterations <= 0:
+        return None, "proxy_unavailable:train_iterations"
+    train_end = index.next_tick_by_position.get(position)
+    if train_end is None:
+        return None, "proxy_unavailable:no_next_train_on_instance(last_train)"
+    if train_end < decode_start:
+        return None, "proxy_unavailable:train_end<decode_start"
+    # context at decode start: prefill_context_tokens (history + folded
+    # prefill); fall back to the equivalent derivations.
+    decode_length = _int_or_none(entry.get("decode_length"))
+    context = _int_or_none(entry.get("prefill_context_tokens"))
+    if context is None:
+        history = _int_or_none(entry.get("history_tokens_before")) or 0
+        prefill = _int_or_none(entry.get("prefill_length"))
+        if prefill is not None:
+            context = history + prefill
+    if context is None and decode_length is not None:
+        final = _int_or_none(entry.get("final_context_tokens"))
+        if final is not None:
+            context = final - decode_length
+    if context is None or context < 0:
+        return None, "proxy_unavailable:context_tokens"
+    weight_bytes, kv_per_token = _model_bytes_cached()
+    if not weight_bytes or not kv_per_token:
+        return None, "proxy_unavailable:W_bytes/KV_bytes(trace_config)"
+    # debut join: consumed = 0.  The weight sum runs over the TRAIN's
+    # iterations (i = 1..iterations, the ledger row's train length): the
+    # debut's first token completes with the train's FIRST iteration, and
+    # w_i linearises the per-iteration cost growth as the member KV grows
+    # (i is the iteration ordinal, mirroring the scheduler's pass-span
+    # encoding (1, context + consumed + step)).  Summing over the debut's
+    # own participation instead would degenerate to share=1 whenever the
+    # debut exits before the train boundary (decode_length < iterations)
+    # and overshoot completion (S3's 60s reference run: 7/1454 rows).
+    consumed = 0
+    iteration_count = iterations
+    w_first = weight_bytes + kv_per_token * (context + consumed + 1)
+    weight_total = sum(
+        weight_bytes + kv_per_token * (context + consumed + step)
+        for step in range(1, iteration_count + 1)
+    )
+    share = w_first / weight_total
+    proxy_ns = int(round(decode_start + share * (train_end - decode_start)))
+    participation = (
+        min(decode_length, iterations)
+        if decode_length is not None else None)
+    note = (
+        "first_token: proxy(train_interpolated) "
+        f"decode_start={decode_start} first_train_end={train_end} "
+        f"train={row.get('train_id')} inst={row.get('instance_index')} "
+        f"N={iteration_count} P={participation} ctx={context} "
+        f"W_bytes={weight_bytes} kv_per_token={kv_per_token}"
+    )
+    # Physical upper bound: a request's first token cannot complete after
+    # the request itself.  Degenerate 1-iteration trains (N=1 -> share=1)
+    # make the proxy equal the next-emission boundary, which sits AFTER the
+    # end-barrier tick recorded as completion (delivery+scheduling gap).
+    # Clamp to completion and say so -- for decode_length==1 the exact-mode
+    # semantics is first_token==completion anyway.
+    completion = _int_or_none(record.get("completion_ns"))
+    if completion is not None and proxy_ns > completion:
+        proxy_ns = completion
+        note += " clamped_to_completion(train_end_boundary>completion)"
+    return proxy_ns, note
+
+
+def _request_metric_rows(
+    run: Run, entries: dict[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """request_metrics.csv rows (frozen column set; B1/WP1 fill level).
+
+    Timing/stage columns come from the C++ ``type=request`` records;
+    ``request_type``/length columns come from the joined manifest entries
+    (WP2 passthrough) and degrade to ``unknown``/``NA`` with a per-row
+    ``instructions`` note -- never a guess.
+    """
+    rows: list[dict[str, Any]] = []
+    # WP9 fallback (B4): train-interpolated proxy index over the run's
+    # train_ledger.jsonl (loaded lazily; absent ledger -> NA with a note).
+    proxy_index = _TrainProxyIndex(run)
+    proxy_available = proxy_index.available()
+    for record in run.requests:
+        queue_index = record.get("queue_index")
+        entry = entries.get(queue_index)
+        if entry is None:
+            raise PostprocessError(
+                f"run {run.run_id}: request record queue_index="
+                f"{queue_index!r} cannot be joined to any manifest request "
+                "entry (fail-closed; rows are never skipped or truncated)"
+            )
+        manifest_request_id = entry.get("request_id")
+        if manifest_request_id not in (None, record.get("request_id")):
+            raise PostprocessError(
+                f"run {run.run_id}: queue_index {queue_index} "
+                f"request_id mismatch: record {record.get('request_id')!r} "
+                f"vs manifest {manifest_request_id!r}"
+            )
+        notes: list[str] = []
+        completed = bool(record.get("completed"))
+        terminal_status = "completed" if completed else "failed"
+        if not completed:
+            reason = record.get("incomplete_reason") or "unspecified"
+            notes.append(f"incomplete_reason={reason}")
+        # WP9 首 token（2026-08-26）：exact code-8 值优先；缺失且归档
+        # train ledger 可得时填 train-interpolated proxy（B4 fallback，
+        # display-only，SLO 判定路径禁入）；否则 NA（instructions 记原因）。
+        first_token_ns = _int_or_none(record.get("first_token_ns"))
+        first_token_source = (
+            FIRST_TOKEN_SOURCE_EXACT if first_token_ns is not None else None)
+        if first_token_ns is None and proxy_available:
+            proxy_ns, proxy_note = _first_token_proxy_value(
+                proxy_index, record, entry)
+            if proxy_ns is not None:
+                first_token_ns = proxy_ns
+                first_token_source = FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED
+            notes.append(proxy_note)
+        elif first_token_ns is None:
+            notes.append("proxy_unavailable:no_train_ledger(results/)")
+        if first_token_ns is not None:
+            # Ordering invariant is re-checked fail-closed on the FILLED
+            # value (exact or proxy): arrival <= first_token <= completion.
+            checked = dict(record)
+            checked["first_token_ns"] = first_token_ns
+            _check_request_row_invariants(run.run_id, checked, queue_index)
+        else:
+            _check_request_row_invariants(run.run_id, record, queue_index)
+        request_type = entry.get("request_type")
+        if request_type not in (REQUEST_TYPE_HUMAN, REQUEST_TYPE_TOOL):
+            if request_type is None:
+                notes.append("request_type=unknown(manifest field absent)")
+            request_type = REQUEST_TYPE_UNKNOWN
+        lengths: dict[str, Any] = {}
+        for column in ("prefill_length", "decode_length", "prefix_len"):
+            value = entry.get(column)
+            if value is None:
+                notes.append(f"{column}={NA}(manifest field absent)")
+                lengths[column] = NA
+            else:
+                lengths[column] = int(value)
+        rows.append(
+            {
+                "queue_index": int(queue_index),
+                "request_id": record.get("request_id", ""),
+                "session_id": record.get("session_id", ""),
+                "turn_index": int(record.get("turn_index", 0)),
+                "request_type": request_type,
+                "terminal_status": terminal_status,
+                "arrival_ns": _int_or_na(record.get("arrival_ns")),
+                "prefill_start_ns": _int_or_na(record.get("prefill_start_ns")),
+                "prefill_end_ns": _int_or_na(record.get("prefill_end_ns")),
+                "decode_start_ns": _int_or_na(record.get("decode_start_ns")),
+                # WP9 首 token(2026-08-26):exact = request 记录的
+                # first_token_ns(事件码 8,split ON 时由首步批 first_token
+                # 标记产出);缺失时 train-interpolated proxy(B4 fallback,
+                # display-only;见 _TrainProxyIndex 块);均无 → NA。
+                "first_token_ns": (
+                    NA if first_token_ns is None else first_token_ns),
+                "first_token_source": (
+                    first_token_source if first_token_source is not None
+                    else NA),
+                "completion_ns": _int_or_na(record.get("completion_ns")),
+                "queue_ns": _int_or_na(record.get("queue_ns")),
+                "prefill_ns": _int_or_na(record.get("prefill_ns")),
+                "prefill_decode_gap_ns": _int_or_na(
+                    record.get("prefill_decode_gap_ns")
+                ),
+                "decode_ns": _int_or_na(record.get("decode_ns")),
+                "e2e_ns": _int_or_na(record.get("e2e_ns")),
+                # WP4/WP5 fill the KV-hit and restore columns; frozen NA here.
+                "kv_hit_state": NA,
+                "restore_start_ns": NA,
+                "restore_complete_ns": NA,
+                "pre_prefill_restore_ns": NA,
+                "hidden_restore_ns": NA,
+                "exposed_restore_stall_ns": NA,
+                "hidden_ratio": NA,
+                "prefill_length": lengths["prefill_length"],
+                "decode_length": lengths["decode_length"],
+                "prefix_len": lengths["prefix_len"],
+                "instructions": "; ".join(notes),
+            }
+        )
+    return rows
+
+
+def write_request_metrics(
+    runs: Sequence[Run], path: Path
+) -> dict[str, Any]:
+    """Write the frozen-schema request_metrics.csv next to the raw CSV.
+
+    Full detail only: summary/off logs carry no ``type=request`` records,
+    so no file is written and the skip reason is printed (it lands in the
+    run's postprocess.log).  Any join failure aborts with a non-zero exit.
+    """
+    with_requests = [run for run in runs if run.requests]
+    if not with_requests:
+        detail_levels = sorted(str(run.init.get("detail_level")) for run in runs)
+        summary = {
+            "out_requests": str(path),
+            "request_metrics": "skipped",
+            "reason": (
+                "no type=request [METRIC] records in the input logs "
+                "(request rows are emitted at --metrics-detail=full only)"
+            ),
+            "detail_levels": detail_levels,
+        }
+        print(json.dumps(summary))
+        return summary
+    if len(with_requests) > 1:
+        raise PostprocessError(
+            "request_metrics.csv is a single-run product; "
+            f"{len(with_requests)} runs carry request records "
+            f"({', '.join(run.run_id for run in with_requests)}); "
+            "postprocess one run log at a time"
+        )
+    run = with_requests[0]
+    if not run.init.get("manifest_path"):
+        raise PostprocessError(
+            f"run {run.run_id}: request records cannot be joined without "
+            "the init record manifest_path (fail-closed)"
+        )
+    metrics_manifest, service_manifest, _ = _load_manifest_sidecars(run)
+    entries, counts = _manifest_request_entries(
+        run, metrics_manifest, service_manifest
+    )
+    for name, count in counts.items():
+        if count != len(run.requests):
+            raise PostprocessError(
+                f"run {run.run_id}: {name} declares {count} requests but "
+                f"the log carries {len(run.requests)} request records "
+                "(fail-closed; no silent truncation)"
+            )
+    rows = _request_metric_rows(run, entries)
+    _write_csv(path, REQUEST_METRICS_COLUMNS, rows)
+    status_counts: dict[str, int] = {}
+    type_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    for row in rows:
+        status_counts[str(row["terminal_status"])] = (
+            status_counts.get(str(row["terminal_status"]), 0) + 1
+        )
+        type_counts[str(row["request_type"])] = (
+            type_counts.get(str(row["request_type"]), 0) + 1
+        )
+        source_counts[str(row["first_token_source"])] = (
+            source_counts.get(str(row["first_token_source"]), 0) + 1
+        )
+    summary = {
+        "out_requests": str(path),
+        "request_rows": len(rows),
+        "terminal_status_counts": status_counts,
+        "request_type_counts": type_counts,
+        "first_token_source_counts": source_counts,
+        "rows_with_notes": sum(1 for row in rows if row["instructions"]),
+    }
+    print(json.dumps(summary))
+    return summary
 
 
 def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, Any]) -> dict[str, str]:
@@ -826,6 +1453,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("logs", nargs="+", help="run log(s) to parse")
     parser.add_argument("--out-raw", default="raw_metrics.csv")
     parser.add_argument("--out-normalized", default="normalized_metrics.csv")
+    parser.add_argument("--out-requests", default="request_metrics.csv")
     parser.add_argument(
         "--group-config",
         default=None,
@@ -869,6 +1497,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     _write_csv(Path(args.out_raw), RAW_COLUMNS, raw_rows)
     _write_csv(Path(args.out_normalized), NORMALIZED_COLUMNS, normalized_rows)
+    try:
+        write_request_metrics(runs, Path(args.out_requests))
+    except PostprocessError as error:
+        print(f"postprocess error: {error}", file=sys.stderr)
+        return 1
     print(
         json.dumps(
             {

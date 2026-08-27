@@ -51,6 +51,7 @@ def _with_clean_run_end_state(s: Sh10OnlineScheduler) -> Sh10OnlineScheduler:
     s.pending_admissions = deque()
     s._runtimes = {}
     s.instances = []
+    s._pending_first_steps = {}   # WP9 首步拆分收尾断言输入（空 = 已清）
     return s
 
 

@@ -47,6 +47,39 @@ if [[ -n "${BRIDGE_TIMEOUT_MS:-}" ]]; then
 fi
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 
+# WP0 (SLO B1, 2026-08-26): --metrics-detail 不再硬编码 summary。优先级
+# env SH_METRICS_DETAIL > 本仓 sh_test_mesh/workload/llama2_7b_inference/
+# metrics_config.json 的 detail_level 字段；两边取值都必须是
+# off|summary|full；走 json 回退时文件缺失/非法/取值非法一律 fail-closed
+# 报错退出（python3 -c 解析，不引入 jq 依赖）。与 run_online_strategy.sh
+# 同构。
+METRICS_CONFIG="${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/metrics_config.json"
+if [[ -n "${SH_METRICS_DETAIL:-}" ]]; then
+  DETAIL="${SH_METRICS_DETAIL}"
+  if [[ "${DETAIL}" != "off" && "${DETAIL}" != "summary" && "${DETAIL}" != "full" ]]; then
+    echo "[run_online_strategy_sensing] SH_METRICS_DETAIL must be off|summary|full, got '${DETAIL}'" >&2
+    exit 1
+  fi
+  DETAIL_SOURCE="env SH_METRICS_DETAIL"
+else
+  DETAIL=$(python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception as exc:
+    print("cannot read metrics_config.json: %s" % exc, file=sys.stderr)
+    sys.exit(1)
+detail = cfg.get("detail_level") if isinstance(cfg, dict) else None
+if detail not in ("off", "summary", "full"):
+    print("metrics_config.json detail_level must be off|summary|full, got %r" % (detail,), file=sys.stderr)
+    sys.exit(1)
+print(detail)
+' "${METRICS_CONFIG}") || exit 1
+  DETAIL_SOURCE="json ${METRICS_CONFIG}"
+fi
+echo "[run_online_strategy_sensing] metrics detail=${DETAIL} (source: ${DETAIL_SOURCE})"
+
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
@@ -66,7 +99,7 @@ cd "${PROJECT}"
   --network-configuration="${RC}/network.yml" \
   --logging-folder=off \
   --metrics-configuration="${ET_DIR}/metrics_manifest.json" \
-  --metrics-detail=summary \
+  --metrics-detail="${DETAIL}" \
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
@@ -105,6 +138,7 @@ if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
   bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
     --out-raw="${RUN_DIR}/raw_metrics.csv" \
     --out-normalized="${RUN_DIR}/normalized_metrics.csv" \
+    --out-request="${RUN_DIR}/request_metrics.csv" \
     > "${RUN_DIR}/postprocess.log" 2>&1
   echo "[run_online_strategy_sensing] metrics postprocess: raw=$(ls "${RUN_DIR}/raw_metrics.csv") normalized=$(ls "${RUN_DIR}/normalized_metrics.csv")"
 else

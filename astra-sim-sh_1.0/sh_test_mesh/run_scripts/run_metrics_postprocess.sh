@@ -10,6 +10,8 @@
 # All arguments are forwarded to metrics_postprocess.py:
 #   --out-raw=PATH            raw CSV (default: raw_metrics.csv)
 #   --out-normalized=PATH     normalized CSV (default: normalized_metrics.csv)
+#   --out-request=PATH        per-request CSV (WP1; full-detail runs only,
+#                             skipped with a note at off/summary)
 #   --normalization=group_max|ratio_to_baseline   (default: group_max)
 #   --baseline=<run_id>       baseline run for ratio_to_baseline
 #   --group-config=PATH       JSON comparison group config

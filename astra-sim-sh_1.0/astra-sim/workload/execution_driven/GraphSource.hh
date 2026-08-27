@@ -163,8 +163,9 @@ class GraphSource {
 
     /// Zero-copy fast path for hot loops; the default keeps the by-value
     /// semantics so static/empty sources are unchanged. The NodeStore-backed
-    /// source overrides it to iterate its stable storage (nodes are never
-    /// erased, so the references outlive the callback).
+    /// source overrides it to iterate its stable storage (online nodes are
+    /// collected only at quiescent commit boundaries -- never inside a
+    /// callback -- so the references outlive the consume callback).
     virtual void for_each_dep_free(
         const std::function<void(const NodeView&)>& consume) {
         for (const auto& nv : dep_free_nodes()) {

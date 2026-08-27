@@ -24,6 +24,37 @@ BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analyt
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 CONFIG=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config_legacy.csv
 
+# --metrics-detail 解析（B1/WP0）：优先级 env SH_METRICS_DETAIL > 本仓
+# sh_test_mesh/workload/llama2_7b_inference/metrics_config.json 的
+# detail_level；json 缺失/非法/值不在 off|summary|full → 立即报错退出
+# （fail-closed，不引入新依赖，python3 -c json 解析）。
+if [[ -n "${SH_METRICS_DETAIL:-}" ]]; then
+  DETAIL="${SH_METRICS_DETAIL}"
+else
+  DETAIL=$(python3 -c '
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError) as error:
+    sys.exit("cannot read metrics detail from %s: %s" % (path, error))
+value = config.get("detail_level") if isinstance(config, dict) else None
+if not isinstance(value, str) or value not in ("off", "summary", "full"):
+    sys.exit(
+        "metrics_config.json detail_level must be one of off|summary|full, "
+        "got %r" % (value,))
+print(value)
+' "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/metrics_config.json") || {
+    echo "[runner] FAIL: cannot resolve --metrics-detail (env SH_METRICS_DETAIL unset/unreadable or metrics_config.json detail_level missing/invalid)" >&2
+    exit 1
+  }
+fi
+if [[ "${DETAIL}" != "off" && "${DETAIL}" != "summary" && "${DETAIL}" != "full" ]]; then
+  echo "[runner] FAIL: invalid SH_METRICS_DETAIL='${DETAIL}' (expected off|summary|full)" >&2
+  exit 1
+fi
+
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
@@ -41,7 +72,7 @@ cd "${PROJECT}"
   --network-configuration="${RC}/network.yml" \
   --logging-folder=off \
   --metrics-configuration="${ET_DIR}/metrics_manifest.json" \
-  --metrics-detail=summary \
+  --metrics-detail="${DETAIL}" \
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
@@ -80,8 +111,14 @@ if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
   bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
     --out-raw="${RUN_DIR}/raw_metrics.csv" \
     --out-normalized="${RUN_DIR}/normalized_metrics.csv" \
+    --out-requests="${RUN_DIR}/request_metrics.csv" \
     > "${RUN_DIR}/postprocess.log" 2>&1
   echo "[run_online_strategy_legacy] metrics postprocess: raw=$(ls "${RUN_DIR}/raw_metrics.csv") normalized=$(ls "${RUN_DIR}/normalized_metrics.csv")"
+  if [ -f "${RUN_DIR}/request_metrics.csv" ]; then
+    echo "[run_online_strategy_legacy] request metrics: ${RUN_DIR}/request_metrics.csv"
+  else
+    echo "[run_online_strategy_legacy] request metrics: none (detail=${DETAIL}; see postprocess.log)"
+  fi
 else
   echo "[run_online_strategy_legacy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
 fi

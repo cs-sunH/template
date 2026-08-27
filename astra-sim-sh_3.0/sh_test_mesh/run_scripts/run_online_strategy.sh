@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # sh_3.0 phase-1 step-1-10 官方在线 runner:strategy 模式(真实策略,实时物理)。
 # Usage: bash run_online_strategy.sh <run_dir> <request_csv>
+# Env: SH_METRICS_DETAIL=off|summary|full 覆盖指标明细档;缺省读
+# sh_test_mesh/workload/llama2_7b_inference/metrics_config.json 的
+# detail_level(env > json;两者非法均 fail-closed)。full 档后处理额外产
+# request_metrics.csv(逐请求时序)。
 # request-neutral(裸仓库):仓库不预置输入队列;request_csv 由调用方按
 # traces/materialize_20_30s.py 物化后必填传入(缺失即 fail-closed)。
 # 流程(C++ 先起建桥,Python 服务后起,等退出码,
@@ -42,6 +46,38 @@ if [[ -n "${BRIDGE_TIMEOUT_MS:-}" ]]; then
 fi
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 
+# B1/WP0 (SLO 指标改造): --metrics-detail 不再硬编码 summary——优先取
+# env SH_METRICS_DETAIL，缺省回落 workload metrics_config.json 的
+# detail_level（优先级 env > json）。json 缺失/非法/值不在
+# {off,summary,full} 或 env 值非法均 fail-closed 退出。
+METRICS_CONFIG_JSON="${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/metrics_config.json"
+if [[ -n "${SH_METRICS_DETAIL:-}" ]]; then
+  DETAIL="${SH_METRICS_DETAIL}"
+else
+  DETAIL=$(python3 - "${METRICS_CONFIG_JSON}" <<'PY' || exit 1
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, ValueError) as error:
+    sys.stderr.write("[run_online_strategy] cannot read %s: %s\n" % (path, error))
+    sys.exit(1)
+detail = config.get("detail_level") if isinstance(config, dict) else None
+if detail not in ("off", "summary", "full"):
+    sys.stderr.write(
+        "[run_online_strategy] invalid detail_level %r in %s "
+        "(expected off|summary|full)\n" % (detail, path))
+    sys.exit(1)
+print(detail)
+PY
+)
+fi
+if [[ "${DETAIL}" != "off" && "${DETAIL}" != "summary" && "${DETAIL}" != "full" ]]; then
+  echo "[run_online_strategy] invalid SH_METRICS_DETAIL='${DETAIL}' (expected off|summary|full)" >&2
+  exit 1
+fi
+
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
@@ -60,7 +96,7 @@ cd "${PROJECT}"
   --network-configuration="${RC}/network.yml" \
   --logging-folder=off \
   --metrics-configuration="${ET_DIR}/metrics_manifest.json" \
-  --metrics-detail=summary \
+  --metrics-detail="${DETAIL}" \
   > "${RUN_DIR}/cpp.log" 2>&1 &
 CPP_PID=$!
 
@@ -94,12 +130,15 @@ fi
 [[ ${CPP_EXIT} -eq 0 && ${PY_EXIT} -eq 0 ]] || exit 1
 
 # 后处理:复用 run_metrics_postprocess.sh 的能力([METRIC] 行已在 cpp.log)。
+# B1/WP1: full 档额外产 request_metrics.csv(逐请求时序,manifest fail-closed
+# 连接);summary/off 档不产(说明写 postprocess.log)。
 if grep -q '\[METRIC\]' "${RUN_DIR}/cpp.log"; then
   bash "${POSTPROCESS}" "${RUN_DIR}/cpp.log" \
     --out-raw="${RUN_DIR}/raw_metrics.csv" \
     --out-normalized="${RUN_DIR}/normalized_metrics.csv" \
+    --out-request="${RUN_DIR}/request_metrics.csv" \
     > "${RUN_DIR}/postprocess.log" 2>&1
-  echo "[run_online_strategy] metrics postprocess: raw=$(ls "${RUN_DIR}/raw_metrics.csv") normalized=$(ls "${RUN_DIR}/normalized_metrics.csv")"
+  echo "[run_online_strategy] metrics postprocess: raw=$(ls "${RUN_DIR}/raw_metrics.csv") normalized=$(ls "${RUN_DIR}/normalized_metrics.csv") request=$(ls "${RUN_DIR}/request_metrics.csv" 2>/dev/null || echo 'SKIPPED(detail!=full)')"
 else
   echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
 fi

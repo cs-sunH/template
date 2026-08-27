@@ -266,6 +266,12 @@ static void register_online_metrics_anchors(
     std::map<std::tuple<std::string, int, std::string>, NodeRef> first_of;
     // (request_id, rank) -> last KV-route transfer node.
     std::map<std::pair<std::string, int>, NodeRef> last_transfer;
+    // WP9 (WP9_CONTRACT §1): every first-token marker node of the batch,
+    // keyed (request_id, rank) -- each occurrence registers its own anchor
+    // (apply_event keeps the min tick per subject, so duplicates are
+    // harmless and cross-TP ranks each contribute).
+    std::vector<std::pair<std::pair<std::string, int>, NodeRef>>
+        first_token_nodes;
     for (const auto& node : batch.nodes) {
         if (!node.contains("request_id") || !node.contains("stage") ||
             !node.contains("rank") || !node.contains("id")) {
@@ -282,6 +288,13 @@ static void register_online_metrics_anchors(
         }
         const uint64_t store_id = id_it->second;
         const std::string name = node.value("name", std::string());
+        if (name.find("first_token") != std::string::npos) {
+            // WP9 observation-only marker: never feeds the first_of
+            // start-anchor or last_transfer groups below.
+            first_token_nodes.push_back(
+                {{request_id, rank}, NodeRef{rank, store_id}});
+            continue;
+        }
         const auto group = std::make_tuple(request_id, rank, stage);
         auto& first = first_of[group];
         if (first.rank < 0) {
@@ -347,6 +360,14 @@ static void register_online_metrics_anchors(
     for (const auto& [key, ref] : last_transfer) {
         MetricCollector::instance().online_register_node_anchor(
             ref.rank, ref.node_id, key.first, "", true);
+    }
+    // WP9 first-token anchors (WP9_CONTRACT §1): kind "first_token" -> event
+    // code 8 (complete edge, subject=request, min tick per subject). Every
+    // occurrence registers -- cross-TP ranks each contribute their own
+    // completion and the collector takes the min.
+    for (const auto& [key, ref] : first_token_nodes) {
+        MetricCollector::instance().online_register_node_anchor(
+            ref.rank, ref.node_id, key.first, "first_token", false);
     }
 }
 
@@ -633,6 +654,211 @@ void command_fifo_reader(const std::string& path, RequestIngress& ingress,
               << std::endl;
 }
 
+
+// ---------------------------------------------------------------------------
+// WP6 NoC link observer wiring (SLO pipeline B2, /tmp/slo_wps/plans/
+// CPP_SPEC.md §D).
+// ---------------------------------------------------------------------------
+
+/// Mesh-boundary ("edge") directed-link set, computed by replicating
+/// MultiDimTopology's deterministic connect order (dims ascending; every
+/// connect() appends src->dest then dest->src). A directed link of a
+/// Line/Mesh dimension is a boundary link when its hop sits at either end
+/// of that dimension (coordinate 0 or dim_size-1). Ring/FullyConnected
+/// dimensions have no boundary (their links consume ids but never
+/// qualify). This backend has no remote-memory port topology inside the
+/// fluid link table (remote memory is a separate API), so the mesh
+/// boundary IS the edge set; when a dimension block is unsupported the
+/// set is marked not derived and the records fall back to -1 + note.
+struct EdgeLinkSet {
+    std::set<LinkId> links;
+    bool derived = false;
+    std::string note;
+};
+
+static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
+    EdgeLinkSet result;
+    const auto blocks = parser.get_topologies_per_dim();
+    const auto sizes = parser.get_npus_counts_per_dim();
+    const int dims = parser.get_dims_count();
+    if (static_cast<int>(blocks.size()) != dims ||
+        static_cast<int>(sizes.size()) != dims || dims <= 0) {
+        result.note = "network parser dimension mismatch; edge set unavailable";
+        return result;
+    }
+    // Row-major strides exactly as MultiDimTopology builds them.
+    std::vector<int64_t> stride(dims, 1);
+    int64_t npus = 1;
+    for (int d = 0; d < dims; ++d) {
+        stride[d] = npus;
+        npus *= sizes[d];
+    }
+    const auto address_of = [&](int64_t id) {
+        std::vector<int64_t> address(dims, 0);
+        for (int d = dims - 1; d >= 0; --d) {
+            address[d] = id / stride[d];
+            id %= stride[d];
+        }
+        return address;
+    };
+
+    LinkId next_id = 0;
+    bool saw_non_mesh_dim = false;
+    for (int d = 0; d < dims; ++d) {
+        switch (blocks[d]) {
+        case TopologyBuildingBlock::Mesh: {
+            for (int64_t src = 0; src < npus; ++src) {
+                const auto address = address_of(src);
+                if (address[d] + 1 >= sizes[d]) {
+                    continue;
+                }
+                const bool boundary =
+                    address[d] == 0 || address[d] + 1 == sizes[d] - 1;
+                if (boundary) {
+                    result.links.insert(next_id);
+                    result.links.insert(next_id + 1);
+                }
+                next_id += 2;
+            }
+            break;
+        }
+        case TopologyBuildingBlock::Ring: {
+            // Ring (incl. the radix==2 mesh fallback): one bidirectional
+            // connect per src; no boundary concept.
+            saw_non_mesh_dim = true;
+            next_id += 2 * static_cast<LinkId>(npus);
+            break;
+        }
+        case TopologyBuildingBlock::FullyConnected: {
+            saw_non_mesh_dim = true;
+            for (int64_t src = 0; src < npus; ++src) {
+                const auto address = address_of(src);
+                for (int64_t further = address[d] + 1; further < sizes[d];
+                     ++further) {
+                    (void)further;
+                    next_id += 2;
+                }
+            }
+            break;
+        }
+        default: {
+            result.note = "unsupported topology block; edge set unavailable";
+            return result;
+        }
+        }
+    }
+    result.derived = true;
+    result.note = saw_non_mesh_dim
+        ? "mesh boundary of Line/Mesh dims (Ring/FullyConnected dims have "
+          "no boundary); no remote-memory port topology exists in this "
+          "backend's fluid link table"
+        : "mesh boundary of the Line/Mesh dimensions; no remote-memory "
+          "port topology exists in this backend's fluid link table";
+    return result;
+}
+
+/// Emit the link_bucket / link_total [METRIC] records from the observer's
+/// integrated series (summary/full runs only; the caller gates). Bucket
+/// rows are sparse; trailing/leading zero buckets are simply absent, and a
+/// bucket with all-zero links emits only when at least one link carried
+/// bytes in it. RSS discipline: the caller releases the arrays right
+/// after this returns.
+static void emit_link_observer_records(
+    const std::shared_ptr<FluidScheduler>& scheduler,
+    const EdgeLinkSet& edge_links) {
+    const auto& bucket_rows = scheduler->link_observer_bucket_bytes();
+    const auto& totals = scheduler->link_observer_totals();
+    const uint64_t bucket_ns = scheduler->link_observer_bucket_ns();
+    const uint64_t window_ns = scheduler->link_observer_window_ns();
+    const auto& collector = MetricCollector::instance();
+
+    size_t bucket_count = 0;
+    for (const auto& row : bucket_rows) {
+        bucket_count = std::max(bucket_count, row.size());
+    }
+    // Coordinator ruling 2026-08-26: the first and last bucket of the
+    // window always emit (window anchors); empty middle buckets do not.
+    if (bucket_ns > 0 && window_ns > 0) {
+        const uint64_t window_buckets =
+            window_ns / bucket_ns + (window_ns % bucket_ns != 0 ? 1 : 0);
+        if (window_buckets > bucket_count) {
+            bucket_count = window_buckets;
+        }
+    }
+    const uint64_t last_bucket =
+        bucket_count > 0 ? static_cast<uint64_t>(bucket_count) - 1 : 0;
+
+    for (uint64_t bucket = 0; bucket < bucket_count; ++bucket) {
+        uint64_t bucket_total = 0;
+        uint64_t max_bytes = 0;
+        LinkId max_link = 0;
+        uint64_t edge_max_bytes = 0;
+        LinkId edge_max_link = 0;
+        bool any_bytes = false;
+        for (size_t link = 0; link < bucket_rows.size(); ++link) {
+            const uint64_t bytes =
+                bucket < bucket_rows[link].size() ? bucket_rows[link][bucket]
+                                                  : 0;
+            if (bytes == 0) {
+                continue;
+            }
+            any_bytes = true;
+            bucket_total += bytes;
+            if (bytes > max_bytes) {
+                max_bytes = bytes;
+                max_link = static_cast<LinkId>(link);
+            }
+            if (edge_links.derived && edge_links.links.count(link) > 0 &&
+                bytes > edge_max_bytes) {
+                edge_max_bytes = bytes;
+                edge_max_link = static_cast<LinkId>(link);
+            }
+        }
+        if (!any_bytes && bucket != 0 && bucket != last_bucket) {
+            continue;
+        }
+        json record;
+        record["schema"] = 1;
+        record["type"] = "link_bucket";
+        record["source"] = "simulator";
+        record["repo_variant"] = collector.metric_repo_variant();
+        record["run_id"] = collector.metric_run_id();
+        record["bucket_start_ns"] = bucket * bucket_ns;
+        record["max_link"] = max_link;
+        record["max_bytes"] = max_bytes;
+        record["total_bytes"] = bucket_total;
+        if (edge_links.derived) {
+            record["edge_max_link"] = edge_max_link;
+            record["edge_max_bytes"] = edge_max_bytes;
+            record["edge_note"] = edge_links.note;
+        } else {
+            record["edge_max_link"] = -1;
+            record["edge_max_bytes"] = -1;
+            record["edge_note"] =
+                "edge link set unavailable: " + edge_links.note;
+        }
+        record["link_bucket_ns"] = bucket_ns;
+        record["provisional"] = collector.slo_sampling_provisional();
+        collector.emit_observer_record(record.dump());
+    }
+
+    for (size_t link = 0; link < totals.size(); ++link) {
+        json record;
+        record["schema"] = 1;
+        record["type"] = "link_total";
+        record["source"] = "simulator";
+        record["repo_variant"] = collector.metric_repo_variant();
+        record["run_id"] = collector.metric_run_id();
+        record["link_id"] = static_cast<LinkId>(link);
+        record["total_bytes"] = totals[link].total_bytes;
+        record["active_ns"] = totals[link].active_ns;
+        record["window_ns"] = window_ns;
+        record["link_count"] = totals.size();
+        record["link_bucket_ns"] = bucket_ns;
+        record["provisional"] = collector.slo_sampling_provisional();
+        collector.emit_observer_record(record.dump());
+    }
+}
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -642,6 +868,22 @@ int main(int argc, char* argv[]) {
     // with the [METRIC] lines (which already write via ::write) in true
     // order. Online binary only: the offline static ET binary is untouched.
     ::setvbuf(stdout, nullptr, _IONBF, 0);
+
+    // Total wall-clock timer from main() entry; logged at run end on both
+    // exit paths (gate failure and normal return) so every ended run
+    // reports how long the simulation took. Logged through the "main"
+    // logger: the console sink prints it and the logging-folder file sink
+    // persists it to log.log (console-only when --logging-folder=off).
+    const auto sim_wall_start = std::chrono::steady_clock::now();
+    const auto print_total_wall_time = [&sim_wall_start]() {
+        const auto total_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - sim_wall_start)
+                .count();
+        LoggerFactory::get_logger("main")->info(
+            "[online] total simulation wall time: {} ms ({:.3f} s)",
+            total_ms, static_cast<double>(total_ms) / 1000.0);
+    };
 
     // Online CLI family contract (step 1-2; hard errors on violation).
     OnlineCliOptions online_cli;
@@ -736,6 +978,38 @@ int main(int argc, char* argv[]) {
     // schedule_event_deferred (same-tick drain). The static main never
     // enables it -- pre-extension behavior is byte-for-byte preserved.
     fluid_scheduler->set_deferred_flush_mode(true);
+
+    // WP6 NoC link observer gating (CPP_SPEC §D): metrics != off AND env
+    // ASTRA_LINK_OBSERVER != 0 (unset == enabled; "0" disables). When the
+    // gate is off the scheduler never even checks the observer flag -- zero
+    // work, zero records, byte-identical [METRIC] stream modulo nothing.
+    // The bucket length comes from the manifest slo_sampling node (the
+    // collector falls back to the documented provisional anchor).
+    bool fluid_link_observer_on = false;
+    EdgeLinkSet edge_links;
+    if (MetricCollector::instance().enabled()) {
+        const char* link_observer_env = std::getenv("ASTRA_LINK_OBSERVER");
+        const bool disabled_by_env =
+            link_observer_env != nullptr &&
+            std::string(link_observer_env) == "0";
+        if (!disabled_by_env) {
+            fluid_scheduler->enable_link_observer(
+                MetricCollector::instance().slo_link_bucket_ns());
+            fluid_link_observer_on = true;
+            edge_links = compute_mesh_edge_links(network_parser);
+            std::cout << "[online] link observer: enabled (bucket_ns="
+                      << MetricCollector::instance().slo_link_bucket_ns()
+                      << ", provisional="
+                      << (MetricCollector::instance().slo_sampling_provisional()
+                              ? "true"
+                              : "false")
+                      << ", edge_links=" << edge_links.links.size() << ")"
+                      << std::endl;
+        } else {
+            std::cout << "[online] link observer: disabled "
+                         "(ASTRA_LINK_OBSERVER=0)" << std::endl;
+        }
+    }
 
     // Create ASTRA-sim related resources
     auto network_apis =
@@ -1003,6 +1277,13 @@ int main(int argc, char* argv[]) {
     if (MetricCollector::instance().enabled()) {
         committer_ctx.metrics_anchor_hook = register_online_metrics_anchors;
     }
+    // M2 node GC (2026-08-23): the CLI arm (--online-node-gc, frozen
+    // default 0 after the 2026-08-23 ruling flip -- GC on showed a
+    // reproducible light-load wall regression; enable explicitly for
+    // memory-bound heavy/parallel campaigns) reaches the committer here;
+    // its constructor propagates the switch to every per-rank store and
+    // commit() collects at its tail (0 = pre-M2 never-erase behavior).
+    committer_ctx.node_gc = online_cli.online_node_gc != 0;
     GraphBatchCommitter committer(committer_ctx);
     driver_ctx.committer = &committer;
     if (online_cli.sensing_enabled) {
@@ -1010,6 +1291,15 @@ int main(int argc, char* argv[]) {
                      "injected-unfinished ledger summary delivered per "
                      "epoch)" << std::endl;
     }
+    // M2 node GC (2026-08-23): evidence line (cpp.log is an allowed-diff
+    // log). The frozen default is 0; --online-node-gc 1 enables collection
+    // (default-off keeps the pre-M2 never-erase behavior: nodes and
+    // store_ids grow for the whole run).
+    std::cout << "[online] node gc: "
+              << (online_cli.online_node_gc != 0 ? "enabled" : "disabled")
+              << " (--online-node-gc "
+              << online_cli.online_node_gc << "; finished childless nodes "
+              "collected at commit tails)" << std::endl;
     event_queue->set_tick_end_callback(ed_driver_tick_end, &driver_ctx);
 
     fluid_scheduler->flush_pending_starts();
@@ -1203,6 +1493,15 @@ int main(int argc, char* argv[]) {
     // still alive; no-op when metrics are disabled (doc sec.5.6).
     MetricCollector::instance().finalize(systems, Sys::boostedTick());
 
+    // WP6 link observer records (CPP_SPEC §D): only reachable when metrics
+    // are on and the observer was enabled. Emitted through the collector's
+    // single-write channel; the integration arrays are freed right after
+    // (RSS discipline).
+    if (fluid_link_observer_on) {
+        emit_link_observer_records(fluid_scheduler, edge_links);
+        fluid_scheduler->link_observer_release();
+    }
+
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
     // first-30-seconds input; the offline replay equivalent of
@@ -1278,6 +1577,22 @@ int main(int argc, char* argv[]) {
     // record.
     std::cout << "[online] phase-5 commit counters: "
               << committer.counters_report() << std::endl;
+
+    // M2 node GC (2026-08-23): run-end evidence (measurement only; cpp.log
+    // is an allowed-diff log). erased = nodes collected over the run;
+    // retained = records still in the stores at run end (the in-flight
+    // window + the post-final-delivery tail nodes that finish after the
+    // last commit, never collected).
+    {
+        uint64_t node_gc_erased = 0;
+        uint64_t node_gc_retained = 0;
+        for (const auto& source : graph_sources) {
+            node_gc_erased += source->store().gc_erased_count();
+            node_gc_retained += source->store().retained_count();
+        }
+        std::cout << "[online] node gc: erased=" << node_gc_erased
+                  << " retained=" << node_gc_retained << std::endl;
+    }
 
     // Phase 6 (方案 §9.1): per-run mechanism counters (measurement only; the
     // decision gate is evaluated from the collected benchmark matrix, not
@@ -1409,6 +1724,11 @@ int main(int argc, char* argv[]) {
         gate_ok = false;
     }
     if (!gate_ok) {
+        print_total_wall_time();
+        // The "main" logger is async: shutdown drains its queue so the
+        // wall-time line lands before this failure exit terminates the
+        // process (the normal path relies on the shutdown below).
+        AstraSim::LoggerFactory::shutdown();
         return EXIT_FAILURE;
     }
 
@@ -1416,6 +1736,8 @@ int main(int argc, char* argv[]) {
         delete it;
     }
     systems.clear();
+
+    print_total_wall_time();
 
     // terminate simulation (the bridge destructor then closes req_notify ->
     // Python sees EOF and finalizes; the run script waits for Python).

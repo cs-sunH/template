@@ -54,12 +54,17 @@ def _read_json_atomic(path):
 
 
 def _write_json_atomic(path, payload):
-    """原子发布: 写 <path>.tmp 再 os.replace,避免对端读到半截文件。"""
+    """原子发布: 写 <path>.tmp 再 os.replace,避免对端读到半截文件。
+
+    B4(2026-08-23,用户裁决): 去除 os.fsync——本函数全部调用方(本模块
+    _handle_request/_fail)均为桥响应瞬态文件,C++ 收到 notify 字节后立刻
+    读走并 unlink,无持久审计消费者;tmp + os.replace 的原子性保留。
+    断电极端场景 fail-closed(整轮重跑,与 campaign 实操一致)。
+    """
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as target:
         json.dump(payload, target)
         target.flush()
-        os.fsync(target.fileno())
     os.replace(tmp, path)
 
 
@@ -106,7 +111,9 @@ class BridgeServer:
         # Python 阻塞等待 C++ 进程的时间(os.read(req_notify) 阻塞 +
         # resp_notify 写端打开阻塞)。channel_bytes = request/response/ack
         # JSON 文件字节(Python 视角,os.path.getsize);forced_flush_count =
-        # 原子 JSON 写中的 os.fsync 强制落盘次数(正式路径无逐节点 flush)。
+        # 原子 JSON 写次数(历史上与 os.fsync 1:1;B4 2026-08-23 去除 fsync
+        # 后计数面保留为原子写次数,与 C++ 侧 write_file_atomic 的计数口径
+        # 一致,计数等价对拍要求)。
         self._stats = {
             "gil_wait_ns": 0,
             "channel_bytes": 0,
@@ -239,8 +246,8 @@ class BridgeServer:
         response_path = os.path.join(
             self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX)
         _write_json_atomic(response_path, response)
-        # 阶段 6 §9.1:每次原子写 = 1 次 os.fsync 强制落盘(_write_json_atomic
-        # 内 flush + fsync);response 文件字节计入通道。
+        # 阶段 6 §9.1 + B4(2026-08-23):每次原子写 +1(历史与 os.fsync 1:1,
+        # B4 去 fsync 后计数面保留为原子写次数口径);response 文件字节计入通道。
         self._stats["forced_flush_count"] += 1
         self._stats["channel_bytes"] += os.path.getsize(response_path)
         self._per_request_stats[seq] = {

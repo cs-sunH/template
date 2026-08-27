@@ -223,6 +223,11 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    canonical digest 两件，turn-0 前缀已折入 prefill_length））
 #    产物放 sh_test_mesh/workload/llama2_7b_inference/traces/，
 #    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
+#    B1/WP2 起 CLI：materialize_20_30s.py [source] [queue_out] [window_ns] [arrival_scale]
+#    （全可选；默认=30e9/1.0 原生行为逐字节不变；window_ns 换窗口界；
+#    arrival_scale 仅把 turn-0 session_arrival_time_ns ÷scale——
+#    inter_request_interval_ns 与窗口筛选不动，同一请求集合更密/更疏到达；
+#    脚本内部 flock /tmp/slo_wps/locks/heavy_mat.lock 串行重载入）
 
 # ③ 生成 plan 目录（runtime_config 四小件 + manifest + metrics_manifest）
 cd sh_test_mesh/workload/llama2_7b_inference && python3 plan_materializer.py && cd <仓根>
@@ -232,11 +237,105 @@ bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <绝对路径 req
 bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <绝对路径 request_csv>
 
 # ⑤ 指标后处理 + ④对账
+#    指标明细档（B1/WP0 起，两 runner 同规则）：env SH_METRICS_DETAIL=
+#    off|summary|full 覆盖；缺省读 workload/llama2_7b_inference/
+#    metrics_config.json 的 detail_level（优先级 env > json；非法值
+#    fail-closed）。full 档后处理额外产 <run_dir>/request_metrics.csv
+#    （逐请求时序：冻结 29 列；填 timing/terminal_status/
+#    request_type/instructions，first_token 族由 B3/B4 填充（exact/
+#    train_interpolated/NA 两段语义，见下），kv_hit_state 与 restore/
+#    hidden 族运行内 CSV 恒 NA（slo_tools 离线适配器另行核算）；
+#    manifest.json 侧车按 queue_index/request_id fail-closed
+#    连接，行数/不变量违例即报错退出）。summary/off 不产该文件
+#    （postprocess.log 有说明）。
+#    B2 观测层新增（SLO 指标改造，只读 side-band，不改变仿真行为）：
+#    - plan_materializer 向 metrics_manifest.json 注入 "slo_sampling" 节
+#      （watermark_period_ns / link_bucket_ns / provisional；值取
+#      sh_test_mesh/slo_tools/slo_params_manifest.json 的对应 value（B4
+#      已填推导值 5,000,000/20,000,000 ns），为 null/缺失时用文档化临时
+#      锚点 5,000,000 ns 并置 provisional=true；
+#      manifest 缺节时 C++ 侧同锚点并落 slo_sampling_warning 记录）。
+#      每条水位线/链路记录回显实际生效的周期与 provisional 标志。
+#    - full 档新增 [METRIC] 记录：hbm_watermark / hbm_watermark_summary
+#      （WP8 水位线：finalize 时对 planner memory ledger 的 delta 重放做
+#      事件驱动+周期兜底分桶峰值；桶记录仅在被采样占用相对前桶变化时
+#      发射、首末桶恒发；capacity_violation_count 应恒 0，
+#      resident_timeavg 与 capacity_timeavg 积分交叉差 >1% 计
+#      consistency violation），请求记录新增 first_token_ns 字段
+#      （WP9 事件码 8；python 侧首 token 标记未上线时为 null+说明；
+#      decode_length==1 的相等不变量按 WP9_CONTRACT §6 2026-08-27 裁决放宽
+#      为序检查 + 信息性 first_token_completion_skew_ns 字段：code 8 取
+#      min、completion 取 max，TP 斜台使二者天然不等，不再 withhold、
+#      不计 violation）。
+#    - summary/full 档新增 link_bucket / link_total 记录（WP6 NoC 链路
+#      观测：FluidScheduler 只读积分，按 link_bucket_ns 分桶累计每链路
+#      字节与活跃时长；桶记录仅有活动（任一链路 bytes>0）时发射、首末
+#      桶恒发；metrics=off 时零工作零输出）。env
+#      ASTRA_LINK_OBSERVER=0 可单独关闭（缺省开启，仅 metrics≠off 生效）。
+#    - WP9 首 token 事件码 8（python+B2cpp 联动，2026-08-26）：
+#      metrics_schema.py 新增 EVENT_FIRST_TOKEN_COMPLETE=8（complete 边，
+#      入 SERVICE_EVENT_CODES）；graph_batch_builder 的迭代列车在含
+#      debut 成员（decode_tokens_consumed==0 的本交付 joiner）且迭代数
+#      >=2 时拆"首步批+余量批"两段式发射——首步批 = joiner 迁移/起始
+#      标记/partial 恢复门 + 各成员第 1 个 span + prefill 队头第 1 chunk
+#      （weight_passes=1）+ 每 debut 的 first_token 标记（1-op COMP，名含
+#      "first_token" 子串，C++ 锚点按名字子串注册 code 8、每 rank 取
+#      min tick）+ 批命名空间唤醒标记（"<train_id>_first_step"，哨兵同
+#      款 PREFILL_DRAIN 单事件通道，仅作余量批交付边界——无 watch 的
+#      首步批在排空尾部会失去交付边界而死锁，为对"首步批无 watch"的
+#      必要工程化偏移，与 sh_1.0/sh_2.0 同构）；余量批 = 剩余 span
+#      （weight_passes=iterations-1，与首步 1 次合计守恒）+ 全部
+#      drain/exit/哨兵标记 + end barrier（挂点语义不变）。唤醒信号的
+#      交付回声在调度器侧无操作（不决策/不记账/不写 decision_log）。
+#      decode_length=1 的 debut 无独立标记，其 exit 标记改名携带
+#      first_token 子串（同节点 code 4/8 双锚点）。拆分新增批产物带
+#      "first_step": true 标记（digests/train_ledger 行）供 ON/OFF
+#      对拍剥离。总开关 env SH_FIRST_TOKEN_SPLIT（**B4 起缺省 "0" 关**；
+#      显式 "1" 开，研究/对拍用——2026-08-26 B3_S3 60s 决策等价门-2
+#      失败：拆分物理扰动经闭环放大（首列 6.5us tick 漂移 → 逐轮放大
+#      至 414us → 决策边界穿越、实例选择翻转、tput +13.2%），按主规格
+#      §1.6 A 类处置默认退回 proxy 口径；证据 /tmp/slo_wps/b3/S3/
+#      t3_full_off_split 与 /tmp/slo_wps/gates/B3_S3.FAILED，2s 门保持）。
+#      **研究专用**：`SH_FIRST_TOKEN_SPLIT=1` 的 exact 口径仅供机制研究（60s 决策等价门未过，证据见仓内 README 所引门文件）；论文指标一律采用默认 proxy（`train_interpolated`）口径，proxy 不得进入任何 SLO 判定路径。
+#      postprocess 起 first_token_ns/first_token_source 入
+#      request_metrics.csv：exact（code-8 事件值，拆分开时）；
+#      **train_interpolated（B4 退路 proxy，主规格 §1.6/§1.2：对已归档
+#      run（results/train_ledger.jsonl 在场）重跑 metrics_postprocess 时，
+#      `first_token = decode_start + (w1/Σwi)·(first_train_end −
+#      decode_start)`，wi = W_bytes + KV_bytes(context+consumed+i)（与
+#      调度器 pass-span 编码同式，i=1..N 按首列车 iterations——首 token
+#      随列车第 1 迭代产出；debut consumed=0；first_train_end = 同实例
+#      下一列车发射边界 tick（busy 门保证其晚于 end barrier；首列车为
+#      实例末列车时不可得 → NA）；N=1 退化列车 share=1 使 proxy 越过
+#      completion 时钳到 completion 并留痕 clamped_to_completion——
+#      首物理上 token 不得晚于请求完成，60s 参考跑 7/1454；
+#      W_bytes/KV 换算取 face_scheduler.py estimate_model_weight_bytes /
+#      kv_cache_bytes_for_tokens × trace_config.csv 模型行——llama2_7b:
+#      W=13476831232B、KV/token=524288B）；运行内（runner 自带那遍）
+#      postprocess 时 ledger 尚在 bridge/ 未归档，split 关时 first_token
+#      保持 NA——proxy 只由对归档产物的离线重跑填充**；NA。proxy 仅为
+#      展示口径，禁入 SLO 判定（slo_common assert_no_proxy_columns 拒绝
+#      first_token_ns/first_token_source，violation 判定列集自证，
+#      slo_tools/tests 有专项单测）。TTFT 展示 = first_token − arrival，
+#      禁用 prefill_end − arrival（红线）。
+#      在线 decision_log 的 KV 传输摘要补落 shard 级 noc_hops/noc_path
+#      （hopbytes 观测，只加字段不改路由）；sh_test_mesh/slo_tools/
+#      hopbytes.py B4 起消费该字段（completion_evictions[].shards[].*，
+#      count/fallback 语义同 sh_1.0：显式 noc_hops 优先、noc_path 推导
+#      兜底；无路由的聚合 bytes 字段不计入本账——60s 参考跑实测
+#      coverage 1.0、hop_bytes 2383397232640 == B3 手工复核值）。
+#      metrics_manifest.json（合成口径）B4 起每请求附加 human_time_ns/
+#      tool_time_ns/request_type 透传（与 manifest.json 同源同值；
+#      slo_stats session 的 T_session 输入，附加键不删不改既有键；
+#      turn-0/0-gap 双侧 null = 0 贡献而非缺数据，键缺席才 NA——
+#      S3 异常③处置）。
 bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/sh30_ledger_reconcile.py --run-dir <run_dir> --manifest <plan目录>/manifest.json（请求数期望由 manifest 推导）
 
-# ⑥ 一键清空测试记录（还原裸仓）
-bash sh_test_mesh/run_scripts/clean_test_records.sh [--full]
+# ⑥ 一键清空测试记录 + 编译产物（还原裸仓库 = 无物化输入 + 无 build/）
+bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config 指针回占位）
+bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（build/）
+#    （或一步到位：clean_test_records.sh --full）
 ```
 
 ## 3. 两条仿真路线
@@ -248,6 +347,20 @@ bash sh_test_mesh/run_scripts/clean_test_records.sh [--full]
 
 PASS 判据：completed == 物化请求数、no_decision=0、single_node=0、
 delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据）。
+
+### 3.1 在线二进制机制旗标（--online-* 家族）
+
+`AstraSim_Analytical_Congestion_Aware_Online` 显式解析 `--online-*` 家族
+（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标当前一枚：
+
+| 旗标 | 取值 | 缺省 | 语义 |
+|---|---|---|---|
+| `--online-node-gc` | `0\|1` | `0`（关） | M2 节点 GC（2026-08-23）：开启时 GraphBatchCommitter 在每次批提交的静止点（issue pass 完全返回后）回收各 rank NodeStore 中"已 finish 且无未完 children"的节点，并按同水位修剪 (rank, json id) → store id 映射，C++ 侧内存维持在途窗口而非全程累计图（30s 冻结输入实测 cpp 峰值 −61%）。被回收节点必已 finished，仍指向它的跨批边按 NodeStore 死父规则无阻塞（validate 仅按 per-rank 稠密前缀水位线放行已修剪 id，从未存在的 id 照旧 fail-closed）。`0` = M2 前永不删除行为。决策序列与全部工件不受该旗标影响（GC 开/关两臂均字节对拍验收）。**默认关的裁决依据（2026-08-23 翻转）**：GC 开存在可复现的轻载墙钟回归（30s 档 +35~55%，机制未明，隔离基准反快 27%，证据见 /tmp/accel_c/DONE open_finding）；按"不为省内存大幅换 CPU"红线默认关，重载/多实验并行等内存受限场景显式 `--online-node-gc 1`（此时 OOM 风险大于墙钟代价）；重档 on/off 对比数据补齐后可一行翻转默认。 |
+
+runner 脚本不传该旗标（走缺省 0 = 墙钟中性）；重载/多实验并行等内存受
+限场景在 runner 命令行追加 `--online-node-gc 1`（cpp 峰值 −61%，决策工件
+字节不变）。运行期证据：cpp.log 启动行 `[online] node gc: ...`、
+结束行 `[online] node gc: erased=... retained=...`。
 
 ## 4. 机制回归 fixtures
 
@@ -261,6 +374,7 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 - `.../online/verify/`：对账与验证工具
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
+- `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
 - `sh_test_mesh/tests/` + workload 根：pytest（基线：2026-08-22 拼 batch 改造后
   97+1 passed——`test_face_scheduler.py` 的 request-neutral 占位测试在正典
   物化件在位而 trace_config 指向占位路径时红为已知环境效应，与代码态无关）
@@ -289,6 +403,20 @@ DECODE_COMPLETION / REQUEST_COMPLETE），再处理 arrival 批，最后跑一�
   decode 固定为 prefill 同实例（selected = state_index，红线 #4）；
   DECODE_COMPLETION / REQUEST_COMPLETE 完成 KV 收尾（typed 两类两段逐出）与
   下一 turn 排程。
+- 逐出转移的 history-gate 位置补偿为**决策时点同步补偿（唯一标记路径）**
+  （2026-08-23 history-gate TOCTOU 修复，与 sh_1.0/sh_2.0 同构 + 同日
+  seq4689 修订）：账本逐出在决策时点同步翻转会话位置，调度器在每个
+  返回逐出转移的 KV 变更点（`sh30_online_scheduler.py` 改法D 1/9~4/9
+  drain 四点 + 7/9 enforce_reserve + 8/9 reserve_request_capacity +
+  9/9 prepare_prefill，共 7 处）的 bump 行后立即调用
+  `GraphBatchBuilder.sync_pending_history_after_evictions(transfers)`
+  （吃 `KVTransfer` 对象，`remote_store` 过滤），把逐出会话立即镜像到
+  pending 门（`partial_hbm_remote` / `remote_memory` 三态语义由
+  `_mark_pending_history_store` 自身推导）；三处发射包装器
+  （`online/graph_batch_builder.py` 准入/列车 joiner/完成段）内的发射时
+  补偿已移除——多级逐出发射乱序时迟到的旧转移标记会把门回退到过期
+  位置（见 sh_2.0 seq4689 事故），"双保险"并不幂等；准入时位置一致性
+  检查（fail-closed）不变。
 - request_aggregated 折算口径：每 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 AllReduce + final norm + logits），
   聚合 FLOPs、激活/KV/HBM 字节、可选远端读与集合通信载荷与成员-迭代展开
@@ -333,7 +461,12 @@ DECODE_COMPLETION / REQUEST_COMPLETE），再处理 arrival 批，最后跑一�
   turn-0 源前缀折入该行 prefill_length（整段重算口径；无第二输入文件，
   会话 KV 自 turn-0 prefill 记账起由运行时账本动态维护，
   `traces/materialize_20_30s.py:3-37`）；manifest 仅携带队列派生的
-  history_tokens_before 推导值（`plan_materializer.py:62-87`）；运行时账本为
+  history_tokens_before 推导值（`plan_materializer.py:62-87`）；B1/WP2 起
+  每请求条目追加 human_time_ns/tool_time_ns/request_type（触发本请求的
+  gap：上一队列行 next_trigger_type × 本行 inter_request_interval_ns；
+  request_type=human 非空→human / tool 非空→tool / 皆空 turn0→human、
+  turn>0→unknown，stdout 计数；既有 9 字段不删不改，供 request_metrics.csv
+  连接）；运行时账本为
   `KVCacheManager`（`sh30_online_scheduler.py:346`；`face_scheduler.py:1226`）：
   驻留命中直接复用、跨实例历史先迁移、被逐出则窗口内重算。
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数

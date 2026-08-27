@@ -55,6 +55,16 @@ std::string stage_generation(const std::string& stage) {
     return stage == "decode" ? "1" : "0";
 }
 
+// S1 (2026-08-23): shared empty-object stand-in. The previous
+// <json>.value(key, nlohmann::json::object()) calls deep-copied the
+// sub-object for every node / watch / alarm of every batch; binding a const
+// reference to the found element (or to this shared empty object when the
+// key is absent) keeps every downstream is_object()/empty()/value() call
+// operating on the exact same value -- identical defaults, identical
+// error paths -- while removing the copies. Read-only after static
+// initialization.
+const nlohmann::json kEmptyObject = nlohmann::json::object();
+
 }  // namespace
 
 void GraphBatchCommitter::apply_delta_facts(
@@ -184,8 +194,14 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        " does not match stage " + stage + " (expected " +
                        stage_generation(stage) + ")";
             }
-            const auto& compute =
-                node.value("compute", nlohmann::json::object());
+            // S1 (2026-08-23): bind the sub-objects by const reference
+            // instead of the previous per-node deep copies
+            // (node.value(key, json::object())); absent keys bind the
+            // shared empty object, so every check below sees the exact same
+            // value the old copy produced.
+            const auto compute_it = node.find("compute");
+            const nlohmann::json& compute =
+                compute_it == node.end() ? kEmptyObject : *compute_it;
             if (!compute.is_object()) {
                 return "node[" + std::to_string(node_index) +
                        "] compute not an object";
@@ -193,7 +209,12 @@ std::optional<std::string> GraphBatchCommitter::validate(
             (void)compute.value("num_ops", uint64_t{0});
             (void)compute.value("tensor_size", uint64_t{0});
             (void)compute.value("runtime_ns", uint64_t{0});
-            const auto& comm = node.value("comm", nlohmann::json::object());
+            // S1 (2026-08-23): reference binding for comm too (face has no
+            // "mem" sub-object contract -- the mother's mem binding has no
+            // counterpart in this repo's node schema).
+            const auto comm_it = node.find("comm");
+            const nlohmann::json& comm =
+                comm_it == node.end() ? kEmptyObject : *comm_it;
             if (!comm.is_object()) {
                 return "node[" + std::to_string(node_index) +
                        "] comm not an object";
@@ -234,7 +255,9 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            " != comm.dst " + std::to_string(dst);
                 }
             }
-            const auto& coll = node.value("coll", nlohmann::json::object());
+            const auto coll_it = node.find("coll");
+            const nlohmann::json& coll =
+                coll_it == node.end() ? kEmptyObject : *coll_it;
             if (!coll.is_object()) {
                 return "node[" + std::to_string(node_index) +
                        "] coll not an object";
@@ -246,12 +269,15 @@ std::optional<std::string> GraphBatchCommitter::validate(
                 return "node[" + std::to_string(node_index) +
                        "] collective with empty pg_name";
             }
-            if (coll.contains("involved_dim")) {
-                if (!coll["involved_dim"].is_array()) {
+            // S1: single find for involved_dim (was contains + operator[]
+            // re-lookup per access).
+            const auto involved_it = coll.find("involved_dim");
+            if (involved_it != coll.end()) {
+                if (!involved_it->is_array()) {
                     return "node[" + std::to_string(node_index) +
                            "] coll.involved_dim not an array";
                 }
-                for (const auto& dim : coll["involved_dim"]) {
+                for (const auto& dim : *involved_it) {
                     (void)dim.get<bool>();
                 }
             }
@@ -295,8 +321,21 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        "] self-loop on rank " + std::to_string(rank);
             }
             const bool from_in_batch = batch_ids[rank].count(from) > 0;
+            // M2 node GC (2026-08-23): a from below the per-rank prune
+            // watermark is a committed-then-collected parent (collected =>
+            // finished => non-blocking, the NodeStore dead-parent rule).
+            // Per-rank json ids are dense from 0 (graph_batch_builder's
+            // next_id counter), so below-watermark exactly characterizes
+            // "was committed and has since been pruned"; a never-emitted id
+            // stays unresolved (fail-closed). With GC off the watermark is
+            // always 0 and this reduces to the previous store_ids_ check.
+            const uint64_t pruned_watermark =
+                rank < static_cast<int>(pruned_json_watermark_.size())
+                    ? pruned_json_watermark_[rank]
+                    : 0;
             if (!from_in_batch &&
-                store_ids_.count(RankNodeKey{rank, from}) == 0) {
+                store_ids_.count(RankNodeKey{rank, from}) == 0 &&
+                from >= pruned_watermark) {
                 return "parent_edge[" + std::to_string(edge_index) +
                        "] parent (rank=" + std::to_string(rank) + " from=" +
                        std::to_string(from) + ") unresolved";
@@ -318,6 +357,10 @@ std::optional<std::string> GraphBatchCommitter::validate(
             const int rank = rank_entry.first;
             std::unordered_map<uint64_t, std::vector<uint64_t>> adj;
             std::unordered_map<uint64_t, uint64_t> indeg;
+            // S1 (2026-08-23): pre-size the Kahn scratch maps (capacity
+            // only; iteration order and results unchanged).
+            adj.reserve(rank_entry.second.size());
+            indeg.reserve(rank_entry.second.size());
             for (const uint64_t id : rank_entry.second) {
                 adj[id];
                 indeg[id] = 0;
@@ -358,8 +401,10 @@ std::optional<std::string> GraphBatchCommitter::validate(
             const int rank = node.value("rank", -1);
             const uint64_t type = node.value("type", uint64_t{0});
             if (type == 5 || type == 6) {
-                const auto& comm =
-                    node.value("comm", nlohmann::json::object());
+                // S1 (2026-08-23): reference binding, no sub-object copy.
+                const auto comm_it = node.find("comm");
+                const nlohmann::json& comm =
+                    comm_it == node.end() ? kEmptyObject : *comm_it;
                 const auto key = std::make_tuple(
                     comm.value("src", -1), comm.value("dst", -1),
                     comm.value("tag", int64_t{-1}));
@@ -369,8 +414,9 @@ std::optional<std::string> GraphBatchCommitter::validate(
                     pairs[key].second = true;
                 }
             } else if (type == 7) {
-                const auto& coll =
-                    node.value("coll", nlohmann::json::object());
+                const auto coll_it = node.find("coll");
+                const nlohmann::json& coll =
+                    coll_it == node.end() ? kEmptyObject : *coll_it;
                 const std::string pg =
                     coll.value("pg_name", std::string());
                 const std::string name =
@@ -437,8 +483,13 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        "in the batch";
             }
             watch_stages.insert({request_id, stage});
-            const auto& members_json =
-                watch.value("members", nlohmann::json::object());
+            // S1 (2026-08-23): reference binding for members/statuses (was
+            // per-watch sub-object copies); absent members binds the shared
+            // empty object and fails the empty check below exactly like the
+            // old fresh-object default did.
+            const auto members_it = watch.find("members");
+            const nlohmann::json& members_json =
+                members_it == watch.end() ? kEmptyObject : *members_it;
             if (!members_json.is_object() || members_json.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty/absent members";
@@ -464,8 +515,9 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            ") is not a node of this batch";
                 }
             }
-            const auto& statuses_json =
-                watch.value("statuses", nlohmann::json::array());
+            const auto statuses_it = watch.find("statuses");
+            const nlohmann::json& statuses_json =
+                statuses_it == watch.end() ? kEmptyObject : *statuses_it;
             if (!statuses_json.is_array() || statuses_json.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty/absent statuses";
@@ -569,8 +621,10 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        std::to_string(arrival) + " < delta tick " +
                        std::to_string(delta.tick);
             }
-            const auto& envelope =
-                alarm.value("envelope", nlohmann::json::object());
+            // S1 (2026-08-23): reference binding (was a per-alarm copy).
+            const auto envelope_it = alarm.find("envelope");
+            const nlohmann::json& envelope =
+                envelope_it == alarm.end() ? kEmptyObject : *envelope_it;
             if (!envelope.is_object()) {
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] envelope not an object";
@@ -627,8 +681,13 @@ std::optional<std::string> GraphBatchCommitter::validate(
                     declared.end()) {
                 return "touched_ranks not sorted unique";
             }
-            const std::vector<int> computed =
-                compute_touched_ranks(batch, ctx_.num_ranks);
+            // S1 (2026-08-23): reuse this validate pass's own touched set
+            // instead of re-walking batch.nodes through
+            // compute_touched_ranks(): by this point every node is an
+            // object with an in-range rank (both conditions fail-closed in
+            // the node pass above), so the sorted-unique rank sets are
+            // identical by construction.
+            const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;
                 os << "touched_ranks mismatch: declared [";
@@ -724,6 +783,16 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         const uint64_t store_id =
             (*ctx_.graph_sources)[rank]->store().add_node(std::move(node));
         store_ids_[RankNodeKey{rank, json_id}] = store_id;
+        // M2 node GC (2026-08-23): remember the commit order (== per-rank
+        // json-id order: per-rank ids are dense and ascending across
+        // batches) for the store_ids_ prune pass at the commit tail.
+        if (ctx_.node_gc) {
+            if (prune_queues_.empty()) {
+                prune_queues_.resize(ctx_.num_ranks);
+                pruned_json_watermark_.assign(ctx_.num_ranks, 0);
+            }
+            prune_queues_[rank].entries.emplace_back(json_id, store_id);
+        }
         ++node_count;
     }
 
@@ -750,7 +819,28 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
         const uint64_t to = edge.value("to", uint64_t(-1));
         const auto from_it = store_ids_.find(RankNodeKey{rank, from});
         const auto to_it = store_ids_.find(RankNodeKey{rank, to});
-        if (from_it == store_ids_.end() || to_it == store_ids_.end()) {
+        if (to_it == store_ids_.end()) {
+            throw std::runtime_error(
+                "commit: parent edge references an unknown node id "
+                "(rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) +
+                " to=" + std::to_string(to) + ")");
+        }
+        if (from_it == store_ids_.end()) {
+            // M2 node GC (2026-08-23): a from below the per-rank prune
+            // watermark was committed and has since been collected --
+            // collected => finished, and add_dependency already treats a
+            // finished parent as non-blocking (the NodeStore dead-parent
+            // rule), so skipping the edge here is the hoisted, byte-equal
+            // form of that no-op. Any other miss is unreachable
+            // post-validate (the fail-closed throw is preserved).
+            const uint64_t pruned_watermark =
+                rank < static_cast<int>(pruned_json_watermark_.size())
+                    ? pruned_json_watermark_[rank]
+                    : 0;
+            if (from < pruned_watermark) {
+                continue;
+            }
             throw std::runtime_error(
                 "commit: parent edge references an unknown node id "
                 "(rank=" + std::to_string(rank) +
@@ -847,6 +937,60 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
     counters_.total_assignments += batch.assignments.size();
     counters_.total_kv_actions += batch.kv_actions.size();
     counters_.total_future_alarms += batch.future_alarms.size();
+
+    // ---- M2 node GC (2026-08-23): quiescent-point collection. The issue
+    //      pass above has fully returned (no Workload callback holds a
+    //      NodeView pointer), and any deferred issue passes it scheduled run
+    //      later and only ever touch free -- i.e. unfinished -- nodes, so
+    //      erasing finished childless nodes here is invisible to every
+    //      holder (see NodeStore::collect_garbage). No-op (structurally
+    //      absent) when node_gc is off. ----
+    if (ctx_.node_gc) {
+        collect_node_garbage();
+    }
+}
+
+void GraphBatchCommitter::collect_node_garbage() {
+    // M2 (2026-08-23): end-of-commit quiescent-point collection (the only
+    // caller is commit()'s tail, gated on ctx_.node_gc). Two steps:
+    //   1. every per-rank store drains its candidate FIFO -- nodes finished
+    //      with no unfinished children are erased;
+    //   2. store_ids_ is pruned behind the same watermark: the per-rank
+    //      commit-order queue (ascending json ids) advances only while its
+    //      head matches the dense prune watermark AND its node was already
+    //      collected, so the pruned set is always a strict dense prefix
+    //      [0, pruned_json_watermark_[rank]) -- validate()'s watermark
+    //      disjunct resolves exactly that prefix and nothing else, and a
+    //      head blocked on a live node bounds the retained prefix by the
+    //      per-rank in-flight window.
+    for (auto& source : *ctx_.graph_sources) {
+        source->store().collect_garbage();
+    }
+    // Bound the prune pass by the queue vector, not num_ranks: a zero-node
+    // batch (an accounting epoch) can reach here before the first
+    // node-bearing commit lazily sized the queues -- nothing to prune then.
+    for (size_t rank = 0; rank < prune_queues_.size(); ++rank) {
+        RankPruneQueue& queue = prune_queues_[rank];
+        uint64_t& watermark = pruned_json_watermark_[rank];
+        const NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+        while (queue.head < queue.entries.size()) {
+            const auto& entry = queue.entries[queue.head];
+            if (entry.first != watermark) {
+                break;  // keep the pruned set a dense prefix (defensive)
+            }
+            if (!store.erased(entry.second)) {
+                break;  // node still live (unfinished / children pending)
+            }
+            store_ids_.erase(
+                RankNodeKey{static_cast<int>(rank), entry.first});
+            ++watermark;
+            ++queue.head;
+        }
+        if (queue.head == queue.entries.size()) {
+            queue.entries.clear();
+            queue.head = 0;
+        }
+    }
 }
 
 std::string GraphBatchCommitter::counters_report() const {

@@ -62,6 +62,10 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     // (--request-max-arrival-ns), and any drop it causes is fail-closed at
     // the run-end completion audit (see main_online.cc).
     uint64_t request_max_arrival_ns = 0;
+    // M2 node GC (2026-08-23): frozen default 0 (off -- flipped after the
+    // reproducible light-load wall regression; enable per-run for
+    // memory-bound heavy/parallel campaigns, see main_online.cc).
+    int online_node_gc = 0;
 
     for (int i = 1; i < argc; ++i) {
         const std::string token(argv[i]);
@@ -93,6 +97,26 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 return false;
             }
             mode = value;
+        } else if (name == "--online-node-gc") {
+            // M2 node GC (2026-08-23): <0|1>, frozen default 0 (off, ruling
+            // flip after the light-load wall regression); 1 enables the
+            // collection (memory arm).
+            if (!has_inline_value) {
+                if (i + 1 >= argc) {
+                    error = "option --online-node-gc requires a value";
+                    return false;
+                }
+                value = argv[++i];
+            }
+            if (value == "0") {
+                online_node_gc = 0;
+            } else if (value == "1") {
+                online_node_gc = 1;
+            } else {
+                error = "unknown --online-node-gc value: " + value +
+                        " (expected \"0\" or \"1\")";
+                return false;
+            }
         } else if (name == "--close-input") {
             if (has_inline_value) {
                 error = "flag --close-input takes no value";
@@ -183,6 +207,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     out.sensing_enabled = sensing_enabled;
     out.request_window_rows = request_window_rows;
     out.request_max_arrival_ns = request_max_arrival_ns;
+    out.online_node_gc = online_node_gc;
     return true;
 }
 

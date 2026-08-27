@@ -83,6 +83,36 @@ from generate_trace import (  # noqa: E402
     transformer_pass_aggregated,
 )
 
+# M1 收集即释放的摊销压缩水位（2026-08-23）：_collect 把已发射节点切片
+# 进当批后，per-rank 已收集前缀达到该水位即整段删除（节点 id 来自
+# next_id 计数器，与 list 位置无关）。8192 保证工作集有界且删除频度
+# 足够低——每节点均摊 O(1)，禁止逐批前缀删除（O(n²) 反例）。
+_COLLECT_COMPACT_THRESHOLD = 8192
+
+
+def first_token_split_enabled() -> bool:
+    """WP9 首步批拆分总开关（SH_FIRST_TOKEN_SPLIT，B4 起缺省 "0" 关）。
+
+    缺省翻转（2026-08-27，主规格 §1.6 A 类处置）：B3_S2 60s 决策等价
+    门-2 失败——拆分的物理扰动（首步批 → 每拆分列车多一次交付 →
+    tick 漂移 → 闭环逐轮放大 → 决策边界穿越 → 实例选择翻转，首分歧
+    decision row 258，其后 4052/4362 决策分叉）使 ON/OFF 字节等价在
+    60s 窗不可达（2s 窗保持通过；同形态 S1 失败已由 t3_off==B0 字节
+    相同的确定性对照排除运行噪声）。证据：/tmp/slo_wps/b3/S2/
+    （t3_full_off_split vs t3_full_split_on 对拍）与
+    /tmp/slo_wps/gates/B3_S2.FAILED（wp9_gate_60s）。默认口径退回
+    proxy（first_token_source=train_interpolated，见
+    metrics_postprocess.py），本开关显式置 "1" 仍可启用拆分取 exact
+    首 token（研究/对拍用）。
+
+    "1" = 拆分开启：debut 列车两段式发射 + first_token 标记；
+    其他值（含缺省）= 拆分完全关闭：调度器不拆列车、不发射
+    first_token 标记，构图/决策/账本产物与拆分上线前逐字节一致（A/B
+    对拍的 OFF 侧）。每次 _emit_train 现场读取（而非构造期缓存），
+    测试与复跑可在进程内切换。
+    """
+    return os.environ.get("SH_FIRST_TOKEN_SPLIT", "0") == "1"
+
 
 class OnlineTraceBuilder:
     """与共享 TraceBuilder 接口同构的在线侧每-rank builder。
@@ -105,8 +135,12 @@ class OnlineTraceBuilder:
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
-        self.nodes = []   # 本 rank 全部已发射节点 dict（发射序）
-        self.edges = []   # 本 rank 全部 parent edges {"rank","from","to","kind"}
+        # M1 收集即释放（2026-08-23）：本 list 只保留"已发射未收集"的
+        # 尾部——_collect 切片进批后按水位摊销压缩前缀（见 _collect），
+        # 全量历史节点不再常驻。禁止按 list 位置回读节点（id 来自
+        # next_id 计数器，与位置无关）。
+        self.nodes = []   # 本 rank 已发射节点 dict（发射序，可被压缩）
+        self.edges = []   # 本 rank parent edges（随节点水位一并压缩）
         self.node_count = 0
         # 当前 request-stage 反向索引上下文（每次 per-request 段发射前设置）。
         self.request_id = ""
@@ -420,6 +454,18 @@ class GraphBatchBuilder:
             node_mark, edge_mark = marker[rank]
             self.batch["nodes"].extend(builder.nodes[node_mark:])
             self.batch["parent_edges"].extend(builder.edges[edge_mark:])
+            # M1 收集即释放（摊销压缩，2026-08-23）：已切片进本批的节点/
+            # 边不再驻留 builder——已收集水位 ≥ 8192 且不小于现存总量一半
+            # 时才删前缀（每次删除搬运的尾部 ≤ 现存一半，均摊 O(1)/节点）。
+            # 安全前提（全仓 grep 证实）：节点 id 来自 next_id 计数器，无
+            # 任何按 list 位置回读节点的代码；每个 _mark() 都在同一次发射
+            # 调用内被紧随的单次 _collect() 消费（无跨发射延迟消费），水位
+            # 即本次切片在当前 list 中的绝对长度，压缩后下一次 _mark 重新
+            # 取 len，自洽。
+            if (node_mark >= _COLLECT_COMPACT_THRESHOLD
+                    and node_mark * 2 >= len(builder.nodes)):
+                del builder.nodes[:node_mark]
+                del builder.edges[:edge_mark]
 
     def _mark(self) -> dict:
         return {
@@ -478,17 +524,29 @@ class GraphBatchBuilder:
                             恢复列车 layout：[首 chunk] + [各成员第 1 迭代
                             span] + [其余 chunk + 成员剩余 span]）
           iterations        迭代数（= weight_passes：权重字节 ×迭代数，
-                            与批成员数无关；激活/KV/AR 逐 span 精确）
+                            与批成员数无关;激活/KV/AR 逐 span 精确）
           partial_first_chunk_count  partial 恢复列车的前缀组 span 数
-                            （1 + 成员数；缺省 None = 非 partial 列车）
+                            （1 + 成员数;缺省 None = 非 partial 列车）
           drain_members     本列车内完成最后 prefill chunk 的请求 plan 列表
           exit_members      本列车内退出 decode 的成员 plan 列表
+          first_token       WP9 首 token 观测（2026-08-26;缺省 None = 拆分
+                            开关关闭，行为与上线前逐字节一致）：{"split":
+                            False 时仅做不拆车的标记增强——多 token debut
+                            成员在列车体后挂 first_token 标记，decode_
+                            length=1 的 debut 成员其 exit 标记改名为
+                            _exit_first_token_（C++ 名字子串锚点，
+                            first_token==completion 不变量由同节点保证）；
+                            "split": True 时本方法拒绝，阶段 1/2 经
+                            emit_train_first_step / emit_train_remainder
+                            发射（partial 恢复列车的 prefix/suffix 层段
+                            组恰为首步组，两段式天然对齐）}
 
         每实例 rank 上的结构（链序）：
           [joiner 迁移 ...] → [共享 readiness barrier] → 17 类聚合体节点
           （transformer_pass_aggregated, weight_passes=iterations;partial
           恢复列车首 chunk 拆 prefix/suffix 层段两段发射）→
-          [drain 标记 ...] → [exit 标记 ...] → 共享 end barrier。
+          [first_token 标记（不拆车增强时）] → [drain 标记 ...] →
+          [exit 标记 ...] → 共享 end barrier。
 
         返回 {"drain_members": {request_id: {rank: 标记节点 id}},
               "exit_members": {request_id: {rank: 标记节点 id}},
@@ -503,16 +561,127 @@ class GraphBatchBuilder:
             raise RuntimeError(
                 "online emission supports request_aggregated granularity only "
                 f"(got {self.config.trace_granularity!r})")
-        instance_index = train_plan["instance_index"]
-        group = self.group_by_index[instance_index]
-        train_id = train_plan["train_id"]
-        stage = train_plan["stage"]
-        generation = 1 if stage == "decode" else 0
-        iterations = int(train_plan["iterations"])
+        first_token = train_plan.get("first_token")
+        if first_token is not None and first_token.get("split"):
+            raise RuntimeError(
+                "split train plans must be emitted through "
+                "emit_train_first_step/emit_train_remainder")
         marker = self._mark()
+        self._emit_train_head(train_plan)
+        partial_info = self._pop_partial_first_chunk(train_plan)
+        self._emit_train_body(
+            train_plan, list(train_plan["pass_spans"]),
+            int(train_plan["iterations"]), partial_info)
+        result = self._emit_train_tail_markers(train_plan, first_token)
+        self._collect(marker)
+        return result
+
+    def emit_train_first_step(self, train_plan: dict) -> dict:
+        """WP9 首步批发射（2026-08-26;拆分阶段 1）。
+
+        首步批 = 所有列车成员的第 1 个 span（decode 成员首迭代）+
+        prefill 队头的第 1 个 chunk（partial 恢复列车 = 原 prefix/suffix
+        层段组，两段式迁移语义原样保留），加上按迭代位置锚定在首步内
+        的 joiner 迁移/readiness barrier/起始标记（挂点语义与整列发射
+        完全一致）。列车体以 weight_passes=1 折叠（权重恰读一次），
+        体后挂各 debut 成员的 first_token 标记节点（1-op COMP，名字含
+        "first_token" 子串——C++ 锚点按名字子串注册 code 8，取每 rank
+        min tick）。
+
+        本批不含任何请求级 watch/drain/exit/哨兵标记;唯一附加物是尾部
+        的批命名空间唤醒标记（每 rank 1 个小节点，request_id =
+        "<train_id>_first_step" 前缀 batch_train_，复用 C++ 哨兵 watch
+        通道）：其 fire 经 PREFILL_DRAIN 通道送回调度器，作为余量批的
+        交付边界——没有它，无 watch 的首步批完成后不存在任何决策工作，
+        C++ tick-end 门不会再交付，运行尾部（全部其余工作已排空）将
+        永久等待（死锁）。这是对"首步批无任何 watch 标记"的必要工程
+        化偏移：唤醒 watch 不挂任何请求、不触发核销/记账/决策（调度
+        器按 first_step id 识别后无操作）。
+
+        返回 {"first_token_members": {request_id: {rank: 标记节点 id}},
+              "wakeup_members": {rank: 唤醒标记节点 id}}。"""
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
+        first_token = train_plan.get("first_token")
+        if first_token is None or not first_token.get("split"):
+            raise RuntimeError(
+                "emit_train_first_step requires a split first_token plan")
+        marker = self._mark()
+        self._emit_train_head(train_plan)
+        partial_info = self._pop_partial_first_chunk(train_plan)
+        self._emit_train_body(
+            train_plan, list(first_token["first_spans"]), 1, partial_info)
+        first_token_members = self._emit_first_token_markers(
+            train_plan, first_token["debut_marker_members"])
+        group = self.group_by_index[train_plan["instance_index"]]
+        wakeup_id = first_token["wakeup_id"]
+        for builder in self.builders.values():
+            builder.set_context(wakeup_id, "prefill", 0)
+        wakeup_members = {
+            rank: self._emit_train_marker(rank, f"{wakeup_id}_wakeup")
+            for rank in group.ranks
+        }
+        self._collect(marker)
+        return {
+            "first_token_members": first_token_members,
+            "wakeup_members": wakeup_members,
+        }
+
+    def emit_train_remainder(self, train_plan: dict) -> dict:
+        """WP9 余量批发射（2026-08-26;拆分阶段 2，唤醒交付处调用）。
+
+        余量批 = 剩余迭代（成员第 2 个 span 起）+ prefill 队头剩余
+        chunk（weight_passes = iterations-1，与首步批的 1 次恰合回整列
+        的迭代数;激活/KV/AR 逐 span 精确，总量与整列发射一致）。
+        drain/exit/哨兵标记与共享 end barrier 全部照常挂本批（挂点语义
+        不变，仍"barrier 前末节点"）;decode_length=1 的 debut 成员
+        exit 标记改名携带 first_token 子串（同节点锚点保证 first_
+        token==completion）。partial 恢复列车的 partial 账本已在首步
+        批弹出，余量体是纯聚合段。返回结构与 emit_iteration_train
+        相同。"""
+        if self.config.trace_granularity != "request_aggregated":
+            raise RuntimeError(
+                "online emission supports request_aggregated granularity only "
+                f"(got {self.config.trace_granularity!r})")
+        first_token = train_plan.get("first_token")
+        if first_token is None or not first_token.get("split"):
+            raise RuntimeError(
+                "emit_train_remainder requires a split first_token plan")
+        marker = self._mark()
+        self._emit_train_body(
+            train_plan, list(first_token["rest_spans"]),
+            int(train_plan["iterations"]) - 1, None)
+        result = self._emit_train_tail_markers(train_plan, first_token)
+        self._collect(marker)
+        return result
+
+    def _pop_partial_first_chunk(self, train_plan: dict):
+        """partial 恢复账本弹出（按"首 chunk 所在批"口径;拆分时首
+        chunk 批 = 首步批）。非 partial 列车返回 None 并与计划对账。"""
+        prefill_start_member = train_plan.get("prefill_start_member")
+        partial_info = None
+        if prefill_start_member is not None:
+            partial_info = self._partial_first_chunk.pop(
+                prefill_start_member["request_id"], None)
+        partial_count = train_plan.get("partial_first_chunk_count")
+        if (partial_info is None) != (partial_count is None):
+            raise RuntimeError(
+                "partial train plan and admission ledger disagree on the "
+                "first-chunk split")
+        return partial_info
+
+    def _emit_train_head(self, train_plan: dict) -> None:
+        """列车头：joiner 迁移 + 共享 readiness barrier + 起始标记节点。
+
+        拆分时整段归首步批（迁移/栅栏/起始标记锚定的迭代位置在第 1
+        迭代内，语义不变）;发射序与整列发射逐节点一致。"""
+        group = self.group_by_index[train_plan["instance_index"]]
+        train_id = train_plan["train_id"]
 
         # ---- joiner 迁移（触发门 = 该成员 drain 列车的 post-barrier
-        #      块末；上下文 (joiner, decode, 1) = decode_start 指标锚点） ----
+        #      块末;上下文 (joiner, decode, 1) = decode_start 指标锚点） ----
         joiners = list(train_plan.get("joiners", ()))
         for joiner in joiners:
             self._set_context(joiner, "decode", 1)
@@ -537,7 +706,7 @@ class GraphBatchBuilder:
                 joiner, kv_transfer_from_log(prefill_decode_transfer),
                 "prefill_decode_transfer")
 
-        # ---- 共享 readiness barrier（仅在有 joiner 时发射；无 joiner 的
+        # ---- 共享 readiness barrier（仅在有 joiner 时发射;无 joiner 的
         #      列车成员 KV 已就绪，无需再栅栏） ----
         if joiners:
             _emit_tp_readiness_barrier(
@@ -546,10 +715,10 @@ class GraphBatchBuilder:
                 name=f"{train_id}_decode_kv_ready_barrier",
             )
 
-        # ---- 起始标记节点（指标锚点；§3.5：decode_start = 请求加入后
-        #      第一个迭代所在列车节点；prefill_start = 请求首个 chunk
+        # ---- 起始标记节点（指标锚点;§3.5：decode_start = 请求加入后
+        #      第一个迭代所在列车节点;prefill_start = 请求首个 chunk
         #      所在列车的首节点。joiner 迁移零节点（如 local_hit）时这是
-        #      唯一锚点；迁移有节点时 min-tick 语义取更早者，不冲突） ----
+        #      唯一锚点;迁移有节点时 min-tick 语义取更早者，不冲突） ----
         for joiner in joiners:
             self._set_context(joiner, "decode", 1)
             for rank in group.ranks:
@@ -564,28 +733,23 @@ class GraphBatchBuilder:
                     rank, f"{train_id}_pstart_"
                     f"{sanitize_node_prefix(prefill_start_member['request_id'])}")
 
-        # ---- 折叠列车体（17 类聚合节点；weight_passes = 迭代数）----
-        # sh_2.0 特性保留（拼 batch 改造,2026-08-22）：partial 前缀两段式
-        # 迁移的请求，其首 chunk 所在列车仍按层段拆分——prefix 层段
-        # （resident 前缀层,已在目标 HBM）不等 suffix 恢复，suffix 层段
-        # arm 依赖 admission 记录的 suffix ready 节点（两段式流水）；
-        # 首 chunk + 各成员第 1 迭代 span 进前缀组（weight_passes=1 的
-        # 两段层发射，激活/KV 按层段分列、权重恰一份），其余 span 进
-        # 剩余段（weight_passes = iterations-1）。
-        pass_spans = list(train_plan["pass_spans"])
-        drain_plan_members = list(train_plan.get("drain_members", ()))
-        # partial 账本按"首 chunk 所在列车"弹出(与 plan 的 partial 判据
-        # head_first_chunk 同源):T_max 截断下首 chunk 列车与 drain 列车
-        # 可能分属不同列车,按 drain 弹出会漏配(2026-08-22 增量修正)。
-        partial_info = None
-        if prefill_start_member is not None:
-            partial_info = self._partial_first_chunk.pop(
-                prefill_start_member["request_id"], None)
-        partial_count = train_plan.get("partial_first_chunk_count")
-        if (partial_info is None) != (partial_count is None):
-            raise RuntimeError(
-                "partial train plan and admission ledger disagree on the "
-                "first-chunk split")
+    def _emit_train_body(self, train_plan: dict, pass_spans,
+                         weight_passes: int, partial_info) -> None:
+        """折叠列车体（17 类聚合节点;weight_passes = 权重读取次数）。
+
+        sh_2.0 特性保留（拼 batch 改造,2026-08-22）：partial 前缀两段式
+        迁移的请求，其首 chunk 所在列车仍按层段拆分——prefix 层段
+        （resident 前缀层,已在目标 HBM）不等 suffix 恢复，suffix 层段
+        arm 依赖 admission 记录的 suffix ready 节点（两段式流水）;
+        首 chunk + 各成员第 1 迭代 span 进前缀组（weight_passes=1 的
+        两段层发射，激活/KV 按层段分列、权重恰一份），其余 span 进
+        剩余段（weight_passes-1）。WP9 拆分（2026-08-26）与该结构
+        天然对齐：首步批传首步组（partial 列车 = prefix/suffix 组）+
+        weight_passes=1，余量批传余量组 + iterations-1。"""
+        group = self.group_by_index[train_plan["instance_index"]]
+        train_id = train_plan["train_id"]
+        stage = train_plan["stage"]
+        generation = 1 if stage == "decode" else 0
         for builder in self.builders.values():
             builder.set_context(train_id, stage, generation)
         tensor_parallel = len(group.ranks)
@@ -612,8 +776,10 @@ class GraphBatchBuilder:
                 if rank not in suffix_ready:
                     raise RuntimeError(
                         "partial train rank missing its suffix ready gate")
-                first_group = pass_spans[:partial_count]
-                rest_spans = pass_spans[partial_count:]
+                first_group = pass_spans[:int(
+                    train_plan["partial_first_chunk_count"])]
+                rest_spans = pass_spans[int(
+                    train_plan["partial_first_chunk_count"]):]
                 transformer_pass_aggregated(
                     self.builders[rank],
                     phase=f"{train_id}_first_chunk_prefix",
@@ -640,7 +806,7 @@ class GraphBatchBuilder:
                         self.builders[rank],
                         phase=f"{train_id}_remaining_aggregated",
                         pass_spans=rest_spans,
-                        weight_passes=iterations - 1,
+                        weight_passes=weight_passes - 1,
                         **arguments,
                     )
             else:
@@ -648,13 +814,58 @@ class GraphBatchBuilder:
                     self.builders[rank],
                     phase=train_id,
                     pass_spans=pass_spans,
-                    weight_passes=iterations,
+                    weight_passes=weight_passes,
                     **arguments,
                 )
 
-        # ---- drain / exit 标记（列车体后、end barrier 前；每成员每 rank
+    def _emit_first_token_markers(self, train_plan: dict,
+                                  debut_members) -> dict:
+        """WP9 first_token 标记节点（debut 成员各自挂;每 rank 1 个
+        1-op COMP 小节点，名字含 "first_token" 子串，C++ 按 (request_
+        id, rank) 取 min tick 收 code 8 事件）。锚定位置 = 该成员链条
+        在所在批内列车体后的末节点（共享折叠体 ⇒ 各 debut 标记顺序挂
+        体后）。"""
+        train_id = train_plan["train_id"]
+        group = self.group_by_index[train_plan["instance_index"]]
+        members = {}
+        for member in debut_members:
+            request_id = member["request_id"]
+            self._set_context(member, "decode", 1)
+            members[request_id] = {
+                rank: self._emit_train_marker(
+                    rank, f"{train_id}_first_token_"
+                    f"{sanitize_node_prefix(request_id)}")
+                for rank in group.ranks
+            }
+        return members
+
+    def _emit_train_tail_markers(self, train_plan: dict,
+                                 first_token) -> dict:
+        """列车尾：first_token 标记（不拆车增强时）+ drain/exit 标记 +
+        哨兵标记 + 共享 end barrier + 块末账本（挂点语义与整列发射
+        一致）。"""
+        group = self.group_by_index[train_plan["instance_index"]]
+        train_id = train_plan["train_id"]
+        stage = train_plan["stage"]
+        generation = 1 if stage == "decode" else 0
+        iterations = int(train_plan["iterations"])
+        drain_plan_members = list(train_plan.get("drain_members", ()))
+
+        # ---- WP9：不拆车时的 first_token 标记（iterations==1 或无需
+        #      拆车的场景;拆车时标记已在首步批挂过，余量批不重挂） ----
+        if first_token is not None and not first_token.get("split"):
+            self._emit_first_token_markers(
+                train_plan, first_token["debut_marker_members"])
+
+        # ---- drain / exit 标记（列车体后、end barrier 前;每成员每 rank
         #      1 个小节点，承载该请求的 PREFILL_DRAIN / DECODE_COMPLETION
-        #      watch 与指标 end 锚点；物理完成时刻 = 标记完成时刻） ----
+        #      watch 与指标 end 锚点;物理完成时刻 = 标记完成时刻。
+        #      WP9：decode_length=1 的 debut 成员 exit 标记名附加
+        #      first_token 子串——同节点双锚点（code 4 watch + code 8
+        #      名字），first_token_ns == completion_ns 不变量由同一
+        #      节点保证） ----
+        exit_first_token = set(
+            (first_token or {}).get("debut_exit_first_token") or ())
         drain_members = {}
         for member in drain_plan_members:
             request_id = member["request_id"]
@@ -671,8 +882,12 @@ class GraphBatchBuilder:
             self._set_context(member, "decode", 1)
             exit_members[request_id] = {
                 rank: self._emit_train_marker(
-                    rank, f"{train_id}_exit_"
-                    f"{sanitize_node_prefix(request_id)}")
+                    rank, (
+                        f"{train_id}_exit_first_token_"
+                        f"{sanitize_node_prefix(request_id)}"
+                        if request_id in exit_first_token else
+                        f"{train_id}_exit_"
+                        f"{sanitize_node_prefix(request_id)}"))
                 for rank in group.ranks
             }
 
@@ -713,7 +928,6 @@ class GraphBatchBuilder:
             self._block_ends.setdefault(member["request_id"], {})[
                 "seg2"] = dict(block_ends)
 
-        self._collect(marker)
         return {
             "drain_members": drain_members,
             "exit_members": exit_members,
@@ -737,6 +951,12 @@ class GraphBatchBuilder:
         marker = self._mark()
         self._emit_completion(request_plan, following_plan)
         self._collect(marker)
+        # M4 核销即删（2026-08-23）：completion 批是本请求图发射的终点
+        # （seg2 块末在 _emit_completion 内消费、action 序号此后无读者，
+        # 全仓 grep 证实无更晚读者）——逐出块末/action 计数账本条目在请求
+        # 完成后即死重，当场弹出（下一 turn 是不同 request_id）。
+        self._block_ends.pop(request_plan["request_id"], None)
+        self._action_sequence.pop(request_plan["request_id"], None)
 
     # --------------------------------------------------- per-request 发射 --
 
@@ -763,8 +983,10 @@ class GraphBatchBuilder:
             trigger_gate=trigger_gate,
             transfer_anchor_sink=None,
         )
-        if transfer.kind == "remote_store":
-            self._mark_pending_history_store(transfer)
+        # 2026-08-23 seq4689 修订：发射侧不再重复标记 pending 门——决策时点
+        # 同步（sync_pending_history_after_evictions）是唯一标记路径；
+        # 多级逐出（suffix→full fallback）发射乱序时，迟到的旧转移标记会把
+        # 门回退到过期位置（partial_hbm_remote 覆盖 remote_memory 事故）。
         return record
 
     def _emit_admission(self, request_plan: dict) -> None:
@@ -1000,6 +1222,15 @@ class GraphBatchBuilder:
         # prefill 主体（chunk spans + end barrier）自拼 batch 改造
         # （2026-08-22）起移入 emit_iteration_train 的折叠体与 drain 标记；
         # 此处止于准入动作（到达 gates/历史迁移/逐出/屏障）。
+
+    def sync_pending_history_after_evictions(self, transfers) -> None:
+        """决策时点补偿：KV 变更点返回的逐出转移，立即镜像到 pending 门。
+        唯一标记路径（2026-08-23 seq4689 修订：发射侧重复标记在多级逐出
+        发射乱序时会把门回退到过期位置，已移除）。partial_hbm_remote /
+        remote_memory 的半驻留语义由 _mark_pending_history_store 自身推导。"""
+        for transfer in transfers or ():
+            if transfer.kind == "remote_store":
+                self._mark_pending_history_store(transfer)
 
     def _mark_pending_history_store(self, transfer: KVTransfer) -> None:
         # 与共享 history-gate 账本一致。

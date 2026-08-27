@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
@@ -1249,6 +1250,12 @@ class KVCacheManager:
         )
         self.reserve_bytes_by_tp_rank = kv_cache_shard_bytes_for_tokens(
             model, reserve_context_tokens, self.tp_degree
+        )
+        # TaskA ablation (SH30_ABLATION=no_tiered_eviction, 2026-08-26):
+        # read once; skips the stage-1 suffix-half offload inside
+        # _ensure_capacity so LOCAL sessions go straight to full eviction.
+        self.disable_tiered_eviction = (
+            os.environ.get("SH30_ABLATION") == "no_tiered_eviction"
         )
 
         if edge_ranks is None:
@@ -2597,11 +2604,17 @@ class KVCacheManager:
         # stop as soon as the requirement is satisfied.
         for trigger_type in ("human", "tool"):
             # Stage 1: oldest-first within the class, move only each
-            # eligible session's latter half.
-            while self._insufficient_ranks(
-                instance_index,
-                required_bytes_by_tp_rank,
-                reservation_request_id=reservation_request_id,
+            # eligible session's latter half.  TaskA ablation
+            # (SH30_ABLATION=no_tiered_eviction): the suffix-half stage is
+            # skipped entirely; LOCAL sessions fall straight through to the
+            # full-session eviction in stage 2 below.
+            while (
+                not self.disable_tiered_eviction
+                and self._insufficient_ranks(
+                    instance_index,
+                    required_bytes_by_tp_rank,
+                    reservation_request_id=reservation_request_id,
+                )
             ):
                 candidates = self._completed_full_candidates(
                     instance_index, trigger_type

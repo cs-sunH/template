@@ -17,6 +17,7 @@ LICENSE file in the root directory of this source tree.
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <unistd.h>
 
 using namespace AstraSim;
@@ -131,6 +132,24 @@ void MetricCollector::initialize(const std::string& manifest_path,
     if (this->kv_event_digest_.has_value()) {
         init_record["kv_event_digest"] = this->kv_event_digest_.value();
     }
+    // SLO sampling anchors echo (CPP_SPEC §A): the values actually in
+    // effect, plus the fallback warning when the manifest carried no
+    // usable slo_sampling node (never fatal).
+    json slo_echo;
+    slo_echo["watermark_period_ns"] = this->watermark_period_ns_;
+    slo_echo["link_bucket_ns"] = this->link_bucket_ns_;
+    slo_echo["provisional"] = this->slo_sampling_provisional_;
+    slo_echo["source"] = this->slo_sampling_from_manifest_
+        ? "manifest:slo_sampling"
+        : "provisional-default:5000000ns";
+    if (!this->slo_sampling_from_manifest_) {
+        slo_echo["warning"] =
+            "manifest has no slo_sampling node; using the documented "
+            "provisional anchor (5,000,000 ns) for the WP8 watermark period "
+            "and the WP6 link bucket; batch B4 replaces both with derived "
+            "values";
+    }
+    init_record["slo_sampling"] = slo_echo;
     fflush(stdout);
     emit_record(init_record.dump());
 }
@@ -177,6 +196,46 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             manifest["kv_event_digest"].get<std::string>();
     }
 
+    // SLO pipeline sampling anchors (CPP_SPEC §A): the manifest's
+    // ``slo_sampling`` node carries the WP8 watermark period and the WP6
+    // link bucket length. A missing node or null values fall back to the
+    // documented provisional anchor (5,000,000 ns; coordinator ruling
+    // 2026-08-26 -- 1 ms measured 31,895 bucket records on the S3 2s
+    // window) with provisional=true; this never fails the run (batch B4
+    // replaces the anchors with derived values, and every related record
+    // echoes the period actually used so the fallback is
+    // downstream-visible).
+    if (manifest.contains("slo_sampling") &&
+        manifest["slo_sampling"].is_object()) {
+        const json& slo = manifest["slo_sampling"];
+        const auto read_ns = [&slo](const char* key) -> std::optional<uint64_t> {
+            if (!slo.contains(key) || !slo[key].is_number()) {
+                return std::nullopt;
+            }
+            const int64_t value = slo[key].get<int64_t>();
+            if (value <= 0) {
+                return std::nullopt;
+            }
+            return static_cast<uint64_t>(value);
+        };
+        const auto watermark = read_ns("watermark_period_ns");
+        const auto link_bucket = read_ns("link_bucket_ns");
+        if (watermark.has_value()) {
+            this->watermark_period_ns_ = watermark.value();
+        }
+        if (link_bucket.has_value()) {
+            this->link_bucket_ns_ = link_bucket.value();
+        }
+        this->slo_sampling_from_manifest_ = true;
+        this->slo_sampling_provisional_ =
+            !watermark.has_value() || !link_bucket.has_value() ||
+            (slo.contains("provisional") && slo["provisional"].is_boolean() &&
+             slo["provisional"].get<bool>());
+    } else {
+        this->slo_sampling_from_manifest_ = false;
+        this->slo_sampling_provisional_ = true;
+    }
+
     // Requests (doc sec.4.2). queue_index must be unique (doc sec.4.5).
     const json requests = manifest.value("requests", json::array());
     for (const auto& entry : requests) {
@@ -209,6 +268,15 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     arrival.at("interval_ns").get<Tick>();
             } else {
                 fatal_metrics_error("unknown arrival kind: " + kind);
+            }
+            // WP9 (CPP_SPEC §C): optional request decode length for the
+            // first-token invariant; synthetic online manifests may omit
+            // it, in which case finalize skips the invariant and notes
+            // manifest_decode_length_missing.
+            if (entry.contains("decode_length") &&
+                entry["decode_length"].is_number()) {
+                state.decode_length =
+                    entry["decode_length"].get<int64_t>();
             }
         } catch (const std::exception& e) {
             fatal_metrics_error(std::string("malformed request entry in ") +
@@ -243,7 +311,7 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             const uint64_t node_id = triple[0].get<uint64_t>();
             const uint8_t event_code = triple[1].get<uint8_t>();
             const int64_t subject_id = triple[2].get<int64_t>();
-            if (event_code < 1 || event_code > 7) {
+            if (event_code < 1 || event_code > 8) {
                 fatal_metrics_error("invalid node event code: " +
                                     std::to_string(event_code));
             }
@@ -423,6 +491,22 @@ void MetricCollector::apply_event(const NodeMetricEvent& event, int rank,
             MemoryAnchorTick{event.subject_id, rank, node_id, tick});
         return;
     }
+    case EventCode::FIRST_TOKEN_COMPLETE: {
+        // WP9 (WP9_CONTRACT §1): min tick across ranks and re-registrations;
+        // unknown subjects count as dropped like every other request event.
+        const auto req_it =
+            this->request_index_by_queue_index_.find(event.subject_id);
+        if (req_it == this->request_index_by_queue_index_.end()) {
+            this->dropped_events_++;
+            return;
+        }
+        const auto existing = this->first_token_ticks_.find(event.subject_id);
+        if (existing == this->first_token_ticks_.end() ||
+            tick < existing->second) {
+            this->first_token_ticks_[event.subject_id] = tick;
+        }
+        return;
+    }
     }
 }
 
@@ -540,6 +624,10 @@ void MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
         event_code = static_cast<uint8_t>(EventCode::DECODE_START_ISSUE);
     } else if (kind == "completion") {
         event_code = static_cast<uint8_t>(EventCode::COMPLETION_COMPLETE);
+    } else if (kind == "first_token") {
+        // WP9 (WP9_CONTRACT §1): complete edge, subject=request, min tick
+        // per subject across ranks.
+        event_code = static_cast<uint8_t>(EventCode::FIRST_TOKEN_COMPLETE);
     } else if (transfer_anchor) {
         event_code = static_cast<uint8_t>(EventCode::MEMORY_ANCHOR_COMPLETE);
     } else {
@@ -612,6 +700,13 @@ void MetricCollector::emit_record(const std::string& json_line) const {
     const std::string line = "[METRIC] " + json_line + "\n";
     const ssize_t written = ::write(STDOUT_FILENO, line.data(), line.size());
     (void)written;
+}
+
+void MetricCollector::emit_observer_record(const std::string& json_line) const {
+    // SLO pipeline B2 (CPP_SPEC §D): observers outside the workload layer
+    // (the congestion-aware FluidScheduler link observer) emit through the
+    // same single-write channel. Read-only; no collector state is touched.
+    emit_record(json_line);
 }
 
 void MetricCollector::finalize(const std::vector<Sys*>& systems,
@@ -956,6 +1051,66 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["decode_start_ns"] = tick_or_null(state.decode_start);
         record["completion_ns"] = tick_or_null(state.completion);
 
+        // WP9 (WP9_CONTRACT §1 + §6 2026-08-27 ruling): first-token
+        // boundary. Null when no code-8 event ever fired for the request;
+        // ORDER violations (arrival <= first_token <= completion) null the
+        // field, count a consistency violation, and leave an instruction
+        // note. The former decode_length==1 equality (first_token ==
+        // completion) was relaxed per the ruling: code 8 aggregates the min
+        // tick across TP ranks while completion (code 4) aggregates the
+        // max, so even a same-node dual anchor disagrees by the TP
+        // completion skew -- the residual is reported as the informational
+        // first_token_completion_skew_ns field instead of a violation.
+        {
+            const auto ft_it =
+                this->first_token_ticks_.find(state.queue_index);
+            std::optional<Tick> first_token;
+            std::string first_token_note;
+            if (ft_it != this->first_token_ticks_.end()) {
+                first_token = ft_it->second;
+                const std::string prefix =
+                    "queue_index " + std::to_string(state.queue_index) + ": ";
+                bool ok = true;
+                if (state.resolved_arrival.has_value() &&
+                    first_token.value() < state.resolved_arrival.value()) {
+                    check_consistency(
+                        false, prefix + "arrival > first_token");
+                    ok = false;
+                }
+                if (state.completion.has_value() &&
+                    first_token.value() > state.completion.value()) {
+                    check_consistency(
+                        false, prefix + "first_token > completion");
+                    ok = false;
+                }
+                if (!ok) {
+                    first_token.reset();
+                    first_token_note =
+                        "first_token_ns nulled by invariant violation (see "
+                        "consistency record)";
+                }
+            }
+            record["first_token_ns"] = tick_or_null(first_token);
+            if (first_token.has_value() && state.completion.has_value() &&
+                state.decode_length.has_value() &&
+                state.decode_length.value() == 1) {
+                // WP9_CONTRACT §6: informational only (completion aggregated
+                // as max, first_token as min -> skew >= 0 is expected).
+                record["first_token_completion_skew_ns"] =
+                    state.completion.value() - first_token.value();
+            }
+            if (!first_token_note.empty()) {
+                record["first_token_note"] = first_token_note;
+            } else if (completed && !state.decode_length.has_value()) {
+                record["first_token_note"] =
+                    "manifest_decode_length_missing: decode-length==1 skew "
+                    "field not evaluable";
+            } else if (!first_token.has_value()) {
+                record["first_token_note"] =
+                    "no code-8 first-token event observed for this request";
+            }
+        }
+
         if (state.resolved_arrival.has_value()) {
             if (!first_arrival.has_value() ||
                 state.resolved_arrival.value() < first_arrival.value()) {
@@ -1252,8 +1407,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     // anchored to the actual ASTRA ticks collected above. Emits one
     // capacity_timeavg record per rank in every non-off mode; the raw
     // planner peaks passthrough is full-detail only.
+    std::vector<int> all_ranks;
+    all_ranks.reserve(systems.size());
+    for (const Sys* sys : systems) {
+        all_ranks.push_back(sys->id);
+    }
     const MemoryReplayTotals memory_totals =
-        emit_memory_records(sim_end_tick, full_detail);
+        emit_memory_records(sim_end_tick, full_detail, all_ranks);
 
     // Summary record (doc sec.5.9 field list, sec.3.4/3.5 windows).
     const uint64_t input_requests = this->requests_.size();
@@ -1409,11 +1569,22 @@ long double i128_to_long_double(__int128 value) {
 }  // namespace
 
 MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
-    Tick sim_end_tick, bool full_detail) {
+    Tick sim_end_tick, bool full_detail, const std::vector<int>& fallback_ranks) {
     MemoryReplayTotals totals;
     totals.actions_total = this->memory_actions_.size();
     totals.peaks_count = this->planner_memory_peaks_.size();
     if (this->memory_actions_.empty() && this->planner_memory_peaks_.empty()) {
+        // WP8 (CPP_SPEC §B): no planner ledger rows at all (the online
+        // synthetic manifests carry none). Still emit the per-rank
+        // watermark summaries over the simulated ranks so the flat-zero
+        // replay is explicit downstream instead of a missing record.
+        std::map<int, WatermarkSeries> flat_series;
+        for (const int rank : fallback_ranks) {
+            WatermarkSeries series;
+            series.replayed = false;
+            flat_series.emplace(rank, std::move(series));
+        }
+        emit_watermark_records(flat_series, sim_end_tick, full_detail);
         return totals;
     }
 
@@ -1545,6 +1716,7 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     // Per-rank replay over [0, sim_end_ns] (doc sec.7.8). Resident covers
     // weight + resident_kv, committed covers weight + resident_kv +
     // reserved_kv (doc sec.3.8).
+    std::map<int, WatermarkSeries> watermark_series_by_rank;
     for (auto& [rank, deltas] : deltas_by_rank) {
         std::sort(deltas.begin(), deltas.end(),
                   [](const AnchoredDelta& a, const AnchoredDelta& b) {
@@ -1553,6 +1725,23 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                       }
                       return a.sequence_index < b.sequence_index;
                   });
+
+        // Per-rank capacity and final planner ledger from the peaks
+        // payload. Resolved BEFORE the integrals: the WP8 watermark walk
+        // needs the capacity for its violation counters too.
+        const auto peak_it = peaks_by_rank.find(rank);
+        std::optional<int64_t> capacity;
+        std::optional<int64_t> planner_physical;
+        std::optional<int64_t> planner_committed;
+        if (peak_it != peaks_by_rank.end() &&
+            peak_it->second->contains("ledger")) {
+            const json& ledger = (*peak_it->second)["ledger"];
+            capacity = ledger.value("capacity_bytes", int64_t(0));
+            planner_physical =
+                ledger.value("physical_used_bytes", int64_t(0));
+            planner_committed =
+                ledger.value("committed_used_bytes", int64_t(0));
+        }
 
         __int128 weight = 0;
         __int128 resident = 0;
@@ -1573,18 +1762,104 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         resident_area += (weight + resident) * tail;
         committed_area += (weight + resident + reserved) * tail;
 
-        const auto peak_it = peaks_by_rank.find(rank);
-        std::optional<int64_t> capacity;
-        std::optional<int64_t> planner_physical;
-        std::optional<int64_t> planner_committed;
-        if (peak_it != peaks_by_rank.end() &&
-            peak_it->second->contains("ledger")) {
-            const json& ledger = (*peak_it->second)["ledger"];
-            capacity = ledger.value("capacity_bytes", int64_t(0));
-            planner_physical =
-                ledger.value("physical_used_bytes", int64_t(0));
-            planner_committed =
-                ledger.value("committed_used_bytes", int64_t(0));
+        // WP8 (CPP_SPEC §B): bucketed watermark sampling of the same step
+        // function, filled by an independent walk that splits segments at
+        // every delta tick (event-driven) AND every watermark bucket
+        // boundary (periodic bottom line), so a bucket fully inside a long
+        // constant segment still gets sampled. Peaks are sparse: buckets
+        // that stayed at zero are not stored (emit treats missing as 0).
+        {
+            WatermarkSeries series;
+            series.replayed = true;
+            series.capacity_known = capacity.has_value();
+            series.capacity_bytes = capacity.value_or(0);
+            const uint64_t period =
+                this->watermark_period_ns_ > 0 ? this->watermark_period_ns_ : 1;
+            size_t next_delta = 0;
+            Tick seg_start = 0;
+            __int128 wm_weight = 0;
+            __int128 wm_resident = 0;
+            __int128 wm_reserved = 0;
+            while (seg_start < sim_end_tick) {
+                // Zero-length step points: deltas at/before seg_start
+                // apply before the segment is evaluated.
+                while (next_delta < deltas.size() &&
+                       deltas[next_delta].tick <= seg_start) {
+                    wm_weight += deltas[next_delta].weight_delta;
+                    wm_resident += deltas[next_delta].resident_delta;
+                    wm_reserved += deltas[next_delta].reserved_delta;
+                    // A delta applying inside this bucket is occupancy
+                    // activity even when the resulting value stays zero
+                    // (e.g. a full release).
+                    series.changed_buckets.insert(
+                        deltas[next_delta].tick / period);
+                    next_delta++;
+                }
+                Tick seg_end = sim_end_tick;
+                if (next_delta < deltas.size() &&
+                    deltas[next_delta].tick < seg_end) {
+                    seg_end = deltas[next_delta].tick;
+                }
+                const uint64_t bucket = seg_start / period;
+                const Tick bucket_end =
+                    static_cast<Tick>(bucket + 1) * static_cast<Tick>(period);
+                if (bucket_end < seg_end) {
+                    seg_end = bucket_end;
+                }
+                if (seg_end <= seg_start) {
+                    break;  // defensive: never expected
+                }
+                const Tick length = seg_end - seg_start;
+                const __int128 resident_value = wm_weight + wm_resident;
+                const __int128 committed_value =
+                    wm_weight + wm_resident + wm_reserved;
+                const __int128 resident_pos =
+                    resident_value > 0 ? resident_value : 0;
+                const __int128 committed_pos =
+                    committed_value > 0 ? committed_value : 0;
+                const uint64_t resident_peak =
+                    resident_pos > static_cast<__int128>(
+                                       std::numeric_limits<uint64_t>::max())
+                        ? std::numeric_limits<uint64_t>::max()
+                        : static_cast<uint64_t>(resident_pos);
+                const uint64_t committed_peak =
+                    committed_pos > static_cast<__int128>(
+                                        std::numeric_limits<uint64_t>::max())
+                        ? std::numeric_limits<uint64_t>::max()
+                        : static_cast<uint64_t>(committed_pos);
+                if (resident_peak > 0 || committed_peak > 0) {
+                    std::pair<uint64_t, uint64_t>& peaks =
+                        series.bucket_peaks[bucket];
+                    if (resident_peak > peaks.first) {
+                        peaks.first = resident_peak;
+                    }
+                    if (committed_peak > peaks.second) {
+                        peaks.second = committed_peak;
+                    }
+                    if (resident_peak > series.resident_peak) {
+                        series.resident_peak = resident_peak;
+                    }
+                    if (committed_peak > series.committed_peak) {
+                        series.committed_peak = committed_peak;
+                    }
+                    // Nonzero occupancy is activity even without a delta
+                    // inside this bucket (e.g. weights resident from the
+                    // first delta on).
+                    series.changed_buckets.insert(bucket);
+                }
+                series.resident_area += resident_pos * length;
+                series.committed_area += committed_pos * length;
+                if (series.capacity_known && series.capacity_bytes > 0 &&
+                    (resident_value > series.capacity_bytes ||
+                     committed_value > series.capacity_bytes)) {
+                    series.capacity_violations++;
+                }
+                series.sample_count++;
+                seg_start = seg_end;
+            }
+            series.direct_resident_area = resident_area;
+            series.direct_committed_area = committed_area;
+            watermark_series_by_rank[rank] = std::move(series);
         }
 
         json record;
@@ -1684,6 +1959,27 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         emit_record(record.dump());
     }
 
+    // WP8: extend the watermark universe with simulated ranks that have no
+    // replayed deltas (capacity still picked up from the planner peaks
+    // when present), then emit the watermark records.
+    for (const int rank : fallback_ranks) {
+        if (watermark_series_by_rank.count(rank) > 0) {
+            continue;
+        }
+        WatermarkSeries series;
+        series.replayed = false;
+        const auto peak_it = peaks_by_rank.find(rank);
+        if (peak_it != peaks_by_rank.end() &&
+            peak_it->second->contains("ledger")) {
+            series.capacity_bytes = (*peak_it->second)["ledger"].value(
+                "capacity_bytes", int64_t(0));
+            series.capacity_known = true;
+        }
+        watermark_series_by_rank.emplace(rank, std::move(series));
+    }
+    emit_watermark_records(watermark_series_by_rank, sim_end_tick,
+                           full_detail);
+
     // Planner memory peaks passthrough (doc sec.7.7). Full detail only; the
     // summary record always carries the count. The chiplet breakdown is a
     // measurement-only equal-striping projection of the per-NPU aggregate
@@ -1730,4 +2026,216 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     }
 
     return totals;
+}
+
+void MetricCollector::emit_watermark_records(
+    const std::map<int, WatermarkSeries>& series_by_rank,
+    Tick sim_end_tick, bool full_detail) {
+    // WP8 (CPP_SPEC §B). Instance projection: ranks are grouped by the
+    // manifest requests' instance assignments (prefill ranks -> prefill
+    // instance, decode ranks -> decode instance; first assignment wins,
+    // conflicts are counted, never silently resolved). Ranks no request
+    // covers map to instance -1 -- online synthetic manifests carry only
+    // placeholder instance-0 rank sets, so -1 is the honest label there.
+    std::map<int, int64_t> instance_by_rank;
+    uint64_t rank_instance_conflicts = 0;
+    for (const auto& state : this->requests_) {
+        for (const int rank : state.prefill_ranks) {
+            const auto it = instance_by_rank.find(rank);
+            if (it == instance_by_rank.end()) {
+                instance_by_rank[rank] = state.prefill_instance;
+            } else if (it->second != state.prefill_instance) {
+                rank_instance_conflicts++;
+            }
+        }
+        for (const int rank : state.decode_ranks) {
+            const auto it = instance_by_rank.find(rank);
+            if (it == instance_by_rank.end()) {
+                instance_by_rank[rank] = state.decode_instance;
+            } else if (it->second != state.decode_instance) {
+                rank_instance_conflicts++;
+            }
+        }
+    }
+    const auto instance_of = [&instance_by_rank](int rank) -> int64_t {
+        const auto it = instance_by_rank.find(rank);
+        return it == instance_by_rank.end() ? int64_t(-1) : it->second;
+    };
+
+    // Per-(instance, bucket) peaks = max over the instance's ranks. Full
+    // detail only (CPP_SPEC §B). Coordinator ruling 2026-08-26: a bucket
+    // record is emitted only when the instance had occupancy activity in
+    // it (some rank changed), plus the FIRST and LAST bucket of the window
+    // which always emit -- empty middle buckets are omitted to keep the
+    // log inside the WP6/WP8 disk budget.
+    if (full_detail) {
+        const uint64_t period =
+            this->watermark_period_ns_ > 0 ? this->watermark_period_ns_ : 1;
+        const uint64_t last_bucket = sim_end_tick > 0
+            ? (sim_end_tick - 1) / period
+            : 0;
+        std::map<std::pair<int64_t, uint64_t>, std::pair<uint64_t, uint64_t>>
+            aggregated;
+        std::map<int64_t, std::set<uint64_t>> changed_by_instance;
+        std::set<int64_t> known_instances;
+        for (const auto& [rank, series] : series_by_rank) {
+            const int64_t instance = instance_of(rank);
+            known_instances.insert(instance);
+            auto& changed = changed_by_instance[instance];
+            for (const uint64_t bucket : series.changed_buckets) {
+                changed.insert(bucket);
+            }
+            for (const auto& [bucket, peaks] : series.bucket_peaks) {
+                auto& agg = aggregated[{instance, bucket}];
+                if (peaks.first > agg.first) {
+                    agg.first = peaks.first;
+                }
+                if (peaks.second > agg.second) {
+                    agg.second = peaks.second;
+                }
+            }
+        }
+        if (known_instances.empty()) {
+            // No rank mapped at all (defensive): still emit the boundary
+            // buckets under the unmapped-instance label.
+            known_instances.insert(int64_t(-1));
+        }
+        for (const int64_t instance : known_instances) {
+            const auto& changed = changed_by_instance[instance];
+            auto emit_bucket = [&](uint64_t bucket) {
+                const auto it = aggregated.find({instance, bucket});
+                const std::pair<uint64_t, uint64_t> peaks =
+                    it != aggregated.end()
+                        ? it->second
+                        : std::pair<uint64_t, uint64_t>{0, 0};
+                json record;
+                record["schema"] = 1;
+                record["type"] = "hbm_watermark";
+                record["source"] = "planner_memory_ledger";
+                record["repo_variant"] = this->repo_variant_;
+                record["run_id"] = this->run_id_;
+                record["instance"] = instance;
+                record["bucket_start_ns"] = bucket * period;
+                record["resident_peak_bytes"] = peaks.first;
+                record["committed_peak_bytes"] = peaks.second;
+                record["watermark_period_ns"] = this->watermark_period_ns_;
+                record["provisional"] = this->slo_sampling_provisional_;
+                if (instance < 0) {
+                    record["instance_note"] =
+                        "rank->instance projection unavailable for this "
+                        "rank (no manifest request covers it; online "
+                        "synthetic manifests carry placeholder instance-0 "
+                        "rank sets)";
+                }
+                emit_record(record.dump());
+            };
+            if (changed.empty()) {
+                // Flat series (e.g. empty online planner ledger): only the
+                // window boundary buckets, both zero, note on the summary
+                // explains why.
+                emit_bucket(0);
+                emit_bucket(last_bucket);
+                continue;
+            }
+            for (const uint64_t bucket : changed) {
+                emit_bucket(bucket);
+            }
+            if (changed.count(0) == 0) {
+                emit_bucket(0);
+            }
+            if (changed.count(last_bucket) == 0) {
+                emit_bucket(last_bucket);
+            }
+        }
+    }
+
+    // Per-rank summary (every non-off detail level). violation counts must
+    // be zero: a nonzero count is a simulation-correctness defect, output
+    // as-is AND counted as a consistency violation.
+    for (const auto& [rank, series] : series_by_rank) {
+        json record;
+        record["schema"] = 1;
+        record["type"] = "hbm_watermark_summary";
+        record["source"] = "planner_memory_ledger";
+        record["repo_variant"] = this->repo_variant_;
+        record["run_id"] = this->run_id_;
+        record["rank"] = rank;
+        record["watermark_period_ns"] = this->watermark_period_ns_;
+        record["provisional"] = this->slo_sampling_provisional_;
+        record["capacity_bytes"] =
+            series.capacity_known ? json(series.capacity_bytes) : json(nullptr);
+        record["resident_peak_bytes"] = series.resident_peak;
+        record["committed_peak_bytes"] = series.committed_peak;
+        record["nonzero_bucket_count"] = series.bucket_peaks.size();
+        record["sample_count"] = series.sample_count;
+        if (sim_end_tick > 0) {
+            const long double window_ns =
+                static_cast<long double>(sim_end_tick);
+            record["resident_timeavg_bytes"] = static_cast<double>(
+                i128_to_long_double(series.resident_area) / window_ns);
+            record["committed_timeavg_bytes"] = static_cast<double>(
+                i128_to_long_double(series.committed_area) / window_ns);
+            if (series.capacity_known && series.capacity_bytes > 0) {
+                const long double denominator =
+                    static_cast<long double>(series.capacity_bytes) * window_ns;
+                record["resident_capacity_timeavg_util"] = static_cast<double>(
+                    i128_to_long_double(series.resident_area) / denominator);
+                record["committed_capacity_timeavg_util"] =
+                    static_cast<double>(i128_to_long_double(
+                        series.committed_area) / denominator);
+            } else {
+                record["resident_capacity_timeavg_util"] = nullptr;
+                record["committed_capacity_timeavg_util"] = nullptr;
+            }
+        } else {
+            record["resident_timeavg_bytes"] = nullptr;
+            record["committed_timeavg_bytes"] = nullptr;
+            record["resident_capacity_timeavg_util"] = nullptr;
+            record["committed_capacity_timeavg_util"] = nullptr;
+        }
+
+        // A-class cross-check: the watermark-walk integral must agree with
+        // the direct delta-loop integral of the same replay to <=1%.
+        if (series.replayed && sim_end_tick > 0) {
+            const long double watermark =
+                i128_to_long_double(series.resident_area);
+            const long double direct =
+                i128_to_long_double(series.direct_resident_area);
+            const long double scale = direct > 0.0L ? direct : 1.0L;
+            long double relative = (watermark - direct) / scale;
+            if (relative < 0.0L) {
+                relative = -relative;
+            }
+            record["timeavg_crosscheck_abs_relative_diff"] =
+                static_cast<double>(relative);
+            record["timeavg_crosscheck"] =
+                relative > 0.01L ? "mismatch>1%" : "ok<=1%";
+            check_consistency(
+                relative <= 0.01L,
+                "rank " + std::to_string(rank) +
+                    ": WP8 watermark resident timeavg differs from the "
+                    "capacity_timeavg replay integral by >1% (watermark=" +
+                    i128_to_string(series.resident_area) + " direct=" +
+                    i128_to_string(series.direct_resident_area) + ")");
+        } else {
+            record["timeavg_crosscheck"] =
+                "skipped: no planner ledger replay for this rank";
+        }
+
+        record["capacity_violation_count"] = series.capacity_violations;
+        if (series.capacity_violations > 0) {
+            check_consistency(
+                false,
+                "rank " + std::to_string(rank) + ": WP8 watermark observed " +
+                    std::to_string(series.capacity_violations) +
+                    " sample points above the planner HBM capacity");
+        }
+        if (!series.replayed) {
+            record["note"] =
+                "no memory actions/planner peaks replayed for this rank; "
+                "flat-zero watermark over [0, sim_end_ns]";
+        }
+        emit_record(record.dump());
+    }
+    (void)rank_instance_conflicts;
 }

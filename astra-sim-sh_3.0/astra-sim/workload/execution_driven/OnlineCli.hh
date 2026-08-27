@@ -75,6 +75,21 @@ online entry must parse its own family explicitly:
                         inputs (Python queue ledger + KV ledger + static
                         route) never consume it, so sensing-on runs keep the
                         phase-2 decision sequence byte-identical.
+  --online-node-gc      M2 node GC (2026-08-23): value <0|1>, frozen default
+                        0 (off). When on, the GraphBatchCommitter collects
+                        finished childless nodes from every per-rank
+                        NodeStore at its end-of-commit quiescent point and
+                        prunes the (rank, json id) -> store id map at the
+                        same watermark, keeping the C++ side at the in-flight
+                        window instead of the whole-run cumulative graph
+                        (memory). Collected nodes were finished, so edges
+                        that still reference them resolve to the NodeStore
+                        dead-parent no-op; validate() resolves pruned ids
+                        below the per-rank dense-prefix watermark only --
+                        never-emitted ids stay fail-closed. 0 = pre-M2
+                        behavior (nodes never erased; emergency rollback
+                        arm). Inline "=" and separate-value forms legal; any
+                        other token is a hard error.
 
 Hard-error rules: unknown flags in the online family (prefixes --request-,
 --bridge-, --close-, --online-) are rejected, because the shared parser would
@@ -119,6 +134,12 @@ struct OnlineCliOptions {
     // cap). The window is an explicit experiment knob only; any drop it
     // causes is counted and fail-closes the run-end completion audit.
     uint64_t request_max_arrival_ns = 0;
+    // M2 node GC (2026-08-23): 1 = collect finished childless nodes at the
+    // committer's end-of-commit quiescent point; 0 = pre-M2 never-erase
+    // behavior. Frozen default 0 (ruling flip 2026-08-23: GC on showed a
+    // reproducible light-load wall regression; pass 1 explicitly for
+    // memory-bound heavy/parallel runs).
+    int online_node_gc = 0;
 };
 
 /// Parse argv for the online family. Returns false and fills `error` on any

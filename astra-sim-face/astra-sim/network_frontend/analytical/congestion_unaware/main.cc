@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_unaware/Helper.h>
+#include <chrono>
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 using namespace AstraSim;
@@ -20,6 +21,9 @@ using namespace NetworkAnalytical;
 using namespace NetworkAnalyticalCongestionUnaware;
 
 int main(int argc, char* argv[]) {
+    // Total wall-clock timer from main() entry; printed at run end.
+    const auto sim_wall_start = std::chrono::steady_clock::now();
+
     // Parse command line arguments
     auto cmd_line_parser = CmdLineParser(argv[0]);
     cmd_line_parser.parse(argc, argv);
@@ -117,6 +121,18 @@ int main(int argc, char* argv[]) {
         delete it;
     }
     systems.clear();
+
+    // Total simulation wall time (from main() entry to run end). Logged
+    // through the "main" logger: the console sink prints it and the
+    // logging-folder file sink persists it to log.log (console-only when
+    // --logging-folder=off).
+    const auto sim_total_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - sim_wall_start)
+            .count();
+    LoggerFactory::get_logger("main")->info(
+        "[sim] total simulation wall time: {} ms ({:.3f} s)", sim_total_ms,
+        static_cast<double>(sim_total_ms) / 1000.0);
 
     // terminate simulation
     AstraSim::LoggerFactory::shutdown();

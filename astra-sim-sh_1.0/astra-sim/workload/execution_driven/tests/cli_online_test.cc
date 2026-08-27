@@ -30,6 +30,10 @@ token):
        --bridge-timeout-ms is a non-negative integer (0 = wait forever,
        the frozen default; both inline and separate value forms legal;
        negative / garbage / over-int-range values are hard errors).
+  R12 M2 node GC (2026-08-23): --online-node-gc <0|1> with frozen default
+       0 (off, ruling flip 2026-08-23: light-load wall regression); 1 =
+       collection enabled (memory arm); both value forms legal; garbage /
+       missing values and --online-node typos are hard errors.
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I . astra-sim/workload/execution_driven/tests/cli_online_test.cc \
@@ -257,7 +261,29 @@ int main() {
     assert(out.sensing_enabled && out.close_input &&
            out.bridge_dir == "/tmp/bridge");
 
-    std::printf("[cli] ALL PASS: R1-R11 online CLI contract verified "
-                "(incl. phase-7 §10.4 window knobs)\n");
+    // R12: M2 node GC (2026-08-23) --online-node-gc <0|1>, default 0 (off,
+    // ruling flip 2026-08-23: light-load wall regression); 1 = collection
+    // enabled (memory arm); both value forms legal; garbage / missing
+    // values and --online-node typos are hard errors.
+    assert(parse_ok({"--online-mode", "strategy"}, out));
+    assert(out.online_node_gc == 0);
+    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc=0"}, out));
+    assert(out.online_node_gc == 0);
+    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc", "1"},
+                    out));
+    assert(out.online_node_gc == 1);
+    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc=1"}, out));
+    assert(out.online_node_gc == 1);
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc=2"})
+               .find("unknown --online-node-gc value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc", "on"})
+               .find("unknown --online-node-gc value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc"})
+               .find("requires a value") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc-x=1"})
+               .find("unknown online-family") != std::string::npos);
+
+    std::printf("[cli] ALL PASS: R1-R12 online CLI contract verified "
+                "(incl. phase-7 §10.4 window knobs, M2 node-gc arm)\n");
     return 0;
 }

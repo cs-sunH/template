@@ -80,6 +80,15 @@ def _bare_scheduler(p_chunk=512):
     s._train_max_iter = 0   # 0 = 不设限(语义测试测自然边界;交付默认 8)
     s._train_instance_index = {}
     s._ready_frontier = set()
+    # 改法S2-B(qp 聚合账本,2026-08-23):_finalize_completed_trains 核销
+    # 扣减走 _prefill_chunk_task_load_ns(依赖 topology/hardware/model/
+    # memo 字典),脚手架同步装配最小拓扑(实例 size=2,与
+    # test_sh30_task_load_snapshot.py 的 2x2 mesh 同款)。
+    s.topology = SimpleNamespace(
+        instance=lambda i: SimpleNamespace(size=2))
+    s.hardware = HARDWARE
+    s.model = MODEL
+    s._prefill_task_cache = {}
     return s
 
 

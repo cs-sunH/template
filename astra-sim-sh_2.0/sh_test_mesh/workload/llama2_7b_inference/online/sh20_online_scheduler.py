@@ -111,12 +111,74 @@ from face_scheduler import (  # noqa: E402 -- 只读 import
     select_prefill_instance,
 )
 from generate_face_trace import _to_scheduler_requests  # noqa: E402
+from online.graph_batch_builder import (  # noqa: E402
+    first_token_split_enabled,
+)
 from online.online_scheduler_base import (  # noqa: E402
     STAGE_DECODE,
     STAGE_PREFILL,
     STAGE_REQUEST,
     OnlineSchedulerBase,
 )
+
+
+def _transfer_hop_rows(transfers) -> list:
+    """WP9-线5 hopbytes 诊断（2026-08-26）：逐传输对象的 noc 路由摘要。
+
+    纯输出字段——sh_2.0 的 KVTransfer 在决策时点已按 deterministic_xy_
+    route 生成 shards[].noc_path（face_scheduler.py 五处构造点：_noc_
+    transfer/_remote_* 等），在线路径直接复用同一对象驱动构图；此前
+    决策日志只落聚合 bytes，shards 未序列化 → hopbytes coverage=0。
+    local_hit 无 shards（无物理搬运）→ noc_hop_bytes=0 / shard_count=0
+    （hopbytes 侧不计入任何桶，与 S1 local_hit 口径一致）。新字段进
+    ON/OFF 对拍剥离清单（新增诊断字段）。"""
+    rows = []
+    for transfer in transfers or ():
+        if transfer is None:
+            continue
+        noc_hop_bytes = 0
+        for shard in transfer.shards:
+            noc_hop_bytes += int(shard.bytes) * max(
+                0, len(shard.noc_path) - 1)
+        rows.append({
+            "kind": transfer.kind,
+            "phase": transfer.phase,
+            "reason": transfer.reason,
+            "total_bytes": transfer.total_bytes,
+            "noc_hop_bytes": noc_hop_bytes,
+            "shard_count": len(transfer.shards),
+        })
+    return rows
+
+
+def _transfer_entry_rows(transfers) -> list:
+    """B3-6（2026-08-27）：逐出/恢复决策 victim/bytes 序列化（纯输出）。
+
+    decision log 此前只落 *_eviction_count（他人会话逐出无 victim/bytes
+    可归因）与聚合 history_transfer_bytes——hbm_watermark 的 S2 分支只能
+    count_only 上界重建、partial 两段式恢复也无法按段对账。本字段把
+    KVTransfer 逐条落盘：字段名与 S1 对齐（history_evictions/
+    prefill_evictions/decode_evictions/completion_evictions），行结构在
+    S1 基础上多带 layer_start/layer_end（分层 KV 部分逐出/半层恢复的
+    区间证据）；history_transfers 额外序列化 partial 前缀两段式迁移的
+    逐段对象（prefix noc_migrate + suffix remote_load，标量会把跨实例
+    partial 迁移错记成整体搬移而击穿占用下界）。纯输出：决策/KV 逻辑
+    零触碰；进 ON/OFF 对拍剥离清单（B3-6 登记于 STRIP_LIST.md）。"""
+    rows = []
+    for transfer in transfers or ():
+        if transfer is None:
+            continue
+        rows.append({
+            "kind": transfer.kind,
+            "reason": transfer.reason,
+            "session_id": transfer.session_id,
+            "total_bytes": transfer.total_bytes,
+            "source_instance_index": transfer.source_instance_index,
+            "target_instance_index": transfer.target_instance_index,
+            "layer_start": transfer.layer_start,
+            "layer_end": transfer.layer_end,
+        })
+    return rows
 
 
 def _kv_action_rows(runtime, stage):
@@ -166,7 +228,9 @@ class _OnlineInstanceState:
 
     __slots__ = ("index", "qp", "active_decode", "last_arrival_ns",
                  "pending_decode_ready", "in_flight_train",
-                 "finalized_trains", "iteration_count", "train_seq")
+                 "finalized_trains", "iteration_count", "train_seq",
+                 "ledger_epoch", "snapshot_epoch", "snapshot_cache",
+                 "first_step_remainder")
 
     def __init__(self, index: int) -> None:
         self.index = index
@@ -179,13 +243,27 @@ class _OnlineInstanceState:
         self.finalized_trains = []       # 已核销列车（待收后续跨交付信号）
         self.iteration_count = 0         # 已完成迭代数
         self.train_seq = 0               # 列车序号（命名/审计用）
+        # ---- 改法S2：实例账本纪元 + 快照纪元缓存（2026-08-23）----
+        # ledger_epoch：本实例快照输入（qp/active_decode 成员、成员进度
+        # 字段 decode_tokens_consumed/current_decode_token/remaining_chunks、
+        # in_flight_train、last_arrival_ns）的每次变更 +1；快照缓存
+        # key = 实例 + 纪元（对齐改法D _kv_ledger_epoch/
+        # _admit_attempt_epoch 的姿态，见 _bump_instance_epoch）。
+        self.ledger_epoch = 0
+        self.snapshot_epoch = -1        # 缓存快照所属纪元（-1 = 未缓存）
+        self.snapshot_cache = None      # 上次快照（冻结 dataclass，可复用）
+        # ---- WP9 首步批拆分（2026-08-26）：两段式发射的余量批挂起 ----
+        self.first_step_remainder = None  # 待发射余量批 train_plan（None=无）
 
 
 class Sh20OnlineScheduler(OnlineSchedulerBase):
     """strategy 变体：sh_2.0 真实策略（关感知）在在线骨架中运行。"""
 
     def __init__(self, *, manifest, config, graph, digest_sink=None,
-                 mode: str = "strategy", sensing: bool = False,
+                 decision_log_sink=None, train_ledger_sink=None,
+                 profile_sink=None, mode: str = "strategy",
+                 sensing: bool = False,
+                 defensive_reply_cache: bool = False,
                  calibrated_constants: dict = None):
         super().__init__(
             manifest=manifest,
@@ -194,6 +272,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             digest_sink=digest_sink,
             mode=mode,
             sensing=sensing,
+            decision_log_sink=decision_log_sink,
+            profile_sink=profile_sink,
+            defensive_reply_cache=defensive_reply_cache,
         )
         if mode != "strategy":
             raise ValueError("Sh20OnlineScheduler requires mode == 'strategy'")
@@ -260,6 +341,12 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         # 并断言必返 False——验证跑零收益、全检查；不设或非"1"则正常运行。
         self._admit_gate_verify = (
             os.environ.get("SH_ADMIT_GATE_VERIFY") == "1")
+        # 改法S2 影子验证开关（SH_SNAPSHOT_VERIFY=1）：快照纪元缓存命中
+        # 与 qp 聚合账本两条路径都仍按原始逐 chunk while 现算完整重算并
+        # 逐字段断言相等——验证跑零收益、全检查；不设或非"1"则正常运行
+        # （生产走缓存）。开关姿态与命名对齐 SH_ADMIT_GATE_VERIFY（改法D）。
+        self._snapshot_verify = (
+            os.environ.get("SH_SNAPSHOT_VERIFY") == "1")
 
         self.runtime_by_request_id = {
             runtime.request.request_id: runtime for runtime in self.runtimes}
@@ -281,8 +368,17 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             runtime.decode_tokens_consumed = 0
             runtime.prefill_tokens_completed = 0
             runtime.drain_block_ends = None
+            # 改法S2-B：剩余 prefill chunk 的 Roofline 负载聚合账本
+            # （整数 int；sh_2.0 快照口径自 prompt_tokens_processed 起折算
+            # ——该字段在 qp 会员期内不变（仅 drain 改写），故账本在入队时
+            # 一次置全量后恒定、drain 出队清零；face_scheduler 的
+            # _RequestRuntime 为普通类，沿用本仓"仅给实例追加属性"模式）。
+            runtime.queued_chunk_load_ns = 0
         # 拼 batch 列车台账（§7.3 不变量断言输入）：每次列车发射一行，
         # 由 online_service 落 bridge 目录 train_ledger.jsonl（审计产物）。
+        # M3 流式落盘（2026-08-23）：提供 train_ledger_sink 时行即写即
+        # 弃，不驻留本列表；缺省 None = 兼容旧路径（行仍缓冲）。
+        self.train_ledger_sink = train_ledger_sink
         self.train_ledger_rows = []
         # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
         # 交付默认 = 8(2026-08-22 §7.4 A2 对拍裁决,sh_1.0 母本统一:
@@ -291,6 +387,11 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self._train_max_iter = int(
             os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
         self._train_instance_index = {}
+        # WP9 首 token 首步批拆分（2026-08-26）：batch_train_<id>_first_step
+        # 唤醒 id -> 实例索引。首步批（无请求级 watch）完成时其唤醒 watch
+        # fire 经 PREFILL_DRAIN 通道送回，本表区分"自己发射的首步唤醒"与
+        # 真哨兵信号；唤醒只作余量批的交付边界，不进任何决策/核销路径。
+        self._pending_first_steps = {}
 
     # ------------------------------------------------------------- 策略 --
 
@@ -326,6 +427,16 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 raise ValueError(
                     "unknown completion stage {!r} for request {!r}".format(
                         stage, request_id))
+        # WP9 首 token 拆分（2026-08-26）：batch_train_*_first_step 唤醒
+        # 信号是"自己发射的首步批"的交付回声——无操作（不决策/不记账/
+        # 不写 decision_log），从哨兵核销通道剥离；余量批在
+        # _plan_and_emit_trains 的 busy 分支发射（本交付或任一后续交付，
+        # 余量节点经依赖边排在首步节点之后，早发不改物理序）。首步批的
+        # commit ack 走基类协议记账（ack_count/幂等门），变体侧零动作。
+        sentinel_trains = [
+            train_id for train_id in sentinel_trains
+            if not self._consume_first_step_wakeup(train_id)
+        ]
         self._finalize_completed_trains(
             drained, completed_now, sentinel_trains, tick)
         for request_id in drained:
@@ -401,12 +512,23 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                         runtime.remaining_chunks -= 1
                     state.iteration_count += iterations
                     state.in_flight_train = None
+                    # M4 核销即删（2026-08-23）：列车核销后其 train_id→
+                    # 实例索引条目即死重（哨兵条目已在信号路由处弹出，
+                    # 此 pop 对其为幂等 no-op；全仓 grep 证实核销后无读者）。
+                    self._train_instance_index.pop(train["train_id"], None)
                     state.finalized_trains.append({
                         "train_id": train["train_id"],
                         "pending": (train["signal_set"] - inflight_hits),
                     })
                     consumed |= inflight_hits
                     pending_signals -= inflight_hits
+                    # 改法S2-A：列车核销改写本实例全部快照输入类别（成员
+                    # decode 进度/active_decode 退出成员/队列头 remaining_
+                    # chunks 推进/in_flight_train 清空）——实例纪元 +1，
+                    # 快照缓存失效。改法S2-B 无扣减：sh_2.0 快照口径自
+                    # prompt_tokens_processed 折算（qp 会员期内不变），
+                    # 成员聚合账本不随核销变化。
+                    self._bump_instance_epoch(state)
             # 已核销列车的后续信号对账（幂等清 pending，清空即出列表）。
             for record in state.finalized_trains:
                 hits = pending_signals & record["pending"]
@@ -568,13 +690,33 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 snapshot.encode()).hexdigest(),
         }
 
+    def _consume_first_step_wakeup(self, train_id: str) -> bool:
+        """识别并吞掉自己发射的首步批唤醒信号（WP9，2026-08-26）。
+
+        首步批的唤醒 watch 用批命名空间 id（"<train_id>_first_step"，
+        batch_train_ 前缀），fire 后与真哨兵同通道送达。返回 True = 这是
+        首步唤醒（无操作，仅从哨兵核销列表剥离）；False = 非首步 id
+        （真哨兵或未知 batch_train_ id，交回哨兵核销逻辑处理）。"""
+        if train_id not in self._pending_first_steps:
+            return False
+        self._pending_first_steps.pop(train_id)
+        return True
+
     def _plan_and_emit_trains(self, tick: int) -> None:
         """为每个空闲且有工作的实例冻结并发射下一列车（§3.2 原子提交
         的后半：KV 就绪成员（pending_decode_ready，迁移随加入列车发射，
         物理先于列车体）进入 active_decode → 冻结成员 → 发射）。
-        busy 门 = 一个列车在飞（§3.2）：在飞实例跳过，不重复发射。"""
+        busy 门 = 一个列车在飞（§3.2）：在飞实例跳过，不重复发射;
+        WP9 拆分列车的余量批在 busy 分支发射（首步唤醒到达后的首个
+        决策边界）。"""
         for state in self.instances:
             if state.in_flight_train is not None:
+                if state.first_step_remainder is not None:
+                    # WP9：两段式发射的后半——余量体 + drain/exit/哨兵
+                    # 标记 + end barrier。发射后 in_flight_train 语义恢复
+                    # 整列口径（标记 watch 全部在本批注册）。发射不改任何
+                    # 快照输入（busy/成员不变），实例纪元不 bump。
+                    self._emit_train_remainder(state, tick)
                 continue  # busy 门：一个列车在飞
             joiners = []
             if state.pending_decode_ready:
@@ -587,14 +729,95 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     self._note_emitted(request_id, STAGE_DECODE)
                     self._ledger_issue(
                         request_id, tick, STAGE_DECODE, state.index)
+                # 改法S2-A：decode 成员入批（active_decode 变更）——实例
+                # 纪元 +1，快照缓存失效。
+                self._bump_instance_epoch(state)
             plan = self._plan_train(state)
             if plan is None:
                 continue
             self._emit_train(state, plan, joiners, tick)
 
+    def _first_token_split_spans(self, plan):
+        """WP9 首/余量 span 组切分（机械操作，2026-08-26）。
+
+        首步 = [prefill 队头第 1 个 chunk] + [各 decode 成员第 1 个
+        span]；余量 = 其余。partial 恢复列车的 layout 本就是 [首 chunk]
+        + [各成员第 1 迭代 span] + [其余 chunk + 成员剩余 span]，前缀组
+        恰为首步组（partial_first_chunk_count 切点）；非 partial 列车
+        layout 为 [全部 chunk] + [成员分组 span]，按成员起点切。聚合节点
+        对 span 求和与顺序无关，两组的激活/KV/AR 字节总量与整列一致;
+        权重经 weight_passes（1 + iterations-1）合计不变。"""
+        spans = list(plan["pass_spans"])
+        if plan.get("partial"):
+            cut = int(plan["partial_first_chunk_count"])
+            return list(spans[:cut]), list(spans[cut:])
+        chunk_count = len(plan["prefill_chunk_tokens"])
+        member_parts = plan["members"]
+        if chunk_count + sum(p for _, p in member_parts) != len(spans):
+            raise RuntimeError(
+                "train span layout does not match the frozen plan")
+        first_spans = spans[:1] if chunk_count else []
+        rest_spans = list(spans[1:chunk_count]) if chunk_count else []
+        offset = chunk_count
+        for _, participation in member_parts:
+            first_spans.append(spans[offset])
+            rest_spans.extend(spans[offset + 1:offset + participation])
+            offset += participation
+        return first_spans, rest_spans
+
+    def _first_token_plan(self, plan, joiner_indexes):
+        """WP9 首 token 观测计划（None = 开关关闭/无 debut，行为与拆分
+        上线前逐字节一致）。
+
+        debut 成员 = 本交付加入列车的 decode 成员（decode_tokens_consumed
+        == 0，计划期可知）。多 token debut 挂独立 first_token 标记;
+        decode_length=1 的 debut 其 exit 标记名附加 first_token 子串
+        （同节点 code 4/8 双锚点，保证 first_token_ns == completion_ns）。
+        iterations >= 2 时物理拆两批（首步批 + 余量批），否则仅做不拆车
+        的标记增强。"""
+        if not first_token_split_enabled():
+            return None
+        debut_indexes = [
+            request_index for request_index in joiner_indexes
+            if self.runtimes[request_index].decode_tokens_consumed == 0
+        ]
+        if not debut_indexes:
+            return None
+        debut_marker_members = [
+            {"request_id": self.runtimes[request_index].request.request_id}
+            for request_index in debut_indexes
+            if self.runtimes[request_index].request.decode_length != 1
+        ]
+        debut_exit_first_token = [
+            self.runtimes[request_index].request.request_id
+            for request_index in debut_indexes
+            if self.runtimes[request_index].request.decode_length == 1
+        ]
+        if plan["iterations"] >= 2:
+            first_spans, rest_spans = self._first_token_split_spans(plan)
+            return {
+                "split": True,
+                "first_spans": first_spans,
+                "rest_spans": rest_spans,
+                "debut_marker_members": debut_marker_members,
+                "debut_exit_first_token": debut_exit_first_token,
+                "wakeup_id": "{}_first_step".format(plan["train_id"]),
+            }
+        return {
+            "split": False,
+            "debut_marker_members": debut_marker_members,
+            "debut_exit_first_token": debut_exit_first_token,
+        }
+
     def _emit_train(self, state, plan, joiner_indexes, tick: int) -> None:
         """把冻结的列车计划交给构图器发射，注册 drain/exit 标记 watch，
-        并挂起 in_flight_train（busy 门 = 一个列车在飞）。"""
+        并挂起 in_flight_train（busy 门 = 一个列车在飞）。
+
+        WP9（2026-08-26）：列车含 debut 成员且拆分开启、迭代数 >= 2 时
+        两段式发射——本交付只发首步批（迁移/起始标记/首迭代体/first_
+        token 标记/唤醒标记），drain/exit/哨兵 watch、块末账本与正常
+        train_ledger 行移至余量批（_emit_train_remainder）；成员选择/
+        排序/KV 动作/挂点语义全部不变。"""
         joiner_plans = []
         for request_index in joiner_indexes:
             runtime = self.runtimes[request_index]
@@ -627,6 +850,16 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         if plan.get("partial"):
             train_plan["partial_first_chunk_count"] = (
                 plan["partial_first_chunk_count"])
+        first_token = self._first_token_plan(plan, joiner_indexes)
+        if first_token is not None:
+            train_plan["first_token"] = first_token
+            if first_token["split"]:
+                # WP9：joiner index 快照随 train_plan 走（余量批的台账
+                # 行需要与首步行相同的 joiners 记录；joiner_plans 只在
+                # 首步批消费）。
+                train_plan["joiner_indexes_of_record"] = list(joiner_indexes)
+                self._emit_train_first_step(state, plan, train_plan, tick)
+                return
         result = self.graph.emit_iteration_train(train_plan)
         for request_index in plan["drain_members"]:
             request_id = self.runtimes[request_index].request.request_id
@@ -668,7 +901,17 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 head_runtime.prefill_start_ns = tick
         self._train_instance_index[plan["train_id"]] = state.index
         state.in_flight_train = plan
-        self.train_ledger_rows.append({
+        # 改法S2-A：在飞列车挂起（快照 running 分量的 busy 门输入变更）
+        # ——实例纪元 +1，快照缓存失效。
+        self._bump_instance_epoch(state)
+        self._emit_train_ledger_row(state, plan, joiner_indexes, tick)
+
+    def _emit_train_ledger_row(self, state, plan, joiner_indexes, tick: int,
+                               first_step: bool = False) -> None:
+        """train_ledger 行（M3 流式落盘）。WP9：拆分列车的首步批先写
+        first_step=True 行（ON/OFF 对拍剥离标记），余量批再写正常行
+        （与整列发射的行同构）。"""
+        ledger_row = {
             "train_id": plan["train_id"],
             "instance_index": state.index,
             "tick": tick,
@@ -686,7 +929,93 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             "prefill_chunks": len(plan["prefill_chunk_tokens"]),
             "partial": bool(plan.get("partial")),
             "pass_spans": len(plan["pass_spans"]),
+        }
+        if first_step:
+            ledger_row["first_step"] = True
+        # M3 流式落盘：提供 train_ledger_sink 时行即写即弃；缺省缓冲。
+        if self.train_ledger_sink is not None:
+            self.train_ledger_sink(ledger_row)
+        else:
+            self.train_ledger_rows.append(ledger_row)
+
+    def _emit_train_first_step(self, state, plan, train_plan,
+                               tick: int) -> None:
+        """WP9 首步批发射（两段式前半，2026-08-26）：构图 + 唤醒 watch
+        注册 + busy 门挂起 + first_step 台账行。drain/exit/哨兵 watch、
+        drain_block_ends 与正常台账行全部移至余量批。"""
+        first_token = train_plan["first_token"]
+        result = self.graph.emit_train_first_step(train_plan)
+        self._batch["watches"].append({
+            # 批命名空间唤醒 watch（哨兵同款单事件通道）：首步批完成即
+            # 交付余量批；不挂任何请求，fire 事件在 run_variant_policy
+            # 的 _consume_first_step_wakeup 处无操作剥离。
+            "request_id": first_token["wakeup_id"],
+            "stage": STAGE_PREFILL,
+            "generation": 0,
+            "members": result["wakeup_members"],
+            "statuses": ["Success", "Skipped"],
         })
+        if plan["prefill_chunk_tokens"]:
+            # offline:（prefill_start）首 chunk 物理开跑时刻 = 首步批发射
+            # （与整列发射同一交付 tick，口径不变）。
+            head_runtime = self.runtimes[plan["prefill_chunk_tokens"][0][0]]
+            if head_runtime.prefill_start_ns is None:
+                head_runtime.prefill_start_ns = tick
+        self._train_instance_index[plan["train_id"]] = state.index
+        state.in_flight_train = plan
+        state.first_step_remainder = train_plan
+        self._pending_first_steps[first_token["wakeup_id"]] = state.index
+        # 改法S2-A：在飞列车挂起（busy 门输入变更）——实例纪元 +1，
+        # 快照缓存失效（与整列发射同一点）。
+        self._bump_instance_epoch(state)
+        self._emit_train_ledger_row(
+            state, plan, train_plan["joiner_indexes_of_record"],
+            tick, first_step=True)
+
+    def _emit_train_remainder(self, state, tick: int) -> None:
+        """WP9 余量批发射（两段式后半，2026-08-26）：余量体 + drain/
+        exit/哨兵标记 + end barrier，随后注册 drain/exit/哨兵 watch、
+        drain_block_ends 账本与正常台账行——与整列发射的后半完全同构。
+        发射不改任何快照输入（busy/成员不变），实例纪元不 bump。"""
+        train_plan = state.first_step_remainder
+        state.first_step_remainder = None
+        plan = state.in_flight_train
+        result = self.graph.emit_train_remainder(train_plan)
+        for request_index in plan["drain_members"]:
+            request_id = self.runtimes[request_index].request.request_id
+            members = result["drain_members"][request_id]
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_PREFILL,
+                "generation": 0,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+            self.runtimes[request_index].drain_block_ends = dict(
+                result["block_ends"])
+        for request_index in plan["exit_members"]:
+            request_id = self.runtimes[request_index].request.request_id
+            members = result["exit_members"][request_id]
+            self._batch["watches"].append({
+                "request_id": request_id,
+                "stage": STAGE_DECODE,
+                "generation": 1,
+                "members": members,
+                "statuses": ["Success", "Skipped"],
+            })
+        if plan["sentinel"]:
+            # T_max 截断且无自然标记:哨兵 watch(train_id 批命名空间,
+            # 固定 prefill 单事件通道——decode 通道会双事件 + 完成计账
+            # 下溢)。
+            self._batch["watches"].append({
+                "request_id": plan["train_id"],
+                "stage": STAGE_PREFILL,
+                "generation": 0,
+                "members": result["sentinel_members"],
+                "statuses": ["Success", "Skipped"],
+            })
+        self._emit_train_ledger_row(
+            state, plan, train_plan["joiner_indexes_of_record"], tick)
 
     # ------------------------------------------------------------- 边界 --
 
@@ -747,6 +1076,11 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         if index not in state.qp:
             raise RuntimeError("draining request is not in its prefill queue")
         state.qp.remove(index)
+        # 改法S2-B：drain 出队核销聚合账本（sh_2.0 口径的账本在 qp 会员
+        # 期内恒定，出队即不再进快照求和；清零即删）。
+        runtime.queued_chunk_load_ns = 0
+        # 改法S2-A：qp 成员变更——实例纪元 +1，快照缓存失效。
+        self._bump_instance_epoch(state)
         runtime.prefill_complete_ns = tick
         # offline: face_scheduler.py（expand_prefill）
         runtime.prefill_evictions = self.kv_manager.expand_prefill(
@@ -757,6 +1091,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=runtime.request.request_id,
         )
         self._bump_kv_ledger_epoch()  # 改法D：expand_prefill 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            runtime.prefill_evictions)
         # offline: face_scheduler.py（select_decode_instance；精确 Roofline
         # 增量代价按当前候选状态直接计算）
         has_prefill_work = [bool(instance.qp) for instance in self.instances]
@@ -796,6 +1132,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             )
         )
         self._bump_kv_ledger_epoch()  # 改法D：move_request_capacity_reservation 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            reservation_move_evictions)
         # offline: face_scheduler.py
         (runtime.prefill_decode_transfer,
          decode_move_evictions) = self.kv_manager.move_prefill_to_decode(
@@ -805,6 +1143,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=runtime.request.request_id,
         )
         self._bump_kv_ledger_epoch()  # 改法D：move_prefill_to_decode 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            decode_move_evictions)
         # offline: face_scheduler.py
         decode_growth_evictions = self.kv_manager.expand_decode(
             session_id=runtime.request.session_id,
@@ -814,6 +1154,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=runtime.request.request_id,
         )
         self._bump_kv_ledger_epoch()  # 改法D：expand_decode 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            decode_growth_evictions)
         runtime.decode_evictions = (
             reservation_move_evictions + decode_move_evictions
             + decode_growth_evictions
@@ -854,9 +1196,17 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 "decode_instance_index": runtime.decode_instance_index,
                 "prefill_instance_index": runtime.prefill_instance_index,
                 "decode_eviction_count": len(runtime.decode_evictions),
+                # B3-6（2026-08-27）：逐出 victim/bytes 逐条序列化
+                # （_transfer_entry_rows；纯输出，进剥离清单）。
+                "decode_evictions": _transfer_entry_rows(
+                    runtime.decode_evictions),
                 "prefill_decode_transfer_bytes": (
                     runtime.prefill_decode_transfer.total_bytes
                     if runtime.prefill_decode_transfer else 0),
+                # WP9-线5 hopbytes 诊断：decode 段传输对象 noc 路由摘要。
+                "transfer_hop_bytes": _transfer_hop_rows(
+                    list(runtime.decode_evictions)
+                    + [runtime.prefill_decode_transfer]),
             },
         }, tick)
         self._batch["assignments"].append({
@@ -919,6 +1269,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             trigger_request_id=runtime.request.request_id,
         )
         self._bump_kv_ledger_epoch()  # 改法D：enforce_reserve 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            runtime.completion_evictions)
         # offline: face_scheduler.py（快照）
         completion_snapshot = self.kv_manager.session_snapshot(
             runtime.request.session_id)
@@ -934,9 +1286,17 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             "kind": "completion", "request_id": request_id, "priority": 0,
             "decision": {
                 "completion_eviction_count": len(runtime.completion_evictions),
+                # B3-6（2026-08-27）：逐出 victim/bytes 逐条序列化
+                # （_transfer_entry_rows；纯输出，进剥离清单）。
+                "completion_evictions": _transfer_entry_rows(
+                    runtime.completion_evictions),
                 "kv_location_after_completion": (
                     runtime.kv_location_after_completion),
                 "reserve_unmet_ranks": list(runtime.reserve_unmet_ranks),
+                # WP9-线5 hopbytes 诊断：completion 段传输对象 noc 路由
+                # 摘要。
+                "transfer_hop_bytes": _transfer_hop_rows(
+                    runtime.completion_evictions),
             },
         }, tick)
         self.graph.emit_completion_batch(self._plan_of(runtime), following_plan)
@@ -959,6 +1319,23 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     "inter_request_interval_ns": interval,
                 },
             })
+        # M4 核销即删（2026-08-23）：请求完成后其 KV 转移对象/准入
+        # 负载快照等胖字段再无读者（逐出已随 completion 批发射进图、
+        # 审计已随决策行落盘；下一 turn 是独立 runtime；runtimes 列表
+        # 运行全程存活，不置空会随完成请求数线性常驻）——置空即删。
+        # sh_2.0 特有字段（partial 前缀两段式迁移）history_prefix_transfer
+        # 同口径处理：admission 发射后即无读者（与母本 sh_3.0 的字段集
+        # 差异点，显式注释）。
+        runtime.history_evictions = ()
+        runtime.prefill_evictions = ()
+        runtime.decode_evictions = ()
+        runtime.completion_evictions = ()
+        runtime.history_prefix_transfer = None
+        runtime.history_transfer = None
+        runtime.prefill_decode_transfer = None
+        runtime.history_location_before = None
+        runtime.drain_block_ends = None
+        runtime.prefill_instance_loads = ()
 
     # ------------------------------------------------------------- 准入 --
 
@@ -966,6 +1343,15 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         """改法D：KV 账本纪元 +1。仅调度器的 9 个 KV 变更点后调用
         （见各调用处注释）；可行性读取与 _check_invariants 只读、不 bump。"""
         self._kv_ledger_epoch += 1
+
+    def _bump_instance_epoch(self, state) -> None:
+        """改法S2-A：实例账本纪元 +1（_task_load_snapshot 快照缓存失效）。
+        仅在本实例快照输入的每个变更点后调用——qp/active_decode 成员变化
+        （准入入队/drain 出队/decode 成员入批/退出成员移除）、成员进度
+        字段推进与 in_flight_train 挂起/核销（列车核销）、last_arrival_ns
+        （准入）；_task_load_snapshot 读取不 bump（对齐改法D
+        _bump_kv_ledger_epoch 的姿态，bump 多只会损失命中、不会错复用）。"""
+        state.ledger_epoch += 1
 
     def _try_admit_request(self, request_index: int, now_ns: int) -> bool:
         """离线 try_admit_request（:3676-3762）的逐行复刻。"""
@@ -1002,6 +1388,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             final_context_tokens=runtime.final_context_tokens,
         )
         self._bump_kv_ledger_epoch()  # 改法D：reserve_request_capacity 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            admission_evictions)
         runtime.prefill_instance_index = selected
         runtime.prefill_assignment_key = selected_snapshot.ordering_key
         runtime.prefill_instance_loads = snapshots
@@ -1017,6 +1405,8 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             reservation_request_id=runtime.request.request_id,
         )
         self._bump_kv_ledger_epoch()  # 改法D：prepare_prefill 后 bump
+        self.graph.sync_pending_history_after_evictions(
+            prepare_evictions)
         runtime.history_evictions = admission_evictions + prepare_evictions
         if runtime.request.turn_index > 0:
             if runtime.history_location_before is None:
@@ -1033,6 +1423,14 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                 if transfer is not None and transfer.kind != "local_hit")
         self.instances[selected].qp.append(request_index)
         self.instances[selected].last_arrival_ns = now_ns
+        # 改法S2-B：入队即置成员聚合账本全量（sh_2.0 口径自
+        # prompt_tokens_processed 折算——准入时点该字段为出厂 0，与原始
+        # while 现算同键同值的一次性计算；qp 会员期内恒定，drain 清零）。
+        runtime.queued_chunk_load_ns = self._queued_chunk_load_full_ns(
+            instance_size=self.topology.instance(selected).size,
+            runtime=runtime)
+        # 改法S2-A：qp 成员与 last_arrival_ns 变更——实例纪元 +1。
+        self._bump_instance_epoch(self.instances[selected])
         # 准入动作发射（拼 batch 改造：到达 gates/历史迁移（含 partial
         # 前缀两段式迁移分支）/逐出/屏障在准入时点发射；prefill 主体移入
         # 实例迭代列车，在 _plan_and_emit_trains 处发射。物理串行化由图内
@@ -1059,6 +1457,41 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     runtime.history_transfer_bytes),
                 "history_eviction_count": (
                     len(runtime.history_evictions)),
+                # B3-6（2026-08-27）：逐出 victim/bytes 逐条序列化 + partial
+                # 两段式恢复逐段对象（见 _transfer_entry_rows docstring）。
+                # 纯输出字段，进 ON/OFF 对拍剥离清单。
+                "history_evictions": _transfer_entry_rows(
+                    runtime.history_evictions),
+                "prefill_evictions": _transfer_entry_rows(
+                    runtime.prefill_evictions),
+                "history_transfers": _transfer_entry_rows(
+                    [runtime.history_prefix_transfer,
+                     runtime.history_transfer]),
+                # WP9-线5（2026-08-26）：准入时点的会话历史位置序列化。
+                # 纯输出字段——只把运行态已有的 SessionKVSnapshot 快照
+                # 落进决策日志，不改任何决策/KV 逻辑；供 kv_cache_adapter
+                # 的 S2 分支映射 kv_hit_state（local_hbm=full /
+                # partial_hbm_remote=partial / remote_memory=full——远存
+                # 整体恢复非重算，与 S1 remote_load 口径一致；S2 无
+                # recompute 语义，miss 不出现属预期）。ON/OFF 对拍剥离
+                # 清单含此字段（新增诊断字段）。
+                "history_location_before": (
+                    None if runtime.history_location_before is None
+                    else runtime.history_location_before.location),
+                "history_location_before_instance_index": (
+                    None if runtime.history_location_before is None
+                    else runtime.history_location_before.instance_index),
+                "history_resident_prefix_layers": (
+                    None if runtime.history_location_before is None
+                    else runtime.history_location_before.
+                    resident_prefix_layers),
+                # WP9-线5 hopbytes 诊断：准入段全部传输对象的 noc 路由
+                # 摘要（shards 已按 deterministic_xy_route 生成）。
+                "transfer_hop_bytes": _transfer_hop_rows(
+                    list(runtime.history_evictions)
+                    + [runtime.history_prefix_transfer,
+                       runtime.history_transfer]
+                    + list(runtime.prefill_evictions)),
             },
         }, tick)
         # 阶段 3 感知账本：发射记录 + issued 层写入（face :777-779 同款；
@@ -1158,7 +1591,114 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             按 decode_tokens_consumed 的闭式迭代级剩余量（决策边界上
             current_decode_token = prefill_context + consumed 与逐 token
             精确值逐点一致；估算器/公式/参数不动，generated_tokens 与
-            current_context_tokens 换为列车闭式账本值）。"""
+            current_context_tokens 换为列车闭式账本值）。
+
+        改法S2（2026-08-23，快照纪元缓存 + qp 聚合账本）：
+          - S2-A 快照纪元缓存：实例账本（qp/active_decode 成员、成员
+            进度字段、in_flight_train、last_arrival_ns）纪元未变则复用
+            上次快照（InstanceTaskLoadSnapshot 为冻结 dataclass，复用
+            引用零风险；now_ns 非取值输入——签名保留，不入缓存条件）。
+            调用方（_try_admit_request 每 admit 尝试对全部实例求快照）
+            在同一批内的重复求值自此走 O(1) 缓存命中。
+          - S2-B qp 聚合账本：running/queued 的"逐请求逐 chunk while
+            现算"改为成员聚合账本读数（准入置全量、drain 清零——sh_2.0
+            口径自 prompt_tokens_processed 折算，该字段 qp 会员期内
+            不变，账本恒定无需扣减），实际计算体见
+            _compute_task_load_snapshot。
+          - 影子断言（SH_SNAPSHOT_VERIFY=1）：缓存路径与聚合路径都仍按
+            _reference_task_load_snapshot 的原始逐 chunk 现算完整重算并
+            逐字段断言相等（零收益、全检查）；生产（不设或非"1"）走缓存。
+        """
+        if (state.snapshot_cache is not None
+                and state.snapshot_epoch == state.ledger_epoch
+                and not self._snapshot_verify):
+            return state.snapshot_cache
+        snapshot = self._compute_task_load_snapshot(state)
+        if self._snapshot_verify:
+            reference = self._reference_task_load_snapshot(state)
+            if snapshot != reference:
+                raise RuntimeError(
+                    "task-load snapshot aggregate ledger diverged from the "
+                    "reference while-loop computation for instance {} "
+                    "(epoch {})".format(state.index, state.ledger_epoch))
+            if (state.snapshot_cache is not None
+                    and state.snapshot_epoch == state.ledger_epoch):
+                if state.snapshot_cache != snapshot:
+                    raise RuntimeError(
+                        "task-load snapshot epoch cache diverged for "
+                        "instance {} (epoch {})".format(
+                            state.index, state.ledger_epoch))
+                return state.snapshot_cache
+        state.snapshot_cache = snapshot
+        state.snapshot_epoch = state.ledger_epoch
+        return snapshot
+
+    def _compute_task_load_snapshot(self, state: _OnlineInstanceState,
+                                    ) -> InstanceTaskLoadSnapshot:
+        """_task_load_snapshot 的实际计算体（改法S2 后形态；仅缓存未命中
+        或影子验证时执行）。三分量口径见 _task_load_snapshot docstring。
+
+        S2-B 整数精确性证明（红线：折算公式一个数都不能变）：三分量
+        全部是 Python int 的加減——estimate_prefill_task_load_ns 与
+        estimate_decode_remaining_task_load_ns 的返回值都是 math.ceil
+        产生的 int（face_scheduler.py），int 加減精确、满足结合/交换律
+        且无舍入，故聚合账本与逐项 while 现算在数学上逐位相等，不存在
+        浮点求和序漂移：
+          - running_prefill = running 成员聚合账本（= 自其
+            prompt_tokens_processed（qp 会员期内恒 0）起的全量剩余逐键
+            求和，准入时一次算定）；
+          - queued_prefill = Σ_qp 成员聚合账本 − running 成员账本
+            （原始"在飞请求折 0"口径的增量等价）；
+          - active_decode 与原始计算体相同（成员有界，memo 查找非热点）。"""
+        instance_size = self.topology.instance(state.index).size
+
+        running_index = None
+        if state.in_flight_train is not None:
+            # busy 门 = 一个列车在飞；running prefill = 列车 chunk 工作
+            # 的队列头（drain 事件跨交付未达的头部不提供 chunk 工作）。
+            for request_index in state.qp:
+                if self.runtimes[request_index].remaining_chunks > 0:
+                    running_index = request_index
+                    break
+
+        queued_load_ns = 0
+        for request_index in state.qp:
+            queued_load_ns += self.runtimes[request_index].queued_chunk_load_ns
+        running_prefill_load_ns = 0
+        if running_index is not None:
+            running_prefill_load_ns = (
+                self.runtimes[running_index].queued_chunk_load_ns)
+            queued_load_ns -= running_prefill_load_ns
+
+        active_decode_load_ns = 0
+        for request_index in state.active_decode:
+            runtime = self.runtimes[request_index]
+            # 闭式迭代级剩余量：generated = 已物理完成 decode token 数
+            # （列车核销推进），current_context = prefill_context +
+            # generated（KV 随迭代增长的同款口径）。fraction 保持 1.0
+            # （决策边界恰在列车边界上，无半个在飞迭代）。
+            generated_tokens = runtime.decode_tokens_consumed
+            active_decode_load_ns += self._decode_task_load_ns_cached(
+                instance_size=instance_size,
+                current_context_tokens=runtime.current_decode_token,
+                generated_tokens=generated_tokens,
+                average_decode_length=self.average_decode_length,
+                running_step_fraction_remaining=1.0,
+            )
+
+        return InstanceTaskLoadSnapshot(
+            instance_index=state.index,
+            running_prefill_task_load_ns=running_prefill_load_ns,
+            queued_prefill_task_load_ns=queued_load_ns,
+            active_decode_task_load_ns=active_decode_load_ns,
+            last_arrival_ns=state.last_arrival_ns,
+        )
+
+    def _reference_task_load_snapshot(self, state: _OnlineInstanceState,
+                                      ) -> InstanceTaskLoadSnapshot:
+        """改法S2 影子参照（SH_SNAPSHOT_VERIFY=1 专用）：S2 之前的原始
+        _task_load_snapshot 计算体逐行保留（running/queued 逐请求逐
+        chunk while 现算）——生产路径零调用。"""
         instance_size = self.topology.instance(state.index).size
 
         running_prefill_load_ns = 0
@@ -1212,6 +1752,27 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             active_decode_task_load_ns=active_decode_load_ns,
             last_arrival_ns=state.last_arrival_ns,
         )
+
+    def _queued_chunk_load_full_ns(self, *, instance_size, runtime) -> int:
+        """改法S2-B：成员聚合账本的一次性全量计算（准入时点调用）——与
+        _reference_task_load_snapshot 的 while 现算对同一请求自其
+        prompt_tokens_processed 起逐 chunk 同键同值。sh_2.0 口径下该字段
+        在 qp 会员期内不变（仅 drain 改写），账本自此恒定至 drain 清零。"""
+        remaining_tokens = (
+            runtime.prefill_tokens_to_process
+            - runtime.prompt_tokens_processed)
+        processed = runtime.prompt_tokens_processed
+        total_ns = 0
+        while remaining_tokens > 0:
+            chunk_tokens = min(self.p_chunk, remaining_tokens)
+            context_tokens = (
+                runtime.history_tokens_before + processed + chunk_tokens)
+            total_ns += self._prefill_chunk_task_load_ns(
+                instance_size=instance_size, chunk_tokens=chunk_tokens,
+                context_tokens=context_tokens)
+            processed += chunk_tokens
+            remaining_tokens -= chunk_tokens
+        return total_ns
 
     def _queued_prefill_task_load_ns(self, state: _OnlineInstanceState, *,
                                      instance_size: int,
@@ -1309,6 +1870,15 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                for state in self.instances):
             raise RuntimeError(
                 "strategy run ended with non-idle instance state")
+        # WP9：全部首步拆分必须已交付余量批、唤醒信号已核销。
+        if self._pending_first_steps:
+            raise RuntimeError(
+                "strategy run ended with undelivered first-step wakeups: "
+                "{}".format(sorted(self._pending_first_steps)[:5]))
+        if any(state.first_step_remainder is not None
+               for state in self.instances):
+            raise RuntimeError(
+                "strategy run ended with an undelivered train remainder")
         if self.arrival_heap:
             raise RuntimeError(
                 "run ended with {} unconsumed arrival events".format(

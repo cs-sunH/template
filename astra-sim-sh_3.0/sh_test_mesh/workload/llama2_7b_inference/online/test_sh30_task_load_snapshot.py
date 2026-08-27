@@ -87,6 +87,9 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     # 改法A（decode 估算全参 memo）：_task_load_snapshot 的 active_decode 段
     # 改读 _decode_task_load_ns_cached，脚手架同步装配其缓存字典。
     scheduler._decode_task_load_cache = {}
+    # 改法S2（快照纪元缓存 + qp 聚合账本，2026-08-23）：_task_load_snapshot
+    # 的缓存包装读 _snapshot_verify，脚手架同步装配（缺省 False = 生产姿态）。
+    scheduler._snapshot_verify = False
     return scheduler
 
 
@@ -121,9 +124,18 @@ def _train_with_chunk_spans(spans):
     }
 
 
-def _make_state(*, index, qp=(), in_flight_train=None, active_decode=()):
+def _make_state(*, index, qp=(), in_flight_train=None, active_decode=(),
+                scheduler=None):
     state = _OnlineInstanceState(index=index)
     for runtime in qp:
+        # 改法S2-B（qp 聚合账本）：手工态同步装配成员聚合账本（生产路径
+        # 由准入点 _try_admit_request 置全量，此处等价补齐）。
+        if scheduler is not None:
+            runtime.queued_chunk_load_ns = (
+                scheduler._queued_chunk_load_full_ns(
+                    instance_size=(
+                        scheduler.topology.instance(index).size),
+                    runtime=runtime))
         state.qp.append(runtime)
     for runtime in active_decode:
         state.active_decode.append(runtime)
@@ -144,11 +156,11 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         total_task_load_ns 必须相等；在飞态全量只进 running 分量。"""
         inflight = _make_runtime("r0")
         state_inflight = _make_state(
-            index=0, qp=(inflight,),
+            index=0, qp=(inflight,), scheduler=self.scheduler,
             in_flight_train=_train_with_chunk_spans(
                 [(512, 512), (512, 1024)]))
         state_queued = _make_state(
-            index=1, qp=(_make_runtime("r1"),))
+            index=1, qp=(_make_runtime("r1"),), scheduler=self.scheduler)
         snap_inflight = self.scheduler._task_load_snapshot(state_inflight, 0)
         snap_queued = self.scheduler._task_load_snapshot(state_queued, 0)
         # 在飞态：全量只进 running；纯排队态：全量只进 queued。
@@ -166,16 +178,17 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         r0 = _make_runtime("r0", prefill_context_tokens=1024)
         r1 = _make_runtime("r1", prefill_context_tokens=768)
         composite = _make_state(
-            index=0, qp=(r0, r1),
+            index=0, qp=(r0, r1), scheduler=self.scheduler,
             in_flight_train=_train_with_chunk_spans(
                 [(512, 512), (512, 1024)]))
         # 对照 1：仅 r1 排队（同 token 形状）。
         r1_only = _make_state(
-            index=1, qp=(_make_runtime("r1c", prefill_context_tokens=768),))
+            index=1, qp=(_make_runtime("r1c", prefill_context_tokens=768),),
+            scheduler=self.scheduler)
         # 对照 2：仅 r0 在飞（同 token 形状）。
         r0_ctrl = _make_runtime("r0c", prefill_context_tokens=1024)
         r0_only = _make_state(
-            index=1, qp=(r0_ctrl,),
+            index=1, qp=(r0_ctrl,), scheduler=self.scheduler,
             in_flight_train=_train_with_chunk_spans(
                 [(512, 512), (512, 1024)]))
         snap_composite = self.scheduler._task_load_snapshot(composite, 0)
@@ -195,7 +208,7 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         active_decode 集合在"实例有无在飞列车"两种状态下该分量逐位相等
         且 > 0。"""
         with_train = _make_state(
-            index=0, qp=(_make_runtime("r0"),),
+            index=0, qp=(_make_runtime("r0"),), scheduler=self.scheduler,
             in_flight_train=_train_with_chunk_spans([(512, 512)]),
             active_decode=(_make_runtime("d0"),))
         without_train = _make_state(
@@ -234,6 +247,59 @@ class TaskLoadSnapshotExactlyOnceTest(unittest.TestCase):
         snap_exhausted = self.scheduler._task_load_snapshot(
             _make_state(index=0, active_decode=(exhausted,)), 0)
         self.assertEqual(snap_exhausted.active_decode_task_load_ns, 0)
+
+
+class SnapshotEpochCacheTest(unittest.TestCase):
+    """改法S2（2026-08-23，快照纪元缓存 + qp 聚合账本）簿记不变量与
+    影子等价性（对齐 test_admit_gate.py 对改法D 的钉子姿态）。"""
+
+    def setUp(self) -> None:
+        self.scheduler = _make_scheduler()
+
+    def test_cache_hit_reuses_and_bump_invalidates(self):
+        """S2-A：纪元未变 → 命中同一快照对象；纪元 +1 → 重算（输入未变
+        时数值恒等）。"""
+        r0 = _make_runtime("r0")
+        state = _make_state(index=0, qp=(r0,), scheduler=self.scheduler)
+        snap1 = self.scheduler._task_load_snapshot(state, 0)
+        snap2 = self.scheduler._task_load_snapshot(state, 0)  # 命中
+        self.assertIs(snap2, snap1)
+        self.scheduler._bump_instance_epoch(state)  # 模拟实例账本变更
+        snap3 = self.scheduler._task_load_snapshot(state, 0)
+        self.assertIsNot(snap3, snap1)
+        self.assertEqual(snap3, snap1)  # 输入未变 → 数值恒等
+
+    def test_shadow_reference_equals_aggregate(self):
+        """S2-B 影子：聚合路径 == 原始逐 chunk while 现算（组合态全覆盖：
+        qp 多成员 + 在飞列车 + active_decode），命中路径同批再取零 raise。"""
+        r0 = _make_runtime("r0", prefill_context_tokens=1536)
+        r1 = _make_runtime("r1", prefill_context_tokens=768)
+        state = _make_state(
+            index=0, qp=(r0, r1), scheduler=self.scheduler,
+            in_flight_train=_train_with_chunk_spans([(512, 512)]),
+            active_decode=(_make_runtime("d0"),))
+        self.scheduler._snapshot_verify = True
+        snapshot = self.scheduler._task_load_snapshot(state, 0)  # 零 raise
+        reference = self.scheduler._reference_task_load_snapshot(state)
+        self.assertEqual(snapshot, reference)
+        again = self.scheduler._task_load_snapshot(state, 0)  # 命中路径
+        self.assertEqual(again, reference)
+
+    def test_train_finalize_decrement_is_exact(self):
+        """S2-B 扣减精确性：列车核销推进一个 chunk 后，成员聚合账本余量
+        == 原始 while 现算的剩余贡献（整数恒等的逐点钉子）。"""
+        r0 = _make_runtime("r0", prefill_context_tokens=1536)
+        state = _make_state(index=0, qp=(r0,), scheduler=self.scheduler)
+        # 模拟 _finalize_completed_trains 的核销推进（首 chunk 512 token：
+        # span 键 = (512, history+0+512)）。
+        r0.prefill_tokens_completed += 512
+        r0.remaining_chunks -= 1
+        r0.queued_chunk_load_ns -= self.scheduler._prefill_chunk_task_load_ns(
+            instance_size=self.scheduler.topology.instance(0).size,
+            chunk_tokens=512, context_tokens=512)
+        reference = self.scheduler._reference_task_load_snapshot(state)
+        self.assertEqual(
+            reference.queued_prefill_task_load_ns, r0.queued_chunk_load_ns)
 
 
 if __name__ == "__main__":

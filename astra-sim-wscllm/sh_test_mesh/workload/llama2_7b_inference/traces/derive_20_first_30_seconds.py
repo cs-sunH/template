@@ -22,12 +22,21 @@ session_arrival_time_ns,inter_request_interval_ns,description
 
 Usage: derive_20_first_30_seconds.py [source] [recompute_queue]
                                       [canonical_sidecar] [window_ns]
+                                      [arrival_scale]
 (window_ns defaults to 30e9; the canonical sidecar is written next to the
-recompute queue.)
+recompute queue.  arrival_scale defaults to 1.0 and must be a positive
+finite float: it divides ONLY the turn-0 session_arrival_time_ns column
+(t0 / arrival_scale, i.e. load x arrival_scale); inter_request_interval_ns
+-- the human/tool exogenous waits -- is never scaled, and the window gate
+plus all statistics stay on unscaled source times, so scale=1.0
+reproduces the frozen 8-column queue byte-for-byte and a scaled run
+selects exactly the same sessions/requests.  New scale/type provenance
+goes only into the canonical sidecar and stdout, never into the queue.)
 """
 
 import csv
 import hashlib
+import math
 import sys
 
 SOURCE = "/home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv"
@@ -49,6 +58,9 @@ SIDECAR_COLUMNS = [
     "inter_request_interval_ns",
     "prefix_mode",
     "digest",
+    "human_time_ns",
+    "tool_time_ns",
+    "request_type",
 ]
 
 def row_digest(row: list[str]) -> str:
@@ -62,6 +74,22 @@ def main() -> None:
     output = sys.argv[2] if len(sys.argv) > 2 else OUTPUT
     sidecar = sys.argv[3] if len(sys.argv) > 3 else SIDECAR
     window_ns = int(sys.argv[4]) if len(sys.argv) > 4 else WINDOW_NS
+    try:
+        arrival_scale = float(sys.argv[5]) if len(sys.argv) > 5 else 1.0
+    except ValueError:
+        print(
+            f"arrival_scale must be a positive finite float, got "
+            f"{sys.argv[5]!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not math.isfinite(arrival_scale) or arrival_scale <= 0:
+        print(
+            f"arrival_scale must be a positive finite float, got "
+            f"{arrival_scale!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     if window_ns == WINDOW_NS:
         description = DESCRIPTION
     else:
@@ -79,6 +107,7 @@ def main() -> None:
     min_decode = None
     max_arrival = 0
     non_1000 = 0
+    request_type_counts = {"human": 0, "tool": 0, "unknown": 0}
 
     with open(source, newline="") as fin, \
             open(output, "w", newline="") as fout, \
@@ -143,7 +172,9 @@ def main() -> None:
             max_arrival = max(max_arrival, prev_arrival)
             n_requests += 1
             if turn_index == 0:
-                session_arrival = prev_arrival
+                # arrival_scale applies ONLY here (t0 / arrival_scale);
+                # window gating above stays on the unscaled source time.
+                session_arrival = int(round(prev_arrival / arrival_scale))
                 interval = ""
             else:
                 session_arrival = ""
@@ -160,6 +191,17 @@ def main() -> None:
                 description,
             ]
             writer.writerow(row_out)
+            human_time_text = row["human_time"]
+            tool_time_text = row["tool_time"]
+            if human_time_text:
+                request_type = "human"
+            elif tool_time_text:
+                request_type = "tool"
+            elif turn_index == 0:
+                request_type = "human"
+            else:
+                request_type = "unknown"
+            request_type_counts[request_type] += 1
             sidecar_writer.writerow([
                 request_id,
                 turn_index,
@@ -173,6 +215,9 @@ def main() -> None:
                 interval,
                 "recompute",
                 row_digest([str(v) for v in row_out]),
+                human_time_text,
+                tool_time_text,
+                request_type,
             ])
             turn_index += 1
             gap_text = row["human_time"] or row["tool_time"]
@@ -184,6 +229,10 @@ def main() -> None:
     print(f"decode range: {min_decode}-{max_decode}")
     print(f"max in-window arrival: {max_arrival / 1e9:.6f} s")
     print(f"rows with timing not multiple of 1000 ns: {non_1000}")
+    print(f"arrival_scale: {arrival_scale} (only turn-0 "
+          "session_arrival_time_ns divided; intervals untouched)")
+    print("request_type counts: human={human} tool={tool} "
+          "unknown={unknown}".format(**request_type_counts))
     print(f"recompute queue: {output}")
     print(f"canonical sidecar: {sidecar}")
     print("[next-steps] 将 trace_config 的 request_queue_csv 指向 "

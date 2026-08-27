@@ -15,7 +15,12 @@
      turn>0 history=上一请求 final、prefill_context=history+prefill_length
      （recompute 单口径，turn-0 前缀已折入队列 prefill_length）；
      final=context+decode）；
-  3. metrics_manifest.json —— 主 agent 裁决 (i) 的合成口径：
+     B1/WP2 追加（SLO request_metrics.csv 连接用，不删不改既有字段）：
+     每请求 human_time_ns / tool_time_ns / request_type——触发本请求的
+     gap（上一队列行 next_trigger_type × 本行 inter_request_interval_ns，
+     0-gap 无类型延续记 None/None）；request_type 规则：human 非空→human、
+     tool 非空→tool、皆空 turn0→human、皆空 turn>0→unknown（stdout 计数）。
+     3. metrics_manifest.json —— 主 agent 裁决 (i) 的合成口径：
        - schema_version=1 + requests[]（arrival：turn0=absolute session
          arrival；turn>0=after_request(同 session 上一 queue_index, interval)
          ——C++ MetricCollector.cc 只要求
@@ -26,7 +31,13 @@
          instance-0 ranks——静态 rank 归因维度**不可信**；请求级指标
          （e2e/完成/sim_end/tput）可信（裁决 i 条件 b，口径登记于实录）；
        - 对账工具（ledger_reconcile 族）不读本 manifest——只消费归档
-         jsonl（裁决 i 条件 c，已核实维持）。
+         jsonl（裁决 i 条件 c，已核实维持）；
+       - B4/WP2 透传补丁（2026-08-26，S3 异常③）：requests[] 每条附加
+         human_time_ns / tool_time_ns / request_type（与 manifest.json 同
+         源同值，_trigger_gap_ns/_request_type 推导）——slo_stats session
+         的 T_session 依赖这两个透传字段，缺省（此前）只能 NA 或靠
+         --request-manifest 指到 manifest.json。附加键，不删不改既有键；
+         C++ MetricCollector 只按需读键，多余键无影响。
 
 输出目录：sh_test_mesh/generated/llama2_7b_inference_54npus_plan_<cfg8>/（保留 54npus
 前缀以过 GEN_MATCH；<cfg8> = trace_config 内容摘要 8 位 hex）。幂等：重跑
@@ -54,15 +65,100 @@ from generate_face_trace import load_face_trace_config  # noqa: E402  (READ-ONLY
 PREFIX = "llama2_7b_inference"
 REPO_VARIANT = "astra-sim-sh_3.0"
 
+# B2/WP6+WP8 (SLO 指标改造): slo_sampling 注入参数的文档化临时锚点——
+# sh_test_mesh/slo_tools/slo_params_manifest.json 对应 value 为 null（B4
+# 批次才推导）或文件缺失时使用，并置 provisional=true（下游 C++ 记录回显）。
+# 2026-08-26 主控修正：锚点 1ms -> 5ms（60s 窗口桶记录量级控制）。
+SLO_SAMPLING_PROVISIONAL_NS = 5_000_000
+
+
+def _slo_sampling_section():
+    """B2: metrics_manifest.json 的 ``slo_sampling`` 节。
+
+    值来源：本仓 ``sh_test_mesh/slo_tools/slo_params_manifest.json`` 的
+    ``params.watermark_sample_period_ns.value`` / ``params.link_bucket_ns.value``；
+    value 为 null / 参数缺失 / 文件缺失 / 非正整数时回落临时锚点
+    (5,000,000 ns) 并置 ``provisional: true``。只读、fail-open（缺参数不阻断
+    物化；B4 推导后由 C++ 记录回显实际使用值）。
+    """
+    section = {}
+    provisional = False
+    manifest_path = SH_TEST_DIR / "slo_tools" / "slo_params_manifest.json"
+    params = {}
+    try:
+        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict) and isinstance(loaded.get("params"), dict):
+            params = loaded["params"]
+    except (OSError, ValueError):
+        params = {}
+    for key, field in (
+        ("watermark_period_ns", "watermark_sample_period_ns"),
+        ("link_bucket_ns", "link_bucket_ns"),
+    ):
+        raw = params.get(field)
+        value = raw.get("value") if isinstance(raw, dict) else None
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            section[key] = SLO_SAMPLING_PROVISIONAL_NS
+            provisional = True
+        else:
+            section[key] = value
+    section["provisional"] = provisional
+    return section
+
 
 def _config_digest8(config_csv: Path) -> str:
     return hashlib.sha256(config_csv.read_bytes()).hexdigest()[:8]
 
 
+def _trigger_gap_ns(spec, prev_spec):
+    """(human_time_ns, tool_time_ns) of the gap that TRIGGERED ``spec``.
+
+    B1/WP2: the queue stores, per row, the interval to its successor turn
+    (``inter_request_interval_ns``) plus the successor's trigger type
+    (``next_trigger_type`` -- "human"/"tool", frozen materializer
+    semantics).  A request's own trigger gap is therefore read off the
+    PREVIOUS queue row of the same session: interval>0 attributes exactly
+    (next_trigger=human => human_time non-empty = interval;
+    next_trigger=tool & interval>0 => tool_time non-empty = interval);
+    a zero interval is the untyped 0-gap continuation (both stay empty).
+    Turn-0 rows have no preceding gap (both None).
+    """
+
+    human_ns = None
+    tool_ns = None
+    if spec.turn_index > 0 and prev_spec is not None:
+        interval = spec.inter_request_interval_ns
+        if interval is not None:
+            interval = int(interval)
+            trigger = prev_spec.next_trigger_type
+            if trigger == "human":
+                human_ns = interval
+            elif trigger == "tool" and interval > 0:
+                tool_ns = interval
+    return human_ns, tool_ns
+
+
+def _request_type(human_ns, tool_ns, turn_index):
+    """human 非空→human；tool 非空→tool；皆空 turn0→human、否则 unknown."""
+
+    if human_ns is not None:
+        return "human"
+    if tool_ns is not None:
+        return "tool"
+    return "human" if turn_index == 0 else "unknown"
+
+
 def _derive_manifest_requests(config):
-    """manifest.json 的 requests[]（队列派生 9 字段）。"""
+    """manifest.json 的 requests[]（队列派生 9 字段 + B1/WP2 追加字段）。
+
+    B1/WP2 追加（不删不改既有字段）：human_time_ns / tool_time_ns /
+    request_type（session_id / decode_length 已在 9 字段内，缺则补）。
+    """
+
     requests = []
     last_final_by_session = {}
+    prev_spec_by_session = {}
+    request_type_counts = {"human": 0, "tool": 0, "unknown": 0}
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
             history = 0
@@ -73,6 +169,9 @@ def _derive_manifest_requests(config):
             # recompute 单口径后续 turn:context = 驻留 history + 新 prefill
             context = history + int(spec.prefill_length)
         final = context + int(spec.decode_length)
+        human_ns, tool_ns = _trigger_gap_ns(spec, prev_spec_by_session.get(spec.session_id))
+        request_type = _request_type(human_ns, tool_ns, int(spec.turn_index))
+        request_type_counts[request_type] = request_type_counts.get(request_type, 0) + 1
         requests.append({
             "request_id": spec.request_id,
             "session_id": spec.session_id,
@@ -83,19 +182,30 @@ def _derive_manifest_requests(config):
             "history_tokens_before": history,
             "prefill_context_tokens": context,
             "final_context_tokens": final,
+            # ---- B1/WP2 追加字段（SLO request_metrics 连接用） ----
+            "human_time_ns": human_ns,
+            "tool_time_ns": tool_ns,
+            "request_type": request_type,
         })
         last_final_by_session[spec.session_id] = final
-    return requests
+        prev_spec_by_session[spec.session_id] = spec
+    return requests, request_type_counts
 
 
 def _derive_metrics_requests(config):
-    """metrics_manifest.json 的 requests[]（合成口径，占位 rank）。"""
+    """metrics_manifest.json 的 requests[]（合成口径，占位 rank）。
+
+    B4/WP2 透传补丁：每条附加 human_time_ns / tool_time_ns /
+    request_type（与 manifest.json 同源同值——slo_stats session 的
+    T_session 输入；附加键，不删不改既有键）。
+    """
     group_by_index = dict(enumerate(config.inference_groups))
     placeholder_ranks = list(group_by_index[0].ranks)
     queue_by_session_turn = {
         (spec.session_id, spec.turn_index): index
         for index, spec in enumerate(config.request_queue)
     }
+    prev_spec_by_session = {}
     records = []
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
@@ -115,17 +225,28 @@ def _derive_metrics_requests(config):
             arrival = {"kind": "after_request",
                        "parent_queue_index": parent,
                        "interval_ns": int(spec.inter_request_interval_ns)}
+        human_ns, tool_ns = _trigger_gap_ns(
+            spec, prev_spec_by_session.get(spec.session_id))
+        prev_spec_by_session[spec.session_id] = spec
         records.append({
             "queue_index": index,
             "request_id": spec.request_id,
             "session_id": spec.session_id,
             "turn_index": int(spec.turn_index),
             "arrival": arrival,
+            # B2/WP9-C++: decode_length 带入（code-8 首 token 的
+            # decode_length==1 不变量检查用；缺失时 C++ 侧跳过该不变量）。
+            "decode_length": int(spec.decode_length),
             # 裁决 i 条件 b：占位决策字段（instance 0 / instance-0 ranks）
             "prefill_instance": 0,
             "prefill_ranks": placeholder_ranks,
             "decode_instance": 0,
             "decode_ranks": placeholder_ranks,
+            # ---- B4/WP2 附加键（S3 异常③：session 统计透传） ----
+            "human_time_ns": human_ns,
+            "tool_time_ns": tool_ns,
+            "request_type": _request_type(
+                human_ns, tool_ns, int(spec.turn_index)),
         })
     return records
 
@@ -143,8 +264,9 @@ def main() -> int:
     output_dir = GENERATED_ROOT / f"{PREFIX}_54npus_plan_{cfg8}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    manifest_requests, request_type_counts = _derive_manifest_requests(config)
     manifest = {
-        "requests": _derive_manifest_requests(config),
+        "requests": manifest_requests,
         "selected_request_count": len(config.request_queue),
         "selected_session_count": len({
             spec.session_id for spec in config.request_queue}),
@@ -158,6 +280,8 @@ def main() -> int:
         "schema_version": 1,
         "repo_variant": REPO_VARIANT,
         "manifest_source": "synthetic-prerun",
+        # B2/WP6+WP8: 采样参数注入（值见 _slo_sampling_section；C++ 记录回显）
+        "slo_sampling": _slo_sampling_section(),
         "requests": _derive_metrics_requests(config),
     }
     (output_dir / "metrics_manifest.json").write_text(
@@ -171,6 +295,7 @@ def main() -> int:
         "plan_dir": str(output_dir),
         "requests": len(manifest["requests"]),
         "sessions": manifest["selected_session_count"],
+        "request_type_counts": request_type_counts,
         "note": runtime_note,
     }))
     return 0

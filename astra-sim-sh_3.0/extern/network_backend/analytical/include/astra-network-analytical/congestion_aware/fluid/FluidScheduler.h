@@ -111,6 +111,49 @@ class FluidScheduler {
     /// Phase-7 §10.2: number of directed links tracked by the scheduler.
     [[nodiscard]] size_t link_count() const noexcept;
 
+    /// -------------------------------------------------------------------
+    /// WP6 NoC link observer (SLO pipeline B2, /tmp/slo_wps/plans/
+    /// CPP_SPEC.md §D): read-only side-band integration of the fluid bytes
+    /// each directed link carried. The observer hooks the scheduler's
+    /// existing rate/membership change points (advance_dirty_flows entry,
+    /// BEFORE any mutation), integrates bytes_delta = rate x dt per link
+    /// into fixed time buckets, and never registers a simulation event,
+    /// never advances a flow, and never touches scheduling state.
+    ///
+    /// Zero work until enable_link_observer() is called; the online main
+    /// gates that on MetricCollector::enabled() (metrics != off) AND env
+    /// ASTRA_LINK_OBSERVER != 0, passing the slo_sampling link bucket.
+    /// Fractional byte accumulation keeps a per-link carry so the bucket
+    /// sums reconcile with the integer transfer byte counts.
+    struct LinkObserverTotals {
+        uint64_t total_bytes;  ///< whole bytes integrated over the window
+        uint64_t active_ns;    ///< time with at least one active flow
+    };
+
+    void enable_link_observer(uint64_t link_bucket_ns) noexcept;
+
+    [[nodiscard]] bool link_observer_enabled() const noexcept;
+
+    /// Bucket length actually in effect (echoed into every link record).
+    [[nodiscard]] uint64_t link_observer_bucket_ns() const noexcept;
+
+    /// Last integrated tick == observer window end (bytes past the last
+    /// scheduler event are not attributed).
+    [[nodiscard]] NetworkAnalytical::EventTime link_observer_window_ns() const noexcept;
+
+    /// Per-link sparse bucket rows: link_observer_bucket_bytes()[link][b]
+    /// is the whole bytes link carried during bucket b (trailing zero
+    /// buckets omitted).
+    [[nodiscard]] const std::vector<std::vector<uint64_t>>&
+    link_observer_bucket_bytes() const noexcept;
+
+    [[nodiscard]] const std::vector<LinkObserverTotals>&
+    link_observer_totals() const noexcept;
+
+    /// Free the integration arrays after the records were emitted (RSS
+    /// discipline; the observer stays disabled afterwards).
+    void link_observer_release() noexcept;
+
   private:
     struct PendingFlowStart {
         FlowId flow_id;
@@ -143,6 +186,13 @@ class FluidScheduler {
     static void flush_callback(void* context) noexcept;
     static void service_wakeup_callback(void* context) noexcept;
     static void tail_arrival_callback(void* context) noexcept;
+
+    /// WP6 link observer: integrate [last_tick, now) with the CURRENT
+    /// (pre-change) rates and memberships. Called at the top of
+    /// advance_dirty_flows -- the single choke point both mutation paths
+    /// (flush_pending_starts / handle_service_wakeup) pass through before
+    /// touching any rate or membership.
+    void link_observer_integrate(NetworkAnalytical::EventTime now) noexcept;
 
     void begin_dirty_batch() noexcept;
     void mark_dirty(FlowId flow_id) noexcept;
@@ -192,6 +242,22 @@ class FluidScheduler {
     uint64_t max_dirty_flows;
     size_t peak_completion_heap_size;
     std::chrono::steady_clock::time_point wall_start_time;
+
+    /// WP6 link observer state (empty/disabled until enabled by the online
+    /// main; see the public block above). rate_sum_scratch and
+    /// totals_scratch avoid per-event/per-query allocations.
+    struct LinkObserverState {
+        bool enabled = false;
+        uint64_t bucket_ns = 0;
+        EventTime last_tick = 0;
+        std::vector<long double> carry;                // per-link fractional bytes
+        std::vector<long double> rate_sum_scratch;     // per-link Bpns sum
+        std::vector<uint64_t> total_bytes;             // per-link whole bytes
+        std::vector<uint64_t> active_ns;               // per-link active time
+        std::vector<std::vector<uint64_t>> bucket_bytes;  // per-link sparse rows
+        mutable std::vector<LinkObserverTotals> totals_scratch;  // query result
+    };
+    LinkObserverState link_observer_;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

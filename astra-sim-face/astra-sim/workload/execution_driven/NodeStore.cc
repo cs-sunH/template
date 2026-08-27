@@ -59,6 +59,9 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
     free_ids_.erase(child);
     child_it->second.parents.push_back(parent);
     parent_it->second.children.push_back(child);
+    // M2 node GC: count the live child on the parent (the child of a
+    // validated edge is always a fresh, unfinished batch node).
+    ++parent_it->second.unfinished_children;
 }
 
 std::vector<uint64_t> NodeStore::resolve_free_nodes() const {
@@ -84,11 +87,35 @@ void NodeStore::finish_node(uint64_t node_id) {
     for (const auto child : it->second.children) {
         auto child_it = nodes_.find(child);
         if (child_it == nodes_.end()) {
-            continue;
+            continue;  // M2: child already collected (it finished earlier)
         }
         assert(child_it->second.unresolved_parents > 0);
         if (--child_it->second.unresolved_parents == 0) {
             free_ids_.insert(child);
+        }
+    }
+    // M2 node GC (2026-08-23): a finished node with no unfinished children
+    // becomes a GC candidate; a node with pending children is enqueued by
+    // the LAST child's finish in the parents loop below (children can only
+    // finish after their parents -- a node is issued only from the free set,
+    // i.e. after every recorded parent finished), so each node enters the
+    // FIFO at most once. finish_node itself NEVER erases: e.g.
+    // Workload::skip_invalid looks the record up again AFTER this call, and
+    // the issue passes hold NodeViews obtained from the free set -- the
+    // actual erase happens only at the committer's quiescent-point
+    // collect_garbage().
+    if (gc_enabled_ && it->second.unfinished_children == 0) {
+        gc_fifo_.push_back(node_id);
+    }
+    for (const auto parent : it->second.parents) {
+        auto parent_it = nodes_.find(parent);
+        if (parent_it == nodes_.end()) {
+            continue;  // M2: parent already collected
+        }
+        assert(parent_it->second.unfinished_children > 0);
+        if (--parent_it->second.unfinished_children == 0 &&
+            parent_it->second.finished && gc_enabled_) {
+            gc_fifo_.push_back(parent);
         }
     }
 }
@@ -123,6 +150,50 @@ size_t NodeStore::pending_count() const {
 }
 
 bool NodeStore::empty() const { return nodes_.empty(); }
+
+void NodeStore::set_gc_enabled(bool enabled) {
+    // M2 node GC: the switch is set once by the committer constructor from
+    // its Context (--online-node-gc on the official path; fixtures leave it
+    // off and keep the pre-M2 behavior, memory profile included).
+    gc_enabled_ = enabled;
+}
+
+void NodeStore::collect_garbage() {
+    // M2 node GC (2026-08-23): quiescent-point collection. The ONLY caller
+    // is the committer's end-of-commit tail --
+    // by then every Workload callback triggered by the commit's issue pass
+    // has fully returned (no NodeView pointer is alive anywhere) and later
+    // deferred issue passes only ever touch free, i.e. unfinished, nodes.
+    if (!gc_enabled_) {
+        return;
+    }
+    for (; gc_fifo_head_ < gc_fifo_.size(); ++gc_fifo_head_) {
+        const uint64_t node_id = gc_fifo_[gc_fifo_head_];
+        auto it = nodes_.find(node_id);
+        if (it == nodes_.end()) {
+            continue;  // defensive: already collected
+        }
+        if (!it->second.finished || it->second.unfinished_children != 0) {
+            // Defensive: unreachable -- a node becomes a candidate only at
+            // (finished && unfinished_children == 0), and post-finish
+            // add_dependency early-returns on the finished parent, so the
+            // counter can never rise again.
+            continue;
+        }
+        nodes_.erase(it);
+        ++gc_erased_count_;
+    }
+    // All entries consumed (each node enqueues at most once): drop the
+    // storage, keep the (bounded, in-flight-window sized) capacity.
+    gc_fifo_.clear();
+    gc_fifo_head_ = 0;
+}
+
+bool NodeStore::erased(uint64_t node_id) const {
+    // M2: absent == collected for committed store ids (see header). Used by
+    // the committer's store_ids_ prune pass only.
+    return nodes_.find(node_id) == nodes_.end();
+}
 
 RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
     // Phase-3 sensing (方案 §6.2 操作 1 / contract ⑥): classify the

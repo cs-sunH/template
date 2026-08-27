@@ -24,6 +24,10 @@ test -- no network simulation, no baseline artifacts touched:
           service / resource state; per (request_id, stage, generation)
           grouping; finished nodes excluded; mark_issued moves the resource
           state from free to in-flight).
+  Part E  M2 node GC (2026-08-23, --online-node-gc): quiescent-point
+          collection of finished childless nodes, parent retention while a
+          child is unfinished, dead-parent no-op onto erased ids, and the
+          gc-off (default) pre-M2 never-erase behavior.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -155,6 +159,69 @@ void test_node_store() {
     store.finish_node(fb);
     expect(store.pending_count() == 0,
            "A: pending_count() 0 after all finishes");
+}
+
+// ---------------------------------------------------------------- Part E --
+// M2 node GC (2026-08-23, --online-node-gc): finished childless nodes are
+// erased at the quiescent collect_garbage() point (never inside
+// finish_node); a parent is retained while any child is unfinished and is
+// collected by the last child's finish; edges onto an erased (i.e. already
+// finished) parent keep the dead-parent no-op; GC off (the default) keeps
+// the pre-M2 never-erase behavior.
+void test_node_gc() {
+    // GC off (default): finishing never erases, collect is a no-op.
+    NodeStore off_store;
+    OnlineNode n;
+    n.kind = NodeKind::Compute;
+    n.name = "gc-off";
+    const uint64_t off_id = off_store.add_node(n);
+    off_store.finish_node(off_id);
+    off_store.collect_garbage();
+    expect(off_store.node(off_id).has_value(),
+           "E: gc off keeps finished nodes (pre-M2 behavior)");
+    expect(off_store.gc_erased_count() == 0, "E: gc off erases nothing");
+
+    // GC on: a childless finished node is collected at the quiescent point
+    // only -- finish_node itself never erases (Workload::skip_invalid looks
+    // the record up again after finish_node).
+    NodeStore store;
+    store.set_gc_enabled(true);
+    const uint64_t a = store.add_node(n);
+    store.finish_node(a);
+    expect(store.node(a).has_value(),
+           "E: finish_node itself never erases");
+    store.collect_garbage();
+    expect(!store.node(a).has_value(),
+           "E: childless finished node erased at collect_garbage");
+    expect(store.erased(a), "E: erased() observes the collection");
+    expect(store.gc_erased_count() == 1, "E: gc_erased_count tracked");
+    expect(store.pending_count() == 0, "E: pending_count unaffected");
+
+    // Chain: the parent is retained while its child is unfinished; the
+    // child's finish re-enqueues it and one collect removes both.
+    const uint64_t p = store.add_node(n);
+    const uint64_t c = store.add_node(n);
+    store.add_dependency(p, c, DepKind::Data);
+    store.mark_issued(p);
+    store.finish_node(p);
+    expect(contains(store.resolve_free_nodes(), c),
+           "E: child freed by the parent finish (unaffected by GC)");
+    store.collect_garbage();
+    expect(store.node(p).has_value(),
+           "E: parent retained while its child is unfinished");
+    store.finish_node(c);
+    store.collect_garbage();
+    expect(!store.node(p).has_value() && !store.node(c).has_value(),
+           "E: chain collected after the last child finishes");
+
+    // Erased => finished: the dead-parent no-op is preserved.
+    const uint64_t late = store.add_node(n);
+    store.add_dependency(p, late, DepKind::Data);
+    expect(contains(store.resolve_free_nodes(), late),
+           "E: edge onto an erased (finished) parent does not block");
+    store.finish_node(p);  // finish of an erased id: still a no-op
+    expect(store.retained_count() == 1, "E: only the late node remains");
+    expect(store.gc_erased_count() == 3, "E: a + p + c erased in total");
 }
 
 // ---------------------------------------------------------------- Part B --
@@ -424,6 +491,7 @@ int main(int argc, char* argv[]) {
     }
 
     test_node_store();
+    test_node_gc();
     test_node_store_graph_source();
     test_injected_unfinished_summary();
     if (et_path.empty()) {

@@ -159,6 +159,15 @@ void FluidScheduler::mark_dirty(const FlowId flow_id) noexcept {
 }
 
 void FluidScheduler::advance_dirty_flows(const EventTime now) noexcept {
+    // WP6 link observer (CPP_SPEC §D): integrate the just-ended constant
+    // interval with the pre-change rates/memberships. advance_dirty_flows
+    // is the single choke point both mutation paths pass through before
+    // touching any rate or membership, so the observer always sees the
+    // interval [last_tick, now) under the rates that were actually in
+    // force during it. No-op (single branch) when the observer is off.
+    if (link_observer_.enabled) {
+        link_observer_integrate(now);
+    }
     std::sort(dirty_flow_ids.begin(), dirty_flow_ids.end());
     for (const auto flow_id : dirty_flow_ids) {
         auto& flow = flows_by_id.at(flow_id);
@@ -566,6 +575,135 @@ std::optional<LinkCongestionSnapshot> FluidScheduler::link_congestion_snapshot(
 
 uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
     return active_route_memberships;
+}
+
+// ---------------------------------------------------------------------------
+// WP6 NoC link observer (read-only side-band; CPP_SPEC §D).
+// ---------------------------------------------------------------------------
+
+void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcept {
+    if (link_bucket_ns == 0) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) link observer bucket must be positive"
+                  << std::endl;
+        std::exit(-1);
+    }
+    link_observer_.enabled = true;
+    link_observer_.bucket_ns = link_bucket_ns;
+    link_observer_.last_tick = event_queue->get_current_time();
+    const auto link_count_value = link_states.size();
+    link_observer_.carry.assign(link_count_value, 0.0L);
+    link_observer_.rate_sum_scratch.assign(link_count_value, 0.0L);
+    link_observer_.total_bytes.assign(link_count_value, 0);
+    link_observer_.active_ns.assign(link_count_value, 0);
+    link_observer_.bucket_bytes.resize(link_count_value);
+}
+
+bool FluidScheduler::link_observer_enabled() const noexcept {
+    return link_observer_.enabled;
+}
+
+uint64_t FluidScheduler::link_observer_bucket_ns() const noexcept {
+    return link_observer_.bucket_ns;
+}
+
+EventTime FluidScheduler::link_observer_window_ns() const noexcept {
+    return link_observer_.last_tick;
+}
+
+const std::vector<std::vector<uint64_t>>& FluidScheduler::link_observer_bucket_bytes() const noexcept {
+    return link_observer_.bucket_bytes;
+}
+
+const std::vector<FluidScheduler::LinkObserverTotals>& FluidScheduler::link_observer_totals() const noexcept {
+    // Materialized into scratch storage the caller can iterate while
+    // emitting; the scheduler is single-threaded (event loop owner).
+    auto& totals = link_observer_.totals_scratch;
+    totals.assign(link_states.size(), LinkObserverTotals{0, 0});
+    for (size_t link = 0; link < link_states.size() && link < link_observer_.total_bytes.size(); ++link) {
+        totals[link].total_bytes = link_observer_.total_bytes[link];
+        totals[link].active_ns = link_observer_.active_ns[link];
+    }
+    return totals;
+}
+
+void FluidScheduler::link_observer_release() noexcept {
+    link_observer_.carry.clear();
+    link_observer_.carry.shrink_to_fit();
+    link_observer_.rate_sum_scratch.clear();
+    link_observer_.rate_sum_scratch.shrink_to_fit();
+    link_observer_.total_bytes.clear();
+    link_observer_.total_bytes.shrink_to_fit();
+    link_observer_.active_ns.clear();
+    link_observer_.active_ns.shrink_to_fit();
+    link_observer_.bucket_bytes.clear();
+    link_observer_.bucket_bytes.shrink_to_fit();
+    link_observer_.totals_scratch.clear();
+    link_observer_.totals_scratch.shrink_to_fit();
+    link_observer_.enabled = false;
+}
+
+void FluidScheduler::link_observer_integrate(const EventTime now) noexcept {
+    auto& observer = link_observer_;
+    if (now <= observer.last_tick) {
+        return;  // same-tick mutation batch: nothing elapsed
+    }
+
+    // Per-link sum of the rates of the flows currently active on it. The
+    // fluid model is work-conserving per link with equal share, so this
+    // sum is exactly the link's instantaneous byte rate; between scheduler
+    // events neither the memberships nor the rates change.
+    for (auto& sum : observer.rate_sum_scratch) {
+        sum = 0.0L;
+    }
+    for (const auto& [flow_id, flow] : flows_by_id) {
+        (void)flow_id;
+        if (flow.state != FluidFlowState::Active) {
+            continue;
+        }
+        for (const auto& membership : flow.memberships) {
+            if (membership.link_id < observer.rate_sum_scratch.size()) {
+                observer.rate_sum_scratch[membership.link_id] +=
+                    static_cast<long double>(flow.current_rate_Bpns);
+            }
+        }
+    }
+
+    // Walk the interval, splitting it at bucket boundaries so long constant
+    // segments still land in the right buckets (periodic coverage without
+    // registering any timer event).
+    EventTime segment_start = observer.last_tick;
+    while (segment_start < now) {
+        const auto bucket = static_cast<uint64_t>(segment_start / observer.bucket_ns);
+        if (bucket == std::numeric_limits<uint64_t>::max()) {
+            break;  // defensive: bucket index space exhausted
+        }
+        const auto bucket_end = static_cast<EventTime>(bucket + 1) * observer.bucket_ns;
+        auto segment_end = now < bucket_end ? now : bucket_end;
+        if (segment_end <= segment_start) {
+            break;  // defensive: zero-length segment
+        }
+        const auto dt = segment_end - segment_start;
+        for (size_t link = 0; link < link_states.size(); ++link) {
+            const auto rate = observer.rate_sum_scratch[link];
+            if (rate <= 0.0L) {
+                continue;
+            }
+            observer.carry[link] += rate * static_cast<long double>(dt);
+            const auto whole = static_cast<uint64_t>(observer.carry[link]);
+            if (whole > 0) {
+                auto& row = observer.bucket_bytes[link];
+                if (row.size() <= bucket) {
+                    row.resize(bucket + 1, 0);
+                }
+                row[bucket] += whole;
+                observer.total_bytes[link] += whole;
+                observer.carry[link] -= static_cast<long double>(whole);
+            }
+            observer.active_ns[link] += dt;
+        }
+        segment_start = segment_end;
+    }
+    observer.last_tick = now;
 }
 
 uint64_t FluidScheduler::get_total_started_flows() const noexcept {

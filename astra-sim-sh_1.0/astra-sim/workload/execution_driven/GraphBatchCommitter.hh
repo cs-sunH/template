@@ -36,10 +36,11 @@ violations):
             scoped to the comm-typed nodes (5/6) -- send node rank ==
             comm.src, recv node rank == comm.dst (non-comm nodes carry the
             comm defaults in real data and an empty comm in fixtures).
-  [edge]    kind == "data"; from != to; from resolves (this batch or an
-            earlier batch's store id -- cross-batch parents are legal, e.g.
-            the interval gate chaining the previous request's completion
-            barrier); to is a node of THIS batch.
+  [edge]    kind == "data"; from != to; from resolves (this batch, an
+            earlier batch's store id, or -- M2 node GC, 2026-08-23 -- a
+            pruned store id below the per-rank prune watermark; cross-batch
+            parents are legal, e.g. the interval gate chaining the previous
+            request's completion barrier); to is a node of THIS batch.
   [cycle]   no cycle among the in-batch edges of one rank.
   [watch]   request_id non-empty; stage in {prefill, decode}; members
             non-empty and all in THIS batch; statuses subset of
@@ -147,6 +148,17 @@ class GraphBatchCommitter {
                            const std::unordered_map<RankNodeKey, uint64_t,
                                                     RankNodeKeyHash>& store_ids)>
             metrics_anchor_hook;
+        // M2 node GC (2026-08-23, --online-node-gc on the official path):
+        // when set, the constructor enables collection on every per-rank
+        // store and commit() collects finished childless nodes at its tail,
+        // pruning store_ids_ at the same watermark (see collect_node_garbage
+        // / pruned_json_watermark_). Internal default OFF: the phase fixtures
+        // construct their Context explicitly and keep the pre-M2 behavior
+        // (including the memory profile) -- main_online passes the CLI value
+        // (frozen default 0 after the 2026-08-23 ruling flip; [sh_1.0
+        // port note] the mother blueprint said "default 1" -- corrected
+        // here to match the flipped CLI).
+        bool node_gc = false;
     };
 
     /// Phase-5 run-end counters (方案 §8.3: single_node_bridge_count == 0 on
@@ -162,7 +174,16 @@ class GraphBatchCommitter {
         uint64_t total_future_alarms = 0;
     };
 
-    explicit GraphBatchCommitter(Context ctx) : ctx_(std::move(ctx)) {}
+    explicit GraphBatchCommitter(Context ctx) : ctx_(std::move(ctx)) {
+        // M2 (2026-08-23): propagate the node-GC switch to every per-rank
+        // store once, here (fixtures leave node_gc off and keep the pre-M2
+        // no-collection behavior byte-for-byte).
+        if (ctx_.node_gc && ctx_.graph_sources != nullptr) {
+            for (auto& source : *ctx_.graph_sources) {
+                source->store().set_gc_enabled(true);
+            }
+        }
+    }
 
     /// Phase A (pure). Returns an error description on ANY violation; the
     /// committer state (stores, watches, counters, tracking) is untouched.
@@ -180,7 +201,11 @@ class GraphBatchCommitter {
     void commit(const StateDelta& delta, const GraphBatch& batch);
 
     /// The persistent (rank, json id) -> store id map (cross-batch edges and
-    /// watch members resolve through it; read-only outside commit()).
+    /// watch members resolve through it; read-only outside commit()). M2
+    /// (--online-node-gc): entries whose node was collected are pruned at
+    /// the per-rank dense prefix watermark at commit tails; pruned parents
+    /// stay resolvable in validate() and their edges become no-ops (the
+    /// collected node was finished -- NodeStore's dead-parent rule).
     const std::unordered_map<RankNodeKey, uint64_t, RankNodeKeyHash>&
     store_ids() const {
         return store_ids_;
@@ -211,11 +236,33 @@ class GraphBatchCommitter {
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);
 
+    /// M2 (2026-08-23) store_ids_ prune state, per rank. entries is the
+    /// commit-order FIFO of (json id, store id) pairs appended at Phase B-1;
+    /// per-rank json ids are allocated densely and ascending across batches
+    /// (graph_batch_builder next_id counter), so the queue is ascending per
+    /// rank and pruned_json_watermark_ is the strict dense prefix of json
+    /// ids [0, watermark) already erased from store_ids_ (their nodes were
+    /// GC'd). validate()'s cross-batch parent resolution accepts exactly
+    /// in-batch | still-mapped | below-the-prune-watermark, so it never
+    /// weakens: a never-emitted id stays "unresolved" and fail-closes.
+    struct RankPruneQueue {
+        std::vector<std::pair<uint64_t, uint64_t>> entries;
+        size_t head = 0;
+    };
+
+    /// M2: collect finished childless nodes in every per-rank store and
+    /// prune store_ids_ at the matching watermark. Called at the very end of
+    /// commit() (a quiescent point) only when ctx_.node_gc is set.
+    void collect_node_garbage();
+
     Context ctx_;
     std::unordered_map<RankNodeKey, uint64_t, RankNodeKeyHash> store_ids_;
     std::set<std::string> in_flight_;           // arrived, not completed
     std::set<std::string> prefill_drained_;     // prefill watch fired
     Counters counters_;
+    // M2 node GC prune state (sized lazily at the first commit).
+    std::vector<RankPruneQueue> prune_queues_;
+    std::vector<uint64_t> pruned_json_watermark_;
 };
 
 }  // namespace ExecutionDriven

@@ -78,7 +78,7 @@ def _snapshot(scheduler, sink):
         "ack_count": scheduler.ack_count,
         "in_flight": dict(sorted(scheduler.in_flight.items())),
         "completed_request_ids": sorted(scheduler.completed_request_ids),
-        "online_log_rows": len(scheduler.online_log_rows),
+        "online_log_rows": scheduler.online_log_count,
         "emitted_by_delivery": len(scheduler._emitted_by_delivery),
         "seen_acks": len(scheduler._seen_ack_delivery_seqs),
         # sh_1.0 适配(批 F1 2026-08-21):face 版此处读 kv 事件水位
@@ -157,12 +157,15 @@ def main(argv=None) -> int:
 
     sink = _CountingDigestSink()
     graph = GraphBatchBuilder(config)
+    # B3(2026-08-23):本夹具逐 delta 双喂,是重放路径的唯一常规触发者——
+    # 显式开启防御性深拷缓存(生产 online_service 走默认引用缓存)。
     scheduler = Sh10OnlineScheduler(
         manifest=manifest,
         config=config,
         graph=graph,
         digest_sink=sink,
         mode="strategy",
+        defensive_reply_cache=True,
     )
 
     # ------------------------------------------------------------- 主循环 --

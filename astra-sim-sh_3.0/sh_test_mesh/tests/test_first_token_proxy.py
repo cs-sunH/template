@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""B4/WP9 fallback: train-interpolated first-token proxy unit tests (S3).
+
+Covers the B3_S3 60s gate-2 failure fallback implemented in
+workload/llama2_7b_inference/metrics_postprocess.py:
+
+  1. authoritative W_bytes / KV-bytes-per-token conversions (frozen
+     face_scheduler formulas fed by trace_config.csv -- no invented values);
+  2. the proxy formula hand-check on a synthetic train ledger index;
+  3. end-to-end ``_request_rows_for_run``: exact value wins; missing exact
+     + joiner ledger row -> train_interpolated; ledger absent -> NA;
+  4. the proxy never leaks into the SLO judgment path is proven separately
+     in slo_tools/tests/test_slo_contract.py (assert_no_proxy_columns +
+     violation fail-closed on proxy columns).
+
+Run: python3 sh_test_mesh/tests/test_first_token_proxy.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+_TESTS_DIR = Path(__file__).resolve().parent
+_SH_TEST_DIR = _TESTS_DIR.parents[0]
+_WORKLOAD_DIR = _SH_TEST_DIR / "workload" / "llama2_7b_inference"
+for _p in (str(_WORKLOAD_DIR), str(_TESTS_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import metrics_postprocess as mp  # noqa: E402
+
+
+def _ledger_row(**overrides):
+    row = {
+        "train_id": "batch_train_i0_1",
+        "instance_index": 0,
+        "tick": 1_000_000,
+        "iterations": 8,
+        "member_count": 1,
+        "member_iterations": 8,
+        "joiners": [],
+        "drains": [],
+        "exits": [],
+        "sentinel": False,
+        "prefill_chunks": 8,
+        "pass_spans": 9,
+    }
+    row.update(overrides)
+    return row
+
+
+def _fake_index(first_train_by_request, next_tick_by_position):
+    index = mp._TrainProxyIndex.__new__(mp._TrainProxyIndex)
+    index._run = None
+    index._loaded = True
+    index._available = True
+    index.first_train_by_request = first_train_by_request
+    index.next_tick_by_position = next_tick_by_position
+    return index
+
+
+class ModelBytesTests(unittest.TestCase):
+    def test_authoritative_conversions(self):
+        """trace_config.csv (llama2_7b) -> frozen face_scheduler numbers."""
+
+        weight_bytes, kv_per_token = mp._load_model_bytes()
+        # test_face_scheduler.py:524 freezes estimate_model_weight_bytes at
+        # 13,476,831,232; KV = 2*layers*tokens*hidden*bytes_per_elem.
+        self.assertEqual(weight_bytes, 13_476_831_232)
+        self.assertEqual(kv_per_token, 2 * 32 * 4096 * 2)
+
+
+class ProxyFormulaTests(unittest.TestCase):
+    def _entry(self, **overrides):
+        entry = {
+            "request_id": "session_0_request_0",
+            "queue_index": 0,
+            "session_id": "session_0",
+            "turn_index": 0,
+            "request_type": "human",
+            "prefill_length": 4096,
+            "decode_length": 16,
+            "history_tokens_before": 0,
+            "prefill_context_tokens": 4096,
+            "final_context_tokens": 4112,
+        }
+        entry.update(overrides)
+        return entry
+
+    def _record(self, **overrides):
+        record = {
+            "queue_index": 0,
+            "request_id": "session_0_request_0",
+            "session_id": "session_0",
+            "turn_index": 0,
+            "completed": True,
+            "arrival_ns": 100,
+            "prefill_start_ns": 200,
+            "prefill_end_ns": 300,
+            "decode_start_ns": 1_000_000,
+            "first_token_ns": None,
+            "completion_ns": 50_000_000,
+        }
+        record.update(overrides)
+        return record
+
+    def test_hand_check_formula(self):
+        """w_i = W + KV(ctx+0+i), i=1..N (train iterations); proxy =
+        decode_start + (w1/sum w_i)*(train_end - decode_start).  Hand-
+        computed.  decode_length=16 > iterations=8 -> debut rides the
+        whole train; P == N."""
+
+        index = _fake_index(
+            {"session_0_request_0": (0, _ledger_row(tick=1_000_000))},
+            {0: 9_000_000},
+        )
+        weight_bytes, kv_per_token = mp._load_model_bytes()
+        context, decode_length, iterations = 4096, 16, 8
+        self.assertEqual(min(decode_length, iterations), 8)
+        weights = [
+            weight_bytes + kv_per_token * (context + step)
+            for step in range(1, iterations + 1)
+        ]
+        expected = int(round(
+            1_000_000
+            + (weights[0] / sum(weights)) * (9_000_000 - 1_000_000)))
+        value, note = mp._first_token_proxy_value(
+            index, self._entry(), self._record())
+        self.assertEqual(value, expected)
+        self.assertIn("train_interpolated", note)
+        self.assertIn("N=8", note)
+        self.assertIn("P=8", note)
+
+    def test_short_debut_interpolates_within_train(self):
+        """decode_length=1 (P=1) inside an 8-iteration train: the weight
+        sum still runs over the TRAIN's N=8 iterations (first token lands
+        with iteration 1), NOT the debut's participation -- summing over
+        P would degenerate to share=1 and overshoot completion
+        (7/1454 rows in the 60s reference run before this fix)."""
+        index = _fake_index(
+            {"r": (0, _ledger_row(tick=1_000_000, iterations=8))},
+            {0: 9_000_000},
+        )
+        weight_bytes, kv_per_token = mp._load_model_bytes()
+        context = 4096
+        weights = [
+            weight_bytes + kv_per_token * (context + step)
+            for step in range(1, 8 + 1)
+        ]
+        expected = int(round(
+            1_000_000 + (weights[0] / sum(weights)) * 8_000_000))
+        value, note = mp._first_token_proxy_value(
+            index,
+            self._entry(request_id="r", decode_length=1,
+                        final_context_tokens=4097),
+            self._record(request_id="r"))
+        self.assertEqual(value, expected)
+        self.assertLess(value, 9_000_000)
+        self.assertIn("N=8", note)
+        self.assertIn("P=1", note)
+
+    def test_clamped_to_completion_for_one_iteration_train(self):
+        """N=1 退化列车：share=1 -> proxy=下一发射边界 > completion（边界晚
+        于 end barrier）——钳到 completion 并留痕（60s 参考跑 7/1454）。"""
+        index = _fake_index(
+            {"r": (0, _ledger_row(tick=1_000_000, iterations=1))},
+            {0: 9_000_000},
+        )
+        value, note = mp._first_token_proxy_value(
+            index,
+            self._entry(request_id="r", decode_length=1),
+            self._record(request_id="r", completion_ns=5_000_000))
+        self.assertEqual(value, 5_000_000)
+        self.assertIn("clamped_to_completion", note)
+
+    def test_last_train_on_instance_not_obtainable(self):
+        index = _fake_index(
+            {"r": (0, _ledger_row(tick=1_000_000))}, {})
+        value, note = mp._first_token_proxy_value(
+            index, self._entry(request_id="r"), self._record(request_id="r"))
+        self.assertIsNone(value)
+        self.assertIn("no_next_train_on_instance", note)
+
+    def test_no_joiner_row_not_obtainable(self):
+        index = _fake_index({}, {})
+        value, note = mp._first_token_proxy_value(
+            index, self._entry(), self._record())
+        self.assertIsNone(value)
+        self.assertIn("no_train_ledger_joiner_row", note)
+
+
+class EndToEndRowsTests(unittest.TestCase):
+    """_request_rows_for_run over a synthetic log + manifest + ledger."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(
+            prefix="slo_wps_proxy_test_")
+        self.run_dir = Path(self._tmp.name)
+        self.log_path = self.run_dir / "cpp.log"
+        self.results_dir = self.run_dir / "results"
+        self.results_dir.mkdir(parents=True)
+        manifest_path = self.run_dir / "generated" / "metrics_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text("{}", encoding="utf-8")
+        # manifest.json sidecar: the request_metrics join input.
+        (manifest_path.parent / "manifest.json").write_text(json.dumps({
+            "requests": [
+                {
+                    "queue_index": 0,
+                    "request_id": "session_0_request_0",
+                    "session_id": "session_0",
+                    "turn_index": 0,
+                    "request_type": "human",
+                    "prefill_length": 4096,
+                    "decode_length": 16,
+                    "prefill_context_tokens": 4096,
+                    "final_context_tokens": 4112,
+                },
+                {
+                    "queue_index": 1,
+                    "request_id": "session_1_request_0",
+                    "session_id": "session_1",
+                    "turn_index": 0,
+                    "request_type": "tool",
+                    "prefill_length": 2048,
+                    "decode_length": 4,
+                    "prefill_context_tokens": 2048,
+                    "final_context_tokens": 2052,
+                },
+            ],
+        }), encoding="utf-8")
+
+        def request_record(queue_index, request_id, session_id,
+                           decode_start, first_token=None):
+            record = {
+                "type": "request",
+                "schema": 1,
+                "queue_index": queue_index,
+                "request_id": request_id,
+                "session_id": session_id,
+                "turn_index": 0,
+                "completed": True,
+                "arrival_ns": 100 + queue_index,
+                "prefill_start_ns": 200 + queue_index,
+                "prefill_end_ns": 300 + queue_index,
+                "decode_start_ns": decode_start,
+                "completion_ns": decode_start + 40_000_000,
+            }
+            if first_token is not None:
+                record["first_token_ns"] = first_token
+            return record
+
+        self.records = [
+            {"type": "init", "schema": 1, "run_id": "proxytest",
+             "manifest_path": str(manifest_path), "detail_level": "full",
+             "run_mode": "service"},
+            request_record(0, "session_0_request_0", "session_0",
+                           1_000_000),
+            request_record(1, "session_1_request_0", "session_1",
+                           2_000_000, first_token=2_500_000),
+        ]
+        # e2e/decomposition fields the postprocessor cross-checks.
+        for record in self.records[1:]:
+            record["e2e_ns"] = record["completion_ns"] - record["arrival_ns"]
+            record["queue_ns"] = 100
+            record["prefill_ns"] = 100
+            record["prefill_decode_gap_ns"] = (
+                record["decode_start_ns"] - record["prefill_end_ns"] - 200)
+            record["decode_ns"] = (
+                record["e2e_ns"] - record["queue_ns"] - record["prefill_ns"]
+                - record["prefill_decode_gap_ns"])
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_log(self):
+        with self.log_path.open("w", encoding="utf-8") as sink:
+            for record in self.records:
+                sink.write("[METRIC] " + json.dumps(record) + "\n")
+
+    def _rows(self):
+        runs = mp._parse_logs([self.log_path])
+        rows, _counts = mp._request_rows_for_run(runs[0])
+        return {row["request_id"]: row for row in rows}
+
+    def test_exact_wins_proxy_fills_missing_ledger_absent_means_na(self):
+        self._write_log()  # no results/train_ledger.jsonl at all
+        rows = self._rows()
+        # exact record: value + source untouched.
+        self.assertEqual(rows["session_1_request_0"]["first_token_ns"],
+                         2_500_000)
+        self.assertEqual(
+            rows["session_1_request_0"]["first_token_source"], "exact")
+        # no exact + no ledger -> NA with the run-level reason note.
+        self.assertIsNone(rows["session_0_request_0"]["first_token_ns"])
+        self.assertEqual(rows["session_0_request_0"]["first_token_source"],
+                         "NA")
+        self.assertIn("proxy_unavailable:no_train_ledger",
+                      rows["session_0_request_0"]["instructions"])
+
+    def test_proxy_filled_from_ledger_and_tagged(self):
+        self._write_log()
+        with (self.results_dir / "train_ledger.jsonl").open(
+                "w", encoding="utf-8") as sink:
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_1", tick=1_000_000,
+                joiners=["session_0_request_0"])) + "\n")
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_2", tick=9_000_000)) + "\n")
+        rows = self._rows()
+        row = rows["session_0_request_0"]
+        weight_bytes, kv_per_token = mp._load_model_bytes()
+        weights = [weight_bytes + kv_per_token * (4096 + step)
+                   for step in range(1, 9)]
+        expected = int(round(
+            1_000_000 + (weights[0] / sum(weights)) * 8_000_000))
+        self.assertEqual(row["first_token_ns"], expected)
+        self.assertEqual(row["first_token_source"], "train_interpolated")
+        # first_step rows (split-ON runs) are skipped for joiner matching.
+        with (self.results_dir / "train_ledger.jsonl").open(
+                "w", encoding="utf-8") as sink:
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_1", tick=1_000_000, first_step=True,
+                joiners=["session_0_request_0"])) + "\n")
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_1", tick=1_000_000,
+                joiners=["session_0_request_0"])) + "\n")
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_2", tick=9_000_000)) + "\n")
+        rows = self._rows()
+        self.assertEqual(rows["session_0_request_0"]["first_token_ns"],
+                         expected)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -146,7 +146,13 @@ def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
 
 
 def _rank_nodes(builder, rank):
-    return builder.builders[rank].nodes
+    """M1 适配（2026-08-23 收集即释放）：builder.nodes 不再保证驻留全部
+    历史节点（已收集前缀按水位摊销压缩）——改读当前批次累加器
+    batch["nodes"]（发射序，自 begin_batch 起含本批全部节点），保持
+    "直读已发射节点"的测试意图；测试内单批发射，节点 id 自 0 连续，
+    rank 过滤后位置 == 节点 id，与改前等价。"""
+    return [node for node in builder.batch["nodes"]
+            if node["rank"] == rank]
 
 
 def _edge_sources(builder, node_id):
@@ -320,9 +326,10 @@ class TrainEmissionNailTest(unittest.TestCase):
 
 
 def _edge_sources_of(graph_builder, rank, node_id):
+    """M1 适配：边列表同 nodes 改读批次累加器（builder.edges 可被压缩）。"""
     return {
         edge["from"]
-        for edge in graph_builder.builders[rank].edges
+        for edge in graph_builder.batch["parent_edges"]
         if edge["to"] == node_id and edge["rank"] == rank
     }
 

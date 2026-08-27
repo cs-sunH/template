@@ -123,8 +123,15 @@ class NodeStore {
     std::optional<OnlineNode> node(uint64_t node_id) const;
 
     /// Zero-copy full record (GraphSource::lookup_ptr / for_each_dep_free
-    /// backing). Nodes are never erased, so the returned pointer stays
-    /// stable for the node's lifetime.
+    /// backing). Lifetime contract (M2 node GC, 2026-08-23): collection
+    /// happens ONLY at the committer's end-of-commit quiescent point
+    /// (collect_garbage); finish_node never erases synchronously, so a
+    /// pointer obtained inside a Workload callback stays valid until that
+    /// callback returns (every current holder uses it within one callback:
+    /// issue paths touch free i.e. unfinished nodes; the terminal paths run
+    /// before finish_node, except Workload::skip_invalid which re-looks-up
+    /// within the same synchronous flow). Never hold the pointer across a
+    /// commit boundary.
     const OnlineNode* node_ptr(uint64_t node_id) const;
 
     /// Reverse index (watch/fence).
@@ -132,6 +139,36 @@ class NodeStore {
 
     size_t pending_count() const;
     bool empty() const;
+
+    // -------------------------------------------------------------------------
+    // M2 node GC (2026-08-23, --online-node-gc). Finished nodes with no
+    // unfinished children are erased at the committer's end-of-commit
+    // quiescent point, keeping the store at the in-flight window instead of
+    // the whole-run cumulative graph. Amortized O(1) per node (candidate
+    // FIFO: every node enters at most once -- see finish_node).
+    // -------------------------------------------------------------------------
+
+    /// Enable/disable collection (default OFF: fixtures and --online-node-gc
+    /// 0 keep the pre-M2 no-collection behavior, including the memory
+    /// profile). With GC off, finish_node does not even enqueue.
+    void set_gc_enabled(bool enabled);
+
+    /// Drain the candidate FIFO and erase every eligible node. MUST only be
+    /// called from a quiescent point (no Workload callback in flight); the
+    /// official caller is GraphBatchCommitter::commit's tail.
+    void collect_garbage();
+
+    /// True when the node id is not in the store. For a committed store id
+    /// this means "collected" (finished + all children finished); used by
+    /// the committer's store_ids_ prune pass.
+    bool erased(uint64_t node_id) const;
+
+    /// Diagnostics: nodes erased by collect_garbage so far.
+    size_t gc_erased_count() const { return gc_erased_count_; }
+
+    /// Diagnostics: records currently retained (unfinished + pinned-by-
+    /// children finished nodes + not-yet-collected candidates).
+    size_t retained_count() const { return nodes_.size(); }
 
     /// Phase-3 sensing: per-rank injected-unfinished summary (committed but
     /// not yet terminal), classified by compute ops / comm bytes / estimated
@@ -146,6 +183,11 @@ class NodeStore {
         std::vector<uint64_t> parents;
         std::vector<uint64_t> children;
         uint32_t unresolved_parents = 0;
+        // M2 node GC: live-child counter of the node (incremented when an
+        // edge is recorded onto an unfinished parent -- validate enforces
+        // that every edge child is a fresh batch node; decremented when that
+        // child finishes). Zero + finished = GC-eligible.
+        uint32_t unfinished_children = 0;
         bool issued = false;
         bool finished = false;
     };
@@ -153,6 +195,15 @@ class NodeStore {
     uint64_t next_id_ = 1;
     std::unordered_map<uint64_t, NodeRecord> nodes_;
     std::set<uint64_t> free_ids_;
+
+    // M2 node GC state. gc_fifo_ holds node ids in finish order; every node
+    // enters at most once (either childless at its own finish, or via the
+    // last child's finish re-enqueue), so the total FIFO traffic is O(nodes)
+    // and collect_garbage is amortized O(1) per node.
+    bool gc_enabled_ = false;
+    std::vector<uint64_t> gc_fifo_;
+    size_t gc_fifo_head_ = 0;
+    size_t gc_erased_count_ = 0;
 };
 
 /// Online-mode GraphSource over a NodeStore. Yields nodes only after a

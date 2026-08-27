@@ -45,26 +45,53 @@ from online.sh30_online_scheduler import Sh30OnlineScheduler  # noqa: E402
 
 DIGEST_LOG_NAME = "graph_batch_digests.jsonl"
 DECISION_LOG_NAME = "online_decision_log.jsonl"
+TRAIN_LEDGER_LOG_NAME = "train_ledger.jsonl"
+PROFILE_LOG_NAME = "profile.jsonl"
 
 
-class _DigestSink:
-    """把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir。"""
+class _JsonlSink:
+    """jsonl 逐行落盘器（M3 流式落盘 + B2 常驻 fd，2026-08-23）。
 
-    def __init__(self, path: str):
+    常驻 fd：构造（或首行）时打开一次，__call__ 只 write+flush，结束
+    close——不再每行 open/close。行格式与 _write_jsonl 完全一致
+    （json.dumps(row, sort_keys=True) + "\\n"），行序不变 ⇒ 与改前结束
+    一次性写出的文件逐字节相同。
+
+    eager=True：构造即截断建文件（与改前"结束统一写出"对 0 行也建空
+    文件的口径一致；digest/decision_log/profile 用）；
+    eager=False：首行才建文件（与改前"有行才写文件"的门语义一致，
+    train_ledger 用）。
+    """
+
+    def __init__(self, path: str, *, eager: bool = True):
         self.path = path
         self.count = 0
+        self._output = None
+        if eager:
+            self._open()
+
+    def _open(self) -> None:
         # 覆盖旧文件(上一轮运行的残留)。
-        with open(path, "w", encoding="utf-8"):
-            pass
+        self._output = open(self.path, "w", encoding="utf-8")
 
     def __call__(self, row: dict) -> None:
-        with open(self.path, "a", encoding="utf-8") as output:
-            output.write(json.dumps(row, sort_keys=True) + "\n")
-            # 阶段 7 §10.3:强制 flush 治理——digest 是流式审计行,崩溃/
-            # 被杀时不得丢失尾部(open("a") 默认块缓冲,重定向下会滞留
-            # ~8KB)。每行一次 flush 的开销对 3531 行可忽略。
-            output.flush()
+        if self._output is None:
+            self._open()
+        self._output.write(json.dumps(row, sort_keys=True) + "\n")
+        # 阶段 7 §10.3:强制 flush 治理——流式审计行,崩溃/被杀时不得丢失
+        # 尾部(常驻 fd 缓冲会滞留;每行一次 flush 的开销可忽略)。
+        self._output.flush()
         self.count += 1
+
+    def close(self) -> None:
+        if self._output is not None:
+            self._output.close()
+            self._output = None
+
+
+class _DigestSink(_JsonlSink):
+    """把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir
+    （B2 后为 _JsonlSink 的常驻 fd 形态；语义/输出字节不变）。"""
 
 
 def _write_jsonl(path: str, rows: list) -> None:
@@ -106,6 +133,17 @@ def main(argv=None) -> int:
     # strategy 模式保持物理跨 request 链(根因 #5 裁决:物理链为③④口径)。
     graph = GraphBatchBuilder(config)
     digest_sink = _DigestSink(os.path.join(args.bridge_dir, DIGEST_LOG_NAME))
+    # M3 决策日志流式落盘(2026-08-23):decision_log / train_ledger /
+    # profile 三类逐行 append+flush(行序与 json.dumps(sort_keys=True)
+    # 口径不变 ⇒ 输出文件与改前结束一次性写出逐字节相同),调度器不再
+    # 驻留行列表(保留计数);崩溃/被杀时尾部不丢(§10.3 flush 治理)。
+    # train_ledger 用 eager=False(改前"有行才写文件"的门语义)。
+    decision_log_sink = _JsonlSink(
+        os.path.join(args.bridge_dir, DECISION_LOG_NAME))
+    train_ledger_sink = _JsonlSink(
+        os.path.join(args.bridge_dir, TRAIN_LEDGER_LOG_NAME), eager=False)
+    profile_sink = _JsonlSink(
+        os.path.join(args.bridge_dir, PROFILE_LOG_NAME))
     # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
@@ -119,6 +157,9 @@ def main(argv=None) -> int:
         config=config,
         graph=graph,
         digest_sink=digest_sink,
+        decision_log_sink=decision_log_sink,
+        train_ledger_sink=train_ledger_sink,
+        profile_sink=profile_sink,
         mode=args.mode,
         sensing=args.sensing,
     )
@@ -134,11 +175,13 @@ def main(argv=None) -> int:
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
-    # full_scan_entries 恒为 0)。
-    scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))
+    # full_scan_entries 恒为 0)——M3 起已在 build_graph_batch 逐行流式
+    # 写出,此处不再结束一次性写出。
 
     # 阶段 6 §9.1:online_stats.jsonl -- 分项计数器统一采集(Python 侧)。
     # 每已应用交付一行(合并桥接层每 request 服务时间) + 一行汇总。
+    # (M3 残留:每行需结束期合并桥接层 processing_ns,无字节等价的流式
+    # 设计,保留结束一次性写出——行量小(每交付一行、字段精简)。)
     bridge_stats = server.stats()
     per_request = {row["seq"]: row for row in server.per_request_stats()}
     stats_rows = []
@@ -171,19 +214,18 @@ def main(argv=None) -> int:
     _write_jsonl(os.path.join(args.bridge_dir, "online_stats.jsonl"),
                  stats_rows)
 
-    _write_jsonl(os.path.join(args.bridge_dir, DECISION_LOG_NAME),
-                 scheduler.online_log_rows)
-    # 拼 batch 列车台账（§7.3 不变量断言输入；每次列车发射一行）。
-    if getattr(scheduler, "train_ledger_rows", None):
-        _write_jsonl(os.path.join(args.bridge_dir, "train_ledger.jsonl"),
-                     scheduler.train_ledger_rows)
+    # online_decision_log / train_ledger 已由 _JsonlSink 逐行落盘(M3)。
     if args.sensing:
         # 阶段 3:分层账本导出 + 决策边界两层剩余负载查询日志(结束总账核对
-        # 与差异报告输入)。
+        # 与差异报告输入;感知关闭的正式跑不经过这里)。
         scheduler.dump_ledger(os.path.join(args.bridge_dir, "ledger.jsonl"))
         _write_jsonl(
             os.path.join(args.bridge_dir, "sensing_query_log.jsonl"),
             scheduler.sensing_query_rows)
+    # B2/M3:常驻 fd 显式关闭(serve 期之外无写入;异常路径由进程退出兜底)。
+    for sink in (digest_sink, decision_log_sink, train_ledger_sink,
+                 profile_sink):
+        sink.close()
     return 0
 
 

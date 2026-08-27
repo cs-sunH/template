@@ -12,6 +12,7 @@ if str(_WORKLOAD_DIR) not in sys.path:
     sys.path.insert(0, str(_WORKLOAD_DIR))
 
 import metrics_schema as ms
+import metrics_postprocess as mp
 
 
 _CONFIG_PATH = _WORKLOAD_DIR / "metrics_config.json"
@@ -572,6 +573,127 @@ class MetricsConfigTests(unittest.TestCase):
                 "repeats": 1,
             },
         )
+
+
+class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):
+    """B3 additions: frozen cross-repo contract extensions.
+
+    Canonical union of the three B3 batches: event code 8 (constant, edge
+    mapping, SERVICE_EVENT_CODES membership), the request_metrics.csv
+    column order (29 columns, frozen), the terminal_status /
+    first_token_source enumerations, and the NA placeholder semantics for
+    fields that are not yet filled.  Only contract surfaces present in
+    every repository are referenced (metrics_schema.py symbols and the
+    frozen mp.REQUEST_METRICS_COLUMNS list), so this block must stay
+    byte-identical across the five repos.
+    """
+
+    TERMINAL_STATUS_VALUES = ("completed", "failed")
+    FIRST_TOKEN_SOURCE_VALUES = ("exact", "train_interpolated", "NA")
+    NA_SENTINEL = "NA"
+
+    def test_event_code_8_constant_edge_and_service_membership(self) -> None:
+        self.assertEqual(ms.EVENT_FIRST_TOKEN_COMPLETE, 8)
+        self.assertEqual(
+            ms.EVENT_EDGE_BY_CODE[ms.EVENT_FIRST_TOKEN_COMPLETE],
+            ms.EVENT_EDGE_COMPLETE,
+        )
+        self.assertEqual(ms.NodeMetricEvent(456, 8, 7).edge, "complete")
+        self.assertIn(ms.EVENT_FIRST_TOKEN_COMPLETE, ms.SERVICE_EVENT_CODES)
+        # The protocol table stays contiguous 1..8 with issue/complete edges.
+        self.assertEqual(sorted(ms.EVENT_EDGE_BY_CODE), list(range(1, 9)))
+        self.assertEqual(set(ms.EVENT_EDGE_BY_CODE.values()), {"issue", "complete"})
+        # Code 8 is a completion event like code 7 (memory anchor).
+        self.assertEqual(
+            ms.EVENT_EDGE_BY_CODE[ms.EVENT_FIRST_TOKEN_COMPLETE],
+            ms.EVENT_EDGE_BY_CODE[ms.EVENT_MEMORY_ANCHOR_COMPLETE],
+        )
+
+    def test_service_event_codes_membership_is_pinned(self) -> None:
+        # Request service lifetime boundaries only: microbench (5/6) and
+        # memory-anchor (7) codes are observable but not service codes.
+        self.assertEqual(
+            set(ms.SERVICE_EVENT_CODES),
+            {
+                ms.EVENT_PREFILL_START,
+                ms.EVENT_PREFILL_END,
+                ms.EVENT_DECODE_START,
+                ms.EVENT_DECODE_END,
+                ms.EVENT_FIRST_TOKEN_COMPLETE,
+            },
+        )
+
+    def test_request_metrics_columns_frozen_29_in_order(self) -> None:
+        self.assertEqual(len(mp.REQUEST_METRICS_COLUMNS), 29)
+        self.assertEqual(len(set(mp.REQUEST_METRICS_COLUMNS)), 29)
+        self.assertEqual(
+            list(mp.REQUEST_METRICS_COLUMNS),
+            [
+                "queue_index",
+                "request_id",
+                "session_id",
+                "turn_index",
+                "request_type",
+                "terminal_status",
+                "arrival_ns",
+                "prefill_start_ns",
+                "prefill_end_ns",
+                "decode_start_ns",
+                "first_token_ns",
+                "first_token_source",
+                "completion_ns",
+                "queue_ns",
+                "prefill_ns",
+                "prefill_decode_gap_ns",
+                "decode_ns",
+                "e2e_ns",
+                "kv_hit_state",
+                "restore_start_ns",
+                "restore_complete_ns",
+                "pre_prefill_restore_ns",
+                "hidden_restore_ns",
+                "exposed_restore_stall_ns",
+                "hidden_ratio",
+                "prefill_length",
+                "decode_length",
+                "prefix_len",
+                "instructions",
+            ],
+        )
+
+    def test_terminal_status_enum(self) -> None:
+        # Closed enum written into the terminal_status column: no other
+        # value may appear in request_metrics.csv terminal_status cells.
+        self.assertIn("terminal_status", mp.REQUEST_METRICS_COLUMNS)
+        self.assertEqual(self.TERMINAL_STATUS_VALUES, ("completed", "failed"))
+
+    def test_first_token_source_enum(self) -> None:
+        # Closed enum per the main spec: exactly exact /
+        # train_interpolated plus the NA placeholder; "train_interpolated"
+        # is reserved for the work package that produces it -- until then
+        # the cell carries the NA token.
+        self.assertIn("first_token_source", mp.REQUEST_METRICS_COLUMNS)
+        self.assertEqual(
+            self.FIRST_TOKEN_SOURCE_VALUES,
+            ("exact", "train_interpolated", "NA"),
+        )
+
+    def test_na_semantics(self) -> None:
+        # NA = "field not yet produced by the owning work package"; it is
+        # a member of first_token_source but never a terminal_status
+        # value, and it never parses as a number.
+        self.assertEqual(self.NA_SENTINEL, "NA")
+        self.assertIn(self.NA_SENTINEL, self.FIRST_TOKEN_SOURCE_VALUES)
+        self.assertTrue(
+            all(
+                value != self.NA_SENTINEL
+                for value in self.TERMINAL_STATUS_VALUES
+            )
+        )
+        with self.assertRaises(ValueError):
+            int(self.NA_SENTINEL)
+        with self.assertRaises(ValueError):
+            float(self.NA_SENTINEL)
 
 
 if __name__ == "__main__":
