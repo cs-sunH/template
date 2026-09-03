@@ -20,19 +20,27 @@ true while queued-but-undrained commands existed, and ended the run with
 the CSV tail undelivered (the field signature: ack_count != delivery_count,
 恒差 1, and completed << total rows).
 
+P0 turn-0 fix adaptation (2026-08-30): the calendar reader indexes the
+whole file and queues EVERY turn-0 Submit during the first pump (the row
+window no longer feeds rows gradually), so the historical "break mid-file
+with completed=10/30" shape is no longer constructible. The defect CLASS
+itself -- finished() consulted while queued-but-undrained Submit commands
+exist -- is still faithfully reproduced: the legacy order below checks
+finished() right after pump() queued the whole calendar and breaks with
+completed=0/30 and 30 queued-but-undrained commands.
+
 The fixture drives the REAL WindowedTraceReader / RequestIngress /
 ServiceCoordinator / DecisionMailbox / EventQueue through both loop
-orders on the same CSV (30 turn-0 rows, arrivals in 3 batches of 10,
-high_water=10 so the file is read in exactly 3 pumps):
+orders on the same CSV (30 single-turn sessions, arrivals in 3 batches of
+10 at ticks 1000/2000/3000; --request-window-rows is advisory):
 
-  Part 1 (REPRO, legacy order):  the loop breaks with reader NOT at EOF,
-      completed=10/30, queued-but-undrained commands > 0 -- the vacuum,
-      caught as an assertion (in production this was the silent early
-      close). The audit_completion verdict must be Incomplete.
-  Part 2 (FIXED order): the extra "drain whatever pump() just queued"
-      (pending_command_count() > 0 -> drain_commands()) closes the
-      vacuum; the loop ends only at EOF with completed == total rows ==
-      30 and verdict Ok.
+  Part 1 (REPRO, legacy order): the loop breaks with queued-but-undrained
+      commands > 0 and completed == 0 -- the counting vacuum, caught as
+      an assertion (in production this was the silent early close). The
+      audit_completion verdict must fail-closed (AccountMismatch).
+  Part 2 (FIXED order): drain-first (drain whatever pump() just queued)
+      plus the close-at-calendar-EOF boundary closes the vacuum; the loop
+      ends with completed == total rows == 30 and verdict Ok.
 
 Build: CMake target AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest.
 Exit code 0 = both parts behaved as described (legacy reproduces, fixed
@@ -67,10 +75,12 @@ void expect(bool cond, const std::string& what) {
     }
 }
 
-// 30 turn-0 data rows; arrivals in 3 batches of 10 (tick 1000/2000/3000).
-// high_water=10 => the reader consumes the file in exactly 3 pumps, and
-// between pumps the "all alarms fired + all requests completed" state is
-// reached while the next 10 rows are freshly queued -- the vacuum window.
+// 30 single-turn sessions (P0 fix: one turn-0 row per session, blocks
+// contiguous -- the structure validation fail-closes otherwise); arrivals
+// in 3 batches of 10 (tick 1000/2000/3000). high_water=10 is advisory
+// now: the calendar reader indexes the whole file and queues every turn-0
+// Submit during the FIRST pump, so the vacuum window is "queued but not
+// yet drained", not "read window boundary".
 const char* kCsvHeader =
     "session_id,turn_index,request_id,prefill_length,decode_length,"
     "session_arrival_time_ns,inter_request_interval_ns";
@@ -81,7 +91,7 @@ std::string make_csv(const std::string& path) {
     for (int row = 0; row < 30; ++row) {
         const uint64_t arrival =
             1000 + static_cast<uint64_t>(row / 10) * 1000;  // 3 batches
-        out << "s" << (row / 10) << ",0,req_" << row << ",100,10," << arrival
+        out << "s" << row << ",0,req_" << row << ",100,10," << arrival
             << ",0\n";
     }
     return path;
@@ -96,9 +106,11 @@ struct RunResult {
     CompletionAuditVerdict verdict = CompletionAuditVerdict::Ok;
 };
 
-// One main-loop replica. `fixed_order` selects drain-after-pump (the fix).
-// Everything else mirrors main_online.cc: bind, close-at-startup, initial
-// pump, arrival hook = immediate no-node completion + window consumption.
+// One main-loop replica. `fixed_order` selects the production close-at-EOF
+// ordering plus drain-after-pump. The legacy arm deliberately closes only the
+// coordinator, leaving the old ingress producer gate open, so it can reproduce
+// the historical queued-command vacuum without violating the new close gate.
+// The arrival hook performs immediate no-node completion + window consumption.
 RunResult run_loop(const std::string& csv, const bool fixed_order) {
     RunResult res;
     const auto eq = std::make_shared<EventQueue>();
@@ -113,12 +125,38 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
         reader.notify_consumed(env.queue_index);
         svc.on_request_completed();
     });
-    ingress.mark_input_closed();  // official runners: --close-input
-
-    reader.pump();  // initial top-up before the loop (main_online.cc)
+    if (!fixed_order) {
+        // Historical behavior: the service could be closed while producers
+        // still queued work. Do not use mark_input_closed() here: its new
+        // linearized producer gate is precisely what this regression fixture
+        // must bypass in order to model the old defect.
+        svc.mark_input_closed();
+    }
+    reader.pump();  // initial pump before the loop (main_online.cc): the
+                    // calendar reader queues ALL turn-0 Submits right here.
+    if (fixed_order && reader.eof()) {
+        ingress.mark_input_closed();
+    }
     while (true) {
+        if (!fixed_order) {
+            // OLD (defect) order: finished() is consulted BEFORE the queued
+            // Submits are drained. With the whole calendar freshly queued
+            // this breaks immediately: completed=0 while 30 commands sit in
+            // the ingress queue -- the counting vacuum.
+            if (svc.finished()) {
+                res.eof = reader.eof();
+                res.queued_at_break = ingress.pending_command_count();
+                res.broke_at_vacuum = res.queued_at_break > 0;
+                break;
+            }
+        }
         ingress.drain_commands();
         reader.pump();
+        if (fixed_order && !svc.input_closed() && reader.eof()) {
+            // Production finite-input ordering: close only after every
+            // calendar entry was submitted, so no later Submit is rejected.
+            ingress.mark_input_closed();
+        }
         if (fixed_order && ingress.pending_command_count() > 0) {
             // Defect-A fix: register what pump() just queued BEFORE the
             // finished() check (the vacuum drain).
@@ -127,7 +165,7 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
         if (svc.finished()) {
             res.eof = reader.eof();
             res.queued_at_break = ingress.pending_command_count();
-            res.broke_at_vacuum = !reader.eof();
+            res.broke_at_vacuum = res.queued_at_break > 0;
             break;
         }
         if (eq->finished()) {
@@ -167,16 +205,19 @@ int main() {
     // ---- Part 1: legacy order REPRODUCES the vacuum ----------------------
     const RunResult legacy = run_loop(csv, /*fixed_order=*/false);
     expect(legacy.broke_at_vacuum,
-           "legacy order breaks while the reader is not at EOF (vacuum)");
-    expect(!legacy.eof, "legacy order: reader NOT at EOF at break");
-    expect(legacy.queued_at_break > 0,
-           "legacy order: queued-but-undrained commands exist at break");
-    expect(legacy.completed == 10 && legacy.total_rows == 20,
-           "legacy order completes 10 with only 20/30 rows read (the "
-           "undelivered tail)");
+           "legacy order breaks with queued-but-undrained commands (the "
+           "counting vacuum)");
+    expect(legacy.eof,
+           "legacy order: calendar reader already at EOF (whole file "
+           "queued; the vacuum is undrained commands, not unread rows)");
+    expect(legacy.queued_at_break == 30,
+           "legacy order: all 30 queued-but-undrained commands exist at "
+           "break");
+    expect(legacy.completed == 0 && legacy.total_rows == 30,
+           "legacy order completes 0/30 with the whole queue undelivered");
     expect(legacy.verdict != CompletionAuditVerdict::Ok,
-           "legacy order audit verdict fail-closed (AccountMismatch or "
-           "Incomplete: rows read but neither accepted nor completed)");
+           "legacy order audit verdict fail-closed (AccountMismatch: rows "
+           "read but neither accepted nor completed)");
     std::printf("[service_vacuum_test] legacy order: VACUUM reproduced "
                 "(break at completed=%llu/%llu, queued=%zu, eof=%d)\n",
                 static_cast<unsigned long long>(legacy.completed),

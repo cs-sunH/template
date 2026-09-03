@@ -20,6 +20,17 @@ Output columns match the simulator request-queue format:
 session_id,turn_index,request_id,prefill_length,decode_length,
 session_arrival_time_ns,inter_request_interval_ns,description
 
+P0 turn-0 late-discovery fix (2026-08-30): besides the queue and the canonical
+sidecar, the script writes <queue>.provenance.json next to the output queue --
+the provenance record the C++ WindowedTraceReader fail-closes on (any field
+mismatch aborts the run before a single Submit). Fields: schema=1,
+generator_version, csv_sha256 (human audit only; the C++ gate does not hash
+sha256), csv_fnv1a64, csv_bytes, data_rows, sessions, turn0_count,
+turn0_arrival_min_ns/max_ns, turn0_adjacent_inversions,
+session_blocks_contiguous. The FNV-1a 64 digest is byte-for-byte the same
+algorithm as the C++ reader (offset basis 14695981039346656037, prime
+1099511628211; h = (h ^ byte) * prime over the raw file bytes, mod 2^64).
+
 Usage: derive_20_first_30_seconds.py [source] [recompute_queue]
                                       [canonical_sidecar] [window_ns]
                                       [arrival_scale]
@@ -41,6 +52,7 @@ stdout).
 
 import csv
 import hashlib
+import json
 import math
 import sys
 
@@ -95,6 +107,109 @@ def row_digest(row: list[str]) -> str:
     """Deterministic digest of the canonical 8-column queue row (B0 input
     equivalence check key)."""
     return hashlib.sha256(",".join(row).encode("utf-8")).hexdigest()
+
+
+def fnv1a64(data: bytes) -> int:
+    """FNV-1a 64 over raw bytes (provenance gate digest).
+
+    Byte-for-byte identical to the C++ reader implementation
+    (WindowedTraceReader.cc): offset basis 14695981039346656037, prime
+    1099511628211, per byte h = (h ^ byte) * prime, all mod 2^64.
+    """
+    h = 14695981039346656037
+    for byte in data:
+        h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def fnv1a64_cont(h: int, data: bytes) -> int:
+    """FNV-1a 64 continuation over one chunk of raw bytes."""
+    for byte in data:
+        h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def queue_provenance(queue_path: str, generator_version: str) -> dict:
+    """Provenance record of a materialized queue, computed from the WRITTEN
+    file bytes (exactly what the C++ reader re-derives and compares).
+
+    Definitions mirror the reader's index pass byte-for-byte: lines split on
+    b"\n" (a trailing "\r" from the CSV writer stays on the line and rides
+    on the unparsed description column, exactly as in C++); the first
+    non-empty line is the header; every later non-empty line is a data row;
+    turn-0 = non-empty session_arrival_time_ns (6th comma field); adjacent
+    inversions are counted over turn-0 arrivals in file order; session
+    blocks must be contiguous (a session id may never reappear).
+    """
+    sha = hashlib.sha256()
+    fnv = 14695981039346656037
+    csv_bytes = 0
+    data_rows = 0
+    turn0_count = 0
+    turn0_min = None
+    turn0_max = None
+    inversions = 0
+    prev_turn0 = None
+    header_seen = False
+    current_session = b""
+    seen_sessions = set()
+    contiguous = True
+    pending = b""
+
+    def consume(line: bytes) -> None:
+        nonlocal data_rows, turn0_count, turn0_min, turn0_max, inversions
+        nonlocal prev_turn0, header_seen, current_session, contiguous
+        if not line:
+            return
+        if not header_seen:
+            header_seen = True
+            return
+        data_rows += 1
+        fields = line.split(b",")
+        session = fields[0]
+        arrival_text = fields[5] if len(fields) > 5 else b""
+        if session != current_session:
+            if session in seen_sessions:
+                contiguous = False
+            seen_sessions.add(session)
+            current_session = session
+        if arrival_text:
+            turn0_count += 1
+            arrival = int(arrival_text)
+            turn0_min = arrival if turn0_min is None else min(turn0_min, arrival)
+            turn0_max = arrival if turn0_max is None else max(turn0_max, arrival)
+            if prev_turn0 is not None and arrival < prev_turn0:
+                inversions += 1
+            prev_turn0 = arrival
+
+    with open(queue_path, "rb") as fin:
+        while True:
+            chunk = fin.read(1 << 20)
+            if not chunk:
+                break
+            csv_bytes += len(chunk)
+            sha.update(chunk)
+            fnv = fnv1a64_cont(fnv, chunk)
+            pending += chunk
+            *complete, pending = pending.split(b"\n")
+            for line in complete:
+                consume(line)
+        if pending:
+            consume(pending)
+    return {
+        "schema": 1,
+        "generator_version": generator_version,
+        "csv_sha256": sha.hexdigest(),
+        "csv_fnv1a64": fnv,
+        "csv_bytes": csv_bytes,
+        "data_rows": data_rows,
+        "sessions": len(seen_sessions),
+        "turn0_count": turn0_count,
+        "turn0_arrival_min_ns": turn0_min if turn0_min is not None else 0,
+        "turn0_arrival_max_ns": turn0_max if turn0_max is not None else 0,
+        "turn0_adjacent_inversions": inversions,
+        "session_blocks_contiguous": contiguous,
+    }
 
 
 def main() -> None:
@@ -244,6 +359,26 @@ def main() -> None:
     print(f"request_type unknown rows: {unknown_type_rows}")
     print(f"recompute queue: {output}")
     print(f"canonical sidecar: {sidecar}")
+
+    # P0 turn-0 fix (2026-08-30): provenance sidecar next to the queue; the
+    # C++ reader fail-closes on any mismatch with these stats.
+    generator_version = (
+        f"derive_20_first_30_seconds.py window_ns={window_ns} "
+        f"arrival_scale={arrival_scale}"
+    )
+    provenance = queue_provenance(output, generator_version)
+    provenance_path = output + ".provenance.json"
+    with open(provenance_path, "w", encoding="utf-8") as pout:
+        json.dump(provenance, pout, indent=2, sort_keys=True)
+        pout.write("\n")
+    print(
+        "provenance: " + json.dumps(
+            {k: provenance[k] for k in (
+                "csv_fnv1a64", "csv_bytes", "data_rows", "sessions",
+                "turn0_count", "turn0_arrival_min_ns", "turn0_arrival_max_ns",
+                "turn0_adjacent_inversions", "session_blocks_contiguous")},
+            sort_keys=True))
+    print(f"provenance sidecar: {provenance_path}")
     print("[next-steps] 将 trace_config 的 request_queue_csv 指向 "
           f"{output}（recompute 单口径，turn-0 前缀已折入 prefill）")
 
