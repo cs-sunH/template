@@ -27,9 +27,11 @@ Exit code 0 on ALL PASS.
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+#include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -185,12 +187,70 @@ void test_counters() {
     expect(!mailbox.has_decision_work(), "C: drain consumed the finalize");
 }
 
+// ---------------------------------------------------------------- Part D --
+// Completed-node accounting: compact production mode versus exact audit mode.
+void test_completed_fact_accumulator() {
+    const int success = static_cast<int>(NodeTerminalStatus::Success);
+    const int skipped = static_cast<int>(NodeTerminalStatus::Skipped);
+
+    CompletedFactAccumulator compact;
+    // Make the fixture independent of an inherited audit-mode environment.
+    compact.set_exact_mode(false);
+    compact.record(/*rank=*/3, /*node_id=*/101, "req-compact", "prefill",
+                   /*generation=*/4, /*tick=*/500, success);
+    compact.record(/*rank=*/3, /*node_id=*/102, "req-compact", "prefill",
+                   /*generation=*/4, /*tick=*/501, skipped);
+    compact.record(/*rank=*/3, /*node_id=*/103, "req-compact", "prefill",
+                   /*generation=*/4, /*tick=*/502, /*invalid=*/99);
+    expect(compact.size() == 0 && compact.drain().empty(),
+           "D: production accumulator drains completed_nodes as []");
+    const CompletedFactCounters& compact_counts = compact.counters();
+    expect(compact_counts.total == 3 && compact_counts.success == 1 &&
+               compact_counts.skipped == 1 && compact_counts.other == 1,
+           "D: compact mode keeps O(1) success/skipped/invalid counters");
+
+    bool compact_mode_change_rejected = false;
+    try {
+        compact.set_exact_mode(true);
+    } catch (const std::logic_error&) {
+        compact_mode_change_rejected = true;
+    }
+    expect(compact_mode_change_rejected,
+           "D: mode cannot change after the first terminal");
+
+    CompletedFactAccumulator exact;
+    exact.set_exact_mode(true);
+    exact.record(/*rank=*/7, /*node_id=*/7001, "req-exact", "decode",
+                 /*generation=*/8, /*tick=*/9001, success);
+    const std::vector<CompletedNodeFact> first_exact = exact.drain();
+    expect(first_exact.size() == 1 && first_exact[0].rank == 7 &&
+               first_exact[0].node_id == 7001 &&
+               first_exact[0].request_id == "req-exact" &&
+               first_exact[0].stage == "decode" &&
+               first_exact[0].generation == 8 && first_exact[0].tick == 9001 &&
+               first_exact[0].terminal_status == success,
+           "D: exact mode preserves the frozen legacy terminal fields");
+    expect(exact.size() == 0 && exact.counters().total == 1 &&
+               exact.counters().success == 1,
+           "D: drain clears only exact records, not run-lifetime counters");
+
+    exact.record(/*rank=*/8, /*node_id=*/7002, "req-exact", "decode",
+                 /*generation=*/9, /*tick=*/9002, skipped);
+    const std::vector<CompletedNodeFact> second_exact = exact.drain();
+    expect(second_exact.size() == 1 && second_exact[0].node_id == 7002 &&
+               second_exact[0].terminal_status == skipped &&
+               exact.counters().total == 2 && exact.counters().success == 1 &&
+               exact.counters().skipped == 1 && exact.counters().other == 0,
+           "D: later exact drains retain cumulative terminal accounting");
+}
+
 }  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
     test_order_drain_and_delta();
     test_dedup();
     test_counters();
+    test_completed_fact_accumulator();
 
     if (!g_ok) {
         std::fprintf(stderr,
@@ -198,6 +258,6 @@ int main(int /*argc*/, char* /*argv*/[]) {
         return 1;
     }
     std::printf("[decision_mailbox_test] ALL PASS: order/drain/StateDelta, "
-                "same-epoch dedup, counters\n");
+                "same-epoch dedup, counters, completed-node accounting\n");
     return 0;
 }

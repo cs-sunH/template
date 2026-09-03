@@ -7,18 +7,24 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/workload/HardwareResource.hh"
 
+#include <cstdlib>
+
 using namespace std;
 using namespace AstraSim;
 using namespace Chakra;
 
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
-HardwareResource::HardwareResource(uint32_t num_npus, int sys_id)
-    : num_npus(num_npus),
+HardwareResource::HardwareResource(
+    uint32_t num_npus, int sys_id,
+    const ExecutionDriven::ExecutionMode execution_mode)
+    : sys_id(sys_id),
+      num_npus(num_npus),
+      retain_node_ids_(execution_mode ==
+                       ExecutionDriven::ExecutionMode::Static),
       num_in_flight_cpu_ops(0),
       num_in_flight_gpu_comm_ops(0),
-      num_in_flight_gpu_comp_ops(0),
-      sys_id(sys_id) {
+      num_in_flight_gpu_comp_ops(0) {
 
     num_cpu_ops = 0;
     num_gpu_ops = 0;
@@ -133,7 +139,9 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         assert(num_in_flight_cpu_ops == 0);
         ++num_in_flight_cpu_ops;
         ++num_cpu_ops;
-        cpu_ops_node.emplace(node.global_id);
+        if (retain_node_ids_) {
+            cpu_ops_node.emplace(node.global_id);
+        }
     } else {
         if (node.kind == ExecutionDriven::NodeKind::Compute) {
         // Step 1-8 (root-cause #3): calibrated COMP chains run concurrently
@@ -143,7 +151,9 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         // its single-slot assert (static mode never runs concurrent COMPs).
         ++num_in_flight_gpu_comp_ops;
         ++num_gpu_ops;
-        gpu_ops_node.emplace(node.global_id);
+        if (retain_node_ids_) {
+            gpu_ops_node.emplace(node.global_id);
+        }
         } else {
             if (node.kind == ExecutionDriven::NodeKind::CommRecv) {
                 return;
@@ -151,7 +161,9 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
             assert(num_in_flight_gpu_comm_ops == 0);
             ++num_in_flight_gpu_comm_ops;
             ++num_gpu_comms;
-            gpu_comms_node.emplace(node.global_id);
+            if (retain_node_ids_) {
+                gpu_comms_node.emplace(node.global_id);
+            }
         }
     }
 }
@@ -161,21 +173,47 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
         return;
     }
     if (node.is_cpu_op) {
+        if (num_in_flight_cpu_ops == 0) {
+            LoggerFactory::get_logger("HardwareResource")
+                ->critical("online CPU release underflow: sys.id={} node={}",
+                           sys_id, node.global_id);
+            std::abort();
+        }
         --num_in_flight_cpu_ops;
         assert(num_in_flight_cpu_ops == 0);
-        this->cpu_ops_node.erase(node.global_id);
+        if (retain_node_ids_) {
+            this->cpu_ops_node.erase(node.global_id);
+        }
     } else {
         if (node.kind == ExecutionDriven::NodeKind::Compute) {
             // Step 1-8 (root-cause #3): count-based, see occupy().
+            if (num_in_flight_gpu_comp_ops == 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical(
+                        "online GPU-comp release underflow: sys.id={} node={}",
+                        sys_id, node.global_id);
+                std::abort();
+            }
             --num_in_flight_gpu_comp_ops;
-            this->gpu_ops_node.erase(node.global_id);
+            if (retain_node_ids_) {
+                this->gpu_ops_node.erase(node.global_id);
+            }
         } else {
             if (node.kind == ExecutionDriven::NodeKind::CommRecv) {
                 return;
             }
+            if (num_in_flight_gpu_comm_ops == 0) {
+                LoggerFactory::get_logger("HardwareResource")
+                    ->critical(
+                        "online GPU-comm release underflow: sys.id={} node={}",
+                        sys_id, node.global_id);
+                std::abort();
+            }
             --num_in_flight_gpu_comm_ops;
             assert(num_in_flight_gpu_comm_ops == 0);
-            this->gpu_comms_node.erase(node.global_id);
+            if (retain_node_ids_) {
+                this->gpu_comms_node.erase(node.global_id);
+            }
         }
     }
 }

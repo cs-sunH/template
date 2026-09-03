@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_note": "SLO 离线后处理 B 类参数清单。B4b（2026-08-26/27）已按主规格（需保留的SLO功能建议指标.md）§1 各推导程序、基于 B4a 证据（/tmp/slo_wps/params/：bucket_candidates、五仓 t_isolated/violation_curves/warmup_rolling/overhead_tiers、WP6 复测）与文献口径（SLO指标大全文档.md §2/§3.2/§7）填充全部 value+evidence+rationale，五仓逐字节相同冻结。约束回执：bucket_percentiles 首次从全量 astra_compute_20.csv 计算后冻结、不得每次重算；alpha/epsilon 一经确定全 campaign 冻结、所有策略共用同一 α。参数【值+证据+理由】总表另见 B4b 交付报告参数附录。slo_tools 各脚本对所需参数一律 fail-closed：遇 null/缺失/非法即非零退出并指明参数名。bucket_percentiles.value 结构为 {\"percentiles\": [p1, p2, ...], \"prefill_edges_tokens\": [...], \"decode_edges_tokens\": [...]}（edges 含首尾哨兵、与 percentiles 切点一一对应，桶 i 覆盖 edges[i] <= x < edges[i+1]、末桶闭合）。",
+  "_note": "SLO 离线后处理 B 类参数清单。B4b（2026-08-26/27）已按主规格（各指标测试建议.md，合并自原执行规格 v5）§1 各推导程序、基于 B4a 证据（/tmp/slo_wps/params/：bucket_candidates、五仓 t_isolated/violation_curves/warmup_rolling/overhead_tiers、WP6 复测）与文献口径（SLO指标大全文档.md §2/§3.2/§7）填充全部 value+evidence+rationale，五仓逐字节相同冻结。约束回执：bucket_percentiles 首次从全量 astra_compute_20.csv 计算后冻结、不得每次重算；alpha/epsilon 一经确定全 campaign 冻结、所有策略共用同一 α。参数【值+证据+理由】总表另见 B4b 交付报告参数附录。slo_tools 各脚本对所需参数一律 fail-closed：遇 null/缺失/非法即非零退出并指明参数名。bucket_percentiles.value 结构为 {\"percentiles\": [p1, p2, ...], \"prefill_edges_tokens\": [...], \"decode_edges_tokens\": [...]}（edges 含首尾哨兵、与 percentiles 切点一一对应，桶 i 覆盖 edges[i] <= x < edges[i+1]、末桶闭合）。",
   "params": {
     "bucket_percentiles": {
       "value": {
@@ -59,7 +59,7 @@
       "value": 7,
       "unit": "count",
       "derivation_program": "主规格 §1.4-B：由单点实测墙钟与总预算反推",
-      "evidence": "单点全量成本：kimi §五锚（20_1min 规模 229-599s/仓）× 数千倍（主规格 §5 注）；B4a 实测 60s 单点墙钟五仓 overhead_tiers 中位 570-1014s、sim/wall ≈ 1.0-1.1（S3 scan_x1：sim 965.7s / wall 894.6s），全量 horizon 44,609s+drain → ≥12h/点且过载退化（B3 oracle 退化先例 0.059 sim-s/wall-s）→ 天级确认。预算形态：5 仓 ×（7 点 + 2 容量点 repeats）= 45 次全量 run（repeats 不占 max_points 计数，见 scan_driver points_budget_left 用 records 计数）",
+      "evidence": "单点全量成本：kimi §五锚（20_1min 规模 229-599s/仓）× 数千倍（主规格 §5 注）；B4a 实测 60s 单点墙钟五仓 overhead_tiers 中位 570-1014s、sim/wall ≈ 1.0-1.1（S3 scan_x1：sim 965.7s / wall 894.6s），全量 horizon 由事件跨度决定（span=末 KV 事件−首 KV 事件，hbm_watermark 全局事件跨度口径，非到达窗；当前缺陷诊断 run 的到达窗 44,609s 仅为跨度下界参照，reader 修复后以重跑实测 span 为准）+drain → ≥12h/点且过载退化（B3 oracle 退化先例 0.059 sim-s/wall-s）→ 天级确认。预算形态：5 仓 ×（7 点 + 2 容量点 repeats）= 45 次全量 run（repeats 不占 max_points 计数，见 scan_driver points_budget_left 用 records 计数）",
       "rationale": "预算反推上限（主控裁定值复核采纳）。算术注记（如实记录）：从 16× 初始 bracket 几何二分（mid=sqrt(lo·hi)）到 (hi−lo)/lo ≤ 5% 恰需 8 次评估（2 端点 + 6 中点：16→4→2→1.414→1.189→1.091→1.044）；上限 7 → 最坏收敛至 (hi−lo)/lo ≈ 9% 且 scan_result.convergence.budget_exhausted=true 如实暴露，属作者决策点（§1.4/WP10：不得擅自加点、超预算上报）；需向下外扩的仓（W/S3）更早触顶，同样走 budget_exhausted 暴露"
     },
     "scan_repeats": {
@@ -74,7 +74,7 @@
       "unit": "ns",
       "derivation_program": "主规格 §1.4-B：实测 trace 开局瞬态长度（backlog 进入平台期的时间），剔除窗口 ≥ 实测瞬态",
       "evidence": "S3/warmup_rolling_S3.json：in-flight 达稳态段 p90 的 90% 用时 t_to_90pct_of_steady_p90_ns = 11e9（backlog_plateau）；前缀剔除判定矩阵 w∈{1,2.5,5,10,15}s → P99 E2E rel_change ≤0.0015（prefix_removal_negligible），w=30s → 0.1503（prefix_matters）；W plateau_entry_ns = 3.09e9；FACE plateau_entry_ns = 0.095e9（首桶即平台）；S1/S2 为 burst-then-drain 型（t_first_50pct_peak 18-19s），其开局 t0 突发为负载结构、随 λ 缩放保留，非初始化伪影（warmup JSON profile_note 原文）",
-      "rationale": "剔除窗口 ≥ 实测瞬态：15s = S3 实测 11s 的 1.36× 余量，且为实测『可忽略域』最大档（30s 起损失 15% P99 信号）；对全量点（44,609s 到达窗）仅剔 0.034%，统计代价可忽略；W/FACE 的更短瞬态被自然覆盖。S1/S2 的 18-19s 突发不属初始化伪影故不纳入瞬态上界（已记录为口径注记）"
+      "rationale": "剔除窗口 ≥ 实测瞬态：15s = S3 实测 11s 的 1.36× 余量，且为实测『可忽略域』最大档（30s 起损失 15% P99 信号）；剔除占比按事件跨度决定式评估（span=末 KV 事件−首 KV 事件，非到达窗——当前缺陷诊断 run 到达窗 44,609s 只是跨度参照下界，实际占比=15s/实测 span，span≫15s 时统计代价可忽略）；W/FACE 的更短瞬态被自然覆盖。S1/S2 的 18-19s 突发不属初始化伪影故不纳入瞬态上界（已记录为口径注记）"
     },
     "warmup_change_threshold": {
       "value": 0.05,
@@ -109,7 +109,14 @@
       "unit": "ns",
       "derivation_program": "主规格 §1.5-B：兜底采样周期推导同链路时间桶（远小于典型 decode step 时间且满足 WP8 开销预算，§1.7）",
       "evidence": "五仓 decode 单步中位 6.885-6.902ms → 5ms = 0.73× 单步（亚步长，步/桶比 1.38）；WP8 周期兜底采样在 finalize 侧重放：B3 证据——跨 detail 档产物相对增量恰为 0（观测器非扰动逐字节等价）、summary 档 cpp.log 已含 hbm_watermark_summary（54 ranks）且容量违规 0 → 仿真运行时零增量，仅离线后处理成本",
-      "rationale": "零运行时开销下分辨率优先：5ms ≤ 1 decode 单步（0.73×），事件驱动采样为主、本周期仅兜底；附录水位线时序 60s → 12K 点/仓、全量 44,609s → 8.9M 点可离线承受；不受 WP6 类运行时预算耦合，无需放粗"
+      "rationale": "零运行时开销下分辨率优先：5ms ≤ 1 decode 单步（0.73×），事件驱动采样为主、本周期仅兜底；附录水位线时序规模按跨度决定式评估（span=末 KV 事件−首 KV 事件，非到达窗）：60s 试点 → 12K 点/仓；全量以 span×N/B 计，稠密输出受 watermark_series_row_budget 行预算约束（B_eff=max(B, ceil(S·N/(R−N)))，R=5M 时 5ms/3 实例全量 span 可离线承受；R≤N 拒绝稠密只给 RLE），权威无损时序为 RLE 变点区间 slo_hbm_intervals.csv（O(动作数) 行，任意桶长可恢复）；不受 WP6 类运行时预算耦合，无需放粗"
+    },
+    "watermark_series_row_budget": {
+      "value": 5000000,
+      "unit": "rows",
+      "derivation_program": "P1-④（2026-08-30）：hbm_watermark 绘图 series（slo_hbm_plot_series.csv）的全局行预算 R——稠密桶行总数上界。B_eff = max(B_requested, ceil(S·N/(R−N)))（S=全局 span=末 KV 事件−首 KV 事件、N=有事件实例数、B=watermark_sample_period_ns）；R≤N 时拒绝稠密输出只给 RLE（slo_hbm_intervals.csv，权威无损）。权威时序以 RLE 为准、稠密 CSV 降级为纯绘图产物，本参数只约束后者",
+      "evidence": "P0 缺陷诊断 run 实测：旧实现按 span/B 稠密物化 series 行字典，全量 trace（span≈61 天、3 实例、5ms 桶）理论行数 ~3.2e9、峰值 RSS ~620MiB（物化大头）；行预算化后输出行数 ≤ R 且流式写出，内存 O(实例数+活跃游标)。R=5,000,000 行 ≈ 500MB 级 CSV 上限（绘图友好），且 > 五仓 60s 试点全部桶行（12K×N）三个数量级，试点不触发调整",
+      "rationale": "5M 行为绘图产物可承受上界（列宽 ~100B/行 → ~500MB；gnuplot/matplotlib 分块可读），对 5ms/多实例长跨度 run 由 B_eff 公式自动放粗到预算内；跨 run 对比须先按所有 run 最大 span 约定共同 B_eff 与共同 bucket origin（campaign 可比性）。本键与 bucket_ns_provisional 语义无关（后者=manifest 缺正式桶长锚点，不复用）；一经确定全 campaign 冻结"
     },
     "imbalance_bucket_ns": {
       "value": 1000000,

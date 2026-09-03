@@ -14,19 +14,72 @@
     （manifest.json）。本脚本把这两者合称"python 侧 ledger"，逐仓字段
     映射登记于 REPO_VARIANTS（先实际检查五仓字段再登记，不猜测）。
 
-算法（重放，非策略复刻）：
-  按 (文件顺序=seq) 重放每条决策记录，记录内固定次序「逐出 → 恢复/迁移
-  → 增长」。会话状态（当前所在实例、当前本地 bytes）由本脚本自行跟踪，
-  恢复/迁移的方向由跟踪态判定（本地跨实例=搬移、远端/同实例=只增），
-  已落盘 bytes 与 f(tokens)=2·layers·hidden_size·bytes_per_elem·tokens
-  逐条对账（f 已在五仓基线数据上核对：restore 比值全 1.0，S3 另有 0.5
-  分层半恢复）。增长按 manager 语义"长到 f(目标 tokens)"取增量。
+四层可信度（P1 工具语义改造，2026-08-30；tier 由 run_dir 内容自动判定，
+log 一行说明判定依据，无需新 CLI 参数）：
 
-  → 每 instance 占用时间序列（桶长 = manifest watermark_sample_period_ns，
-    null → 5,000,000 ns 临时锚点，全输出标 provisional）；
-  → 汇总 JSON：每 instance peak/mean/时长、逐出次数/bytes、容量违规计
-    数（occupancy > capacity 必须为 0；>0 → 退出码 3 + 标红报错，宁可
-    报错不可静默——既可能是重建口径错误，也可能是真实问题）。
+  * ``per_rank_total_hbm_certified``——``results/kv_delta_journal.jsonl``
+    （manager mutation 提交点的 append-only 逐 rank delta 权威账本）与
+    ``results/kv_delta_journal_checksum.json``（run 末守恒证书）都在场，
+    且四道门全过：journal sha256 == checksum.sha256、行级链自洽
+    （before == 前行 after、after == before + 三类 delta）、重放终态 ==
+    checksum 终态、证书四项 checks 全 true。流式重放 journal 得逐 rank
+    physical=weight+resident+reserved 时序，对行内 capacity_bytes 逐 rank
+    认证——**正式容量判决只在本层给出**（违规 → 退出码 3，fail-loud）。
+  * ``resident_kv_exact``——journal 在场、行级链自洽，但 checksum 缺失：
+    逐 rank resident/weight/reserved 时序精确（行级 before/after 自证），
+    缺 run 末守恒证书（journal 覆盖完整性无证明）→ 逐 rank 容量检查如实
+    报告（violation 计数标注 tier），但不作正式判决（不出退出码 3）。
+  * ``lifecycle_replay_exact``——journal + checksum 都在场、链自洽、终态
+    一致，但证书四项 checks 有 false（run 末守恒未通过，如残差非零）：
+    会话生命周期逐事务精确（manager_state_match 仍真），无守恒证书 →
+    同上仅报告；log 显著警告守恒失败项。
+  * ``upper_bound_only``——journal 缺失（阶段2 前的全部旧 run）：只能走
+    decision-log 重放，其结果对"真实占用"是**上界**（terminal 退休/decode
+    准入逐出两缺口不落盘 → 17.24TB 级幻影）。本层**不得输出物理违规认证**：
+    occupancy_valid 恒 false、退出码 3 废除（超限只作诊断计数并标注
+    tier，退出码不再因"聚合占用>容量"为 3）。旧 run 重跑后处理得本层 +
+    诊断属预期语义，不是回归。
+  * journal 在场时 decision-log 重放照常执行，作为**对照列**输出（上界
+    vs 权威，差异 = 账本缺口的直接可视化）；journal 缺失时 decision-log
+    重放即权威（上界口径）。journal sha256 不匹配 / 行级链断裂 / 终态与
+    证书矛盾 → fail-closed 退出码 2（账本损坏不得静默降级）。
+
+算法（重放，非策略复刻）：
+  按 (文件顺序=seq) 重放每条决策记录（journal 路径按 sequence 流式重放），
+  记录内固定次序「逐出 → 恢复/迁移 → 增长」。会话状态（当前所在实例、
+  当前本地 bytes）由本脚本自行跟踪，恢复/迁移的方向由跟踪态判定（本地
+  跨实例=搬移、远端/同实例=只增），已落盘 bytes 与 f(tokens)=2·layers·
+  hidden_size·bytes_per_elem·tokens 逐条对账（f 已在五仓基线数据上核对：
+  restore 比值全 1.0，S3 另有 0.5 分层半恢复）。增长按 manager 语义
+  "长到 f(目标 tokens)"取增量。
+
+  → 事件流 stats（P1-②）：peak/mean/residual/violation 全部在变点归并
+    （RLE）时 O(动作数) 内存计算，与 span/桶长彻底解耦——同事件流换任意
+    桶长，stats 逐字段不变（单测断言）；
+  → 权威时序产物 ``slo_hbm_intervals.csv``（P1-④）：change-point/RLE
+    区间（区间起止 tick、起止占用、区间内峰值、逐出叠加），无损、
+    O(动作数) 行，可从它恢复任意桶长序列（单测断言无损恢复）；
+  → 绘图产物 ``slo_hbm_plot_series.csv``（P1-④，取代旧
+    slo_hbm_watermark_series.csv）：全局行预算 R（manifest
+    watermark_series_row_budget）约束，B_eff = max(B_requested,
+    ceil(S·N/(R−N)))（S=全局 span=末 KV 事件−首 KV 事件、N=有事件实例
+    数；R≤N 时拒绝稠密输出只给 RLE，正常完成并 log 说明）；流式边算边
+    写，桶行在游标推进时逐行写出，内存 O(实例数+活跃游标)。元数据
+    resolution_adjusted/adjustment_reason/row_budget/span_ns/
+    bucket_origin_ns 独立登记，**不复用 bucket_ns_provisional**（后者
+    语义=manifest 缺正式桶长锚点）。
+
+容量三口径（P1-③，summary 分列；逐 rank 剖面函数逐字拷贝自仓内
+session_kv_manager.py，见"manager 原函数（逐字拷贝）"节）：
+  * 正式认证：逐 rank physical = weight + resident + reserved ≤
+    capacity_bytes（数据源 = journal 行；只在 per_rank_total_hbm_
+    certified 层构成判决）；
+  * resident 硬上限：reservation=0 时逐 rank ⌊(capacity − weight_i)/
+    kv_i⌋ 最小 token 数 × Σkv_i（任意时刻成立；llama2_7b/swiglu/TP6/
+    160GiB 锚定 1,723,864 token → 903,801,208,832 B）；
+  * 水位目标：kv_reserve_context_tokens（1M/rank）扣减后同式（锚定
+    723,864 token → 379,513,208,832 B）——水位目标非任意时刻上限，
+    **仅报告不作判决**。
 
 容量链（逐仓登记，不编造）：
   trace_config.csv config 行 local_hbm_capacity_profile → 仓内
@@ -35,26 +88,32 @@
   prefill_ranks 长度）。任一环节缺失 → capacity=NA，违规检查降级为
   "峰值记录"并注明，绝不代拟容量值。
 
-覆盖度（fail-closed 语义的对偶面，显式降级、绝不静默）：
+覆盖度（decision-log 重放路径的口径；fail-closed 语义的对偶面，显式
+降级、绝不静默）：
   * FACE/W/S1/S3：逐出条目带 bytes+victim → eviction_coverage=full，
-    违规检查生效；
   * S2：decision log 只落 *_eviction_count（无 victim/bytes），他人逐出
-    无法归因 → occupancy 为上界（未归因逐出不扣减），违规检查降级为
-    峰值记录（occupancy_valid=false）。
+    无法归因 → occupancy 为上界（未归因逐出不扣减）。B3-6（2026-08-27）
+    起新产物逐条序列化 *_evictions（victim/bytes）+ history_transfers
+    （partial 两段式恢复逐段对象）——字段在场即升级 full 口径
+    （upgrade_s2_mapping_if_fields_present），旧产物保底回退 count_only。
 
-退出码：0 正常；2 fail-closed（缺文件/缺列/结构错/重放不可续）；
-3 容量违规（occupancy > capacity，coverage=full 且 capacity 已知时）。
+退出码：0 正常（含 upper_bound/resident/lifecycle 层的超限诊断——
+tier 已标注，不构成物理违规认证）；2 fail-closed（缺文件/缺列/结构错/
+重放不可续/journal 损坏）；3 容量违规——**仅 per_rank_total_hbm_
+certified 层**的逐 rank physical > capacity_bytes。
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
 from pathlib import Path
-from typing import Optional
+from types import SimpleNamespace
+from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -62,10 +121,10 @@ from slo_common import (  # noqa: E402
     DECISION_LOG_RELPATH, NA, SloToolError, default_manifest_path,
     detect_repo_variant, emit_json, fail, iter_jsonl,
     load_request_manifest, load_slo_manifest, manifest_requests,
-    open_output, read_init_record, run_main, write_csv,
+    open_output, read_init_record, require_param_int, run_main, write_csv,
 )
 
-EXIT_VIOLATION = 3  # 容量违规（与 fail-closed 的 2 区分）
+EXIT_VIOLATION = 3  # 容量违规（与 fail-closed 的 2 区分；仅 certified 层）
 
 # watermark_sample_period_ns 未推导（null）时的临时桶长锚点（ns）。
 # 全输出（JSON/CSV/stderr）都会带 bucket_ns_provisional=true 标注。
@@ -73,18 +132,42 @@ PROVISIONAL_BUCKET_NS = 5_000_000
 
 TOKEN_MANIFEST_FILENAME = "manifest.json"
 
+# P1 权威账本（阶段2 manager mutation 提交点落盘；journal 开关 off 或
+# legacy 变体 run 不存在 → decision-log 重放上界路径）。
+KV_DELTA_JOURNAL_RELPATH = Path("results") / "kv_delta_journal.jsonl"
+KV_DELTA_JOURNAL_CHECKSUM_RELPATH = (
+    Path("results") / "kv_delta_journal_checksum.json")
+
+# 四层可信度（判定条件见模块 docstring；输出顺序=证据强度降序）。
+TRUST_TIER_UPPER_BOUND = "upper_bound_only"
+TRUST_TIER_LIFECYCLE = "lifecycle_replay_exact"
+TRUST_TIER_RESIDENT = "resident_kv_exact"
+TRUST_TIER_CERTIFIED = "per_rank_total_hbm_certified"
+JOURNAL_TIERS = (TRUST_TIER_CERTIFIED, TRUST_TIER_RESIDENT,
+                 TRUST_TIER_LIFECYCLE)
+
+# 绘图 series（P1-④：受全局行预算约束的稠密产物；旧产物名
+# slo_hbm_watermark_series.csv 退役）。
 SERIES_COLUMNS = (
     "repo_variant", "instance_index", "bucket_index", "bucket_start_ns",
     "bucket_end_ns", "occupancy_end_bytes", "occupancy_peak_in_bucket_bytes",
     "evict_events", "evict_bytes",
 )
+# 权威 RLE 区间（P1-④：change-point 无损时序，O(动作数) 行）。
+INTERVAL_COLUMNS = (
+    "repo_variant", "instance_index", "interval_start_ns", "interval_end_ns",
+    "occupancy_start_bytes", "occupancy_end_bytes",
+    "occupancy_peak_in_interval_bytes", "evict_events", "evict_bytes",
+)
 INSTANCE_COLUMNS = (
-    "repo_variant", "instance_index", "eviction_coverage", "occupancy_valid",
+    "repo_variant", "instance_index", "trust_tier", "eviction_coverage",
+    "occupancy_valid",
     "capacity_bytes", "capacity_source", "bucket_ns",
-    "bucket_ns_provisional", "first_event_ns", "last_event_ns",
+    "bucket_ns_provisional", "effective_bucket_ns", "resolution_adjusted",
+    "first_event_ns", "last_event_ns",
     "duration_ns", "peak_occupancy_bytes", "mean_occupancy_bytes",
     "residual_occupancy_bytes", "evict_events", "evict_bytes",
-    "violation_events",
+    "violation_events", "upper_bound_peak_occupancy_bytes",
 )
 
 
@@ -163,6 +246,41 @@ def _prefill_restore_actions(record: dict, mapping: dict, where: str) -> list:
     logged_source = None
     state_before = None
     holder = decision
+
+    # B3-6（2026-08-27）：restore_list_field——逐段恢复对象列表（S2 新产物
+    # history_transfers：partial 前缀 noc_migrate + suffix remote_load 各一
+    # 段）。每段独立成动作（kind/bytes/source 逐段），标量聚合会把跨实例
+    # partial 迁移错记成整体搬移而击穿占用下界。local_hit 段不计 bytes
+    # （信息量非搬移量，与标量口径 history_transfer_bytes 的排除法一致）。
+    restore_list_field = spec.get("restore_list_field")
+    if restore_list_field:
+        rows = decision.get(restore_list_field)
+        if rows is None:
+            holders = []
+        elif isinstance(rows, list):
+            holders = [row for row in rows if isinstance(row, dict)]
+        else:
+            fail(f"{where}: {restore_list_field} 必须是数组")
+        actions = []
+        for row in holders:
+            row_kind = row.get("kind")
+            row_bytes = row.get("total_bytes")
+            if not isinstance(row_bytes, int) or row_bytes < 0:
+                fail(f"{where}: {restore_list_field} 成员缺非负整数 "
+                     f"total_bytes")
+            if row_kind in ("local_hit", "LOCAL_HIT"):
+                row_bytes = 0
+            row_source = row.get("source_instance_index")
+            if row_source is not None and not isinstance(row_source, int):
+                row_source = None
+            actions.append({
+                "type": "restore", "tick": record.get("tick", 0),
+                "session": record.get("session_hint"), "bytes": row_bytes,
+                "kind": row_kind, "logged_source": row_source,
+                "state_before": None,
+                "target": decision.get("prefill_instance_index")})
+        return actions
+
     for path_element in spec.get("bytes_path", []):
         if isinstance(holder, dict):
             holder = holder.get(path_element)
@@ -260,10 +378,13 @@ REPO_VARIANTS: dict[str, dict] = {
     },
     # W 同 FACE 字段族 + history_cache_state_before。基线实测账本缺口：decode
     # 准入期逐出（decode_target_evictions 在 prefill 记录落盘之后才累积，
-    # decode 记录不含逐出列表）不落盘——802 例 RECOMPUTE(state_before=
-    # EVICTED) 隐含静默逐出；重放按账本断言在恢复点对账扣减
+    # decode 记录不含逐出列表）不落盘——full_tracelab 本 run 实测 7,923 例
+    # RECOMPUTE(state_before=EVICTED) 隐含静默逐出（802 为 FACE 基线旧数，
+    # 非 W 本 run 口径）；重放按账本断言在恢复点对账扣减
     # （silent_evictions_reconciled），逐出真实时刻 ∈ 上次可见事件与恢复
-    # tick 之间，占用在该窗口为上界。
+    # tick 之间，占用在该窗口为上界。P1（2026-08-30）起缺 journal 的 run
+    # 一律标 upper_bound_only（上界，无物理违规认证）；journal 在场的 run
+    # 以 kv_delta_journal 为权威、本重放仅作对照列。
     "astra-sim-wscllm": {
         "eviction_lists": (
             ("prefill", "admission_evictions", _sum_shard_bytes),
@@ -305,6 +426,10 @@ REPO_VARIANTS: dict[str, dict] = {
     # S2（分层 KV）：decision log 只落聚合 bytes 与 *_eviction_count，
     # 无逐出 victim/bytes → 他人逐出不可归因（上界重建）；completion 的
     # kv_location_after_completion 可归因自身会话去向。
+    # B3-6（2026-08-27）：B3 起新产物的 decision log 逐条带 *_evictions
+    # （victim/bytes，字段名与 S1 对齐）+ history_transfers（partial 两段
+    # 式恢复逐段对象）——字段在场时 upgrade_s2_mapping_if_fields_present
+    # 升级 full 口径；旧产物无字段 → 原样保底回退 count_only。
     "astra-sim-sh_2.0": {
         "eviction_lists": (),
         "restore": {"bytes_path": ["history_transfer_bytes"]},
@@ -342,8 +467,284 @@ REPO_VARIANTS: dict[str, dict] = {
 
 
 # ---------------------------------------------------------------------------
+# manager 原函数（逐字拷贝）+ 容量三口径（P1-③）
+# ---------------------------------------------------------------------------
+# 以下六个函数逐字拷贝自仓内 workload/llama2_7b_inference/
+# session_kv_manager.py（_require_nonnegative_int / partition_values_exact /
+# attention_heads_by_tp_rank / estimate_model_weight_bytes /
+# model_weight_shard_bytes_by_tp_rank(:185) / kv_cache_shard_bytes_for_
+# tokens(:220)）——manager 是逐 rank HBM 记账的权威实现，本工具不得另立
+# 口径。**同步义务**：session_kv_manager.py 上述函数任何改动必须同步拷贝
+# 到本节（五仓同改，md5 对齐）；函数是五仓共性，模型参数由 run_dir 自带
+# 的 trace_config/hardware 配置实例化（五仓 hardware 配置可不同）。
+
+def _require_nonnegative_int(value: int, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
+def partition_values_exact(total: int, partitions: int) -> tuple[int, ...]:
+    """Split an integer without padding, putting remainders on low ranks."""
+
+    _require_nonnegative_int(total, "total")
+    if isinstance(partitions, bool) or not isinstance(partitions, int) or partitions <= 0:
+        raise ValueError("partitions must be a positive integer")
+    quotient, remainder = divmod(total, partitions)
+    return tuple(quotient + (1 if index < remainder else 0) for index in range(partitions))
+
+
+def attention_heads_by_tp_rank(num_heads: int, tp_degree: int) -> tuple[int, ...]:
+    """Return the whole-head ownership of each relative TP rank."""
+
+    if (
+        isinstance(num_heads, bool)
+        or isinstance(tp_degree, bool)
+        or not isinstance(num_heads, int)
+        or not isinstance(tp_degree, int)
+        or num_heads <= 0
+        or tp_degree <= 0
+    ):
+        raise ValueError("num_heads and tp_degree must be positive integers")
+    return partition_values_exact(num_heads, tp_degree)
+
+
+def estimate_model_weight_bytes(model: Any) -> int:
+    """Match the existing LLaMA-family model-size estimate exactly."""
+
+    mlp_matrices = 3 if getattr(model, "mlp_variant", "gelu") == "swiglu" else 2
+    norm_elements = (
+        2 * model.hidden_size
+        if getattr(model, "mlp_variant", "gelu") == "swiglu"
+        else 4 * model.hidden_size
+    )
+    per_layer_elements = (
+        4 * model.hidden_size * model.hidden_size
+        + mlp_matrices * model.hidden_size * model.ffn_size
+        + norm_elements
+    )
+    embedding_elements = 2 * model.vocab_size * model.hidden_size
+    final_norm_elements = (
+        model.hidden_size if getattr(model, "mlp_variant", "gelu") == "swiglu" else 0
+    )
+    return (
+        model.layers * per_layer_elements + embedding_elements + final_norm_elements
+    ) * model.bytes_per_elem
+
+
+def model_weight_shard_bytes_by_tp_rank(model: Any, tp_degree: int) -> tuple[int, ...]:
+    """Return exact TP weight shards aligned with whole-head KV ownership."""
+
+    if model.hidden_size % model.num_heads:
+        raise ValueError("hidden_size must be divisible by num_heads")
+    heads = attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    ffn_extents = partition_values_exact(model.ffn_size, tp_degree)
+    vocab_extents = partition_values_exact(model.vocab_size, tp_degree)
+    head_dim = model.hidden_size // model.num_heads
+    mlp_matrices = 3 if getattr(model, "mlp_variant", "gelu") == "swiglu" else 2
+    matrix_shards = tuple(
+        (
+            model.layers
+            * (
+                4 * model.hidden_size * head_count * head_dim
+                + mlp_matrices * model.hidden_size * ffn_extent
+            )
+            + 2 * model.hidden_size * vocab_extent
+        )
+        * model.bytes_per_elem
+        for head_count, ffn_extent, vocab_extent in zip(heads, ffn_extents, vocab_extents)
+    )
+    total = estimate_model_weight_bytes(model)
+    residual = total - sum(matrix_shards)
+    if residual < 0:
+        raise RuntimeError("TP weight matrix shards exceed the model total")
+    shards = tuple(
+        shard + remainder
+        for shard, remainder in zip(matrix_shards, partition_values_exact(residual, tp_degree))
+    )
+    if sum(shards) != total:
+        raise RuntimeError("TP weight shards do not preserve the model total")
+    return shards
+
+
+def kv_cache_shard_bytes_for_tokens(
+    model: Any,
+    tokens: int,
+    tp_degree: int,
+) -> tuple[int, ...]:
+    """Return exact whole-head KV shard bytes for a complete model cache."""
+
+    _require_nonnegative_int(tokens, "tokens")
+    if model.hidden_size % model.num_heads:
+        raise ValueError("hidden_size must be divisible by num_heads")
+    head_dim = model.hidden_size // model.num_heads
+    bytes_per_head = 2 * model.layers * tokens * head_dim * model.bytes_per_elem
+    shards = tuple(
+        bytes_per_head * head_count
+        for head_count in attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    )
+    expected = 2 * model.layers * tokens * model.hidden_size * model.bytes_per_elem
+    if sum(shards) != expected:
+        raise RuntimeError("whole-head KV shards do not preserve total KV bytes")
+    return shards
+# ----- 逐字拷贝区结束（以上与 session_kv_manager.py 保持字节一致） -----
+
+
+DEFAULT_KV_RESERVE_CONTEXT_TOKENS = 1_000_000
+
+
+def build_model_spec(config: dict) -> Optional[SimpleNamespace]:
+    """trace_config config 行 → manager 原函数可用的 model duck-typed 对象。
+
+    与 workload 侧（wsc_llm_scheduler.WscLlmModel / metrics_postprocess._
+    load_model_bytes）同一参数化：layers/hidden_size/ffn_size/num_heads/
+    vocab_size/bytes_per_elem 必填，mlp_variant 缺省 gelu。任一必填缺失或
+    非正 → None（调用方把三口径降级为 NA 并注明，不 fail——旧合成
+    fixture/非 LLaMA 配置无这些行，聚合容量链不受影响）。
+    """
+    values = {}
+    for field in ("layers", "hidden_size", "ffn_size", "num_heads",
+                  "vocab_size", "bytes_per_elem"):
+        raw = config.get(field)
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        values[field] = parsed
+    variant = config.get("mlp_variant")
+    values["mlp_variant"] = variant if isinstance(variant, str) and variant \
+        else "gelu"
+    return SimpleNamespace(**values)
+
+
+def compute_capacity_calibers(model: SimpleNamespace, tp_degree: int,
+                              capacity_bytes_per_npu: int,
+                              reserve_context_tokens: int) -> dict:
+    """三口径容量剖面（P1-③；summary 分列）。
+
+    * 正式认证口径 per_rank_total_hbm：逐 rank physical=weight+resident+
+      reserved ≤ capacity_bytes——判决性检查在 journal 重放（行级
+      capacity_bytes/before/after）执行，本函数只给静态剖面。
+    * resident 硬上限 resident_kv_hard_limit：reservation=0 时任意时刻
+      成立的 resident 上限 = min_r ⌊(capacity − weight_r)/kv_r⌋ token ×
+      Σkv_r（llama2_7b/swiglu/TP6/160GiB 锚定 1,723,864 → 903,801,208,832）。
+    * 水位目标 watermark_reserve_target：enforce_watermark 的
+      kv_reserve_context_tokens/rank 扣减后同式（锚定 723,864 →
+      379,513,208,832）——水位目标非任意时刻上限，仅报告不作判决。
+    """
+    weight_shards = model_weight_shard_bytes_by_tp_rank(model, tp_degree)
+    kv_shards_per_token = kv_cache_shard_bytes_for_tokens(model, 1, tp_degree)
+    reserve_shards = kv_cache_shard_bytes_for_tokens(
+        model, reserve_context_tokens, tp_degree)
+    # 0 头 shard（num_heads < tp_degree 的退化切分）不持有 KV，对 resident
+    # 上限不构成约束——min 只在 kv>0 的 rank 上取。
+    hard_tokens = min(
+        (capacity_bytes_per_npu - weight) // kv_per_token
+        for weight, kv_per_token in zip(weight_shards, kv_shards_per_token)
+        if kv_per_token > 0)
+    target_tokens = min(
+        (capacity_bytes_per_npu - weight - reserve) // kv_per_token
+        for weight, reserve, kv_per_token in zip(
+            weight_shards, reserve_shards, kv_shards_per_token)
+        if kv_per_token > 0)
+    coef = sum(kv_shards_per_token)
+    hard_tokens_by_weight = {}
+    ambiguous_weights = set()
+    for weight, kv_per_token in zip(weight_shards, kv_shards_per_token):
+        if kv_per_token <= 0:
+            continue  # 0 头 shard 无 KV 上限语义，不参与绑定
+        limit = kv_per_token * hard_tokens
+        known = hard_tokens_by_weight.get(weight)
+        if known is not None and known != limit:
+            ambiguous_weights.add(weight)
+        else:
+            hard_tokens_by_weight[weight] = limit
+    for weight in ambiguous_weights:
+        hard_tokens_by_weight.pop(weight, None)
+    return {
+        "tp_degree": tp_degree,
+        "capacity_bytes_per_rank": capacity_bytes_per_npu,
+        "weight_shard_bytes_by_relative_rank": list(weight_shards),
+        "weight_total_bytes_per_instance": sum(weight_shards),
+        "kv_shard_bytes_per_token_by_relative_rank":
+            list(kv_shards_per_token),
+        "resident_kv_hard_limit": {
+            "limit_tokens": hard_tokens,
+            "limit_bytes_per_instance": coef * hard_tokens,
+            "limit_resident_bytes_by_relative_rank": [
+                kv_per_token * hard_tokens
+                for kv_per_token in kv_shards_per_token],
+            "limit_by_weight_bytes": hard_tokens_by_weight,
+            "ambiguous_weight_binding": sorted(ambiguous_weights),
+            "semantics": "reservation=0 时逐 rank ⌊(capacity−weight_r)/"
+                         "kv_r⌋ 最小 token 数 × Σkv_r——任意时刻成立的 "
+                         "resident-KV 硬上限（诊断口径）",
+        },
+        "watermark_reserve_target": {
+            "reserve_context_tokens": reserve_context_tokens,
+            "reserve_shard_bytes_by_relative_rank": list(reserve_shards),
+            "target_tokens": target_tokens,
+            "target_bytes_per_instance": coef * target_tokens,
+            "semantics": "kv_reserve_context_tokens/rank 水位目标（无 "
+                         "active/reserved 消费者时冷态驻留池预算，非任意"
+                         "时刻上限）——仅报告不作判决",
+        },
+        "per_rank_total_hbm": {
+            "invariant": "逐 rank physical = weight + resident + reserved "
+                         "≤ capacity_bytes（session_kv_manager 不变量）",
+            "verdict_tier": TRUST_TIER_CERTIFIED,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # 输入装载（fail-closed）
 # ---------------------------------------------------------------------------
+
+# B3-6（2026-08-27）：S2 逐出 victim/bytes 序列化（sh20_online_scheduler
+# 的 _transfer_entry_rows）落地后的 full 口径升级。判定字段 =
+# history_transfers（partial 两段式恢复逐段对象）：新产物每个 prefill 决策
+# 恒在场（空列表亦在场），旧产物（B3 前基线）与跨仓通用 fixture 均无此
+# 字段——比检测 *_evictions 键名更严格（后者在通用 fixture 的默认
+# decision 里也会出现，会把 count_only 旧语义误升级）。
+S2_FULL_TRIGGER_FIELD = "history_transfers"
+
+
+def upgrade_s2_mapping_if_fields_present(mapping: dict,
+                                         run_dir: Path) -> dict:
+    """字段在场 → full 口径；旧产物（B3 前基线）→ 原 count_only 映射。
+
+    full 口径语义（与 S1 对齐）：逐出条目可归因（victim session + bytes +
+    source 实例）；restore 按 history_transfers 逐段对账（partial 前缀
+    noc_migrate 搬移 + suffix remote_load 只增，标量聚合会把跨实例 partial
+    迁移错记成整体搬移而击穿占用下界）；completion 的自身释放已含在
+    completion_evictions（enforce_reserve 含自身逐出）→ 关闭
+    kv_location_after_completion 归因避免双重扣减；*_eviction_count 不再
+    计入 unattributed（逐出已逐条归因）。"""
+    log_path = run_dir / DECISION_LOG_RELPATH
+    present = False
+    for record in iter_jsonl(log_path):
+        decision = record.get("decision")
+        if record.get("kind") == "prefill" and isinstance(decision, dict) \
+                and isinstance(decision.get(S2_FULL_TRIGGER_FIELD), list):
+            present = True
+            break
+    if not present:
+        return mapping
+    upgraded = dict(mapping)
+    upgraded["eviction_lists"] = (
+        ("prefill", "history_evictions", _scalar_bytes),
+        ("prefill", "prefill_evictions", _scalar_bytes),
+        ("decode", "decode_evictions", _scalar_bytes),
+        ("completion", "completion_evictions", _scalar_bytes),
+    )
+    upgraded["restore"] = {"restore_list_field": "history_transfers"}
+    upgraded["completion_relocation_field"] = None
+    upgraded["eviction_count_fields"] = ()
+    upgraded["eviction_coverage"] = "full"
+    return upgraded
+
 
 def load_token_manifest(run_dir: Path, explicit: Optional[Path]) -> dict:
     """token 事实 manifest（plan_materializer 产物，requests[] 带
@@ -497,14 +898,20 @@ def resolve_hardware_capacity(profile: str, explicit: Optional[Path]) -> dict:
          f"拒绝执行（不编造容量）")
 
 
-def load_npus_per_instance(run_dir: Path, explicit: Optional[Path]) -> int:
+def load_npus_per_instance(run_dir: Path, explicit: Optional[Path],
+                           manifest_loader=None) -> int:
     """每实例 NPU 数：request manifest requests[].prefill_ranks 长度。
 
     优先级：--request-manifest > run_dir/metrics_manifest.json >
-    cpp.log init 行 manifest_path。
+    cpp.log init 行 manifest_path。manifest_loader（A4 driver 传入的
+    惰性装载器，返回已装载 manifest）在场时复用（读放大收敛）；其
+    SloToolError 与自装载同路处理（fail → 调用方降级警告），失败时点
+    不变。
     """
+    loader = manifest_loader if manifest_loader is not None else (
+        lambda: load_request_manifest(run_dir, explicit))
     try:
-        manifest = load_request_manifest(run_dir, explicit)
+        manifest = loader()
     except SloToolError as exc:
         fail(f"无法定位 request manifest（npus_per_instance 推导失败）："
              f"{exc}")
@@ -545,6 +952,242 @@ def load_bucket_ns(manifest: dict) -> tuple[int, bool]:
 # ---------------------------------------------------------------------------
 # 重放引擎
 # ---------------------------------------------------------------------------
+
+class _ChangePoint:
+    """单变点：同 tick 的占用事件归并为一行（RLE 的原子；逐出标记在
+    _UnitLog.evicts 独立成表，merged_change_points 归并时叠加同 tick 行）。"""
+
+    __slots__ = ("tick", "start", "end", "peak", "delta")
+
+    def __init__(self, tick: int, start: int) -> None:
+        self.tick = tick
+        self.start = start  # 本 tick 首事件前占用
+        self.end = start
+        self.peak = start  # 本 tick 内事件后占用的最大值（含进入值）
+        self.delta = 0
+
+
+class _UnitLog:
+    """单实例（journal 路径=journal instance；decision-log 路径=跟踪实例）
+    的变点序列 + 事件流 stats（P1-②：与桶长/跨度彻底解耦）。"""
+
+    __slots__ = ("points", "evicts", "open", "occupancy", "has_event",
+                 "first_tick", "last_tick", "prev_tick", "peak", "area")
+
+    def __init__(self) -> None:
+        self.points: list[_ChangePoint] = []
+        self.evicts: dict[int, list[int]] = {}  # tick -> [events, bytes]
+        self.open: Optional[_ChangePoint] = None
+        self.occupancy = 0
+        self.has_event = False
+        self.first_tick = -1
+        self.last_tick = -1
+        self.prev_tick = -1
+        self.peak = 0
+        self.area = 0  # Σ(occupancy × dt)，整数累计，展示层才转浮点
+
+    def add(self, tick: int, delta: int) -> None:
+        if self.open is None or self.open.tick != tick:
+            if not self.has_event:
+                self.has_event = True
+                self.first_tick = tick
+            else:
+                self.area += self.occupancy * (tick - self.prev_tick)
+            self.prev_tick = tick
+            self.open = _ChangePoint(tick, self.occupancy)
+            self.points.append(self.open)
+            self.last_tick = tick
+        self.occupancy += delta
+        self.open.delta += delta
+        self.open.end = self.occupancy
+        if self.occupancy > self.open.peak:
+            self.open.peak = self.occupancy
+        if self.occupancy > self.peak:
+            self.peak = self.occupancy
+
+    def add_evict(self, tick: int, nbytes: int) -> None:
+        """逐出标记独立成表（tick 可早于/晚于事件 tick，统计与旧实现
+        一致：计入总量、参与锚桶，不触碰事件流 stats 的首末/面积）。"""
+        pair = self.evicts.get(tick)
+        if pair is None:
+            self.evicts[tick] = [1, nbytes]
+        else:
+            pair[0] += 1
+            pair[1] += nbytes
+
+    def stats(self) -> dict:
+        duration = self.last_tick - self.first_tick
+        evict_events = sum(pair[0] for pair in self.evicts.values())
+        evict_bytes = sum(pair[1] for pair in self.evicts.values())
+        return {
+            "first_event_ns": self.first_tick,
+            "last_event_ns": self.last_tick,
+            "duration_ns": duration,
+            "peak_occupancy_bytes": self.peak,
+            "mean_occupancy_bytes": (self.area / duration) if duration > 0
+            else float(self.peak),
+            "residual_occupancy_bytes": self.occupancy,
+            "evict_events": evict_events,
+            "evict_bytes": evict_bytes,
+        }
+
+    def merged_change_points(self):
+        """事件变点 ∪ 逐出 tick 的有序归并流（生成器，不物化第二份）。
+
+        逐出 tick 落在事件之间时占用 = 前一事件后占用（const 段），其
+        delta=0；逐出 tick 与事件 tick 相同时并入该变点行（evict 列叠
+        加）——保证从本流可无损恢复任意桶长序列（含逐出列）。
+        """
+        evict_items = sorted(self.evicts.items())
+        evict_index = 0
+        occupancy = 0
+        point_index = 0
+        points = self.points
+        evict_count = len(evict_items)
+        while point_index < len(points) or evict_index < evict_count:
+            point_tick = points[point_index].tick \
+                if point_index < len(points) else None
+            evict_tick = evict_items[evict_index][0] \
+                if evict_index < evict_count else None
+            if point_tick is not None and (evict_tick is None
+                                           or point_tick < evict_tick):
+                point = points[point_index]
+                point_index += 1
+                occupancy = point.end
+                yield (point.tick, point.start, point.end, point.peak,
+                       0, 0)
+            elif evict_tick is not None and (point_tick is None
+                                             or evict_tick < point_tick):
+                tick, pair = evict_items[evict_index]
+                evict_index += 1
+                yield (tick, occupancy, occupancy, occupancy,
+                       pair[0], pair[1])
+            else:
+                # 同 tick：事件变点行叠加逐出列。
+                point = points[point_index]
+                pair = evict_items[evict_index][1]
+                point_index += 1
+                evict_index += 1
+                occupancy = point.end
+                yield (point.tick, point.start, point.end, point.peak,
+                       pair[0], pair[1])
+
+
+class ChangePointLog:
+    """全部实例的变点日志（P1-④：series 行字典全量物化就此消灭）。
+
+    add(tick, instance, delta) 要求 tick 对同一实例单调不减（decision-log
+    重放的 tick 回退检查与 journal 的 planner_time_ns 单调检查保证）；
+    逐出标记走独立 per-unit 表。内存 O(变点数+实例数)。
+    """
+
+    def __init__(self) -> None:
+        self.units: dict[int, _UnitLog] = {}
+
+    def _unit(self, instance: int) -> _UnitLog:
+        unit = self.units.get(instance)
+        if unit is None:
+            unit = _UnitLog()
+            self.units[instance] = unit
+        return unit
+
+    def add(self, tick: int, instance: int, delta: int) -> None:
+        self._unit(instance).add(tick, delta)
+
+    def add_evict(self, tick: int, instance: int, nbytes: int) -> None:
+        self._unit(instance).add_evict(tick, nbytes)
+
+    def has_events(self) -> bool:
+        return any(unit.has_event for unit in self.units.values())
+
+    def eventful_units(self) -> list[int]:
+        return sorted(unit for unit, log in self.units.items()
+                      if log.has_event)
+
+    def span(self) -> tuple[Optional[int], Optional[int]]:
+        """全局事件跨度（首/末 KV 事件 tick；仅统计有事件实例）。"""
+        first: Optional[int] = None
+        last: Optional[int] = None
+        for log in self.units.values():
+            if not log.has_event:
+                continue
+            if first is None or log.first_tick < first:
+                first = log.first_tick
+            if last is None or log.last_tick > last:
+                last = log.last_tick
+        return first, last
+
+
+def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
+                     bucket_ns: int):
+    """变点流 → 桶行流（P1-④：游标推进时逐行 yield，不物化行字典）。
+
+    change_points_factory：零参 callable，每次调用返回一份新鲜的变点迭代
+    器（_UnitLog.merged_change_points 即是；单测的 intervals.csv 无损恢复
+    同样喂本函数）——两遍消费（先锚桶后扫行）均流式，除锚桶索引集合外
+    不新增整表物化。语义与旧 bucketize 逐行等价：桶 j 覆盖
+    [origin + j·B, +B)；事件 tick 落在 [bucket_start, bucket_end) 计入
+    桶 j，末桶 bucket_end 钳到 span_end+1（含恰落在 span_end 的事件）；
+    锚桶 = 有变点（事件或逐出）的桶位，锚桶间无变点且占用>0 的桶位补
+    占位行（占用保持段）；出界（负桶号）变点只进统计不产行。迭代器
+    元素 = (tick, occ_start, occ_end, occ_peak, evict_events,
+    evict_bytes)。
+    """
+    n_buckets = (span_end - origin) // bucket_ns + 1
+
+    def bucket_index(tick: int) -> int:
+        # 与旧实现对齐：逐出 tick 越上界的钳到末桶；事件 tick 自然在界内。
+        return min((tick - origin) // bucket_ns, n_buckets - 1)
+
+    anchors: list[int] = []
+    seen: set[int] = set()
+    for item in change_points_factory():
+        index = bucket_index(item[0])
+        if index >= 0 and index not in seen:
+            seen.add(index)
+            anchors.append(index)
+    anchors.sort()
+    cursor_item = None
+    stream = iter(change_points_factory())
+
+    def advance():
+        nonlocal cursor_item
+        cursor_item = next(stream, None)
+        return cursor_item is not None
+
+    advance()
+    # 出界（tick 早于全局首事件）的变点只进统计不产行——在锚桶扫描前丢弃
+    # （与旧实现的负桶号过滤一致；stats 的逐出总量在 _UnitLog 统计）。
+    while cursor_item is not None and cursor_item[0] < origin:
+        advance()
+    occupancy = 0
+    for pos, index in enumerate(anchors):
+        bucket_start = origin + index * bucket_ns
+        bucket_end = min(bucket_start + bucket_ns, span_end + 1)
+        bucket_peak = occupancy
+        evict_events = 0
+        evict_bytes = 0
+        while cursor_item is not None \
+                and min(cursor_item[0], span_end) < bucket_end:
+            _, _, occ_end, occ_peak, ev_n, ev_b = cursor_item
+            occupancy = occ_end
+            if occ_peak > bucket_peak:
+                bucket_peak = occ_peak
+            evict_events += ev_n
+            evict_bytes += ev_b
+            advance()
+        if occupancy > 0 or bucket_peak > 0 or evict_events:
+            yield (index, bucket_start, bucket_start + bucket_ns, occupancy,
+                   bucket_peak, evict_events, evict_bytes)
+        next_bound = anchors[pos + 1] if pos + 1 < len(anchors) \
+            else n_buckets
+        for fill in range(index + 1, next_bound):
+            if occupancy <= 0:
+                break
+            fill_start = origin + fill * bucket_ns
+            yield (fill, fill_start, fill_start + bucket_ns, occupancy,
+                   occupancy, 0, 0)
+
 
 class SessionState:
     """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。"""
@@ -593,8 +1236,9 @@ class WatermarkReplay:
         self.coef = coef_bytes_per_token
         self.capacity = capacity_per_instance
         self.sessions: dict[str, SessionState] = {}
-        self.events: list[tuple[int, int, int]] = []  # (tick, instance, delta)
-        self.evict_marks: list[tuple[int, int, int]] = []  # (tick,inst,bytes)
+        # P1-②/④：事件/逐出标记直入变点日志（RLE），不再物化裸事件表；
+        # stats 从变点归并时 O(动作数) 计算，与桶长解耦。
+        self.cplog = ChangePointLog()
         self.occupancy: dict[int, int] = {}
         self.violation_events = 0
         self.violation_by_instance: dict[int, int] = {}
@@ -612,10 +1256,12 @@ class WatermarkReplay:
                  f"不一致（多扣/漏加），拒绝输出错误水位线；请核对"
                  f"REPO_VARIANTS 映射与输入 ledger")
         self.occupancy[instance] = current
-        self.events.append((tick, instance, delta))
+        self.cplog.add(tick, instance, delta)
         if evict_bytes is not None:
-            self.evict_marks.append((tick, instance, evict_bytes))
+            self.cplog.add_evict(tick, instance, evict_bytes)
         if self.capacity is not None and current > self.capacity:
+            # decision-log 路径的违规计数恒为诊断口径（P1-①：本路径属
+            # upper_bound_only 层，不构成物理违规认证、不触发退出码 3）。
             self.violation_events += 1
             self.violation_by_instance[instance] = \
                 self.violation_by_instance.get(instance, 0) + 1
@@ -822,15 +1468,31 @@ class WatermarkReplay:
 # 决策记录 → 动作流
 # ---------------------------------------------------------------------------
 
-def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
-                        tokens: dict, coef: int,
-                        capacity: Optional[int]) -> WatermarkReplay:
-    replay = WatermarkReplay(repo_variant, mapping, tokens, coef, capacity)
-    seen_kinds: dict[tuple[str, str], int] = {}
-    log_path = run_dir / DECISION_LOG_RELPATH
-    last_tick = -1
-    for record in iter_jsonl(log_path):
-        where = f"{log_path}:seq={record.get('seq', '?')}"
+class WatermarkScan:
+    """A4 driver 复用面：单条决策记录一次 consume，扫完 finish。
+
+    与独立 CLI 的 replay_decision_log 循环体逐语句等价（含 fail 消息与
+    记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
+    consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
+    watermark 必须最后（kv/load/hop 不读该键，注入对其不可见）。
+    """
+
+    def __init__(self, run_dir: Path, repo_variant: str, mapping: dict,
+                 tokens: dict, coef: int,
+                 capacity: Optional[int]) -> None:
+        self.replay = WatermarkReplay(repo_variant, mapping, tokens, coef,
+                                      capacity)
+        self.mapping = mapping
+        self.tokens = tokens
+        self.seen_kinds: dict[tuple[str, str], int] = {}
+        self.log_path = run_dir / DECISION_LOG_RELPATH
+        self.last_tick = -1
+
+    def consume(self, record: dict) -> None:
+        replay = self.replay
+        mapping = self.mapping
+        tokens = self.tokens
+        where = f"{self.log_path}:seq={record.get('seq', '?')}"
         request_id = record.get("request_id")
         kind = record.get("kind")
         if not isinstance(request_id, str) or not request_id:
@@ -838,17 +1500,17 @@ def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
         if kind not in ("prefill", "decode", "completion"):
             fail(f"{where}: 未知 kind={kind!r}")
         key = (request_id, kind)
-        if key in seen_kinds:
+        if key in self.seen_kinds:
             fail(f"{where}: 请求 {request_id} 的 {kind} 决策出现两次"
-                 f"（先于 seq={seen_kinds[key]}）——账本次序异常")
-        seen_kinds[key] = record.get("seq", -1)
+                 f"（先于 seq={self.seen_kinds[key]}）——账本次序异常")
+        self.seen_kinds[key] = record.get("seq", -1)
         tick = record.get("tick")
         if not isinstance(tick, int) or tick < 0:
             fail(f"{where}: 缺非负整数 tick")
-        if tick < last_tick:
-            fail(f"{where}: tick 回退（{tick} < {last_tick}）——文件顺序"
+        if tick < self.last_tick:
+            fail(f"{where}: tick 回退（{tick} < {self.last_tick}）——文件顺序"
                  f"与时间顺序不一致，无法安全重放")
-        last_tick = tick
+        self.last_tick = tick
         token_row = tokens["requests"].get(request_id)
         if token_row is None:
             fail(f"{where}: 请求 {request_id} 不在 token manifest"
@@ -905,127 +1567,356 @@ def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
                 hint = replay.sessions.get(session_id)
                 instance = hint.instance if hint else None
                 for _ in range(count):
-                    replay.evict_marks.append(
-                        (tick, instance if instance is not None else -1, 0))
+                    replay.cplog.add_evict(
+                        tick, instance if instance is not None else -1, 0)
 
-    missing = []
-    for request_id in tokens["requests"]:
-        for kind in ("prefill", "decode", "completion"):
-            if (request_id, kind) not in seen_kinds:
-                missing.append(f"{request_id}:{kind}")
-    if missing:
-        fail(f"{log_path}: token manifest 中的请求缺决策记录（前 5 例："
-             f"{missing[:5]}，共 {len(missing)}）——两源请求集不一致")
-    if not replay.events:
-        fail(f"{log_path}: 没有任何可重放的 KV 动作")
-    return replay
+    def finish(self) -> WatermarkReplay:
+        tokens = self.tokens
+        missing = []
+        for request_id in tokens["requests"]:
+            for kind in ("prefill", "decode", "completion"):
+                if (request_id, kind) not in self.seen_kinds:
+                    missing.append(f"{request_id}:{kind}")
+        if missing:
+            fail(f"{self.log_path}: token manifest 中的请求缺决策记录（前 5 例："
+                 f"{missing[:5]}，共 {len(missing)}）——两源请求集不一致")
+        if not self.replay.cplog.has_events():
+            fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
+        return self.replay
+
+
+def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
+                        tokens: dict, coef: int,
+                        capacity: Optional[int]) -> WatermarkReplay:
+    scan = WatermarkScan(run_dir, repo_variant, mapping, tokens, coef,
+                         capacity)
+    for record in iter_jsonl(scan.log_path):
+        scan.consume(record)
+    return scan.finish()
 
 
 # ---------------------------------------------------------------------------
-# 分桶与汇总
+# journal 权威重放（P1-①）与 tier 判定
 # ---------------------------------------------------------------------------
 
-def bucketize(replay: WatermarkReplay, bucket_ns: int) -> dict:
-    """逐实例桶时序（桶末占用 + 桶内峰值 + 逐出叠加）。
+JOURNAL_REQUIRED_FIELDS = (
+    "schema_version", "sequence", "transaction_id", "planner_time_ns",
+    "rank", "instance_index", "capacity_bytes", "weight_delta_bytes",
+    "resident_kv_delta_bytes", "reserved_kv_delta_bytes", "before_bytes",
+    "after_bytes", "cause",
+)
 
-    桶 j 覆盖 [span_start + j·B, +B)；事件 tick 落在 [start, end) 计入
-    桶 j；末桶补记 span_end 处事件。active 桶 = 有事件或占用非零。
+
+class JournalReplay:
+    """kv_delta_journal.jsonl 的流式权威重放（逐 rank 认证 + 逐实例 RLE）。
+
+    每行是 manager mutation 提交点的权威记录（rank/instance/capacity_
+    bytes/三类 delta/before/after）。三类检查：
+
+    * 行级链自洽（fail-closed）：before == 该 rank 前行 after；
+      after == before + 对应 delta（三类各自）；after 各分量非负。
+    * 逐 rank 容量认证：physical = after.weight + after.resident +
+      after.reserved > capacity_bytes → 违规计数（是否构成正式判决由
+      tier 决定——仅 per_rank_total_hbm_certified 层 exit 3）。
+    * resident 硬上限口径（诊断）：after.resident > kv_shard_r ×
+      hard_limit_tokens → 计数报告（三口径之一，不作判决）。
+
+    逐实例 resident 变点流喂 ChangePointLog（journal 的 instance 语义与
+    decision-log 重放一致，可直接并到同一 instances/series/intervals 产物）。
     """
-    events = sorted(replay.events, key=lambda item: (item[0],))
-    span_start = events[0][0]
-    span_end = events[-1][0]
-    if span_end <= span_start:
-        fail("KV 动作时间跨度为 0，无法分桶")
-    # 末桶必须能容纳恰落在 span_end 的事件（其桶号 = span//B）——
-    # 用 ceil 会把末事件静默丢出网格。
-    n_buckets = (span_end - span_start) // bucket_ns + 1
 
-    per_instance_events: dict[int, list[tuple[int, int]]] = {}
-    for tick, instance, delta in events:
-        per_instance_events.setdefault(instance, []).append((tick, delta))
-    per_instance_evicts: dict[int, list[tuple[int, int]]] = {}
-    for tick, instance, nbytes in replay.evict_marks:
-        per_instance_evicts.setdefault(instance, []).append((tick, nbytes))
+    def __init__(self, journal_path: Path,
+                 hard_limit_by_weight: Optional[dict[int, int]]) -> None:
+        self.journal_path = journal_path
+        self.hard_limit_by_weight = hard_limit_by_weight or {}
+        self.cplog = ChangePointLog()
+        self.state: dict[int, dict] = {}  # rank -> {w, r, s}（当前）
+        self.rank_instance: dict[int, int] = {}
+        self.rank_capacity: dict[int, int] = {}
+        self.rows = 0
+        self.sequence_first: Optional[int] = None
+        self.sequence_last: Optional[int] = None
+        self.transaction_max = -1
+        self.causes: dict[str, int] = {}
+        self.physical_violation_events = 0
+        self.violation_by_rank: dict[int, int] = {}
+        self.violation_by_instance: dict[int, int] = {}
+        self.max_exceed_bytes = 0
+        self.hard_limit_exceed_events = 0
+        self.hard_limit_exceed_ranks: dict[int, int] = {}
+        self.sha256 = hashlib.sha256()
+        self._prev_sequence: Optional[int] = None
+        self._prev_time: Optional[int] = None
 
-    series: dict[int, list[dict]] = {}
-    stats: dict[int, dict] = {}
-    for instance, ievents in per_instance_events.items():
-        ievents.sort(key=lambda item: item[0])
-        evicts = per_instance_evicts.get(instance, [])
-        evict_by_bucket: dict[int, list[int]] = {}
-        for tick, nbytes in evicts:
-            index = min((tick - span_start) // bucket_ns, n_buckets - 1)
-            pair = evict_by_bucket.setdefault(index, [0, 0])
-            pair[0] += 1
-            pair[1] += nbytes
-        rows: list[dict] = []
-        occupancy = 0
-        cursor = 0
-        first_tick = ievents[0][0]
-        last_tick = ievents[-1][0]
-        peak = 0
-        area = 0  # Σ(occupancy × dt)（先整数后除，展示层才转浮点）
-        prev_tick = first_tick
-        # 逐桶推进：每桶先吸收事件，再记录桶末占用。
-        for index in range(n_buckets):
-            bucket_start = span_start + index * bucket_ns
-            bucket_end = min(bucket_start + bucket_ns,
-                             span_end + 1)  # 末桶含 span_end 事件
-            bucket_peak = occupancy
-            while cursor < len(ievents) and ievents[cursor][0] < bucket_end:
-                tick, delta = ievents[cursor]
-                area += occupancy * (tick - prev_tick)  # 先记旧占用×时长
-                occupancy += delta
-                bucket_peak = max(bucket_peak, occupancy)
-                peak = max(peak, occupancy)
-                prev_tick = tick
-                cursor += 1
-            evict_pair = evict_by_bucket.get(index)
-            if occupancy > 0 or bucket_peak > 0 or evict_pair:
-                rows.append({
-                    "bucket_index": index,
-                    "bucket_start_ns": bucket_start,
-                    "bucket_end_ns": bucket_start + bucket_ns,
-                    "occupancy_end_bytes": occupancy,
-                    "occupancy_peak_in_bucket_bytes": bucket_peak,
-                    "evict_events": evict_pair[0] if evict_pair else 0,
-                    "evict_bytes": evict_pair[1] if evict_pair else 0,
-                })
-        # 事件间隔用 tick 步进（线性插值不做：只累计事件间驻留面积）。
-        duration = last_tick - first_tick
-        stats[instance] = {
-            "first_event_ns": first_tick,
-            "last_event_ns": last_tick,
-            "duration_ns": duration,
-            "peak_occupancy_bytes": peak,
-            "mean_occupancy_bytes": (area / duration) if duration > 0
-            else float(peak),
-            "residual_occupancy_bytes": occupancy,
-            "evict_events": sum(pair[0] for pair in
-                                evict_by_bucket.values()),
-            "evict_bytes": sum(pair[1] for pair in evict_by_bucket.values()),
-        }
-        series[instance] = rows
+    # -- 行校验与施加 -----------------------------------------------------
+
+    def _require(self, condition: bool, message: str) -> None:
+        if not condition:
+            fail(f"{self.journal_path}:seq={self.sequence_last}: {message}"
+                 f"——kv_delta_journal 行结构/链不自洽（账本损坏，"
+                 f"fail-closed 不降级）")
+
+    def consume(self, row: dict, where: str) -> None:
+        for field in JOURNAL_REQUIRED_FIELDS:
+            self._require(field in row, f"缺字段 {field}")
+        self._require(row.get("schema_version") == 1,
+                      f"schema_version 必须为 1（实得 "
+                      f"{row.get('schema_version')!r}）")
+        sequence = row["sequence"]
+        tick = row["planner_time_ns"]
+        self._require(isinstance(sequence, int) and not isinstance(
+            sequence, bool) and sequence >= 0, "sequence 非非负整数")
+        self._require(isinstance(tick, int) and not isinstance(tick, bool)
+                      and tick >= 0, "planner_time_ns 非非负整数")
+        self._require(self._prev_sequence is None or sequence >
+                      self._prev_sequence,
+                      f"sequence 回退（{sequence} <= {self._prev_sequence}）")
+        self._require(self._prev_time is None or tick >= self._prev_time,
+                      f"planner_time_ns 回退（{tick} < {self._prev_time}）")
+        self._prev_sequence = sequence
+        self._prev_time = tick
+        if self.sequence_first is None:
+            self.sequence_first = sequence
+        self.sequence_last = sequence
+        transaction_id = row["transaction_id"]
+        if isinstance(transaction_id, int) and not isinstance(
+                transaction_id, bool) and transaction_id > self.transaction_max:
+            self.transaction_max = transaction_id
+        rank = row["rank"]
+        instance = row["instance_index"]
+        capacity = row["capacity_bytes"]
+        self._require(isinstance(rank, int) and not isinstance(rank, bool)
+                      and rank >= 0, "rank 非非负整数")
+        self._require(isinstance(instance, int) and not isinstance(
+            instance, bool) and instance >= 0, "instance_index 非非负整数")
+        self._require(isinstance(capacity, int) and not isinstance(
+            capacity, bool) and capacity > 0, "capacity_bytes 非正整数")
+        deltas = {}
+        for field, key in (("weight_delta_bytes", "w"),
+                           ("resident_kv_delta_bytes", "r"),
+                           ("reserved_kv_delta_bytes", "s")):
+            value = row[field]
+            self._require(isinstance(value, int) and not isinstance(
+                value, bool), f"{field} 非整数")
+            deltas[key] = value
+        before = row["before_bytes"]
+        after = row["after_bytes"]
+        self._require(isinstance(before, dict) and isinstance(after, dict),
+                      "before_bytes/after_bytes 必须是对象")
+        parsed_before = {}
+        parsed_after = {}
+        for source, target in ((before, parsed_before), (after, parsed_after)):
+            for field, key in (("weight", "w"), ("resident", "r"),
+                               ("reserved", "s")):
+                value = source.get(field)
+                self._require(isinstance(value, int) and not isinstance(
+                    value, bool) and value >= 0,
+                    f"{field if source is after else 'before.' + field}"
+                    f" 非非负整数")
+                target[key] = value
+        current = self.state.get(rank)
+        expected_before = current if current is not None \
+            else {"w": 0, "r": 0, "s": 0}
+        for key, label in (("w", "weight"), ("r", "resident"),
+                           ("s", "reserved")):
+            self._require(parsed_before[key] == expected_before[key],
+                          f"rank {rank} {label} 链断裂（before="
+                          f"{parsed_before[key]}，前行 after="
+                          f"{expected_before[key]}）")
+            self._require(parsed_after[key] == parsed_before[key] +
+                          deltas[key],
+                          f"rank {rank} {label} 行不自洽（after="
+                          f"{parsed_after[key]} != before+delta="
+                          f"{parsed_before[key] + deltas[key]}）")
+        known_instance = self.rank_instance.get(rank)
+        if known_instance is not None:
+            self._require(known_instance == instance,
+                          f"rank {rank} 实例漂移（{known_instance} -> "
+                          f"{instance}）")
+        known_capacity = self.rank_capacity.get(rank)
+        if known_capacity is not None:
+            self._require(known_capacity == capacity,
+                          f"rank {rank} capacity 漂移（{known_capacity} -> "
+                          f"{capacity}）")
+        self.rank_instance[rank] = instance
+        self.rank_capacity[rank] = capacity
+        self.state[rank] = parsed_after
+        physical_after = parsed_after["w"] + parsed_after["r"] + \
+            parsed_after["s"]
+        if physical_after > capacity:
+            self.physical_violation_events += 1
+            self.violation_by_rank[rank] = \
+                self.violation_by_rank.get(rank, 0) + 1
+            self.violation_by_instance[instance] = \
+                self.violation_by_instance.get(instance, 0) + 1
+            self.max_exceed_bytes = max(self.max_exceed_bytes,
+                                        physical_after - capacity)
+        hard_limit = self.hard_limit_by_weight.get(parsed_after["w"]) \
+            if parsed_after["w"] else None
+        if hard_limit is not None and parsed_after["r"] > hard_limit:
+            self.hard_limit_exceed_events += 1
+            self.hard_limit_exceed_ranks[rank] = \
+                self.hard_limit_exceed_ranks.get(rank, 0) + 1
+        cause = row.get("cause")
+        cause_label = cause if isinstance(cause, str) else repr(cause)
+        self.causes[cause_label] = self.causes.get(cause_label, 0) + 1
+        if deltas["r"]:
+            self.cplog.add(tick, instance, deltas["r"])
+        if "evict" in cause_label.lower() and deltas["r"] < 0:
+            self.cplog.add_evict(tick, instance, -deltas["r"])
+        self.rows += 1
+
+    def final_rank_state(self) -> dict:
+        return {rank: {
+            "instance_index": self.rank_instance[rank],
+            "capacity_bytes": self.rank_capacity[rank],
+            "weight": state["w"],
+            "resident": state["r"],
+            "reserved": state["s"],
+            "physical": state["w"] + state["r"] + state["s"],
+        } for rank, state in sorted(self.state.items())}
+
+
+def load_journal_checksum(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"kv_delta_journal_checksum.json 非法 JSON：{path}: {exc}")
+    if not isinstance(data, dict):
+        fail(f"kv_delta_journal_checksum.json 必须是对象：{path}")
+    return data
+
+
+def replay_journal(journal_path: Path,
+                   checksum_path: Optional[Path],
+                   hard_limit_by_weight: Optional[dict[int, int]]) -> dict:
+    """journal 单遍流式重放 + tier 判定（P1-① 的权威路径）。
+
+    返回 {tier, replay, checksum, sha256_hex, checks}。fail-closed 条件
+    （退出码 2，不降级）：sha256 不匹配 / 行级链断裂 / 行数与证书不符 /
+    重放终态与证书终态矛盾。checks 有 false → lifecycle_replay_exact
+    （run 末守恒未过：journal 行级仍精确，但不作正式判决）。
+    """
+    replay = JournalReplay(journal_path, hard_limit_by_weight)
+    with journal_path.open("rb") as handle:
+        for lineno, raw in enumerate(handle, start=1):
+            replay.sha256.update(raw)
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                fail(f"{journal_path}:{lineno}: 非法 JSON（{exc}）")
+            if not isinstance(row, dict):
+                fail(f"{journal_path}:{lineno}: journal 行必须是对象")
+            replay.consume(row, f"{journal_path}:{lineno}")
+    if replay.rows == 0:
+        fail(f"{journal_path}: 没有任何可重放的 KV delta 行")
+    sha256_hex = replay.sha256.hexdigest()
+    checksum: Optional[dict] = None
+    checks: dict = {}
+    tier = TRUST_TIER_RESIDENT
+    if checksum_path is not None:
+        checksum = load_journal_checksum(checksum_path)
+        expected_sha = checksum.get("sha256")
+        if expected_sha is not None and expected_sha != sha256_hex:
+            fail(f"{journal_path}: journal sha256 与证书不符（journal="
+                 f"{sha256_hex}，checksum={expected_sha}）——账本完整性"
+                 f"破坏，fail-closed 不降级")
+        expected_lines = checksum.get("line_count")
+        if isinstance(expected_lines, int) and expected_lines != replay.rows:
+            fail(f"{journal_path}: journal 行数与证书不符（journal="
+                 f"{replay.rows}，checksum={expected_lines}）")
+        ranks_block = checksum.get("ranks")
+        if isinstance(ranks_block, dict) and ranks_block:
+            for rank_key, entry in sorted(ranks_block.items()):
+                try:
+                    rank = int(rank_key)
+                except ValueError:
+                    fail(f"{checksum_path}: ranks 键必须是 rank 整数"
+                         f"（实得 {rank_key!r}）")
+                state = replay.state.get(rank)
+                if state is None:
+                    fail(f"{checksum_path}: 证书含 rank {rank} 但 journal"
+                         f"无该 rank 行——账本与证书矛盾")
+                if not isinstance(entry, dict):
+                    fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
+                for field, key in (("weight", "w"), ("resident", "r"),
+                                   ("reserved", "s")):
+                    value = entry.get(field)
+                    if isinstance(value, int) and value != state[key]:
+                        fail(
+                            f"{checksum_path}: rank {rank} 终态 {field} 与"
+                            f" journal 重放不符（证书 {value}，重放 "
+                            f"{state[key]}）——账本与证书矛盾")
+                capacity = entry.get("capacity_bytes")
+                if isinstance(capacity, int) and \
+                        capacity != replay.rank_capacity.get(rank):
+                    fail(f"{checksum_path}: rank {rank} capacity 与 journal"
+                         f" 不符（证书 {capacity}，重放 "
+                         f"{replay.rank_capacity.get(rank)}）")
+            missing = sorted(set(replay.state) - {
+                int(key) for key in ranks_block if str(key).lstrip("-").isdigit()})
+            if missing:
+                fail(f"{checksum_path}: journal 含证书未覆盖的 rank"
+                     f"（{missing[:5]}，共 {len(missing)}）——账本与证书"
+                     f"矛盾")
+        checks = checksum.get("checks") if isinstance(
+            checksum.get("checks"), dict) else {}
+        if checks and all(checks.get(name) is True for name in (
+                "manager_state_match", "physical_equals_weight",
+                "residual_reserved_zero", "residual_resident_zero")):
+            tier = TRUST_TIER_CERTIFIED
+        else:
+            tier = TRUST_TIER_LIFECYCLE
     return {
-        "span_start_ns": span_start,
-        "span_end_ns": span_end,
-        "bucket_ns": bucket_ns,
-        "n_buckets": n_buckets,
-        "series": series,
-        "stats": stats,
+        "tier": tier,
+        "replay": replay,
+        "checksum": checksum,
+        "sha256_hex": sha256_hex,
+        "checks": checks,
     }
+
+
+def resolve_effective_bucket_ns(requested_bucket_ns: int, span_ns: int,
+                                eventful_units: int,
+                                row_budget: int) -> tuple[int, bool, str]:
+    """B_eff = max(B_requested, ceil(S·N/(R−N)))（P1-④）。
+
+    S=全局 span（末 KV 事件−首 KV 事件）、N=有事件实例数、R=全局行预算。
+    R≤N → 拒绝稠密输出（返回 (requested, True, "row_budget_exceeded_
+    dense_refused")，调用方只写 RLE、log 说明、正常完成）。
+    """
+    if row_budget <= eventful_units:
+        return requested_bucket_ns, True, "row_budget_exceeded_dense_refused"
+    minimum = -(-span_ns * eventful_units
+                // (row_budget - eventful_units))  # ceil(商)
+    if minimum > requested_bucket_ns:
+        return minimum, True, "row_budget_coarsened"
+    return requested_bucket_ns, False, "none"
+
 
 
 # ---------------------------------------------------------------------------
 # 命令
 # ---------------------------------------------------------------------------
 
-def cmd_hbm_watermark(args: argparse.Namespace) -> int:
-    repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
+def watermark_prepare(args: argparse.Namespace, repo_variant: str,
+                      request_manifest_loader=None) -> dict:
+    """A4 driver 用：映射/参数/token/容量装载（stderr 警告时点原样）。
+
+    request_manifest_loader：driver 传入的惰性 manifest 装载器（npus
+    推导复用；缺省 None=自行装载=CLI 行为不变，失败时点同构）。
+    """
     mapping = REPO_VARIANTS.get(repo_variant)
     if mapping is None:
         fail(f"未登记的 repo_variant：{repo_variant}"
              f"（REPO_VARIANTS 需扩表并附基线核对证据）")
+    # B3-6：S2 新产物（逐出 victim/bytes 在场）升级 full 口径；旧产物
+    # 保底回退 count_only 上界口径。
+    if repo_variant == "astra-sim-sh_2.0":
+        mapping = upgrade_s2_mapping_if_fields_present(mapping, args.run_dir)
 
     manifest = load_slo_manifest(args.manifest or default_manifest_path())
     bucket_ns, bucket_provisional = load_bucket_ns(manifest)
@@ -1050,8 +1941,9 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
             hardware = resolve_hardware_capacity(profile,
                                                  args.hardware_config)
             try:
-                npus = load_npus_per_instance(args.run_dir,
-                                              args.request_manifest)
+                npus = load_npus_per_instance(
+                    args.run_dir, args.request_manifest,
+                    request_manifest_loader)
             except SloToolError as exc:
                 print(f"[hbm-watermark] 警告：{exc}——capacity=NA，违规"
                       f"检查降级为峰值记录", file=sys.stderr)
@@ -1067,60 +1959,316 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
             print(f"[hbm-watermark] 警告：{exc}——capacity=NA，违规检查"
                   f"降级为峰值记录", file=sys.stderr)
 
+    # P1-③：三口径容量剖面（manager 原函数逐字拷贝；配置缺模型行 → NA 降
+    # 级，不 fail——聚合容量链不受影响）。
+    calibers: Optional[dict] = None
+    calibers_note = NA
+    if capacity is not None:
+        model = build_model_spec(config)
+        if model is None:
+            print("[hbm-watermark] 警告：trace_config 缺模型行（ffn_size/"
+                  "num_heads/vocab_size 任一）——三口径容量剖面=NA（聚合容"
+                  "量链不受影响）", file=sys.stderr)
+        else:
+            raw_reserve = config.get("kv_reserve_context_tokens")
+            try:
+                reserve_tokens = int(raw_reserve)
+            except (TypeError, ValueError):
+                reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
+            if reserve_tokens < 0:
+                reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
+            npus_for_calibers = load_npus_per_instance(
+                args.run_dir, args.request_manifest, request_manifest_loader) \
+                if not npus else npus
+            try:
+                calibers = compute_capacity_calibers(
+                    model, npus_for_calibers, hardware["bytes"],
+                    reserve_tokens)
+            except (ValueError, RuntimeError, ZeroDivisionError) as exc:
+                print(f"[hbm-watermark] 警告：三口径容量剖面计算失败"
+                      f"（{exc}）——capacity_calibers=NA", file=sys.stderr)
+            else:
+                # resident 硬上限的逐 rank 诊断口径按 rank 当前 weight 绑定
+                # （journal 只给绝对 rank 编号，相对位=拓扑属性不落盘；
+                # weight 值唯一确定 (w_r, kv_r) 剖面项——值冲突且限值不同
+                # 的退化配置该 rank 诊断跳过，summary 注记）。绑定表在
+                # calibers["resident_kv_hard_limit"]["limit_by_weight_bytes"]。
+                calibers_note = (
+                    f"{trace['path']} 模型行 × manager 原函数"
+                    f"（model_weight_shard_bytes_by_tp_rank / "
+                    f"kv_cache_shard_bytes_for_tokens，逐字拷贝自 "
+                    f"session_kv_manager.py）")
+
+    # P1-①：tier 判定基础（run_dir 内容探测；最终 tier 在 emit 侧经
+    # journal 重放 + 证书对账落定）。
+    journal_path = args.run_dir / KV_DELTA_JOURNAL_RELPATH
+    checksum_path = args.run_dir / KV_DELTA_JOURNAL_CHECKSUM_RELPATH
+    journal_present = journal_path.is_file()
+    checksum_present = checksum_path.is_file()
+    if journal_present and checksum_present:
+        violation_check = "per_rank_physical_gt_capacity"
+    elif journal_present:
+        violation_check = "per_rank_reported_no_formal_verdict"
+    else:
+        violation_check = "diagnostic_upper_bound_only"
+    if capacity is None:
+        violation_check = "degraded_peak_recorded"
+
+    # P1-④：绘图 series 全局行预算（manifest 新键，fail-closed）。
+    row_budget = require_param_int(manifest, "watermark_series_row_budget")
+
     coverage = mapping["eviction_coverage"]
-    occupancy_valid = coverage in ("full", "full_reconciled")
-    violation_check = "occupancy_gt_capacity" if (
-        capacity is not None and occupancy_valid) else (
-        "degraded_peak_recorded" if capacity is None else
-        "degraded_upper_bound_no_certification")
+    return {
+        "mapping": mapping,
+        "bucket_ns": bucket_ns,
+        "bucket_provisional": bucket_provisional,
+        "row_budget": row_budget,
+        "tokens": tokens,
+        "trace": trace,
+        "coef": coef,
+        "capacity": capacity,
+        "capacity_source": capacity_source,
+        "calibers": calibers,
+        "calibers_note": calibers_note,
+        "coverage": coverage,
+        "journal_path": journal_path,
+        "checksum_path": checksum_path,
+        "journal_present": journal_present,
+        "checksum_present": checksum_present,
+        "violation_check": violation_check,
+    }
 
-    replay = replay_decision_log(args.run_dir, repo_variant, mapping,
-                                 tokens, coef, capacity
-                                 if violation_check ==
-                                 "occupancy_gt_capacity" else None)
-    result = bucketize(replay, bucket_ns)
 
-    # -- 输出 ------------------------------------------------------------
-    stream, close = open_output(args.output, "slo_hbm_watermark_series.csv",
+def cmd_hbm_watermark(args: argparse.Namespace) -> int:
+    # CLI 入口（独立运行行为不变）。A4 driver 经 watermark_prepare /
+    # WatermarkScan.consume / watermark_emit 组合复用同一逻辑。decision-log
+    # 重放的容量参数恒为诊断口径（upper_bound_only 层不出物理违规认证）。
+    repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
+    prep = watermark_prepare(args, repo_variant)
+    scan = WatermarkScan(args.run_dir, repo_variant, prep["mapping"],
+                         prep["tokens"], prep["coef"], prep["capacity"])
+    for record in iter_jsonl(scan.log_path):
+        scan.consume(record)
+    replay = scan.finish()
+    return watermark_emit(args, repo_variant, prep, replay)
+
+
+def _intervals_rows(cplog: ChangePointLog, repo_variant: str):
+    """intervals.csv 的行流：per instance 变点区间（含逐出列）。"""
+    for instance in cplog.eventful_units():
+        unit = cplog.units[instance]
+        next_tick: Optional[int] = None
+        pending: Optional[tuple] = None
+        for item in unit.merged_change_points():
+            if pending is not None:
+                yield (repo_variant, instance, pending[0], item[0],
+                       pending[1], pending[2], pending[3], pending[4],
+                       pending[5])
+            pending = item
+        if pending is not None:
+            # 末变点：后续段 [tick, ∞) 占用恒定，interval_end 记自身 tick
+            # （退化段；恢复任意桶长只需变点 tick 序，无需后继）。
+            yield (repo_variant, instance, pending[0], pending[0],
+                   pending[1], pending[2], pending[3], pending[4],
+                   pending[5])
+
+
+def _plot_series_rows(cplog: ChangePointLog, repo_variant: str, origin: int,
+                      span_end: int, effective_bucket_ns: int):
+    """plot_series.csv 的行流：游标推进时逐行 yield（P1-④ 流式写出）。"""
+    for instance in cplog.eventful_units():
+        unit = cplog.units[instance]
+        for row in bucket_row_sweep(unit.merged_change_points, origin,
+                                    span_end, effective_bucket_ns):
+            yield (repo_variant, instance, row[0], row[1], row[2], row[3],
+                   row[4], row[5], row[6])
+
+
+def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
+                   replay: WatermarkReplay) -> int:
+    bucket_ns = prep["bucket_ns"]
+    bucket_provisional = prep["bucket_provisional"]
+    row_budget = prep["row_budget"]
+    tokens = prep["tokens"]
+    trace = prep["trace"]
+    coef = prep["coef"]
+    capacity = prep["capacity"]
+    capacity_source = prep["capacity_source"]
+    calibers = prep["calibers"]
+    calibers_note = prep["calibers_note"]
+    coverage = prep["coverage"]
+    violation_check = prep["violation_check"]
+    mapping = prep["mapping"]
+
+    # -- P1-①：tier 判定 + journal 权威重放 --------------------------------
+    journal_result = None
+    journal_replay = None
+    trust_tier = TRUST_TIER_UPPER_BOUND
+    if prep["journal_present"]:
+        hard_limit_by_weight = None
+        if calibers is not None:
+            hard_limit_by_weight = calibers["resident_kv_hard_limit"][
+                "limit_by_weight_bytes"]
+        journal_result = replay_journal(
+            prep["journal_path"],
+            prep["checksum_path"] if prep["checksum_present"] else None,
+            hard_limit_by_weight)
+        journal_replay = journal_result["replay"]
+        trust_tier = journal_result["tier"]
+        if trust_tier == TRUST_TIER_CERTIFIED:
+            basis = ("kv_delta_journal.jsonl + kv_delta_journal_checksum."
+                     "json 在场，且 sha256/行级链/重放终态/守恒四项全过")
+        elif trust_tier == TRUST_TIER_LIFECYCLE:
+            basis = ("journal + checksum 在场、行级链与终态一致，但守恒"
+                     f"checks 未全过（{journal_result['checks']}）——"
+                     f"lifecycle 精确、无守恒证书")
+        else:
+            basis = ("kv_delta_journal.jsonl 在场、行级链自洽，但 "
+                     "kv_delta_journal_checksum.json 缺失——resident 精确、"
+                     "无 run 末守恒证书")
+        print(f"[hbm-watermark] trust_tier={trust_tier}：依据 {basis}",
+              file=sys.stderr)
+    else:
+        print(f"[hbm-watermark] trust_tier={trust_tier}：依据 run_dir 缺 "
+              f"results/kv_delta_journal.jsonl（阶段2 前旧 run）——decision-"
+              f"log 重放为上界口径，occupancy_valid=false、退出码 3 废除"
+              f"（超限只作诊断计数）", file=sys.stderr)
+
+    # 权威变点日志：journal 在场=journal 重放（journal 为权威）；否则=
+    # decision-log 重放（上界口径，即权威可得的最好结果）。
+    cplog = journal_replay.cplog if journal_replay is not None \
+        else replay.cplog
+    occupancy_source = ("kv_delta_journal resident 重放（权威）"
+                        if journal_replay is not None else
+                        "decision-log KV 动作重放（上界）")
+    occupancy_valid = journal_replay is not None
+
+    span_start, span_end = cplog.span()
+    if span_start is None or span_end is None or span_end <= span_start:
+        fail("KV 动作时间跨度为 0/空事件流，无法分桶（decision-log 与 "
+             "journal 两侧均无可重放 KV 动作）")
+    span_ns = span_end - span_start
+    units = cplog.eventful_units()
+    n_units = len(units)
+
+    # -- P1-④：B_eff 行预算 ------------------------------------------------
+    effective_bucket_ns, resolution_adjusted, adjustment_reason = \
+        resolve_effective_bucket_ns(bucket_ns, span_ns, n_units, row_budget)
+    dense_refused = adjustment_reason == "row_budget_exceeded_dense_refused"
+    if resolution_adjusted and not dense_refused:
+        print(f"[hbm-watermark] 绘图 series 行预算调整：requested_bucket_ns"
+              f"={bucket_ns} → effective_bucket_ns={effective_bucket_ns}"
+              f"（row_budget={row_budget}，span_ns={span_ns}，"
+              f"eventful_units={n_units}；B_eff=max(B, ceil(S·N/(R−N)))）",
+              file=sys.stderr)
+    if dense_refused:
+        print(f"[hbm-watermark] 绘图 series 拒绝稠密输出：row_budget"
+              f"={row_budget} ≤ eventful_units={n_units}——只写 RLE 权威"
+              f"区间（slo_hbm_intervals.csv），plot_series 仅表头；"
+              f"正常完成（非失败）", file=sys.stderr)
+    worst_rows_requested = max(
+        (cplog.units[u].last_tick - span_start) // bucket_ns for u in units) \
+        + 1
+    worst_rows_effective = max(
+        (cplog.units[u].last_tick - span_start) // effective_bucket_ns
+        for u in units) + 1
+
+    # -- 输出：intervals（权威 RLE）----------------------------------------
+    interval_rows_total = 0
+    istream, iclose = open_output(args.intervals_csv,
+                                  "slo_hbm_intervals.csv", args.run_dir)
+    try:
+        writer_rows = _intervals_rows(cplog, repo_variant)
+        def counted_intervals():
+            nonlocal interval_rows_total
+            for row in writer_rows:
+                interval_rows_total += 1
+                yield row
+        write_csv(istream, INTERVAL_COLUMNS, counted_intervals())
+    finally:
+        if iclose:
+            istream.close()
+
+    # -- 输出：plot_series（行预算约束的绘图产物，流式写出）----------------
+    dense_rows_total = 0
+    stream, close = open_output(args.output, "slo_hbm_plot_series.csv",
                                 args.run_dir)
     try:
-        def series_rows():
-            for instance in sorted(result["series"]):
-                for row in result["series"][instance]:
-                    yield (repo_variant, instance, row["bucket_index"],
-                           row["bucket_start_ns"], row["bucket_end_ns"],
-                           row["occupancy_end_bytes"],
-                           row["occupancy_peak_in_bucket_bytes"],
-                           row["evict_events"], row["evict_bytes"])
-        write_csv(stream, SERIES_COLUMNS, series_rows())
+        if dense_refused:
+            write_csv(stream, SERIES_COLUMNS, iter(()))
+        else:
+            series_rows = _plot_series_rows(cplog, repo_variant, span_start,
+                                            span_end, effective_bucket_ns)
+            def counted_series():
+                nonlocal dense_rows_total
+                for row in series_rows:
+                    dense_rows_total += 1
+                    yield row
+            write_csv(stream, SERIES_COLUMNS, counted_series())
     finally:
         if close:
             stream.close()
+    if dense_rows_total > row_budget:
+        fail(f"绘图 series 行数 {dense_rows_total} 超全局行预算 "
+             f"{row_budget}（B_eff 公式失效）——fail-closed（不变量破坏，"
+             f"拒绝静默超预算交付）")
 
-    istream, iclose = open_output(
+    # -- 违规口径（tier 决定正式性）----------------------------------------
+    if journal_replay is not None:
+        violation_events = journal_replay.physical_violation_events
+        violation_instances = journal_replay.violation_by_instance
+        max_exceed_bytes = journal_replay.max_exceed_bytes
+        violation_kind = ("per_rank_physical_gt_capacity（正式判决）"
+                          if trust_tier == TRUST_TIER_CERTIFIED else
+                          f"per_rank_physical_gt_capacity（{trust_tier} 层"
+                          f"仅报告，不作正式判决）")
+    else:
+        violation_events = replay.violation_events
+        violation_instances = replay.violation_by_instance
+        max_exceed_bytes = replay.max_exceed_bytes
+        violation_kind = ("aggregate_occupancy_gt_aggregate_capacity"
+                          "（upper_bound_only 层诊断：不构成物理违规认证"
+                          "、退出码不为 3）")
+
+    # -- 输出：instances CSV ------------------------------------------------
+    upper_bound_peaks: dict[int, int] = {}
+    if journal_replay is not None:
+        for instance, unit in replay.cplog.units.items():
+            if unit.has_event:
+                upper_bound_peaks[instance] = unit.peak
+    instances_csv_coverage = ("journal_exact" if journal_replay is not None
+                              else coverage)
+    estream, eclose = open_output(
         args.instances_csv, "slo_hbm_watermark_instances.csv", args.run_dir)
     try:
         def instance_rows():
-            for instance in sorted(result["stats"]):
-                stat = result["stats"][instance]
-                yield (repo_variant, instance, coverage,
+            for instance in units:
+                stat = cplog.units[instance].stats()
+                yield (repo_variant, instance, trust_tier,
+                       instances_csv_coverage,
                        "true" if occupancy_valid else "false",
                        capacity if capacity is not None else NA,
                        capacity_source, bucket_ns,
                        "true" if bucket_provisional else "false",
+                       effective_bucket_ns,
+                       "true" if resolution_adjusted else "false",
                        stat["first_event_ns"], stat["last_event_ns"],
                        stat["duration_ns"], stat["peak_occupancy_bytes"],
                        f"{stat['mean_occupancy_bytes']:.3f}",
                        stat["residual_occupancy_bytes"],
                        stat["evict_events"],
-                       stat["evict_bytes"] if coverage == "full" else NA,
-                       replay.violation_by_instance.get(instance, 0))
-        write_csv(istream, INSTANCE_COLUMNS, instance_rows())
+                       # P1-⑤：full_reconciled 也输出真实逐出 bytes（JSON
+                       # 本就有，NA 展示分支只保留给 count_only 档）。
+                       stat["evict_bytes"] if coverage in ("full",
+                                                           "full_reconciled")
+                       else NA,
+                       violation_instances.get(instance, 0),
+                       upper_bound_peaks.get(instance, NA))
+        write_csv(estream, INSTANCE_COLUMNS, instance_rows())
     finally:
-        if iclose:
-            istream.close()
+        if eclose:
+            estream.close()
 
-    total_violations = replay.violation_events
     if coverage == "full":
         occupancy_note = "full：逐出条目带 bytes+victim，重放闭合"
     elif coverage == "full_reconciled":
@@ -1136,21 +2284,57 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
             "S2 decision log 只有 *_eviction_count（无 victim/bytes）：他"
             f"人逐出不可归因，occupancy 为上界（未归因逐出 "
             f"{replay.report.actions['unattributed_evictions']} 例不扣减）")
+
     summary = {
         "command": "hbm_watermark",
         "repo_variant": repo_variant,
-        "algorithm": "decision-log KV action replay (evict -> restore/"
-                     "move -> grow, per-record order) -> per-instance "
-                     "occupancy series (WP8 offline primary source)",
+        "algorithm": ("kv_delta_journal 权威重放（tier>=resident_kv_exact）"
+                      "或 decision-log KV action replay（upper_bound_"
+                      "only；evict -> restore/move -> grow, per-record "
+                      "order）-> RLE 变点区间 + 事件流 stats + 行预算绘"
+                      "图 series（WP8 offline primary source）"),
+        "trust_tier": trust_tier,
+        "trust_tier_semantics": {
+            TRUST_TIER_CERTIFIED:
+                "journal+checksum 在场且 sha256/行级链/终态/守恒四项全过"
+                "——逐 rank physical 认证，违规=exit 3（正式容量判决）",
+            TRUST_TIER_RESIDENT:
+                "journal 在场、链自洽，checksum 缺失——逐 rank 时序精确、"
+                "无守恒证书，容量检查仅报告",
+            TRUST_TIER_LIFECYCLE:
+                "journal+checksum 在场、链与终态一致，守恒 checks 未全过"
+                "——生命周期精确、无守恒证书，容量检查仅报告",
+            TRUST_TIER_UPPER_BOUND:
+                "journal 缺失——decision-log 重放为上界，occupancy_valid"
+                "=false，无物理违规认证（退出码不为 3）",
+        },
+        "occupancy_source": occupancy_source,
         "bucket_ns": bucket_ns,
         "bucket_ns_provisional": bucket_provisional,
         "bucket_ns_source": "slo_params_manifest.watermark_sample_period_ns"
                             + ("（临时锚点 5,000,000 ns）"
                                if bucket_provisional else ""),
-        "span_start_ns": result["span_start_ns"],
-        "span_end_ns": result["span_end_ns"],
-        "n_buckets": result["n_buckets"],
-        "n_instances": len(result["stats"]),
+        "plot_series": {
+            "requested_bucket_ns": bucket_ns,
+            "effective_bucket_ns": effective_bucket_ns,
+            "resolution_adjusted": resolution_adjusted,
+            "adjustment_reason": adjustment_reason,
+            "row_budget": row_budget,
+            "span_ns": span_ns,
+            "bucket_origin_ns": span_start,
+            "b_eff_formula": "max(B_requested, ceil(S·N/(R−N)))；"
+                             "R≤N 拒绝稠密输出只给 RLE",
+            "eventful_units": n_units,
+            "dense_rows_written": dense_rows_total,
+            "dense_output_refused": dense_refused,
+            "worst_dense_rows_estimate_requested": worst_rows_requested,
+            "worst_dense_rows_estimate_effective": worst_rows_effective,
+        },
+        "span_start_ns": span_start,
+        "span_end_ns": span_end,
+        "n_buckets": (span_end - span_start) // effective_bucket_ns + 1,
+        "n_instances": n_units,
+        "interval_rows": interval_rows_total,
         "coef_bytes_per_token": coef,
         "coef_formula": "2*layers*hidden_size*bytes_per_elem",
         "trace_config_source": trace["path"],
@@ -1158,14 +2342,17 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
         "capacity_bytes_per_instance": capacity,
         "capacity_source": capacity_source,
         "capacity_field_evidence": mapping["capacity_field_evidence"],
+        "capacity_calibers": calibers if calibers is not None else NA,
+        "capacity_calibers_note": calibers_note,
         "eviction_coverage": coverage,
         "occupancy_valid": occupancy_valid,
         "occupancy_note": occupancy_note,
         "violation_check": violation_check,
-        "violation_events": total_violations,
+        "violation_kind": violation_kind,
+        "violation_events": violation_events,
         "violation_instances": {str(k): v for k, v in
-                                sorted(replay.violation_by_instance.items())},
-        "max_exceed_bytes": replay.max_exceed_bytes,
+                                sorted(violation_instances.items())},
+        "max_exceed_bytes": max_exceed_bytes,
         "total_evict_events": replay.report.actions["evictions"],
         "total_evict_bytes": replay.report.actions["evict_bytes"],
         "partial_evictions": replay.report.actions["partial_evictions"],
@@ -1181,13 +2368,61 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
                     stat["residual_occupancy_bytes"],
                 "evict_events": stat["evict_events"],
                 "evict_bytes": stat["evict_bytes"],
-                "active_buckets": len(result["series"][instance]),
-                "violation_events":
-                    replay.violation_by_instance.get(instance, 0),
+                "interval_rows": len(cplog.units[instance].points),
+                "violation_events": violation_instances.get(instance, 0),
             }
-            for instance, stat in sorted(result["stats"].items())
+            for instance, stat in ((u, cplog.units[u].stats())
+                                   for u in units)
         },
     }
+    if journal_replay is not None:
+        summary["journal_replay"] = {
+            "journal_path": str(prep["journal_path"]),
+            "checksum_path": (str(prep["checksum_path"])
+                              if prep["checksum_present"] else None),
+            "sha256": journal_result["sha256_hex"],
+            "rows": journal_replay.rows,
+            "sequence_first": journal_replay.sequence_first,
+            "sequence_last": journal_replay.sequence_last,
+            "transaction_max": journal_replay.transaction_max,
+            "causes": journal_replay.causes,
+            "checks": journal_result["checks"],
+            "per_rank_final": journal_replay.final_rank_state(),
+            "per_rank_physical_violations": {
+                str(rank): count for rank, count in
+                sorted(journal_replay.violation_by_rank.items())},
+            "resident_hard_limit_exceed_events":
+                journal_replay.hard_limit_exceed_events,
+            "resident_hard_limit_exceed_ranks": {
+                str(rank): count for rank, count in
+                sorted(journal_replay.hard_limit_exceed_ranks.items())},
+        }
+        # 对照列：decision-log 重放（上界）per instance 峰值/残差——与
+        # journal 权威值的差 = 账本缺口可视化（17.24TB 幻影的对照面）。
+        comparison = {}
+        for instance in sorted({**{u: None for u in units},
+                                **{u: None for u in replay.cplog.units}}):
+            unit = replay.cplog.units.get(instance)
+            entry = {
+                "upper_bound_peak_occupancy_bytes":
+                    unit.peak if unit is not None and unit.has_event else NA,
+                "upper_bound_residual_occupancy_bytes":
+                    unit.occupancy if unit is not None and unit.has_event
+                    else NA,
+            }
+            auth = cplog.units.get(instance)
+            if auth is not None and auth.has_event:
+                entry["authoritative_peak_occupancy_bytes"] = auth.peak
+                entry["authoritative_residual_occupancy_bytes"] = \
+                    auth.occupancy
+                if isinstance(entry["upper_bound_peak_occupancy_bytes"],
+                              int):
+                    entry["peak_gap_bytes"] = (
+                        entry["upper_bound_peak_occupancy_bytes"]
+                        - auth.peak)
+            comparison[str(instance)] = entry
+        summary["decision_log_upper_bound_comparison"] = comparison
+
     print("", file=sys.stderr)
     emit_json(sys.stderr, summary)
     if args.json:
@@ -1199,34 +2434,49 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
             if jclose:
                 jstream.close()
 
-    if total_violations:
+    if violation_events and trust_tier == TRUST_TIER_CERTIFIED:
+        # 正式容量判决（仅 certified 层）：fail-loud。
         print("", file=sys.stderr)
-        print("!! [hbm-watermark] 容量违规：occupancy > capacity 共 "
-              f"{total_violations} 个事件点（实例分布 "
-              f"{summary['violation_instances']}，最大超出 "
-              f"{replay.max_exceed_bytes} B）——可能是重建口径错误，也可"
-              f"能是真实超卖；宁可报错不可静默，退出码 {EXIT_VIOLATION}",
+        print("!! [hbm-watermark] 容量违规（正式判决，per_rank_total_hbm_"
+              f"certified）：逐 rank physical > capacity_bytes 共 "
+              f"{violation_events} 个事件点（rank 分布 "
+              f"{summary['journal_replay']['per_rank_physical_violations']}，"
+              f"最大超出 {max_exceed_bytes} B）——manager 逐 rank 不变量"
+              f"被破坏；宁可报错不可静默，退出码 {EXIT_VIOLATION}",
               file=sys.stderr)
         return EXIT_VIOLATION
+    if violation_events:
+        # 非 certified 层：诊断报告（tier 已标注），不构成物理违规认证。
+        print("", file=sys.stderr)
+        print("[hbm-watermark] 超限诊断（非正式判决；trust_tier="
+              f"{trust_tier}）：{violation_kind} 共 {violation_events} 个"
+              f"事件点（实例分布 {summary['violation_instances']}，最大"
+              f"超出 {max_exceed_bytes} B）——tier 语义见 summary；"
+              f"退出码保持 0", file=sys.stderr)
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="hbm_watermark.py",
-        description="WP8 补充主数据源：离线重放 python 侧 ledger（decision "
-                    "log KV 动作 + plan manifest token 事实）重建每实例 "
-                    "HBM KV 占用水位线（时序 CSV + 峰值/均值/逐出/容量违"
-                    "规汇总）。fail-closed：缺文件/缺列/重放不一致即非零"
-                    "退出；容量违规退出码 3。")
+        description="WP8 补充主数据源：离线重放重建每实例 HBM KV 水位线"
+                    "（journal 权威重放或 decision-log 上界重放，四层可"
+                    "信度自动判定）→ RLE 权威区间 + 行预算绘图 series + "
+                    "事件流 stats + 逐 rank 三口径容量认证。fail-closed："
+                    "缺文件/缺列/重放不一致/journal 损坏即退出码 2；容量"
+                    "违规退出码 3 仅 per_rank_total_hbm_certified 层。")
     parser.add_argument("run_dir", type=Path,
                         help="运行目录（含 results/online_decision_log."
                              "jsonl、cpp.log；token manifest 与 "
-                             "trace_config 可自动定位或显式指定）")
+                             "trace_config 可自动定位或显式指定；含 "
+                             "results/kv_delta_journal.jsonl 时走 journal "
+                             "权威路径）")
     parser.add_argument("--manifest", type=Path, default=None,
                         help="slo_params_manifest.json（默认：脚本同目录；"
                              "watermark_sample_period_ns null → 5,000,000 ns"
-                             " 临时锚点并标 provisional）")
+                             " 临时锚点并标 provisional；"
+                             "watermark_series_row_budget 为绘图 series "
+                             "全局行预算）")
     parser.add_argument("--token-manifest", type=Path, default=None,
                         help="token manifest（manifest.json：requests[]."
                              "prefill_context_tokens/final_context_tokens/"
@@ -1238,13 +2488,18 @@ def main() -> int:
                              "长度）")
     parser.add_argument("--trace-config", type=Path, default=None,
                         help="trace_config.csv（config 行 layers/hidden_size/"
-                             "bytes_per_elem/local_hbm_capacity_profile）")
+                             "bytes_per_elem/local_hbm_capacity_profile 及三"
+                             "口径剖面所需模型行）")
     parser.add_argument("--hardware-config", type=Path, default=None,
                         help="hardware json（local-hbm.capacity-profiles；"
                              "默认搜脚本所在仓 sh_test_mesh/hardware/）")
+    parser.add_argument("--intervals-csv", default="",
+                        help="权威 RLE 变点区间 CSV（'-'=stdout；缺省写 "
+                             "run_dir/slo_hbm_intervals.csv）")
     parser.add_argument("-o", "--output", default="",
-                        help="逐实例桶时序 CSV（'-'=stdout；缺省写 run_dir/"
-                             "slo_hbm_watermark_series.csv）")
+                        help="绘图 series CSV（行预算约束；'-'=stdout；"
+                             "缺省写 run_dir/slo_hbm_plot_series.csv；旧产"
+                             "物名 slo_hbm_watermark_series.csv 已退役）")
     parser.add_argument("--instances-csv", default="",
                         help="逐实例汇总 CSV（缺省写 run_dir/"
                              "slo_hbm_watermark_instances.csv）")

@@ -107,12 +107,12 @@ struct DecisionEvent {
     DecisionPayload payload;
 };
 
-/// One per-node terminal fact (schema v1, phase 4): every node terminal
-/// (or skip) recorded by the online CompletionObserver hook since the
-/// previous delivery epoch. terminal_status follows NodeTerminalStatus
-/// (0 = Success, 1 = Skipped). Audit/reconciliation input only -- never a
-/// strategy decision input (红线 §0.4). See
-/// online_contracts/state_delta_v1.md §5.2.
+/// One legacy per-node terminal-fact wire record. Production deliberately
+/// does not retain or serialize these facts: completed_nodes stays present as
+/// an empty schema field. ASTRA_SIM_ONLINE_COMPLETED_NODES=exact enables this
+/// record for deep audit/replay only. terminal_status follows
+/// NodeTerminalStatus (0 = Success, 1 = Skipped); it is never a strategy
+/// decision input (红线 §0.4). See online_contracts/state_delta_v1.md §5.2.
 struct CompletedNodeFact {
     int rank = 0;
     uint64_t node_id = 0;
@@ -121,6 +121,49 @@ struct CompletedNodeFact {
     uint64_t generation = 0;
     uint64_t tick = 0;
     int terminal_status = 0;
+};
+
+/// Run-lifetime terminal accounting. These counters include terminal nodes
+/// that complete after the final bridge delivery (for example an end-barrier
+/// control tail), so the online run-end audit can fail closed against the
+/// GraphBatchCommitter's total committed-node count without keeping node
+/// metadata or JSON facts resident. `other` is an invalid observer status.
+struct CompletedFactCounters {
+    uint64_t total = 0;
+    uint64_t success = 0;
+    uint64_t skipped = 0;
+    uint64_t other = 0;
+};
+
+/// Per-delivery terminal-fact collector. Default production mode updates only
+/// CompletedFactCounters and drains an empty completed_nodes array. The
+/// explicit ASTRA_SIM_ONLINE_COMPLETED_NODES=exact mode retains the frozen
+/// legacy per-node records for deep audit/replay. The collector is
+/// simulation-thread-only, matching CompletionObserver's contract.
+class CompletedFactAccumulator {
+  public:
+    CompletedFactAccumulator();
+
+    void record(int rank, uint64_t node_id, const char* request_id,
+                const char* stage, uint64_t generation, uint64_t tick,
+                int terminal_status);
+
+    /// Transfer this delivery's exact-audit records and reset that buffer.
+    std::vector<CompletedNodeFact> drain();
+    [[nodiscard]] size_t size() const;
+    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
+    [[nodiscard]] const CompletedFactCounters& counters() const {
+        return counters_;
+    }
+
+    /// Test/embedding override. It is only legal before the first terminal,
+    /// preventing one run from silently switching its audit representation.
+    void set_exact_mode(bool exact_mode);
+
+  private:
+    bool exact_mode_ = false;
+    std::vector<CompletedNodeFact> exact_facts_;
+    CompletedFactCounters counters_;
 };
 
 /// Snapshot handle (schema v1, phase 4): a placeholder until phase 7 wires

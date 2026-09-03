@@ -77,8 +77,8 @@ class SameTickMilestoneHandler:
             "is_timer_op": False,
             "inputs_values": "",
             "compute": {"num_ops": 0, "tensor_size": 0, "runtime_ns": 0},
-            "comm": {},
-            "coll": {},
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "coll": {"comm_type": 0, "bytes": 0, "priority": 0, "pg_name": "", "involved_dim": []},
         }
 
     @staticmethod
@@ -95,8 +95,8 @@ class SameTickMilestoneHandler:
             "is_timer_op": False,
             "inputs_values": "",
             "compute": {"num_ops": 1, "tensor_size": 1, "runtime_ns": 1},
-            "comm": {},
-            "coll": {},
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "coll": {"comm_type": 0, "bytes": 0, "priority": 0, "pg_name": "", "involved_dim": []},
         }
 
     def __call__(self, request):

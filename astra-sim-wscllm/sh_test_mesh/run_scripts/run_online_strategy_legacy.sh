@@ -59,10 +59,62 @@ rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
 
+# P2(2026-08-28):per-request manifest 拷入 run_dir 根——run_dir 自包含、
+# 与仓还原状态解耦(slo_common.load_request_manifest 优先级:run_dir/
+# metrics_manifest.json > cpp.log init 行指向的 generated/ 副本;裸仓还原
+# 会删 generated/,且仓内副本每仿真点重写、跨点不可复现)。legacy 变体
+# 的 ET_DIR 指向调用方物化的 legacy 基线目录,拷贝同样生效。
+cp "${ET_DIR}/metrics_manifest.json" "${RUN_DIR}/metrics_manifest.json"
+if [ -f "${ET_DIR}/manifest.json" ]; then
+  cp "${ET_DIR}/manifest.json" "${RUN_DIR}/manifest.json"
+fi
+
+# A1/C1/D3(2026-08-28)降耗开关(runner 默认值,env 可覆盖;同
+# run_online_strategy.sh)。legacy 变体 Python 侧不接 B3 sink(裁决),
+# C++ 侧开关与主变体一致。
+export ASTRA_LINK_OBSERVER="${ASTRA_LINK_OBSERVER:-0}"
+# PYTHONUNBUFFERED（收尾批 2026-09-01 补，与主 runner 对齐）：python3 -u 已
+# 在启动行，此处防御性冗余——确保 Python 侧异常/楔死痕迹及时落 python.log。
+export PYTHONUNBUFFERED=1
+
+# 桥侧看门狗（收尾批 2026-09-01 补装，与主 runner 统一；此前本 runner 完全
+# 未武装——楔死实证：Python 启动即死(missing queue)后 C++ 桥轮询空等
+# 2h53m，现场 face_full_tracelab/d_legacy_c30_wedge_no_bridge_timeout/）：
+# BRIDGE_TIMEOUT_MS 三态语义（与 run_online_strategy.sh 同款）：
+#   未设/空  -> 缺省 120000（campaign 常态；值必须大于本负载最慢单决策耗时，
+#               且大于 Python 服务启动的 FIFO 开启等待——实际下界秒级，
+#               建议 >=10000=10s，过小会在启动窗口 abort C++）；
+#   显式 =0  -> 永等（冻结旧默认的逃生口：桥侧 poll 不设超时）；
+#   正值     -> 该值（毫秒）。
+# 定位：只武装 C++ 桥的两处 response poll（覆盖"Python 侧单次决策交换停滞"
+# 族，含 Python 启动即死形态）；管不到 wait_for_work() 停泊族（wscllm 无
+# input-open 死端 fail-loud 分支，合同 §2.1——由 --idle-watchdog-s 墙钟
+# 看门狗兜住）。
+# 监督纪律：终止长跑用 SIGTERM（kill <pid>），勿用 SIGINT/Ctrl-C；疑似楔死
+# 先保留 bridge 目录盘态与双方 /proc/<pid>/{wchan,syscall,stack} 再清理。
+BRIDGE_TIMEOUT_MS="${BRIDGE_TIMEOUT_MS:-120000}"
+BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
+
+# FP3 (2026-09-01, sync-A16 batch P; 合同 §2.3/P3)：可选透传
+# SH_REQUEST_WINDOW_ROWS——与 run_online_strategy.sh 同款。缺省不传（C++
+# 侧 --request-window-rows 缺省 128）。wscllm（sync-A16 批次4）：本仓窗口
+# 为 advisory（calendar reader 按 arrival 序提交，窗口值不改变任何行为；
+# 无 C++ 启动 span 预检——不设 A1 拒绝门，合同 §3.1），0/正数照原 token
+# 透传仅为 CLI/checkpoint 兼容口径统一；非法 token 原样交给 C++ 统一
+# fail-closed，runner 不自行吞掉。
+WINDOW_ROWS_ARGS=()
+if [[ -n "${SH_REQUEST_WINDOW_ROWS:-}" ]]; then
+  WINDOW_ROWS_ARGS=(--request-window-rows "${SH_REQUEST_WINDOW_ROWS}")
+fi
+
 # C++ first: creates the bridge dir + FIFOs (decision_bridge contract).
 "${BIN}" \
   --online-mode strategy \
   --bridge-dir "${RUN_DIR}/bridge" \
+  --online-node-gc "${SH_ONLINE_NODE_GC:-1}" \
+  --online-validate "${SH_ONLINE_VALIDATE:-0}" \
+  "${BRIDGE_TIMEOUT_ARGS[@]}" \
+  "${WINDOW_ROWS_ARGS[@]}" \
   --request-queue-csv "${REQUEST_CSV}" \
   --close-input \
   --workload-configuration="${ET_PREFIX}" \
@@ -126,7 +178,7 @@ fi
 # 分目录;失败保留 bridge 为调试证据)。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log; do
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))
@@ -142,6 +194,24 @@ fi
 CP_COUNT=$(find "${RUN_DIR}/bridge/checkpoints" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
 # Backport 2026-08-16 (对比报告 §5.3): ls with a >2e4-entry glob exceeds
 # ARG_MAX (E2BIG, exit 126 under set -e) -- count via find instead.
-REQ_COUNT=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l)
-echo "[run_online_strategy_legacy] artifacts: ${ARCHIVED} archived -> results/; checkpoints=${CP_COUNT}; request retained=${REQ_COUNT}"
+echo "[run_online_strategy_legacy] artifacts: ${ARCHIVED} jsonl archived -> results/; checkpoints=${CP_COUNT}; request_journal=results/request_journal.jsonl"
+# P3(2026-08-28):仿真成功后自动 SLO 指标提取(postprocess 成功之后、
+# archive_run_outputs.sh 之前:cpp.log 未压缩、manifest 已拷入、results/
+# 已归位,输入全齐;产物随保留集常驻,最细粒度纪律见脚本头注)。
+# SH_SLO_POSTPROCESS: 1=默认 warn(子命令失败只写 slo_postprocess.FAIL,
+# 不推翻仿真结果); 0=整步跳过; strict=失败即本 runner 非零退出。
+SLO_MODE="${SH_SLO_POSTPROCESS:-1}"
+if [[ "${SLO_MODE}" != "0" ]]; then
+  if ! bash "${SCRIPT_DIR}/run_slo_postprocess.sh" "${RUN_DIR}"; then
+    if [[ "${SLO_MODE}" == "strict" ]]; then
+      echo "[run_online_strategy_legacy] FAIL: SLO postprocess failed (SH_SLO_POSTPROCESS=strict)" >&2
+      exit 1
+    fi
+    echo "[run_online_strategy_legacy] WARN: SLO postprocess failures flagged in ${RUN_DIR}/slo_postprocess.FAIL (warn mode)" >&2
+  fi
+fi
+# D1(2026-08-28):成功后产物瘦身归档(SH_ARCHIVE_RUN=0 关闭)。
+if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
+  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" || exit 1
+fi
 echo "[run_online_strategy_legacy] PASS: ${RUN_DIR}"

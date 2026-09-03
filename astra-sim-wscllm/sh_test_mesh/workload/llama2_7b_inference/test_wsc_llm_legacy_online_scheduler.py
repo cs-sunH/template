@@ -237,6 +237,16 @@ def _assigned(batch):
     return {assignment["request_id"] for assignment in batch["assignments"]}
 
 
+def _completion_decision(scheduler, request_id):
+    """返回已持久化的 completion 决策；运行时对象会在 request-complete
+    边界回收，不能在该边界之后从 runtime_by_request_id 读取。"""
+    rows = [row for row in scheduler.online_log_rows
+            if row["kind"] == "completion"
+            and row["request_id"] == request_id]
+    assert len(rows) == 1
+    return rows[0]["decision"]
+
+
 # --------------------------------------------------------------------- 红线 --
 
 
@@ -281,8 +291,8 @@ def test_kv_actions_always_empty_and_terminal_payload():
         _complete("fx_s0_r0", "decode"), _complete("fx_s0_r0", "")])
     assert batch2["kv_actions"] == []
     scheduler.verify_run_end()
-    assert scheduler.runtime_by_request_id[
-        "fx_s0_r0"].terminal_kv_release_at_completion
+    assert _completion_decision(
+        scheduler, "fx_s0_r0")["terminal_kv_release_at_completion"] is True
     assert list(scheduler.allocator.remaining_capacity) == initial
     payload = scheduler.kv_event_payload_legacy()
     assert payload["policy"] == "wsc_relevant_pd_static_decode_domain"
@@ -442,7 +452,8 @@ def test_fcfs_head_of_line_blocking_and_recheck():
                                _complete("fx_sA_r0", "")])
     assert b.kv_allocation is not None  # 阻塞解除
     assert "fx_sB_r0" in _watched_requests(batch4)
-    assert a.terminal_kv_release_at_completion
+    assert _completion_decision(
+        scheduler, "fx_sA_r0")["terminal_kv_release_at_completion"] is True
 
     # seq5-6: B 完成(terminal 释放)。
     _apply(scheduler, 5, 5000, completed=[_complete("fx_sB_r0", "prefill")])
@@ -486,6 +497,7 @@ def test_turn1_history_release_and_decision_log_legacy_scope():
 
     _apply(scheduler, 0, 1000, arrivals=[
         _arrival(turn0_slots[0], "fx_s1_r0", "fx_s1", 0)])
+    r0_decode_instance_index = by_id["fx_s1_r0"].decode_instance_index
     assert sum(scheduler.allocator.remaining_capacity) == \
         initial_total - r0_bytes
     _apply(scheduler, 1, 2000, completed=[_complete("fx_s1_r0", "prefill")])
@@ -518,7 +530,7 @@ def test_turn1_history_release_and_decision_log_legacy_scope():
     assert sum(scheduler.allocator.remaining_capacity) == \
         initial_total - r1_final_bytes
     assert r1.history_source_instance_index == \
-        by_id["fx_s1_r0"].decode_instance_index
+        r0_decode_instance_index
     assert r1.history_transfer_bytes == r0_bytes
     # 决策日志:legacy 口径 history_action = NO_HISTORY(离线 decision_log
     # 同字段);构图字段为 NOC_MIGRATE(_plan_dict)。
@@ -528,7 +540,7 @@ def test_turn1_history_release_and_decision_log_legacy_scope():
     assert len(prefill_rows) == 1
     assert prefill_rows[0]["decision"]["history_action"] == "NO_HISTORY"
     assert prefill_rows[0]["decision"]["history_source_instance_index"] == \
-        by_id["fx_s1_r0"].decode_instance_index
+        r0_decode_instance_index
     assert prefill_rows[0]["decision"]["history_transfer_bytes"] == r0_bytes
     # 构图:turn-1 用 NOC_MIGRATE(单 history transfer,共享构图器分支)。
     plan = scheduler._plan_dict(r1)
@@ -541,7 +553,8 @@ def test_turn1_history_release_and_decision_log_legacy_scope():
     _apply(scheduler, 5, 5000 + interval, completed=[
         _complete("fx_s1_r1", "decode"), _complete("fx_s1_r1", "")])
     scheduler.verify_run_end()
-    assert by_id["fx_s1_r1"].terminal_kv_release_at_completion
+    assert _completion_decision(
+        scheduler, "fx_s1_r1")["terminal_kv_release_at_completion"] is True
     assert list(scheduler.allocator.remaining_capacity) == \
         list(scheduler.allocator.initial_capacity)
 
@@ -575,6 +588,7 @@ def test_full_run_verify_and_decision_log_shape():
         _arrival(turn0_slots[0], "fx_x_r0", "fx_x", 0),
         _arrival(turn0_slots[1], "fx_y_r0", "fx_y", 0),
     ])
+    y0_decode_instance_index = by_id["fx_y_r0"].decode_instance_index
     assert set(_watched_requests(batch0)) == {"fx_x_r0", "fx_y_r0"}
 
     # seq1: 两 prefill 完成;decode 0 队首整段发射 = 只发射 fx_x_r0 的
@@ -613,7 +627,7 @@ def test_full_run_verify_and_decision_log_shape():
                  interval_ns=interval)])
     assert "fx_y_r1" in _watched_requests(batch4)
     assert by_id["fx_y_r1"].history_source_instance_index == \
-        by_id["fx_y_r0"].decode_instance_index
+        y0_decode_instance_index
 
     # seq5-6: turn-1 完成(terminal)。
     _apply(scheduler, 5, 5000 + interval,

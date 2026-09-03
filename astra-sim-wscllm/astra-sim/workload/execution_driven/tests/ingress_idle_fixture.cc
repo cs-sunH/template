@@ -34,6 +34,10 @@ Scenarios (方案 §4 步骤 1-2 操作 6, amended step 1-10):
      child, draining an Error command must abort (SIGABRT); the parent
      asserts the child died by signal (NOT by a clean exit -- the old
      silent-close behavior would have exited 0).
+  8. Close-vs-Submit race: close and one producer contend on the same ingress
+     mutex. The Submit is either accepted before close and fully drained, or
+     rejected after close; every later Submit is rejected and no command is
+     left behind at the finished exit.
 
 Expected state-transition log across all scenarios: 2 (scenario 1), 4
 (scenario 2), 2 (scenario 3), 2 (scenario 4; the log records the NEW state
@@ -55,9 +59,11 @@ Build (from template/astra-sim-wscllm):
 #include <unistd.h>
 
 #include <cassert>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <csignal>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -92,7 +98,8 @@ void run_loop(Fixture& f) {
     // submitted before a Close are never dropped).
     while (true) {
         f.ingress.drain_commands();
-        if (f.svc.finished()) {
+        if (f.svc.finished() &&
+            f.ingress.pending_command_count() == 0) {
             break;
         }
         if (f.eq.finished()) {
@@ -195,6 +202,10 @@ void scenario4_eof_command(Fixture& f) {
     IngressCommand eof;
     eof.kind = IngressCommandKind::EndOfFile;
     assert(f.ingress.enqueue_command(eof));
+    IngressCommand after_eof;
+    after_eof.kind = IngressCommandKind::Submit;
+    after_eof.envelope.request_id = "must_be_rejected_after_eof";
+    assert(!f.ingress.enqueue_command(after_eof));
 
     run_loop(f);
 
@@ -272,6 +283,99 @@ void scenario6_error_command_aborts() {
     }
 }
 
+void scenario7_transition_log_is_bounded() {
+    ServiceCoordinator svc;
+    uint64_t hook_count = 0;
+    svc.set_transition_hook(
+        [&hook_count](ServiceState, ServiceState) { ++hook_count; });
+
+    constexpr uint64_t cycles =
+        ServiceCoordinator::kTransitionLogCapacity / 2 + 16;
+    for (uint64_t i = 0; i < cycles; ++i) {
+        svc.on_command_accepted();
+        svc.on_alarm_scheduled();
+        svc.on_request_arrived();
+        svc.on_request_completed();
+    }
+    svc.mark_input_closed();
+
+    const uint64_t transitions = cycles * 2 + 2;
+    assert(svc.finished());
+    assert(svc.transition_log().size() ==
+           ServiceCoordinator::kTransitionLogCapacity);
+    assert(svc.transition_log_dropped() ==
+           transitions - ServiceCoordinator::kTransitionLogCapacity);
+    assert(hook_count == transitions);
+    for (std::size_t i = 0; i < svc.transition_log().size(); ++i) {
+        assert(svc.transition_log()[i] ==
+               (i % 2 == 0 ? ServiceState::ACTIVE : ServiceState::IDLE));
+    }
+
+    std::printf("[fixture] scenario 7 PASS: transition memory is capped at "
+                "%zu entries while hook observed all %llu transitions\n",
+                ServiceCoordinator::kTransitionLogCapacity,
+                static_cast<unsigned long long>(transitions));
+}
+
+void scenario8_close_submit_race_is_linearized() {
+    constexpr int kRounds = 128;
+    int accepted_before_close = 0;
+    for (int round = 0; round < kRounds; ++round) {
+        Fixture f;
+        f.ingress.set_arrival_hook(
+            [&f](const RequestEnvelope&) { f.svc.on_request_completed(); });
+
+        std::atomic<int> ready{0};
+        std::atomic<bool> go{false};
+        std::atomic<bool> accepted{false};
+        std::thread producer([&]() {
+            IngressCommand cmd;
+            cmd.kind = IngressCommandKind::Submit;
+            cmd.envelope.session_id = "race";
+            cmd.envelope.turn_index = 0;
+            cmd.envelope.request_id = "race_" + std::to_string(round);
+            cmd.envelope.prefill_length = 1;
+            cmd.envelope.decode_length = 1;
+            cmd.envelope.arrival_world_ns = 1000;
+            ready.fetch_add(1);
+            while (!go.load()) {
+                std::this_thread::yield();
+            }
+            accepted.store(f.ingress.enqueue_command(std::move(cmd)));
+        });
+        std::thread closer([&]() {
+            ready.fetch_add(1);
+            while (!go.load()) {
+                std::this_thread::yield();
+            }
+            f.ingress.mark_input_closed();
+        });
+        while (ready.load() != 2) {
+            std::this_thread::yield();
+        }
+        go.store(true);
+        producer.join();
+        closer.join();
+
+        // This attempt is strictly after mark_input_closed() returned.
+        IngressCommand after_close;
+        after_close.kind = IngressCommandKind::Submit;
+        after_close.envelope.request_id = "post_close";
+        assert(!f.ingress.enqueue_command(std::move(after_close)));
+
+        run_loop(f);
+        const uint64_t expected = accepted.load() ? 1 : 0;
+        accepted_before_close += static_cast<int>(expected);
+        assert(f.ingress.pending_command_count() == 0);
+        assert(f.svc.accepted_request_count() == expected);
+        assert(f.svc.completed_request_count() == expected);
+        assert(f.svc.finished());
+    }
+    std::printf("[fixture] scenario 8 PASS: %d close-vs-submit races "
+                "linearized (%d accepted-before-close, remainder rejected)\n",
+                kRounds, accepted_before_close);
+}
+
 void scenario2_inject_at_ticks(Fixture& f) {
     // request-neutral startup: no requests yet
     assert(f.svc.state() == ServiceState::IDLE);
@@ -340,6 +444,70 @@ void scenario2_inject_at_ticks(Fixture& f) {
 
 }  // namespace
 
+namespace {
+
+// FP1 (2026-09-01, sync-A16 batch P; contract §2.4/E9/E26): the checked
+// deadline helper is a pure function over its inputs -- every failure mode
+// leaves out_deadline untouched, and the near-max now() exercises the
+// pre-addition bound (the addition itself would overflow time_point).
+void scenario9_checked_deadline_bounds() {
+    using clk = std::chrono::steady_clock;
+    clk::time_point out;
+    const clk::time_point now = clk::now();
+
+    // normal value succeeds and produces a deadline after now
+    out = clk::time_point::min();
+    assert(ServiceCoordinator::checked_wait_deadline(1.5, now, out));
+    assert(out > now);
+    // tiny-but-legal sub-second values arm at least one tick
+    assert(ServiceCoordinator::checked_wait_deadline(0.001, now, out));
+    // 0 / negative / non-finite fail (helper keeps the 0-fails contract;
+    // the CLI layer treats 0 as "off" and never calls it with 0)
+    for (const double bad : {0.0, -1.0, -0.0,
+                             std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN()}) {
+        clk::time_point sentinel = now + std::chrono::hours(1);
+        assert(!ServiceCoordinator::checked_wait_deadline(bad, now, sentinel));
+        assert(sentinel == now + std::chrono::hours(1));
+    }
+    // above duration::max() in the tick domain fails (1e9 s parses at the
+    // CLI but a value beyond the clock's representable range must not)
+    assert(!ServiceCoordinator::checked_wait_deadline(9.3e9, now, out));
+    assert(!ServiceCoordinator::checked_wait_deadline(1e308, now, out));
+    // a sub-tick positive value converts to a zero duration -> reject
+    assert(!ServiceCoordinator::checked_wait_deadline(1e-12, now, out));
+    // near time_point::max now(): the pre-addition bound fires (the add
+    // would overflow) even for a tiny timeout, and out stays untouched
+    const clk::time_point near_max =
+        clk::time_point::max() - std::chrono::hours(1);
+    clk::time_point sentinel2 = now;
+    assert(!ServiceCoordinator::checked_wait_deadline(3600.0 * 24.0 * 3.0,
+                                                      near_max, sentinel2));
+    assert(sentinel2 == now);
+
+    // wait_for_work_until semantics on a live coordinator: a timeout
+    // consumes nothing (a racing signal stays pending), a wake consumes
+    // wakeup_pending_ exactly like wait_for_work.
+    ServiceCoordinator svc;
+    const auto deadline = clk::now() + std::chrono::milliseconds(50);
+    assert(!svc.wait_for_work_until(deadline));  // input open, no signal
+    svc.signal_work();                           // pending, not yet consumed
+    const bool woke = svc.wait_for_work_until(clk::now() +
+                                              std::chrono::seconds(30));
+    assert(woke);
+    // the consumed pending flag is observable: a second bounded wait with
+    // no new signal and the input still open must time out again
+    assert(!svc.wait_for_work_until(clk::now() +
+                                    std::chrono::milliseconds(20)));
+
+    std::printf("[fixture] scenario 9 PASS: checked_wait_deadline bounds "
+                "(0/neg/non-finite/over-duration/sub-tick/near-max) + "
+                "wait_for_work_until consume-on-wake-only semantics\n");
+}
+
+}  // namespace
+
 int main() {
     {
         Fixture f;
@@ -359,7 +527,12 @@ int main() {
     }
     scenario5_overflow_audit();
     scenario6_error_command_aborts();
+    scenario7_transition_log_is_bounded();
+    scenario8_close_submit_race_is_linearized();
+    scenario9_checked_deadline_bounds();
     std::printf("[fixture] ALL PASS: 10 state transitions logged "
-                "(2 + 4 + 2 + 2) + overflow audit + fail-closed abort\n");
+                "(2 + 4 + 2 + 2) + overflow audit + fail-closed abort + "
+                "bounded transition audit + close/submit linearization + "
+                "FP1 checked-deadline bounds\n");
     return 0;
 }

@@ -271,8 +271,11 @@ nlohmann::json build_request_json(const StateDelta& delta) {
 // -------------------------------------------------------------- FileBridge --
 
 FileDecisionBridge::FileDecisionBridge(std::string bridge_dir,
-                                       const int timeout_ms)
-    : bridge_dir_(std::move(bridge_dir)), timeout_ms_(timeout_ms) {}
+                                       const int timeout_ms,
+                                       const int num_ranks)
+    : bridge_dir_(std::move(bridge_dir)),
+      timeout_ms_(timeout_ms),
+      num_ranks_(num_ranks) {}
 
 FileDecisionBridge::~FileDecisionBridge() {
     if (req_notify_fd_ >= 0) {
@@ -510,27 +513,34 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                      std::to_string(seq));
     }
 
-    GraphBatch batch;
-    batch.source_delivery_sequence = seq;
-    batch.batch_id = resp.value("batch_id", uint64_t(0));
+    // Error before structure (frozen ordering, rule T3/O4): a decision
+    // failure aborts with the Python error message, never with a misleading
+    // structural diagnostic -- the _fail skeleton carries all-empty arrays
+    // and would parse cleanly anyway.
     const std::string error = resp.value("error", std::string());
     if (!error.empty()) {
         bridge_fatal("Python decision failed for delivery_sequence=" +
                      std::to_string(seq) + ": " + error);
     }
-    batch.nodes = resp.value("nodes", nlohmann::json::array());
-    batch.parent_edges = resp.value("parent_edges", nlohmann::json::array());
-    batch.watches = resp.value("watches", nlohmann::json::array());
-    batch.assignments = resp.value("assignments", nlohmann::json::array());
-    batch.kv_actions = resp.value("kv_actions", nlohmann::json::array());
-    batch.future_alarms = resp.value("future_alarms", nlohmann::json::array());
-    // Phase 5 (方案 §8.2): the Python-computed touched rank set. Absent in
-    // pre-phase-5 fixtures (has_touched_ranks = false -> the committer
-    // recomputes and skips the cross-check); the online service always
-    // emits it.
-    if (resp.contains("touched_ranks")) {
-        batch.has_touched_ranks = true;
-        batch.touched_ranks = resp["touched_ranks"];
+
+    // C1 (2026-08-29): ONE structural parse into the typed ParsedGraphBatch.
+    // The pre-C1 path moved the six DOM arrays into the batch and let
+    // validate / liveness-preflight / commit assembly / anchor registration
+    // re-extract every field (four full DOM walks per batch, each .value()
+    // a std::map lookup + variant conversion + std::string deep copy). All
+    // of that collapses into this single pass; the response DOM (resp) is
+    // destroyed when this function returns. parse_graph_batch is a pure
+    // local construction -- a ParseError unwinds only local vectors, so the
+    // abort below leaves zero state side effects anywhere. The response
+    // file also survives (post-mortem evidence; the unlink is only on the
+    // success path).
+    GraphBatch batch;
+    try {
+        batch = parse_graph_batch(resp, num_ranks_);
+    } catch (const ParseError& exc) {
+        bridge_fatal(std::string("malformed GraphBatch response for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
     }
     // Phase 6 (方案 §9.1): round-trip accounting. B1 (2026-08-23): the
     // response contribution to channel_bytes is the on-disk response file
@@ -561,9 +571,10 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // decision-sequence evidence the idempotency fixture replays) plus the
     // in-flight response. Measured on the frozen 20.csv first-30s input:
     // response files are ~202 MB of the ~252 MB bridge footprint. The
-    // request files are intentionally NOT deleted (idempotency_fixture
-    // replays them; audit retention, bounded by the fixed input). On the
-    // fail-closed paths above the response stays on disk for post-mortem.
+    // Python journals each successfully handled request into one ordered
+    // request_journal.jsonl and retires loose request files in bounded batches;
+    // idempotency/audit readers accept that journal and the legacy loose layout.
+    // On fail-closed paths the response stays on disk for post-mortem.
     if (::unlink(response_path(seq).c_str()) != 0) {
         bridge_fatal("unlink response " + response_path(seq) + ": " +
                      std::strerror(errno));

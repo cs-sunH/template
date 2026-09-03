@@ -10,6 +10,10 @@ state, or capacity-driven remapping in this implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import functools
+import hashlib
+import json
+import os
 from typing import Any, Iterable, Optional, Sequence
 
 
@@ -20,13 +24,37 @@ LOCAL_HIT = "LOCAL_HIT"
 NOC_MIGRATE = "NOC_MIGRATE"
 RECOMPUTE = "RECOMPUTE"
 
+# B1 已消费前缀的摊销压缩水位(2026-08-28,风格对齐 graph_batch_builder
+# 的 M1 压缩):_events 已消费水位达到该值且不小于现存总量一半时才整段
+# 删除前缀,均摊 O(1)/事件。
+_EVENTS_COMPACT_THRESHOLD = 8192
+
 # Read-only metrics observation (implementation doc sec.7).  When a recorder
 # is installed through set_metrics_observer(), every state mutation below is
 # mirrored to it *after* the mutation completes; the recorder never feeds
 # anything back into admission, eviction, or placement decisions.  When no
 # recorder is installed (the default) none of the observation bookkeeping
 # runs at all, so behavior and performance are unchanged.
+#
+# P1 权威 HBM delta journal(2026-08-30):recorder 处于 journal 模式
+# (MemoryActionRecorder(journal_path=...))时,manager 每次公开 mutation 构成
+# 一个 journal 事务(③):入口 begin,内部嵌套的公开复用(如 reserve 内的
+# enforce_watermark)只加深深度并入同一事务;最外层正常返回 = commit 点,
+# 在 _check_invariants_after_mutation 已逐内层通过之后执行 ④ 逐 rank 对账
+# (manager 实际状态 vs journal before+Σdelta 推出的 after)。journal 是纯
+# 观测旁路:不改任何准入/逐出/放置决策,不改变任何返回值。
 _METRICS_RECORDER: Any = None
+
+
+def _strict_kv_invariants_from_environment() -> bool:
+    """Return whether every mutation must also run the complete audit."""
+
+    return os.environ.get("SH_STRICT_KV_INVARIANTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def set_metrics_observer(recorder: Any) -> None:
@@ -53,6 +81,52 @@ def _metrics_anchor_for_phase(phase: str) -> str:
         "prefill_decode": "decode_start",
         "completion": "completion",
     }.get(phase, "stage_boundary")
+
+
+def _journal_transaction(method: Any) -> Any:
+    """③ 公开 mutation = journal 事务(原子校验边界)装饰器。
+
+    语义(doc §6-P1 ③/④):
+    - recorder 未装或非 journal 模式:透传,零开销零行为差(journal 是
+      纯观测旁路,关闭时与改前逐字节一致)。
+    - 最外层公开调用:入口向 recorder 申请单调 transaction_id(journal
+      各行携带该 id);正常返回 = commit 点,此时方法体内的全部
+      _check_invariants_after_mutation 已通过,随即执行 ④ 逐 rank 对账
+      _journal_reconcile_transaction(manager 快照 vs journal 记账)。
+    - 嵌套公开复用(retire_terminal_session 内部的 release_request_
+      capacity、reserve 内部的 enforce_watermark/ensure_physical_fit 等):
+      深度 +1 并入外层同一事务,不另起 id——事务粒度 = 调度器视角的一次
+      manager 公开 mutation。
+    - 异常路径:放弃事务登记(abort),不执行对账(避免二次异常掩盖
+      原始错误);已写出的部分行保留在 journal 中,本轮 run 本就
+      fail-closed 终止。
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: "SessionKVCacheManager", *args: Any, **kwargs: Any) -> Any:
+        recorder = self._metrics_recorder
+        if recorder is None or not recorder.journal_enabled:
+            return method(self, *args, **kwargs)
+        if self._journal_transaction_depth:
+            self._journal_transaction_depth += 1
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                self._journal_transaction_depth -= 1
+        recorder.begin_transaction()
+        self._journal_transaction_depth = 1
+        try:
+            result = method(self, *args, **kwargs)
+        except BaseException:
+            self._journal_transaction_depth = 0
+            recorder.abort_transaction()
+            raise
+        self._journal_transaction_depth = 0
+        transaction_id, ranks = recorder.finish_transaction()
+        self._journal_reconcile_transaction(transaction_id, ranks)
+        return result
+
+    return wrapper
 
 
 def _require_nonnegative_int(value: int, name: str) -> None:
@@ -378,8 +452,11 @@ class SessionKVCacheManager:
         model: Any,
         *,
         reserve_context_tokens: int = 1_000_000,
+        strict_invariants: Optional[bool] = None,
     ) -> None:
         _require_nonnegative_int(reserve_context_tokens, "reserve_context_tokens")
+        if strict_invariants is not None and not isinstance(strict_invariants, bool):
+            raise ValueError("strict_invariants must be a bool or None")
         instances = tuple(topology.instances)
         if not instances:
             raise ValueError("at least one TP instance is required")
@@ -421,19 +498,37 @@ class SessionKVCacheManager:
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, RequestCapacityReservation] = {}
         self._events: list[KVCacheEvent] = []
+        # B1(2026-08-28):kv 事件流水号独立于列表位置——前缀压缩后
+        # len(self._events) 不再可用作 event_index(会与存活事件撞号),
+        # 改由单调计数器分配,流内 event_index 语义/取值与改前一致。
+        self._event_index_next = 0
         # A blocked request can be reconsidered many times while unrelated
         # active Decode work advances.  Keep the audit trail bounded: retain
         # the first pressure observation and one explicit retry per request /
         # phase / target rather than appending an identical event per token.
         self._pressure_event_keys: set[tuple[str, str, str, int]] = set()
+        # Completion must retire the dedup keys of every turn, not merely the
+        # terminal turn.  Keep an ownership index so retirement is O(keys for
+        # this request) instead of rebuilding the process-wide set each time.
+        self._pressure_event_keys_by_request: dict[
+            str, set[tuple[str, str, str, int]]
+        ] = {}
         self._deferred_instances: set[int] = set()
+        self._strict_kv_invariants = (
+            _strict_kv_invariants_from_environment()
+            if strict_invariants is None
+            else strict_invariants
+        )
         self._check_invariants()
+        self._initialize_incremental_invariants()
         # Metrics observation state (doc sec.7.4): resident KV is tracked as
         # per-session segments so that chiplet-projection removes always walk
         # back the exact recorded distribution of an earlier add.
         self._metrics_recorder = _METRICS_RECORDER
         self._metrics_segments: dict[str, dict[str, list[Any]]] = {}
         self._metrics_segment_counters: dict[str, int] = {}
+        # ③ journal 事务深度(0 = 无事务;公开 mutation 装饰器维护)。
+        self._journal_transaction_depth = 0
         if self._metrics_recorder is not None:
             for rank in sorted(self._rank_states):
                 self._metrics_recorder.initialize_rank(
@@ -441,12 +536,15 @@ class SessionKVCacheManager:
                 )
             for rank in sorted(self._rank_states):
                 state = self._rank_states[rank]
+                # 权重预载是 journal 首 record:无请求上下文,时刻取 0
+                # (run 首记录),transaction_id=0(构造期,先于任何事务)。
                 self._metrics_recorder.record(
                     planner_time_ns=0,
                     anchor_kind="tick_zero",
                     request_id=None,
                     session_id=None,
                     rank=rank,
+                    instance_index=state.instance_index,
                     allocation_key=f"weight:{rank}",
                     weight_delta_bytes=state.model_weight_bytes,
                     cause="model_weight_preload",
@@ -455,6 +553,25 @@ class SessionKVCacheManager:
     @property
     def events(self) -> tuple[KVCacheEvent, ...]:
         return tuple(self._events)
+
+    # B1 增量读取 + 水位压缩(2026-08-28):生产消费方(在线调度器的
+    # kv_actions 流)本就持有 _kv_events_emitted 游标,改走 events_since
+    # 增量切片,消除每决策批 events property 的全量 tuple() 拷贝(O(n²)
+    # CPU 残留);已消费前缀按水位整段删除(风格对齐 graph_batch_builder
+    # 的 M1 压缩:≥8192 且不小于一半才删,均摊 O(1)/事件)。event_index
+    # 由单调计数器分配,压缩不改变任何已发射事件的载荷。
+    def events_since(self, index: int) -> list[KVCacheEvent]:
+        """B1:列表位置 index 起的增量事件(消费方维护游标)。"""
+        return self._events[index:]
+
+    def compact_events(self, consumed: int) -> int:
+        """B1:已消费水位 ≥8192 且不小于现存一半时整段删除前缀,返回实际
+        删除条数(调用方游标同步减去该值;0 = 未压缩)。"""
+        if (consumed >= _EVENTS_COMPACT_THRESHOLD
+                and consumed * 2 >= len(self._events)):
+            del self._events[:consumed]
+            return consumed
+        return 0
 
     @property
     def session_ids(self) -> tuple[str, ...]:
@@ -546,7 +663,7 @@ class SessionKVCacheManager:
     ) -> None:
         self._events.append(
             KVCacheEvent(
-                event_index=len(self._events),
+                event_index=self._event_index_next,
                 planner_time_ns=now_ns,
                 phase=phase,
                 event_type=event_type,
@@ -564,6 +681,7 @@ class SessionKVCacheManager:
                 insufficient_ranks=tuple(int(rank) for rank in insufficient_ranks),
             )
         )
+        self._event_index_next += 1
 
     def _pressure_event(
         self,
@@ -584,7 +702,7 @@ class SessionKVCacheManager:
         if key in self._pressure_event_keys:
             retry_key = ("admission_retry", phase, trigger_request_id, target_instance_index)
             if retry_key not in self._pressure_event_keys:
-                self._pressure_event_keys.add(retry_key)
+                self._remember_pressure_event_key(retry_key)
                 self._event(
                     now_ns=now_ns,
                     phase=phase,
@@ -597,7 +715,7 @@ class SessionKVCacheManager:
                     insufficient_ranks=insufficient_ranks,
                 )
             return
-        self._pressure_event_keys.add(key)
+        self._remember_pressure_event_key(key)
         self._event(
             now_ns=now_ns,
             phase=phase,
@@ -609,6 +727,16 @@ class SessionKVCacheManager:
             after=after,
             insufficient_ranks=insufficient_ranks,
         )
+
+    def _remember_pressure_event_key(
+        self, key: tuple[str, str, str, int]
+    ) -> None:
+        self._pressure_event_keys.add(key)
+        self._pressure_event_keys_by_request.setdefault(key[2], set()).add(key)
+
+    def _forget_pressure_event_keys(self, request_id: str) -> None:
+        for key in self._pressure_event_keys_by_request.pop(request_id, ()):
+            self._pressure_event_keys.discard(key)
 
     def _add_shards(self, instance_index: int, shards: Sequence[int]) -> None:
         instance = self.topology.instance(instance_index)
@@ -626,6 +754,194 @@ class SessionKVCacheManager:
             if state.resident_kv_bytes < value:
                 raise RuntimeError("attempted to release more KV than the rank owns")
             state.resident_kv_bytes -= int(value)
+
+    # ------------------------------------------------------------------
+    # Incremental invariant ledger.  The complete checker below remains the
+    # source of truth for construction, explicit strict mode, and the terminal
+    # audit.  Normal mutation paths update only the contribution(s) they
+    # changed, which avoids rebuilding process-wide session/reservation totals
+    # after every generated token.
+    # ------------------------------------------------------------------
+
+    def _initialize_incremental_invariants(self) -> None:
+        self._invariant_expected_resident_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._invariant_expected_reserved_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._invariant_session_contributions: dict[
+            str, Optional[tuple[int, tuple[int, ...]]]
+        ] = {}
+        self._invariant_reservation_contributions: dict[
+            str, Optional[tuple[int, tuple[int, ...]]]
+        ] = {}
+        self._refresh_incremental_sessions(self._sessions)
+        self._refresh_incremental_reservations(self._reservations)
+
+    def _incremental_session_contribution(
+        self, session: SessionKVState
+    ) -> Optional[tuple[int, tuple[int, ...]]]:
+        if (
+            session.state != RESIDENT
+            or session.instance_index is None
+            or len(session.shard_bytes) != self.tp_degree
+        ):
+            return None
+        return session.instance_index, tuple(int(value) for value in session.shard_bytes)
+
+    def _incremental_reservation_contribution(
+        self, reservation: RequestCapacityReservation
+    ) -> Optional[tuple[int, tuple[int, ...]]]:
+        if len(reservation.shard_bytes) != self.tp_degree:
+            return None
+        return reservation.instance_index, tuple(
+            int(value) for value in reservation.shard_bytes
+        )
+
+    def _apply_incremental_contribution(
+        self,
+        expected_by_rank: dict[int, int],
+        contribution: Optional[tuple[int, tuple[int, ...]]],
+        multiplier: int,
+    ) -> set[int]:
+        if contribution is None:
+            return set()
+        instance_index, shards = contribution
+        instance = self.topology.instance(instance_index)
+        affected_ranks = set(instance.ranks)
+        for rank, value in zip(instance.ranks, shards):
+            expected_by_rank[rank] += multiplier * value
+        return affected_ranks
+
+    def _refresh_incremental_sessions(self, session_ids: Iterable[str]) -> set[int]:
+        affected_ranks: set[int] = set()
+        for session_id in dict.fromkeys(session_ids):
+            old = self._invariant_session_contributions.pop(session_id, None)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_resident_by_rank, old, -1
+                )
+            )
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            new = self._incremental_session_contribution(session)
+            self._invariant_session_contributions[session_id] = new
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_resident_by_rank, new, 1
+                )
+            )
+        return affected_ranks
+
+    def _refresh_incremental_reservations(
+        self, reservation_ids: Iterable[str]
+    ) -> set[int]:
+        affected_ranks: set[int] = set()
+        for request_id in dict.fromkeys(reservation_ids):
+            old = self._invariant_reservation_contributions.pop(request_id, None)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_reserved_by_rank, old, -1
+                )
+            )
+            reservation = self._reservations.get(request_id)
+            if reservation is None:
+                continue
+            new = self._incremental_reservation_contribution(reservation)
+            self._invariant_reservation_contributions[request_id] = new
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_reserved_by_rank, new, 1
+                )
+            )
+        return affected_ranks
+
+    def _check_incremental_session_invariants(self, session: SessionKVState) -> None:
+        if session.state not in {RESIDENT, EVICTED}:
+            raise RuntimeError(f"unknown KV state: {session.state}")
+        if session.state == RESIDENT:
+            if session.instance_index is None:
+                raise RuntimeError("resident session has no instance")
+            if len(session.shard_bytes) != self.tp_degree:
+                raise RuntimeError("resident session has invalid TP shard vector")
+        elif session.instance_index is not None:
+            raise RuntimeError("evicted session retained an instance")
+
+    def _check_incremental_reservation_invariants(
+        self, reservation: RequestCapacityReservation
+    ) -> None:
+        if len(reservation.shard_bytes) != self.tp_degree:
+            raise RuntimeError("reservation has invalid TP shard vector")
+
+    def _check_invariants_after_mutation(
+        self,
+        *,
+        session_ids: Iterable[str] = (),
+        reservation_ids: Iterable[str] = (),
+    ) -> None:
+        """Validate only the state touched by a completed manager mutation."""
+
+        changed_sessions = tuple(dict.fromkeys(session_ids))
+        changed_reservations = tuple(dict.fromkeys(reservation_ids))
+        affected_ranks = self._refresh_incremental_sessions(changed_sessions)
+        affected_ranks.update(
+            self._refresh_incremental_reservations(changed_reservations)
+        )
+
+        # Keep the first part of the complete checker local and fail closed
+        # before any caller can observe the mutated state.
+        for rank in sorted(affected_ranks):
+            state = self._rank_states[rank]
+            if state.resident_kv_bytes < 0 or state.reserved_request_bytes < 0:
+                raise RuntimeError("negative HBM accounting")
+            if state.used_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"HBM capacity exceeded on rank {state.rank}: "
+                    f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                )
+        for session_id in changed_sessions:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                self._check_incremental_session_invariants(session)
+        for request_id in changed_reservations:
+            reservation = self._reservations.get(request_id)
+            if reservation is not None:
+                self._check_incremental_reservation_invariants(reservation)
+
+        affected_instances = {
+            self._rank_states[rank].instance_index for rank in affected_ranks
+        }
+        for instance_index in sorted(affected_instances):
+            instance = self.topology.instance(instance_index)
+            actual = tuple(
+                self._rank_states[rank].resident_kv_bytes for rank in instance.ranks
+            )
+            expected = tuple(
+                self._invariant_expected_resident_by_rank[rank]
+                for rank in instance.ranks
+            )
+            if actual != expected:
+                raise RuntimeError(
+                    f"session/rank KV accounting mismatch for instance {instance.index}: "
+                    f"states={actual}, sessions={expected}"
+                )
+            actual_reserved = tuple(
+                self._rank_states[rank].reserved_request_bytes for rank in instance.ranks
+            )
+            expected_reserved = tuple(
+                self._invariant_expected_reserved_by_rank[rank]
+                for rank in instance.ranks
+            )
+            if actual_reserved != expected_reserved:
+                raise RuntimeError(
+                    f"reservation/rank accounting mismatch for instance {instance.index}: "
+                    f"states={actual_reserved}, reservations={expected_reserved}"
+                )
+
+        if self._strict_kv_invariants:
+            self._check_invariants()
 
     # ------------------------------------------------------------------
     # Read-only metrics observation helpers (doc sec.7).  Every method here
@@ -664,6 +980,7 @@ class SessionKVCacheManager:
                 request_id=request_id,
                 session_id=session_id,
                 rank=rank,
+                instance_index=instance_index,
                 allocation_key=f"resident:{session_id}:{segment_id}",
                 resident_kv_delta_bytes=int(value),
                 cause=cause,
@@ -694,6 +1011,7 @@ class SessionKVCacheManager:
                     request_id=request_id,
                     session_id=session_id,
                     rank=rank,
+                    instance_index=instance_index,
                     allocation_key=f"resident:{session_id}:{segment_id}",
                     resident_kv_delta_bytes=-int(value),
                     cause=cause,
@@ -736,6 +1054,7 @@ class SessionKVCacheManager:
                 request_id=request_id,
                 session_id=session_id,
                 rank=rank,
+                instance_index=target_instance_index,
                 allocation_key=consolidated_key,
                 resident_kv_delta_bytes=int(value),
                 cause=f"{cause}_target_add",
@@ -753,6 +1072,7 @@ class SessionKVCacheManager:
                     request_id=request_id,
                     session_id=session_id,
                     rank=rank,
+                    instance_index=source_instance_index,
                     allocation_key=old_key,
                     resident_kv_delta_bytes=-int(value),
                     cause=f"{cause}_source_remove",
@@ -760,6 +1080,164 @@ class SessionKVCacheManager:
         self._metrics_segments[session_id] = {
             segment_id: [target_instance_index, tuple(int(v) for v in total_shards)]
         }
+
+    # ------------------------------------------------------------------
+    # P1 journal 事务对账与 run 末 checksum 门。两者都只在 recorder 处于
+    # journal 模式时生效,且都是纯观测校验:任何不一致 raise(fail-closed),
+    # 不做任何静默修复/钳位——发现账本 bug 正是 journal 的价值。
+    # ------------------------------------------------------------------
+
+    def _journal_reconcile_transaction(
+        self, transaction_id: int, ranks: Iterable[int]
+    ) -> None:
+        """④ commit 点对账:manager 实际状态 vs journal 记账逐 rank 比对。
+
+        journal 每行的 before/after 由 recorder 的逐 rank 运行计数推出,
+        该计数 = 全部已写行 Σdelta;故此处比对等价于"该事务 before+Σdelta
+        推出的 after vs manager 快照"。只查本事务写过的 rank(未写行的
+        rank 无字节变化,不可能漂移);weight 由增量不变量不覆盖,此处
+        一并核对(journal 对 weight 同样记账)。"""
+
+        recorder = self._metrics_recorder
+        mismatches = []
+        for rank in sorted(set(ranks)):
+            state = self._rank_states[rank]
+            journal_totals = recorder.rank_totals(rank)
+            manager_totals = (
+                state.model_weight_bytes,
+                state.resident_kv_bytes,
+                state.reserved_request_bytes,
+            )
+            if journal_totals != manager_totals:
+                mismatches.append(
+                    f"rank {rank}: manager=(weight={manager_totals[0]}, "
+                    f"resident={manager_totals[1]}, reserved={manager_totals[2]}), "
+                    f"journal=(weight={journal_totals[0]}, "
+                    f"resident={journal_totals[1]}, "
+                    f"reserved={journal_totals[2]})"
+                )
+        if mismatches:
+            raise RuntimeError(
+                "KV delta journal reconciliation failed for transaction "
+                f"{transaction_id}: " + "; ".join(mismatches)
+            )
+
+    def verify_journal_checksum(self) -> Optional[dict[str, Any]]:
+        """Run 末 checksum 门(fail-closed):流式重放权威 journal 并对账。
+
+        三重断言,任一不成立 raise(错误信息含逐 rank 差额表):
+        1. journal 重放逐 rank 终态(weight/resident/reserved)与 manager
+           快照完全一致(重放本身先校验 sequence 连续/前后快照自洽/
+           planner_time_ns 与 transaction_id 单调/断行报行号);
+        2. 写出条数一致(recorder 内存计数 vs 重放行数,流式丢失即暴露);
+        3. 守恒:journal 重放终态 resident==0、reserved==0、
+           physical==weight_bytes(权重驻留、无会话/预约残留)。
+
+        产物:kv_delta_journal_checksum.json(journal 同目录,由 runner
+        归档进 run_dir/results/)。recorder 未装或非 journal 模式时返回
+        None(门只对 journal-on 的 run 生效,旁路态零行为差)。"""
+
+        recorder = self._metrics_recorder
+        if recorder is None or not recorder.journal_enabled:
+            return None
+        replay = recorder.replay_journal()
+        if replay["line_count"] != recorder.record_count:
+            raise RuntimeError(
+                "KV delta journal run-end checksum mismatch: replayed "
+                f"{replay['line_count']} lines but the recorder wrote "
+                f"{recorder.record_count}"
+            )
+        problems: list[str] = []
+        for rank in sorted(self._rank_states):
+            state = self._rank_states[rank]
+            replayed = replay["ranks"].get(rank)
+            if replayed is None:
+                problems.append(
+                    f"rank {rank}: journal replay has no state "
+                    f"(manager=(weight={state.model_weight_bytes}, "
+                    f"resident={state.resident_kv_bytes}, "
+                    f"reserved={state.reserved_request_bytes}))"
+                )
+                continue
+            manager_totals = (
+                state.model_weight_bytes,
+                state.resident_kv_bytes,
+                state.reserved_request_bytes,
+            )
+            journal_totals = (
+                replayed["weight"],
+                replayed["resident"],
+                replayed["reserved"],
+            )
+            if journal_totals != manager_totals:
+                problems.append(
+                    f"rank {rank}: manager=(weight={manager_totals[0]}, "
+                    f"resident={manager_totals[1]}, "
+                    f"reserved={manager_totals[2]}), "
+                    f"journal_replay=(weight={journal_totals[0]}, "
+                    f"resident={journal_totals[1]}, "
+                    f"reserved={journal_totals[2]}), "
+                    f"delta=(weight={manager_totals[0] - journal_totals[0]}, "
+                    f"resident={manager_totals[1] - journal_totals[1]}, "
+                    f"reserved={manager_totals[2] - journal_totals[2]})"
+                )
+        for rank in sorted(replay["ranks"]):
+            if rank not in self._rank_states:
+                problems.append(
+                    f"rank {rank}: journal replay knows a rank the manager "
+                    "does not"
+                )
+        if problems:
+            raise RuntimeError(
+                "KV delta journal run-end checksum mismatch: "
+                + "; ".join(problems)
+            )
+        # 守恒断言:合法 run 终态必须是"只剩权重"。若真实 workload 允许
+        # 会话 KV 驻留终态,这里会 raise——按 P1 裁决保留 fail-closed,
+        # 不放宽门,上报裁决而不是改门。
+        conservation: list[str] = []
+        for rank in sorted(replay["ranks"]):
+            replayed = replay["ranks"][rank]
+            if (
+                replayed["resident"] != 0
+                or replayed["reserved"] != 0
+                or replayed["physical"] != replayed["weight"]
+            ):
+                conservation.append(
+                    f"rank {rank}: resident={replayed['resident']}, "
+                    f"reserved={replayed['reserved']}, "
+                    f"physical={replayed['physical']}, "
+                    f"weight={replayed['weight']}"
+                )
+        if conservation:
+            raise RuntimeError(
+                "KV delta journal conservation violated at run end "
+                "(resident must be 0, reserved must be 0, physical must "
+                "equal weight): " + "; ".join(conservation)
+            )
+        summary = {
+            "schema_version": 1,
+            "journal": recorder.journal_path.name,
+            "line_count": replay["line_count"],
+            "sha256": replay["sha256"],
+            "transaction_count": replay["transaction_count"],
+            "max_transaction_id": replay["max_transaction_id"],
+            "checks": {
+                "manager_state_match": True,
+                "residual_resident_zero": True,
+                "residual_reserved_zero": True,
+                "physical_equals_weight": True,
+            },
+            "ranks": replay["ranks"],
+        }
+        checksum_path = (
+            recorder.journal_path.parent / type(recorder).JOURNAL_CHECKSUM_NAME
+        )
+        checksum_path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return summary
 
 
     def _delete(
@@ -785,7 +1263,7 @@ class SessionKVCacheManager:
         victim.instance_index = None
         victim.evicted_at_ns = now_ns
         victim.evicted_by_request_id = trigger_request_id
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(victim.session_id,))
         self._metrics_remove_session_segments(
             victim.session_id,
             now_ns=now_ns,
@@ -822,6 +1300,7 @@ class SessionKVCacheManager:
         )
         return record
 
+    @_journal_transaction
     def enforce_watermark(
         self,
         instance_index: int,
@@ -835,9 +1314,18 @@ class SessionKVCacheManager:
         insufficient = self._insufficient(
             instance_index, self.reserve_shard_bytes, watermark=True
         )
+        # A deletion only changes the selected victim; the remaining completed
+        # inactive residents keep both their eligibility and LRU order for this
+        # eviction stage.  Snapshot the sorted candidates once, while retaining
+        # the capacity check after every victim.
+        candidates = (
+            self._candidate_sessions(instance_index, protected_sessions)
+            if insufficient
+            else []
+        )
+        candidate_index = 0
         while insufficient:
-            candidates = self._candidate_sessions(instance_index, protected_sessions)
-            if not candidates:
+            if candidate_index >= len(candidates):
                 before = self._remaining(instance_index)
                 self._deferred_instances.add(instance_index)
                 self._pressure_event(
@@ -852,9 +1340,11 @@ class SessionKVCacheManager:
                     insufficient_ranks=insufficient,
                 )
                 return WatermarkResult(tuple(evictions), True, insufficient)
+            victim = candidates[candidate_index]
+            candidate_index += 1
             evictions.append(
                 self._delete(
-                    candidates[0],
+                    victim,
                     now_ns=now_ns,
                     phase=phase,
                     reason="restore_1m_reserve",
@@ -867,6 +1357,7 @@ class SessionKVCacheManager:
         self._deferred_instances.discard(instance_index)
         return WatermarkResult(tuple(evictions), False, ())
 
+    @_journal_transaction
     def ensure_physical_fit(
         self,
         instance_index: int,
@@ -899,9 +1390,16 @@ class SessionKVCacheManager:
             raise ValueError(f"request cannot fit an empty instance: {details}")
         evictions: list[EvictionRecord] = []
         insufficient = self._insufficient(instance_index, required)
+        # See enforce_watermark(): eligibility and LRU order of unselected
+        # candidates are static inside this single reclamation stage.
+        candidates = (
+            self._candidate_sessions(instance_index, protected_sessions)
+            if insufficient
+            else []
+        )
+        candidate_index = 0
         while insufficient:
-            candidates = self._candidate_sessions(instance_index, protected_sessions)
-            if not candidates:
+            if candidate_index >= len(candidates):
                 before = self._remaining(instance_index)
                 self._pressure_event(
                     now_ns=now_ns,
@@ -915,9 +1413,11 @@ class SessionKVCacheManager:
                     insufficient_ranks=insufficient,
                 )
                 return CapacityResult(tuple(evictions), False, insufficient)
+            victim = candidates[candidate_index]
+            candidate_index += 1
             evictions.append(
                 self._delete(
-                    candidates[0],
+                    victim,
                     now_ns=now_ns,
                     phase=phase,
                     reason=reason,
@@ -927,6 +1427,7 @@ class SessionKVCacheManager:
             insufficient = self._insufficient(instance_index, required)
         return CapacityResult(tuple(evictions), True, ())
 
+    @_journal_transaction
     def reserve_request_capacity(
         self,
         request_id: str,
@@ -966,7 +1467,7 @@ class SessionKVCacheManager:
             instance_index=instance_index,
             shard_bytes=required,
         )
-        self._check_invariants()
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
             for rank, value in zip(
                 self.topology.instance(instance_index).ranks, required
@@ -979,13 +1480,26 @@ class SessionKVCacheManager:
                     request_id=request_id,
                     session_id=session_id,
                     rank=rank,
+                    instance_index=instance_index,
                     allocation_key=f"reservation:{request_id}",
                     reserved_kv_delta_bytes=int(value),
                     cause=reason,
                 )
         return CapacityResult(evictions, True, ())
 
-    def release_request_capacity(self, request_id: str) -> RequestCapacityReservation:
+    @_journal_transaction
+    def release_request_capacity(
+        self,
+        request_id: str,
+        now_ns: int,
+    ) -> RequestCapacityReservation:
+        """Release one request's decode-capacity reservation.
+
+        ``now_ns`` 是本 mutation 的真实 planner 时刻(P1 语义修改①:改前
+        本 API 无时间戳参数,metrics 复用最近 KV 事件时间——journal 化后
+        该近似会污染权威账本时序,故改为必传参数,全部调用方显式给值;
+        传入时刻若早于 journal 已有最后时刻,recorder 直接 raise)。"""
+
         reservation = self._reservations.pop(request_id)
         for rank, value in zip(
             self.topology.instance(reservation.instance_index).ranks,
@@ -995,11 +1509,8 @@ class SessionKVCacheManager:
             if state.reserved_request_bytes < value:
                 raise RuntimeError("request reservation accounting underflow")
             state.reserved_request_bytes -= value
-        self._check_invariants()
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
-            # This API carries no planner timestamp; reuse the most recent
-            # event time so the replay stream stays non-decreasing.
-            now_ns = self._events[-1].planner_time_ns if self._events else 0
             for rank, value in zip(
                 self.topology.instance(reservation.instance_index).ranks,
                 reservation.shard_bytes,
@@ -1012,6 +1523,7 @@ class SessionKVCacheManager:
                     request_id=request_id,
                     session_id=reservation.session_id,
                     rank=rank,
+                    instance_index=reservation.instance_index,
                     allocation_key=f"reservation:{request_id}",
                     reserved_kv_delta_bytes=-int(value),
                     cause="reservation_release",
@@ -1021,6 +1533,7 @@ class SessionKVCacheManager:
     def _history_shards(self, tokens: int) -> tuple[int, ...]:
         return kv_cache_shard_bytes_for_tokens(self.model, tokens, self.tp_degree)
 
+    @_journal_transaction
     def prepare_history(
         self,
         session_id: str,
@@ -1104,6 +1617,7 @@ class SessionKVCacheManager:
                 last_request_id=trigger_request_id,
             )
             self._sessions[session_id] = state
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             before = self._remaining(target_instance_index)
             self._event(
                 now_ns=now_ns,
@@ -1136,7 +1650,7 @@ class SessionKVCacheManager:
             state.last_request_id = trigger_request_id
             state.evicted_at_ns = None
             state.evicted_by_request_id = None
-            self._check_invariants()
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             self._metrics_add_segment(
                 session_id,
                 target_instance_index,
@@ -1178,6 +1692,7 @@ class SessionKVCacheManager:
         state.active = True
         state.last_request_id = trigger_request_id
         if source_instance == target_instance_index:
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             before = self._remaining(target_instance_index)
             self._event(
                 now_ns=now_ns,
@@ -1219,7 +1734,7 @@ class SessionKVCacheManager:
         self._add_shards(target_instance_index, history_shards)
         self._remove_shards(source_instance, history_shards)
         state.instance_index = target_instance_index
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_move_session_segments(
             session_id,
             target_instance_index,
@@ -1297,7 +1812,7 @@ class SessionKVCacheManager:
         state.shard_bytes = desired
         state.logical_context_tokens = context_tokens
         state.last_request_id = trigger_request_id
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_add_segment(
             session_id,
             instance_index,
@@ -1311,6 +1826,7 @@ class SessionKVCacheManager:
         )
         return CapacityResult(evictions, True, ())
 
+    @_journal_transaction
     def grow_prefill(
         self,
         session_id: str,
@@ -1331,6 +1847,7 @@ class SessionKVCacheManager:
             reason="prefill_growth_capacity",
         )
 
+    @_journal_transaction
     def move_prefill_to_decode(
         self,
         session_id: str,
@@ -1434,7 +1951,7 @@ class SessionKVCacheManager:
         self._add_shards(target_instance_index, state.shard_bytes)
         self._remove_shards(source_instance, state.shard_bytes)
         state.instance_index = target_instance_index
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_move_session_segments(
             session_id,
             target_instance_index,
@@ -1463,6 +1980,7 @@ class SessionKVCacheManager:
         )
         return MoveDecision(NOC_MIGRATE, source_instance, target_instance_index, transfer, evictions)
 
+    @_journal_transaction
     def grow_decode(
         self,
         session_id: str,
@@ -1483,6 +2001,7 @@ class SessionKVCacheManager:
             reason="decode_growth_capacity",
         )
 
+    @_journal_transaction
     def mark_complete(
         self,
         session_id: str,
@@ -1495,6 +2014,7 @@ class SessionKVCacheManager:
         state.active = False
         state.last_completion_ns = completion_ns
         state.last_request_id = request_id
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         before = self._remaining(state.instance_index)
         self._event(
             now_ns=completion_ns,
@@ -1511,12 +2031,103 @@ class SessionKVCacheManager:
             before=before,
             after=before,
         )
-        return self.enforce_watermark(
+        result = self.enforce_watermark(
             state.instance_index,
             completion_ns,
             request_id,
             phase="completion",
-        ).evictions
+        )
+        # The request can never retry admission after completion.  Retire its
+        # bounded-dedup state even when the session has a later turn.
+        self._forget_pressure_event_keys(request_id)
+        return result.evictions
+
+    @_journal_transaction
+    def retire_terminal_session(
+        self,
+        session_id: str,
+        completion_ns: int,
+        request_id: Optional[str] = None,
+    ) -> Optional[int]:
+        """Drop a completed terminal session without synthesizing a KV action.
+
+        ``mark_complete`` deliberately retains KV for a possible following
+        turn.  The online scheduler calls this only after it has proved that
+        the completed request has no successor and has emitted every output
+        that reads the completion snapshot.
+        """
+
+        state = self._sessions.get(session_id)
+        if state is None:
+            raise KeyError(f"unknown KV session: {session_id}")
+        if state.active or state.last_completion_ns is None:
+            raise RuntimeError(
+                "only inactive completed sessions may be terminally retired"
+            )
+        if (
+            request_id is not None
+            and state.last_request_id is not None
+            and request_id != state.last_request_id
+        ):
+            raise RuntimeError(
+                "terminal retirement request does not own the completed session"
+            )
+        terminal_request_id = request_id or state.last_request_id
+        if terminal_request_id is None:
+            raise RuntimeError("completed session has no terminal request ID")
+        requested_reservation = self._reservations.get(terminal_request_id)
+        if (
+            requested_reservation is not None
+            and requested_reservation.session_id != session_id
+        ):
+            raise RuntimeError(
+                "terminal retirement request owns another session reservation"
+            )
+
+        # A session can own at most its own request reservations.  Release all
+        # matching entries rather than retaining a terminal-accounting
+        # tombstone; never touch another session's reservation.
+        reservation_ids = sorted(
+            reservation_id
+            for reservation_id, reservation in self._reservations.items()
+            if reservation.session_id == session_id
+        )
+        for reservation_id in reservation_ids:
+            # ① 嵌套公开复用:retire 事务内以本 mutation 的 completion_ns
+            # 作为 release 的真实 planner 时刻(并入同一 journal 事务)。
+            self.release_request_capacity(reservation_id, completion_ns)
+
+        released_instance_index: Optional[int] = None
+        if state.state == RESIDENT:
+            if state.instance_index is None:
+                raise RuntimeError("resident completed session has no instance")
+            released_instance_index = state.instance_index
+            self._remove_shards(released_instance_index, state.shard_bytes)
+            self._metrics_remove_session_segments(
+                session_id,
+                now_ns=completion_ns,
+                anchor_kind="completion",
+                request_id=terminal_request_id,
+                cause="terminal_session_retire",
+            )
+        elif state.state != EVICTED:
+            raise RuntimeError(f"unknown KV state: {state.state}")
+
+        # Metrics helpers intentionally no-op without an observer; retirement
+        # must nevertheless remove the per-session containers in both modes.
+        self._metrics_segments.pop(session_id, None)
+        self._metrics_segment_counters.pop(session_id, None)
+        self._forget_pressure_event_keys(terminal_request_id)
+        del self._sessions[session_id]
+        if (
+            released_instance_index is not None
+            and not self._insufficient(
+                released_instance_index, self.reserve_shard_bytes, watermark=True
+            )
+        ):
+            self._deferred_instances.discard(released_instance_index)
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        return released_instance_index
 
     def assert_final_state(self) -> None:
         self._check_invariants()
@@ -1524,6 +2135,8 @@ class SessionKVCacheManager:
             raise RuntimeError(
                 f"planning ended with outstanding KV reservations: {sorted(self._reservations)}"
             )
+        if self._pressure_event_keys or self._pressure_event_keys_by_request:
+            raise RuntimeError("planning ended with stale KV pressure dedup state")
         active = [state.session_id for state in self._sessions.values() if state.active]
         if active:
             raise RuntimeError(f"planning ended with active KV sessions: {sorted(active)}")

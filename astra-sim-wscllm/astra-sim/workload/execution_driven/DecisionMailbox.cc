@@ -7,11 +7,82 @@ Implementation (方案 §4 步骤 1-6).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+#include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
 #include <utility>
 
 namespace AstraSim {
 namespace ExecutionDriven {
+
+namespace {
+
+bool completed_nodes_exact_from_env() {
+    const char* const mode = std::getenv("ASTRA_SIM_ONLINE_COMPLETED_NODES");
+    if (mode == nullptr) {
+        return false;
+    }
+    if (std::strcmp(mode, "exact") == 0) {
+        return true;
+    }
+    throw std::runtime_error(
+        "ASTRA_SIM_ONLINE_COMPLETED_NODES must be unset (default) or 'exact'");
+}
+
+}  // namespace
+
+CompletedFactAccumulator::CompletedFactAccumulator()
+    : exact_mode_(completed_nodes_exact_from_env()) {}
+
+void CompletedFactAccumulator::record(
+    const int rank, const uint64_t node_id, const char* request_id,
+    const char* stage, const uint64_t generation, const uint64_t tick,
+    const int terminal_status) {
+    ++counters_.total;
+    switch (terminal_status) {
+        case static_cast<int>(NodeTerminalStatus::Success):
+            ++counters_.success;
+            break;
+        case static_cast<int>(NodeTerminalStatus::Skipped):
+            ++counters_.skipped;
+            break;
+        default:
+            ++counters_.other;
+            break;
+    }
+    if (!exact_mode_) {
+        return;
+    }
+    CompletedNodeFact fact;
+    fact.rank = rank;
+    fact.node_id = node_id;
+    fact.request_id = request_id == nullptr ? "" : request_id;
+    fact.stage = stage == nullptr ? "" : stage;
+    fact.generation = generation;
+    fact.tick = tick;
+    fact.terminal_status = terminal_status;
+    exact_facts_.push_back(std::move(fact));
+}
+
+std::vector<CompletedNodeFact> CompletedFactAccumulator::drain() {
+    std::vector<CompletedNodeFact> result = std::move(exact_facts_);
+    exact_facts_.clear();
+    return result;
+}
+
+size_t CompletedFactAccumulator::size() const {
+    return exact_facts_.size();
+}
+
+void CompletedFactAccumulator::set_exact_mode(const bool exact_mode) {
+    if (counters_.total != 0) {
+        throw std::logic_error(
+            "CompletedFactAccumulator mode cannot change after a terminal");
+    }
+    exact_mode_ = exact_mode;
+}
 
 StateDelta build_state_delta(std::vector<DecisionEvent> events,
                              const uint64_t tick,

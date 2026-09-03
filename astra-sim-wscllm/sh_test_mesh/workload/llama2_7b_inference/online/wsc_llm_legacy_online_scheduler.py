@@ -488,23 +488,36 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
         """
         runtime = self.runtime_by_request_id[request_id]
         # §7.3:_runtime_index O(1) 定位(替换 O(N) 全量扫描)。
-        following = self.next_request[self._runtime_index[runtime.request_id]]
-        if following is None:
-            return  # session 最后一 turn:无下一次 arrival
-        interval = self._interval_ns(following)  # :1525-1528
-        # :1529-1530 push_event(now_ns + interval, 1, "arrival", following) ->
-        # 在线等价:future alarm(阶段 1 的 alarm 语义,见 C++ Phase 4)。
-        self._batch["future_alarms"].append({
-            "arrival_world_ns": tick + interval,
-            "envelope": {
-                "request_id": following.request_id,
-                "session_id": following.session_id,
-                "turn_index": following.turn_index,
-                "prefill_length": following.prefill_length,
-                "decode_length": following.decode_length,
-                "inter_request_interval_ns": interval,
-            },
-        })
+        index = self._runtime_index[request_id]
+        following = self.next_request[index]
+        # The predecessor no longer owns its successor after this one-time
+        # alarm emission; dropping the link also permits its completed runtime
+        # payload to be released immediately.
+        self.next_request[index] = None
+        if following is not None:
+            interval = self._interval_ns(following)  # :1525-1528
+            # :1529-1530 push_event(now_ns + interval, 1, "arrival", following) ->
+            # 在线等价:future alarm(阶段 1 的 alarm 语义,见 C++ Phase 4)。
+            self._batch["future_alarms"].append({
+                "arrival_world_ns": tick + interval,
+                "envelope": {
+                    "request_id": following.request_id,
+                    "session_id": following.session_id,
+                    "turn_index": following.turn_index,
+                    "prefill_length": following.prefill_length,
+                    "decode_length": following.decode_length,
+                    "inter_request_interval_ns": interval,
+                },
+            })
+        else:
+            # terminal turn 的 completion gate 不会再被下一次 admission
+            # 消费；REQUEST_COMPLETE 后无任何图构造读者。
+            self.graph.retire_completion_gate(runtime.session_id)
+        self.runtime_by_request_id.pop(request_id, None)
+        if self._runtime_index.pop(request_id, None) != index:
+            raise RuntimeError("legacy runtime index drift for {!r}".format(
+                request_id))
+        self.runtimes[index] = None
 
     # ------------------------------------------------------- arrival heap --
 
@@ -794,6 +807,10 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "legacy run ended with {}/{} requests complete".format(
                     self.completed_requests, len(self.runtimes)))
+        if (self.runtime_by_request_id or self._runtime_index
+                or any(runtime is not None for runtime in self.runtimes)
+                or any(runtime is not None for runtime in self.next_request)):
+            raise RuntimeError("legacy run ended with retained request runtimes")
         if any(state.busy or state.qp or state.active_decode
                for state in self.instances):
             raise RuntimeError("legacy run ended with non-idle instance state")
@@ -812,3 +829,7 @@ class WscLlmLegacyOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "run ended with non-empty ready frontier: {!r}".format(
                     sorted(self._ready_frontier)))
+        if self.graph.completion_gates:
+            raise RuntimeError(
+                "legacy run ended with unretired completion gates: {!r}"
+                .format(sorted(self.graph.completion_gates)))

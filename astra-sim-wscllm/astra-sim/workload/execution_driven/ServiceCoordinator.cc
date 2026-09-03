@@ -12,6 +12,7 @@ fully-drained ACTIVE returns to IDLE while the input stays open (合同②
 #include "astra-sim/workload/execution_driven/ServiceCoordinator.hh"
 
 #include <cassert>
+#include <cmath>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -106,6 +107,62 @@ void ServiceCoordinator::wait_for_work() {
     wakeup_pending_ = false;
 }
 
+bool ServiceCoordinator::checked_wait_deadline(
+    const double timeout_s, const std::chrono::steady_clock::time_point now,
+    std::chrono::steady_clock::time_point& out_deadline) {
+    // FP1 (2026-09-01, sync-A16 batch P; contract E9/E26 §2.4): the frozen
+    // five-step order -- bound-check in the tick domain BEFORE any
+    // float->integer conversion, convert once, bound-check the addition
+    // BEFORE it happens, add once. The helper keeps the 0-fails contract
+    // (the CLI layer treats 0 as "off" and never calls it with 0; a
+    // negative or non-finite timeout is a programming error and fails the
+    // same way).
+    if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
+        return false;
+    }
+    const double duration_max_count = static_cast<double>(
+        std::chrono::steady_clock::duration::max().count());
+    if (timeout_s > duration_max_count) {
+        return false;  // could not be represented as a duration at all
+    }
+    const std::chrono::steady_clock::duration timeout =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(timeout_s));
+    if (timeout <= std::chrono::steady_clock::duration::zero()) {
+        return false;  // sub-tick: parsed fine, but cannot arm even one tick
+    }
+    const auto epoch_max =
+        std::chrono::steady_clock::time_point::max().time_since_epoch();
+    if (now.time_since_epoch() > epoch_max - timeout) {
+        return false;  // the addition itself would overflow time_point
+    }
+    out_deadline = now + timeout;
+    return true;
+}
+
+bool ServiceCoordinator::wait_for_work_until(
+    const std::chrono::steady_clock::time_point deadline) {
+    // FP1 (2026-09-01, sync-A16 batch P): absolute-deadline variant of the
+    // P0-2 wall-clock parking watchdog. Identical predicate and
+    // wakeup_pending_ consumption as wait_for_work; the deadline arrives
+    // precomputed from checked_wait_deadline, so this function takes
+    // now()/does no arithmetic of its own (the old duration entry
+    // recomputed now()+timeout internally -- E9). wait_until with a
+    // predicate returns false only on timeout (spurious wake-ups
+    // re-evaluate the predicate and keep waiting), so a false return is a
+    // genuine liveness failure of every producer: the caller turns it into
+    // a fail-closed abort with the full parking diagnostics instead of the
+    // old silent forever-wait (the 41-minute futex wedge).
+    std::unique_lock<std::mutex> lock(mtx_);
+    const bool woke = work_cv_.wait_until(lock, deadline, [this] {
+        return wakeup_pending_ || !input_open_ || finished_locked();
+    });
+    if (woke) {
+        wakeup_pending_ = false;
+    }
+    return woke;
+}
+
 void ServiceCoordinator::signal_work() {
     std::lock_guard<std::mutex> lock(mtx_);
     wakeup_pending_ = true;
@@ -114,6 +171,11 @@ void ServiceCoordinator::signal_work() {
 
 const std::vector<ServiceState>& ServiceCoordinator::transition_log() const {
     return transition_log_;
+}
+
+uint64_t ServiceCoordinator::transition_log_dropped() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return transition_log_dropped_;
 }
 
 void ServiceCoordinator::set_transition_hook(StateTransitionHook hook) {
@@ -141,11 +203,22 @@ uint64_t ServiceCoordinator::pending_alarm_count() const {
     return pending_alarm_count_;
 }
 
+uint64_t ServiceCoordinator::pending_fence_count() const {
+    // P0-2 (2026-08-31): read-only diagnostics accessor (step-1-5 counter;
+    // no behavior change).
+    std::lock_guard<std::mutex> lock(mtx_);
+    return pending_fence_count_;
+}
+
 void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
     state_ = next;
-    transition_log_.push_back(next);
+    if (transition_log_.size() < kTransitionLogCapacity) {
+        transition_log_.push_back(next);
+    } else {
+        ++transition_log_dropped_;
+    }
     if (transition_hook_) {
         // Contract: the hook must not call back into the coordinator (it is
         // invoked with mtx_ held); the online entry uses it to print the

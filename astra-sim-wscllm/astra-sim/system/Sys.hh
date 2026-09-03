@@ -113,6 +113,18 @@ class Sys : public Callable {
                         EventType event,
                         CallData* callData,
                         Tick delta_cycles);
+    // Cancellable events own neither Callable nor CallData by default.  A
+    // caller that supplies a cancellation callback transfers only the
+    // pending-payload cleanup to Sys; after the event is popped, its normal
+    // Callable::call path keeps the pre-existing ownership contract.
+    using EventDataCancellationCallback = void (*)(CallData*);
+    [[nodiscard]] SystemEventHandle register_event_cancellable(
+        Callable* callable,
+        EventType event,
+        CallData* callData,
+        Tick delta_cycles,
+        EventDataCancellationCallback cancellation_callback);
+    [[nodiscard]] bool cancel_event(SystemEventHandle& handle);
     void try_register_event(Callable* callable,
                             EventType event,
                             CallData* callData,
@@ -338,8 +350,21 @@ class Sys : public Callable {
     std::map<int, std::list<BaseStream*>> active_Streams;
     std::map<int, std::list<int>> stream_priorities;
 
-    std::map<Tick, std::list<std::tuple<Callable*, EventType, CallData*>>>
-        event_queue;
+    struct ScheduledEvent {
+        Callable* callable;
+        EventType event;
+        CallData* call_data;
+        uint64_t event_id;
+        EventDataCancellationCallback cancellation_callback;
+    };
+    struct ScheduledEventBucket {
+        std::list<ScheduledEvent> events;
+        AstraNetworkAPI::CancellableScheduleHandle outer_alarm;
+    };
+    std::map<Tick, ScheduledEventBucket> event_queue;
+    uint64_t next_cancellable_event_id = 1;
+    bool dispatching_events = false;
+    Tick dispatching_event_time = 0;
     int total_nodes;
     int dim_to_break;
     std::vector<int> logical_broken_dims;

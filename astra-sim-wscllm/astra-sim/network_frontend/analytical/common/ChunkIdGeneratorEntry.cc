@@ -10,7 +10,8 @@ using namespace AstraSimAnalytical;
 
 ChunkIdGeneratorEntry::ChunkIdGeneratorEntry() noexcept
     : send_id(-1),
-      recv_id(-1) {}
+      recv_id(-1),
+      outstanding_(0) {}
 
 int ChunkIdGeneratorEntry::get_send_id() const noexcept {
     assert(send_id >= 0);
@@ -30,4 +31,17 @@ void ChunkIdGeneratorEntry::increment_send_id() noexcept {
 
 void ChunkIdGeneratorEntry::increment_recv_id() noexcept {
     recv_id++;
+}
+
+uint64_t ChunkIdGeneratorEntry::outstanding() const noexcept {
+    return outstanding_;
+}
+
+void ChunkIdGeneratorEntry::increment_outstanding() noexcept {
+    ++outstanding_;
+}
+
+void ChunkIdGeneratorEntry::decrement_outstanding() noexcept {
+    assert(outstanding_ > 0);
+    --outstanding_;
 }

@@ -34,6 +34,14 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
     git checkout -- "$WL/trace_config.csv" && echo "[clean] trace_config.csv 已恢复 git 原始字节"
   echo "[clean] 提示: trace_config 已恢复占位态;重跑前需运行 traces/ 物化器脚本重新物化并将 request_queue_csv 指到物化产物（占位/缺失将 fail-closed）"
   fi
+  # 4b. trace_config_legacy.csv（仅 face/wscllm 有）: legacy 流程物化 legacy
+  #     基线目录时会改指物化队列,同样恢复 git 原始字节;文件不存在的仓
+  #     自然跳过（条件=文件存在,五仓脚本保持逐字节相同）。
+  if [ -f "$WL/trace_config_legacy.csv" ]; then
+    if ! git diff --quiet -- "$WL/trace_config_legacy.csv" 2>/dev/null; then
+      git checkout -- "$WL/trace_config_legacy.csv" && echo "[clean] trace_config_legacy.csv 已恢复 git 原始字节"
+    fi
+  fi
 else
   echo "[clean][warn] 非 git 环境，跳过 trace_config 恢复（请手动核对第12行指向 placeholder）"
 fi

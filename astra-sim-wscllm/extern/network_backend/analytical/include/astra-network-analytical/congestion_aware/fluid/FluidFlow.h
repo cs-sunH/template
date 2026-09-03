@@ -12,6 +12,8 @@ LICENSE file in the root directory of this source tree.
 
 namespace NetworkAnalyticalCongestionAware {
 
+class FluidScheduler;
+
 struct FluidRoute {
     std::vector<LinkId> link_ids;
     NetworkAnalytical::EventTime propagation_latency_ns;
@@ -40,6 +42,10 @@ struct FluidFlow {
 
     NetworkAnalytical::Callback completion_callback;
     NetworkAnalytical::CallbackArg completion_arg;
+    // A tail event borrows this stable unordered_map element as its callback
+    // context.  It is set exactly while PropagatingTail and cleared immediately
+    // before the element is erased by FluidScheduler.
+    FluidScheduler* tail_scheduler = nullptr;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

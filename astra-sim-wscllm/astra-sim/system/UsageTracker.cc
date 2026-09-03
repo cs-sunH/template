@@ -5,44 +5,62 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/UsageTracker.hh"
 
+#include <stdexcept>
+
 #include "astra-sim/system/Sys.hh"
 
 using namespace AstraSim;
 
-UsageTracker::UsageTracker(int levels) {
-    this->levels = levels;
-    this->current_level = 0;
-    this->last_tick = 0;
-}
+UsageTracker::UsageTracker(int levels, bool retain_history)
+    : levels(levels),
+      current_level(0),
+      last_tick(0),
+      retain_history_(retain_history) {}
 
 void UsageTracker::increase_usage() {
     if (current_level < levels - 1) {
-        Usage u(current_level, last_tick, Sys::boostedTick());
-        usage.push_back(u);
+        if (retain_history_) {
+            Usage u(current_level, last_tick, Sys::boostedTick());
+            usage.push_back(u);
+        }
         current_level++;
-        last_tick = Sys::boostedTick();
+        if (retain_history_) {
+            last_tick = Sys::boostedTick();
+        }
     }
 }
 
 void UsageTracker::decrease_usage() {
     if (current_level > 0) {
-        Usage u(current_level, last_tick, Sys::boostedTick());
-        usage.push_back(u);
+        if (retain_history_) {
+            Usage u(current_level, last_tick, Sys::boostedTick());
+            usage.push_back(u);
+        }
         current_level--;
-        last_tick = Sys::boostedTick();
+        if (retain_history_) {
+            last_tick = Sys::boostedTick();
+        }
     }
 }
 
 void UsageTracker::set_usage(int level) {
     if (current_level != level) {
-        Usage u(current_level, last_tick, Sys::boostedTick());
-        usage.push_back(u);
+        if (retain_history_) {
+            Usage u(current_level, last_tick, Sys::boostedTick());
+            usage.push_back(u);
+        }
         current_level = level;
-        last_tick = Sys::boostedTick();
+        if (retain_history_) {
+            last_tick = Sys::boostedTick();
+        }
     }
 }
 
 void UsageTracker::report(CSVWriter* writer, int offset) {
+    if (!retain_history_) {
+        throw std::logic_error(
+            "UsageTracker history was disabled for this online scheduler");
+    }
     uint64_t col = offset * 3;
     uint64_t row = 1;
     for (auto a : usage) {
@@ -54,6 +72,10 @@ void UsageTracker::report(CSVWriter* writer, int offset) {
 
 std::list<std::pair<uint64_t, double>> UsageTracker::report_percentage(
     uint64_t cycles) {
+    if (!retain_history_) {
+        throw std::logic_error(
+            "UsageTracker history was disabled for this online scheduler");
+    }
     decrease_usage();
     increase_usage();
     Tick total_activity_possible = (this->levels - 1) * cycles;

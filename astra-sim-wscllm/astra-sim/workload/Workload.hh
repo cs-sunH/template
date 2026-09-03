@@ -73,7 +73,7 @@ class Workload : public Callable {
     void report();
 
     Chakra::ETFeeder* et_feeder;
-    std::unordered_map<int, CommunicatorGroup*> comm_groups;
+    std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;
     Sys* sys;
     Statistics* stats;
@@ -109,9 +109,24 @@ class Workload : public Callable {
     std::shared_ptr<spdlog::logger> workload_logger_;
 
     // From the node view, find out the corresponding communicator group, and
-    // return the pointer. If no communicator group is specified for this
-    // node, return nullptr.
-    CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
+    // return its shared owner. If no communicator group is specified for this
+    // node, return nullptr. A collective DataSet retains this owner so an
+    // in-flight definition survives later metadata replacement.
+    std::shared_ptr<CommunicatorGroup> extract_comm_group(
+        const ExecutionDriven::NodeView& node);
+
+    // Compact online Statistics keeps its per-node transient data in the
+    // NodeStore record.  These helpers centralize the no-operator-map service
+    // path and the terminal single-fire guard; static ET callers never enter
+    // them.
+    ExecutionDriven::OnlineStatisticsState&
+    online_statistics_state_or_fail(uint64_t node_id);
+    void start_online_statistics(const ExecutionDriven::NodeView& node,
+                                 Tick start_time);
+    void complete_online_statistics(const ExecutionDriven::NodeView& node,
+                                    Tick end_time);
+    void mark_online_terminal_or_fail(uint64_t node_id);
+    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
 
     // Body shared by every generic (wlhd) node completion: node release /
     // stats / metrics / terminal record / dependency release / static-mode
@@ -134,6 +149,15 @@ class Workload : public Callable {
     std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
     void maybe_complete_hbm_joined_comm(uint64_t node_id);
 };
+
+// R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger moved to its
+// own self-contained layer (astra-sim/workload/RemoteFifoLedger.hh/.cc) and
+// is now accounted at the REAL backend ports inside
+// AnalyticalRemoteMemory::issue/call. The Workload layer no longer infers a
+// port from sys_id: under PER_NODE / MEMORY_POOL several ranks share one
+// physical FIFO, and under the configured PER_NPU + sparse npu-ids the port
+// index is the array index, not the rank -- the old per-rank keys mislabeled
+// every architecture and split shared queues into per-rank virtual ledgers.
 
 }  // namespace AstraSim
 

@@ -80,10 +80,16 @@ void test_node_store() {
     const uint64_t id1 = store.add_node(n);
     const uint64_t id2 = store.add_node(n);
     expect(id1 == 1 && id2 == 2, "A: add_node assigns 1, 2");
+    expect(store.next_auto_id() == 3,
+           "A: next_auto_id exposes the following automatic id");
     expect(!store.empty(), "A: non-empty after adds");
     expect(store.pending_count() == 2, "A: pending_count() == 2");
     expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2}),
            "A: both nodes free, ascending");
+    std::vector<uint64_t> free_snapshot = {99};
+    store.fill_free_node_snapshot(free_snapshot);
+    expect(free_snapshot == std::vector<uint64_t>({1, 2}),
+           "A: caller-owned free snapshot matches resolve_free_nodes");
 
     OnlineNode m;
     m.global_id = 7;
@@ -92,6 +98,8 @@ void test_node_store() {
     m.stage = "prefill";
     m.generation = 3;
     expect(store.add_node(m) == 7, "A: explicit global_id kept");
+    expect(store.next_auto_id() == 8,
+           "A: explicit global_id advances the following automatic id");
     expect(store.resolve_free_nodes() == std::vector<uint64_t>({1, 2, 7}),
            "A: free set ascending incl. 7");
     const auto rec = store.node(7);
@@ -159,6 +167,22 @@ void test_node_store() {
     store.finish_node(fb);
     expect(store.pending_count() == 0,
            "A: pending_count() 0 after all finishes");
+
+    // Online terminal delivery is a single-fire transition.  It must reject
+    // unknown and not-yet-issued ids before any Statistics/observer side
+    // effect, accept exactly the first terminal callback after issue, then
+    // reject the duplicate.
+    NodeStore terminal_store;
+    const uint64_t terminal_id = terminal_store.add_node(n);
+    expect(!terminal_store.mark_terminal_observed(999),
+           "A: terminal guard rejects unknown node");
+    expect(!terminal_store.mark_terminal_observed(terminal_id),
+           "A: terminal guard rejects unissued node");
+    terminal_store.mark_issued(terminal_id);
+    expect(terminal_store.mark_terminal_observed(terminal_id),
+           "A: terminal guard accepts first issued callback");
+    expect(!terminal_store.mark_terminal_observed(terminal_id),
+           "A: terminal guard rejects duplicate callback");
 }
 
 // ---------------------------------------------------------------- Part E --
@@ -271,6 +295,30 @@ void test_node_store_graph_source() {
     expect(!src.static_all_done(), "B: online source is never static-done");
     src.finish_node(8);
     expect(src.dep_free_nodes().empty(), "B: no auto-emit after finish");
+
+    // for_each_dep_free must retain a snapshot while its callback releases a
+    // child: that child belongs to the next pass, not this traversal.
+    OnlineNode parent;
+    parent.global_id = 10;
+    parent.kind = NodeKind::Compute;
+    OnlineNode child;
+    child.global_id = 11;
+    child.kind = NodeKind::Compute;
+    src.store().add_node(parent);
+    src.store().add_node(child);
+    src.store().add_dependency(10, 11, DepKind::Data);
+    std::vector<uint64_t> first_pass;
+    src.for_each_dep_free([&](const NodeView& view) {
+        first_pass.push_back(view.global_id);
+        src.finish_node(view.global_id);
+    });
+    expect(first_pass == std::vector<uint64_t>({10}),
+           "B: released child is absent from the current snapshot pass");
+    std::vector<uint64_t> second_pass;
+    src.for_each_dep_free(
+        [&](const NodeView& view) { second_pass.push_back(view.global_id); });
+    expect(second_pass == std::vector<uint64_t>({11}),
+           "B: released child is visible on the following snapshot pass");
 }
 
 // ---------------------------------------------------------------- Part D --

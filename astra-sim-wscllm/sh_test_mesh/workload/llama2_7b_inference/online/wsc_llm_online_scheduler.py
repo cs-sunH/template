@@ -265,7 +265,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                  decision_log_sink=None, train_ledger_sink=None,
                  profile_sink=None, mode: str = "strategy",
                  sensing: bool = False,
-                 defensive_reply_cache: bool = False):
+                 defensive_reply_cache: bool = False,
+                 sensing_query_sink=None, online_stats_sink=None,
+                 ledger_sink=None):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -276,6 +278,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             decision_log_sink=decision_log_sink,
             profile_sink=profile_sink,
             defensive_reply_cache=defensive_reply_cache,
+            sensing_query_sink=sensing_query_sink,
+            online_stats_sink=online_stats_sink,
+            ledger_sink=ledger_sink,
         )
         if mode != "strategy":
             raise ValueError("WscLlmOnlineScheduler requires mode == 'strategy'")
@@ -352,7 +357,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 蓝图 :1729-1732:容量 epoch / 准入门控。
         # offline: wsc_llm_scheduler.py
         self.capacity_epoch = [0 for _ in self.topology.instances]
-        self.prefill_attempt_epoch = {}
+        # Last failed admission epoch lives on the request runtime itself.
+        # A second request_id->epoch dictionary would retain completed
+        # requests for the entire run.
         self.decode_admission_epoch = [-1 for _ in self.topology.instances]
         self.decode_admission_dirty = set()
 
@@ -495,12 +502,19 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         self._admit_pass(tick)
 
         # ---- kv 动作流:本批次 kv_manager 新产出的账本事件 ----
-        events = self.kv_manager.events
-        if len(events) > self._kv_events_emitted:
+        # B1(2026-08-28):改走 events_since 增量读取(消费方游标本就存在),
+        # 消除每批 events property 的全量 tuple() 拷贝;已消费前缀按水位
+        # 整段压缩(游标同步回退),事件载荷/event_index 不变。
+        new_events = self.kv_manager.events_since(self._kv_events_emitted)
+        if new_events:
             self._batch["kv_actions"].extend(
                 _kv_event_dict(event)
-                for event in events[self._kv_events_emitted:])
-            self._kv_events_emitted = len(events)
+                for event in new_events)
+            self._kv_events_emitted += len(new_events)
+            removed = self.kv_manager.compact_events(
+                self._kv_events_emitted)
+            if removed:
+                self._kv_events_emitted -= removed
 
     # ------------------------------------------------------ 列车账本 --
 
@@ -1052,24 +1066,52 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         offline: wsc_llm_scheduler.py
         """
         runtime = self.runtime_by_request_id[request_id]
+        # 原 run-end 的 decode 终值检查前移到释放边界；之后 runtime 不再
+        # 常驻，仍以同一严格条件 fail-closed。
+        if (runtime.decode_tokens_consumed != runtime.decode_length
+                or not runtime.decode_train_joined):
+            raise RuntimeError(
+                "completed request {!r} has an incomplete decode ledger"
+                .format(request_id))
         # §7.3:_runtime_index O(1) 定位(替换 O(N) 全量扫描)。
         following = self.next_request[self._runtime_index[runtime.request_id]]
-        if following is None:
-            return  # session 最后一 turn:无下一次 arrival
-        interval = self._interval_ns(following)  # :2069-2071
-        # :2072 push_event(now_ns + interval, 1, "arrival", following) ->
-        # 在线等价:future alarm(阶段 1 的 alarm 语义,见 C++ Phase 4)。
-        self._batch["future_alarms"].append({
-            "arrival_world_ns": tick + interval,
-            "envelope": {
-                "request_id": following.request_id,
-                "session_id": following.session_id,
-                "turn_index": following.turn_index,
-                "prefill_length": following.prefill_length,
-                "decode_length": following.decode_length,
-                "inter_request_interval_ns": interval,
-            },
-        })
+        if following is not None:
+            interval = self._interval_ns(following)  # :2069-2071
+            # :2072 push_event(now_ns + interval, 1, "arrival", following) ->
+            # 在线等价:future alarm(阶段 1 的 alarm 语义,见 C++ Phase 4)。
+            self._batch["future_alarms"].append({
+                "arrival_world_ns": tick + interval,
+                "envelope": {
+                    "request_id": following.request_id,
+                    "session_id": following.session_id,
+                    "turn_index": following.turn_index,
+                    "prefill_length": following.prefill_length,
+                    "decode_length": following.decode_length,
+                    "inter_request_interval_ns": interval,
+                },
+            })
+        else:
+            # terminal turn 的 completion gate 不会再被下一次 admission
+            # 消费；REQUEST_COMPLETE 是所有图边已发射后的安全回收点。
+            self.graph.retire_completion_gate(runtime.session_id)
+            released_instance_index = self.kv_manager.retire_terminal_session(
+                runtime.session_id,
+                tick,
+                runtime.request_id,
+            )
+            # Retirement may free local HBM after the completion snapshot and
+            # graph batch have been consumed.  Publish that capacity change
+            # without consulting the now-deleted session state.
+            self._note_capacity_change(released_instance_index)
+        # REQUEST_COMPLETE 边界后该 runtime 及其索引再无读者。释放 map、
+        # list slot 和已消费的 next link，避免完成请求仍被预构建链持有。
+        self.runtime_by_request_id.pop(request_id, None)
+        index = self._runtime_index.pop(request_id, None)
+        if index is None:
+            raise RuntimeError(
+                "completed request lost runtime index {!r}".format(request_id))
+        self.next_request[index] = None
+        self.runtimes[index] = None
 
     # ------------------------------------------------------- arrival heap --
 
@@ -1159,10 +1201,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             self.capacity_epoch[prefill_instance],
             self.capacity_epoch[decode_instance],
         )
-        if (self.prefill_attempt_epoch.get(runtime.request_id)
-                == admission_epoch):  # :1758-1759
+        if runtime.prefill_attempt_epoch == admission_epoch:  # :1758-1759
             return False
-        self.prefill_attempt_epoch[runtime.request_id] = admission_epoch  # :1760
+        runtime.prefill_attempt_epoch = admission_epoch  # :1760
         final_shards = kv_cache_shard_bytes_for_tokens(  # :1761-1763
             self.config.model, runtime.final_context_tokens,
             self.topology.instances[0].size)
@@ -1202,7 +1243,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         )
         runtime.admission_evictions = decision.evictions  # :1797
         if decision.admission_blocked:  # :1798-1808
-            self.kv_manager.release_request_capacity(runtime.request_id)
+            self.kv_manager.release_request_capacity(runtime.request_id, now_ns)
             runtime.decode_capacity_reserved = False
             self._note_capacity_change(
                 prefill_instance,
@@ -1271,7 +1312,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                     raise RuntimeError(
                         "WSC Decode target was not reserved before Prefill")
                 self.kv_manager.release_request_capacity(  # :1876
-                    runtime.request_id)
+                    runtime.request_id, now_ns)
                 runtime.decode_capacity_reserved = False  # :1877
                 move = self.kv_manager.move_prefill_to_decode(  # :1878-1884
                     runtime.session_id,
@@ -1510,10 +1551,10 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         admission retry ready set)。拼 batch 改造:增加列车账本清空断言
         (在飞列车/已核销待收信号/未加入列车的 decode 成员)。"""
         super().verify_run_end()
-        if self.completed_requests != len(self.runtimes):
+        if self.completed_requests != self.expected_request_count:
             raise RuntimeError(
                 "strategy run ended with {}/{} requests complete".format(
-                    self.completed_requests, len(self.runtimes)))
+                    self.completed_requests, self.expected_request_count))
         if any(state.busy or state.qp or state.active_decode
                or state.in_flight_train is not None or state.finalized_trains
                or state.first_step_remainder is not None
@@ -1523,11 +1564,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with unconsumed first-step wakeups: "
                 "{!r}".format(sorted(self._pending_first_steps)))
-        if any(runtime.decode_tokens_consumed != runtime.decode_length
-               or not runtime.decode_train_joined
-               for runtime in self.runtimes):
-            raise RuntimeError(
-                "strategy run ended with decode ledgers not fully advanced")
+        if self.runtime_by_request_id or self._runtime_index or \
+                any(runtime is not None for runtime in self.runtimes):
+            raise RuntimeError("strategy run ended with unreleased runtimes")
         if any(queue for queue in self.waiting_decode_admissions.values()):
             raise RuntimeError(
                 "strategy run ended with pending decode admissions")
@@ -1544,4 +1583,14 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         if self._admission_retry_ready:
             raise RuntimeError(
                 "run ended with non-empty admission retry ready set")
+        if self.graph.completion_gates:
+            raise RuntimeError(
+                "strategy run ended with unretired completion gates: {!r}"
+                .format(sorted(self.graph.completion_gates)))
         self.kv_manager.assert_final_state()
+        # P1 权威 HBM delta journal run 末 checksum 门(fail-closed,doc
+        # §6-P1):流式重放 kv_delta_journal.jsonl 与 manager 终态逐 rank
+        # 对账并断言守恒(resident=0/reserved=0/physical=weight),产物
+        # kv_delta_journal_checksum.json;journal 未装配时为 no-op(旁路态
+        # 与改前行为一致)。挂在 assert_final_state 之后同一校验链。
+        self.kv_manager.verify_journal_checksum()

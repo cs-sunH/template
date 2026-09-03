@@ -456,7 +456,9 @@ class ScanExportSkeletonTests(unittest.TestCase):
             synthetic.write_cpp_log(run_dir, [],
                                     repo_variant="astra-sim-face")
             run_dirs.append(run_dir)
-        out = run_dirs[0].parent / "norm.csv"
+        # 输出落独立临时目录：run_dirs 的 /tmp 根为多仓并行测试共享，
+        # 固定名 norm.csv 会竞态互踩（mkdtemp 隔离，任务2修复）。
+        out = synthetic.make_run_dir("nm_out") / "norm.csv"
         args = slo_argv(["normalized", *[str(d) for d in run_dirs],
                          "-o", str(out)])
         self.assertEqual(slo_stats.cmd_normalized(args), 0)

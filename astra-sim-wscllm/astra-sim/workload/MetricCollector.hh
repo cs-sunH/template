@@ -7,11 +7,14 @@ LICENSE file in the root directory of this source tree.
 #define ASTRASIM_WORKLOAD_METRIC_COLLECTOR_HH
 
 #include <cstdint>
+#include <cstdio>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <json/json.hpp>
@@ -37,6 +40,11 @@ class MetricCollector {
   public:
     static MetricCollector& instance();
 
+    // The collector owns an anonymous online memory-anchor spool when that
+    // mode is active.  The explicit destructor keeps process teardown and
+    // test/reinitialization lifecycles from leaking its file descriptor.
+    ~MetricCollector();
+
     // Load the manifest and set the detail level ("off", "summary", "full").
     // Must be called once, early during startup. With detail "off" the
     // collector stays disabled and performs no work at all.
@@ -47,8 +55,26 @@ class MetricCollector {
         return this->enabled_;
     }
 
-    // Sparse boundary events. Only nodes listed in the manifest ever match;
-    // all other nodes cost two failed hash lookups.
+    // Online service statistics can retire terminal node records.  The one
+    // exception is an enabled microbenchmark: its arbitrary iteration window
+    // queries still require the complete per-node history.
+    [[nodiscard]] bool preserve_online_operator_history() const {
+        return this->enabled_ && this->run_mode_ == "microbenchmark";
+    }
+
+    // Sparse boundary events. Only nodes listed in the manifest (static) or
+    // dynamically registered (online) ever match; all other nodes cost two
+    // failed hash lookups. R2 one-shot semantics (2026-08-29): a matched
+    // node bucket is applied in full (a bucket can carry several events,
+    // e.g. a code-4 + code-7 watch tail) and then ERASED immediately; an
+    // empty rank bucket is erased too. Each (rank, node) edge fires at most
+    // once (take_node consumes the free set; store ids are never reused;
+    // registration precedes the issue pass), so the second call for the
+    // same edge is a silent miss. The erase touches ONLY these routing
+    // tables: every finalize consumer (memory_anchor_ticks_ / spool,
+    // transfer maxima, requests_, request_boundaries_, first_token_ticks_,
+    // iterations_) reads derived storage filled by apply_event, never the
+    // routing tables.
     void on_node_issue(int rank, uint64_t node_id, Tick tick);
     void on_node_complete(int rank, uint64_t node_id, Tick tick);
 
@@ -100,10 +126,15 @@ class MetricCollector {
                                  Tick arrival_interval_ns);
     void online_register_ranks(const std::string& request_id, bool prefill,
                                const std::vector<int>& ranks);
-    void online_register_node_anchor(int rank, uint64_t node_id,
-                                     const std::string& request_id,
-                                     const std::string& kind,
-                                     bool transfer_anchor);
+    // Returns true when the (rank, node) HAS an anchor on some edge after
+    // the call -- including an idempotent duplicate hit -- so the online
+    // driver can set the OnlineNode fast-path flags; false for disabled /
+    // unknown-request / unknown-kind (no routing entry exists, matching
+    // the Workload-side enabled() gate).
+    [[nodiscard]] bool online_register_node_anchor(int rank, uint64_t node_id,
+                                                   const std::string& request_id,
+                                                   const std::string& kind,
+                                                   bool transfer_anchor);
 
     // Side-band accumulation of executed GPU compute node FLOPs and local
     // tensor bytes (values already read by Workload::issue_comp).
@@ -157,6 +188,25 @@ class MetricCollector {
     // records through the same single-write channel. Read-only; callers
     // must check enabled() first (records are never emitted in off mode).
     void emit_observer_record(const std::string& json_line) const;
+
+    // A2 (2026-08-28): release the completed request's dynamic anchor
+    // routing entries (issue_events_ / complete_events_ per (rank, node))
+    // after its REQUEST_COMPLETE commit. Safe because every anchored node
+    // of the request has fired both hooks before the decode watch could
+    // fire, and the REQUEST_COMPLETE delta fact arrives at a strictly later
+    // epoch; store ids are never reused, so the entries cannot be
+    // re-referenced. The requests_ record itself stays (finalize emits one
+    // [METRIC] request row per manifest request from it). No-op when
+    // metrics are disabled or the request has no anchors.
+    void online_release_request_anchors(const std::string& request_id);
+
+    // C5 (2026-08-28): flush the buffered [METRIC] emit channel. Records
+    // accumulate in an in-memory buffer (flushed at 1 MiB to bound memory)
+    // and land in one ::write per flush instead of one syscall per record;
+    // content and order are unchanged. finalize() flushes at its end; the
+    // link-observer emission path (which runs after finalize) must call
+    // this once when done.
+    void flush_emit_buffer() const;
 
     [[nodiscard]] const std::string& metric_repo_variant() const {
         return this->repo_variant_;
@@ -263,6 +313,30 @@ class MetricCollector {
         Tick tick;
     };
 
+    // Online transfer-anchor replay only needs the last observed tick for
+    // planner ledger actions.  Keep the key deliberately separate from the
+    // raw spool record: the latter must preserve every event and its original
+    // order for full-detail memory_anchor output.
+    struct TransferAnchorKey {
+        int64_t subject_id;
+        int rank;
+
+        bool operator==(const TransferAnchorKey& other) const noexcept {
+            return this->subject_id == other.subject_id &&
+                this->rank == other.rank;
+        }
+    };
+
+    struct TransferAnchorKeyHash {
+        size_t operator()(const TransferAnchorKey& key) const noexcept {
+            const size_t subject_hash = std::hash<int64_t>{}(key.subject_id);
+            const size_t rank_hash = std::hash<int>{}(key.rank);
+            return subject_hash ^
+                (rank_hash + 0x9e3779b9u + (subject_hash << 6) +
+                 (subject_hash >> 2));
+        }
+    };
+
     // 128-bit accumulators: 64-bit integers risk overflowing total FLOPs of
     // long workloads (doc sec.5.3). Serialized as decimal strings.
     struct RankMetricState {
@@ -348,6 +422,13 @@ class MetricCollector {
     };
 
     void load_manifest(const std::string& manifest_path);
+    void reset_for_initialize();
+    void ensure_online_memory_anchor_spool();
+    void close_memory_anchor_spool_or_die();
+    void append_online_memory_anchor(const MemoryAnchorTick& anchor);
+    void emit_online_memory_anchor_spool_records();
+    void emit_memory_anchor_record(const MemoryAnchorTick& anchor) const;
+    void rebuild_online_transfer_anchor_interest();
     void apply_event(const NodeMetricEvent& event, int rank, uint64_t node_id,
                      Tick tick);
     std::optional<Tick> resolve_arrival(size_t request_index);
@@ -375,6 +456,23 @@ class MetricCollector {
     // Phase-0 counters (plan step 0-7): opt-in, default off, never emitted.
     bool counters_enabled_ = false;
     PerformanceCounters counters_;
+    // D3 (2026-08-28): set by clear_static_node_events (online mode only).
+    // Online synthetic manifests carry no planner ledger, so the
+    // hbm_watermark bucket records are the documented all-zero series (the
+    // authoritative WP8 data source is the ledger.jsonl replay, see
+    // slo_tools/hbm_watermark.py) and metrics_postprocess does not consume
+    // them -- emit_watermark_records skips the bucket lines (the per-rank
+    // summary records stay).
+    bool online_mode_ = false;
+    // A2 (2026-08-28): request_id -> anchored (rank, node) pairs, filled by
+    // online_register_node_anchor and drained by
+    // online_release_request_anchors at REQUEST_COMPLETE.
+    std::unordered_map<std::string,
+                       std::vector<std::pair<int, uint64_t>>>
+        online_anchor_nodes_;
+    // C5 (2026-08-28): buffered [METRIC] emit channel (mutable: emit_record
+    // is const; flushed at 1 MiB and by flush_emit_buffer).
+    mutable std::string emit_buffer_;
 
     // Manifest metadata.
     int schema_version_ = 0;
@@ -404,7 +502,18 @@ class MetricCollector {
     // anchors by request_id, which is what the committed nodes carry).
     std::unordered_map<std::string, size_t> request_index_by_request_id_;
     std::map<int64_t, IterationMetricState> iterations_;
+    // Static ET runs keep the legacy in-memory history.  Online service runs
+    // stream raw records to memory_anchor_spool_ and retain only the bounded
+    // planner-action index below, so terminal-node count cannot grow RAM.
     std::vector<MemoryAnchorTick> memory_anchor_ticks_;
+    std::FILE* memory_anchor_spool_ = nullptr;
+    uint64_t memory_anchor_spool_record_count_ = 0;
+    std::unordered_set<TransferAnchorKey, TransferAnchorKeyHash>
+        online_transfer_anchor_keys_needed_;
+    std::unordered_set<int64_t> online_transfer_anchor_subjects_needed_;
+    std::unordered_map<TransferAnchorKey, Tick, TransferAnchorKeyHash>
+        online_transfer_anchor_ticks_;
+    std::unordered_map<int64_t, Tick> online_transfer_anchor_by_subject_;
     // WP9 (WP9_CONTRACT §1): subject (queue_index) -> min observed code-8
     // first-token complete tick across ranks and re-registrations.
     std::unordered_map<int64_t, Tick> first_token_ticks_;
@@ -427,6 +536,12 @@ class MetricCollector {
 
     uint64_t dropped_events_ = 0;
     std::vector<std::string> consistency_violations_;
+    bool finalized_ = false;
+
+    // Test-only friend keeps storage-bound assertions out of the production
+    // API while allowing the regression fixture to prove that online raw
+    // anchor history is spooled rather than retained in a vector.
+    friend struct MetricCollectorTestAccess;
 };
 
 }  // namespace AstraSim

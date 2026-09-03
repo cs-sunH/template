@@ -10,6 +10,8 @@ LICENSE file in the root directory of this source tree.
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-sim/common/AstraNetworkAPI.hh>
 #include <astra-sim/system/Common.hh>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -53,6 +55,7 @@ class CommonNetworkApi : public AstraNetworkAPI {
      * @param rank id of the API
      */
     explicit CommonNetworkApi(int rank) noexcept;
+    ~CommonNetworkApi() override;
 
     /**
      * Implement sim_get_time of AstraNetworkAPI.
@@ -65,6 +68,20 @@ class CommonNetworkApi : public AstraNetworkAPI {
     void sim_schedule(timespec_t delta,
                       void (*fun_ptr)(void* fun_arg),
                       void* fun_arg) override;
+
+    /**
+     * Implement the opt-in cancellable AstraNetworkAPI alarm path.
+     */
+    [[nodiscard]] AstraNetworkAPI::CancellableScheduleHandle
+    sim_schedule_cancellable(
+        timespec_t delta,
+        void (*fun_ptr)(void* fun_arg),
+        void* fun_arg,
+        AstraNetworkAPI::ScheduleCancellationCallback cancellation_cleanup)
+        override;
+
+    [[nodiscard]] bool sim_cancel_event(
+        AstraNetworkAPI::CancellableScheduleHandle& handle) override;
 
     /**
      * Implement sim_recv of AstraNetworkAPI.
@@ -98,6 +115,21 @@ class CommonNetworkApi : public AstraNetworkAPI {
 
     /// number of network dimensions of the topology
     static int dims_count;
+
+  private:
+    struct CancellableScheduleContext {
+        CommonNetworkApi* owner;
+        uint64_t token;
+        void (*callback)(void*);
+        void* callback_arg;
+        AstraNetworkAPI::ScheduleCancellationCallback cancellation_cleanup;
+    };
+
+    static void invoke_cancellable_schedule(void* arg) noexcept;
+    static void cancel_cancellable_schedule(void* arg) noexcept;
+
+    std::map<uint64_t, EventHandle> cancellable_events_;
+    uint64_t next_cancellable_schedule_token_ = 1;
 };
 
 }  // namespace AstraSimAnalytical

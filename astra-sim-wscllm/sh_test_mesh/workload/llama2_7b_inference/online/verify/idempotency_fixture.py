@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """idempotency_fixture.py -- 阶段 4 §7.2 幂等 fixture(重放同一 delivery)。
 
-把一次真实运行(C++ 侧)产出的全部 request_<seq>.json(delta 序列)逐一喂给
+把一次真实运行产出的 request_journal.jsonl（兼容旧 request_<seq>.json）逐一喂给
 一个真实的 WscLlmOnlineScheduler,每个 delta 喂两次:
 
   1. 第一次 = 正常应用(delivery_sequence 单调 +1);
@@ -18,7 +18,7 @@ fail-closed 路径同样验证(不满足即非 0 退出):
   - 重复 ack 幂等忽略(ack_count 不重复计)。
 
 结束:verify_run_end() 必须通过(ack_count == delivery_count ==
-last_applied_sequence;reply cache 覆盖最后一笔交付)。
+last_applied_sequence;最后一笔回复在 ack 后释放且不能重放)。
 
 用法(与 online_service.py 相同的参数子集):
     python3 online/verify/idempotency_fixture.py \
@@ -42,6 +42,7 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _path)
 
 from generate_wsc_llm_trace import load_wsc_llm_trace_config  # noqa: E402
+from online.bridge_request_journal import iter_request_records  # noqa: E402
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 from online.wsc_llm_online_scheduler import WscLlmOnlineScheduler  # noqa: E402
 
@@ -63,18 +64,19 @@ def _snapshot(scheduler, sink):
         "last_applied_sequence": scheduler.last_applied_sequence,
         "ack_count": scheduler.ack_count,
         "in_flight": dict(sorted(scheduler.in_flight.items())),
-        "completed_request_ids": sorted(scheduler.completed_request_ids),
+        "completed_request_count": scheduler.completed_request_count,
         "online_log_rows": scheduler.online_log_count,
         "emitted_by_delivery": len(scheduler._emitted_by_delivery),
-        "seen_acks": len(scheduler._seen_ack_delivery_seqs),
+        "ack_watermark": (scheduler._acked_through, tuple(sorted(scheduler._acked_out_of_order))),
         "kv_events": len(scheduler.kv_manager.events),
         "kv_events_emitted": scheduler._kv_events_emitted,
         # 阶段 5 §8.2:provisional KV 账本也纳入幂等快照(重放不重复入账,
         # fail-closed 尝试不污染;ack 流把暂存条目逐笔转入 committed 层)。
+        # B2(2026-08-28):committed 层驻留 dict 改计数器,快照读计数。
         "provisional_kv_actions": sorted(
             scheduler._provisional_kv_actions),
-        "committed_kv_actions_count": len(
-            scheduler._committed_kv_actions),
+        "committed_kv_actions_count": (
+            scheduler.committed_kv_action_batches),
         "digest_count": sink.count,
         "reply_cache_seq": (
             -1 if scheduler._delivery_reply_cache is None
@@ -86,7 +88,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="wscllm phase-4 §7.2 idempotency fixture")
     parser.add_argument("--bridge-dir", required=True,
-                        help="真实运行的 bridge 目录(含 request_<seq>.json)")
+                        help="真实运行 bridge 目录(journal 或旧 request 文件)")
     parser.add_argument("--plan-dir", required=True,
                         help="离线 plan/manifest 目录(含 manifest.json)")
     parser.add_argument("--config", default=None,
@@ -103,30 +105,9 @@ def main(argv=None) -> int:
     else:
         config = load_wsc_llm_trace_config()
 
-    # 真实 delta 序列:重读 C++ 运行产出的 request_<seq>.json,按 seq 升序。
-    # 只取已获 response 的交付(运行尾 C++ 可能写出最后一笔 request 后即
-    # 结束,该笔无 response/ack,Python 侧从未应用)。
-    deltas = []
-    has_any_response = any(
-        name.startswith("response_") and name.endswith(".json")
-        for name in os.listdir(args.bridge_dir))
-    for name in sorted(os.listdir(args.bridge_dir)):
-        if name.startswith("request_") and name.endswith(".json"):
-            seq = int(name[len("request_"):-len(".json")])
-            if has_any_response and not os.path.exists(os.path.join(
-                    args.bridge_dir, "response_{}.json".format(seq))):
-                continue  # 运行尾未响应交付,Python 从未应用,不重放
-            # (阶段 7 §10.3 response 消费即删:成功运行的 bridge 无任何
-            #  response_*.json,此时全部 request_*.json 均为已应用交付。)
-            with open(os.path.join(args.bridge_dir, name),
-                      "r", encoding="utf-8") as source:
-                deltas.append((seq, json.load(source)))
-    deltas.sort(key=lambda item: item[0])
-    if not deltas:
-        raise RuntimeError("no request_<seq>.json found in {}".format(
-            args.bridge_dir))
-    if args.limit > 0:
-        deltas = deltas[:args.limit]
+    # 单一 journal 与旧散装 request 布局统一按 seq 流式读取。生产 journal
+    # 只记录 Python 已成功应用的交付;不再把全量 delta 驻留在 fixture 内存。
+    delta_records = iter_request_records(args.bridge_dir)
 
     sink = _CountingDigestSink()
     graph = GraphBatchBuilder(config)
@@ -143,7 +124,12 @@ def main(argv=None) -> int:
     )
 
     # ------------------------------------------------------------- 主循环 --
-    for index, (seq, delta) in enumerate(deltas):
+    delivery_total = 0
+    last_delta = None
+    for index, (seq, delta) in enumerate(delta_records):
+        if args.limit > 0 and index >= args.limit:
+            break
+        delivery_total = index + 1
         if delta.get("delivery_sequence") != seq:
             raise RuntimeError(
                 "delta file seq {} != payload delivery_sequence {}"
@@ -152,6 +138,7 @@ def main(argv=None) -> int:
             raise RuntimeError(
                 "delta sequence not contiguous: got {} at index {}"
                 .format(seq, index))
+        last_delta = copy.deepcopy(delta)
 
         batch1 = scheduler.on_decision_batch(delta)
         before = _snapshot(scheduler, sink)
@@ -206,8 +193,35 @@ def main(argv=None) -> int:
                 raise RuntimeError(
                     "fail-closed attempt mutated scheduler state")
 
+    if delivery_total == 0:
+        raise RuntimeError(
+            "no request journal records or legacy request_<seq>.json found in {}"
+            .format(args.bridge_dir))
+
     # ------------------------------------------------------------- ack 流 --
-    for seq, _ in deltas:
+    # The reply cache always represents the newest delivery.  Confirming an
+    # older delivery must not release that newer batch: C++ can ack an earlier
+    # batch after Python has already prepared the next response.
+    if delivery_total >= 2:
+        current_seq = delivery_total - 1
+        scheduler.on_commit_ack({
+            "schema_version": 1,
+            "delivery_sequence": 0,
+            "batch_id": 0,
+            "success": True,
+        })
+        cached = scheduler._delivery_reply_cache
+        if cached is None or cached["seq"] != current_seq:
+            raise RuntimeError(
+                "acknowledging an older delivery released the newest reply")
+        if (scheduler._batch is None
+                or scheduler._batch["delivery_sequence"] != current_seq):
+            raise RuntimeError(
+                "acknowledging an older delivery released the newest batch")
+        if getattr(scheduler.graph, "batch", None) is None:
+            raise RuntimeError(
+                "acknowledging an older delivery released the newest graph batch")
+    for seq in range(delivery_total):
         ack = {
             "schema_version": 1,
             "delivery_sequence": seq,
@@ -216,10 +230,28 @@ def main(argv=None) -> int:
         }
         scheduler.on_commit_ack(ack)
         scheduler.on_commit_ack(ack)  # 重复 ack 幂等忽略
-    if scheduler.ack_count != len(deltas):
+    if scheduler.ack_count != delivery_total:
         raise RuntimeError(
             "ack_count={} != deliveries={} after ack stream"
-            .format(scheduler.ack_count, len(deltas)))
+            .format(scheduler.ack_count, delivery_total))
+    if scheduler._delivery_reply_cache is not None:
+        raise RuntimeError("acknowledged reply cache was retained")
+    if scheduler._batch is not None:
+        raise RuntimeError("acknowledged scheduler batch was retained")
+    if getattr(scheduler.graph, "batch", None) is not None:
+        raise RuntimeError("acknowledged graph batch was retained")
+    if (scheduler._acked_through != delivery_total - 1
+            or scheduler._acked_out_of_order):
+        raise RuntimeError(
+            "ack watermark did not compact: through={} holes={}".format(
+                scheduler._acked_through,
+                sorted(scheduler._acked_out_of_order)))
+    try:
+        scheduler.on_decision_batch(last_delta)
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("acknowledged delivery was replayable")
     # ack fail-closed:版本错 / batch_id 发散 / 领先。
     for label, ack in (
         ("schema version", {"schema_version": 0, "delivery_sequence": 1,
@@ -227,8 +259,8 @@ def main(argv=None) -> int:
         ("batch_id divergence", {"schema_version": 1, "delivery_sequence": 1,
                                  "batch_id": 2, "success": True}),
         ("ahead of last applied", {"schema_version": 1,
-                                   "delivery_sequence": len(deltas) + 1,
-                                   "batch_id": len(deltas) + 1,
+                                   "delivery_sequence": delivery_total + 1,
+                                   "batch_id": delivery_total + 1,
                                    "success": True}),
     ):
         try:
@@ -238,7 +270,7 @@ def main(argv=None) -> int:
         else:
             raise RuntimeError(
                 "ack fail-closed violation not rejected: {}".format(label))
-    if scheduler.ack_count != len(deltas):
+    if scheduler.ack_count != delivery_total:
         raise RuntimeError(
             "rejected acks still counted: ack_count={}".format(
                 scheduler.ack_count))
@@ -250,14 +282,14 @@ def main(argv=None) -> int:
         print(
             "idempotency fixture PASS (smoke, first {} deliveries): {} "
             "replays, {} acks, {} digest rows (all applied once)"
-            .format(args.limit, len(deltas), scheduler.ack_count, sink.count),
+            .format(args.limit, delivery_total, scheduler.ack_count, sink.count),
             flush=True)
         return 0
     scheduler.verify_run_end()
     print(
         "idempotency fixture PASS: {} deliveries, {} deliveries replayed, "
         "{} acks, {} digest rows (all applied once), verify_run_end ok"
-        .format(len(deltas), len(deltas), scheduler.ack_count, sink.count),
+        .format(delivery_total, delivery_total, scheduler.ack_count, sink.count),
         flush=True)
     return 0
 

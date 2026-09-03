@@ -7,8 +7,10 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventList.h"
 #include "common/Type.h"
-#include <list>
+#include <cstddef>
+#include <deque>
 #include <map>
+#include <utility>
 
 namespace NetworkAnalytical {
 
@@ -53,6 +55,28 @@ class EventQueue {
      * @param callback_arg argument of the callback function
      */
     void schedule_event(EventTime event_time, Callback callback, CallbackArg callback_arg) noexcept;
+
+    /**
+     * Schedule an event with an explicit cancellation cleanup contract.
+     *
+     * If cancel_event(handle) succeeds before the queue pops the event, the
+     * EventList node is erased and cancellation_callback(callback_arg) runs
+     * synchronously.  Once the event is popped for callback invocation,
+     * cancellation safely returns false; the callback owns callback_arg.
+     */
+    [[nodiscard]] EventHandle schedule_event_cancellable(
+        EventTime event_time,
+        Callback callback,
+        CallbackArg callback_arg,
+        EventCancellationCallback cancellation_callback) noexcept;
+
+    /// Cancel one pending main-queue event.  The handle is consumed whether
+    /// cancellation succeeds or the event was already popped/removed.
+    [[nodiscard]] bool cancel_event(EventHandle& handle) noexcept;
+
+    /// Number of physical main-queue callbacks currently resident. Deferred
+    /// post-commit callbacks are intentionally excluded.
+    [[nodiscard]] size_t scheduled_event_count() const noexcept;
 
     /**
      * Set the tick-end callback (phase-1 execution-driven extension, map-family).
@@ -123,9 +147,10 @@ class EventQueue {
     /// argument passed to the tick-end callback
     CallbackArg tick_end_arg_ = nullptr;
 
-    /// same-tick post-commit deferred event lists (container independent of
-    /// the main map; identical to the list-family blueprint)
-    std::list<EventList> deferred_queue_;
+    /// Same-tick post-commit FIFO. A deque of callback pairs avoids allocating
+    /// one EventList list node plus one Event node for every terminal
+    /// completion. Nested scheduling remains FIFO and drains in the same pass.
+    std::deque<std::pair<Callback, CallbackArg>> deferred_queue_;
 };
 
 }  // namespace NetworkAnalytical

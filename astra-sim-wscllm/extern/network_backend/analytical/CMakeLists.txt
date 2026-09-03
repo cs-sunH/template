@@ -19,6 +19,16 @@ set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_unaware
 # Can be compiled into either library or executable
 option(NETWORK_BACKEND_BUILD_AS_LIBRARY "Build as a library" OFF)
 
+# Focused regression fixture for the bounded, streaming link observer. Kept
+# opt-in so ordinary analytical builds retain their existing target graph.
+option(ANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST
+       "Build the FluidScheduler link-observer regression test" OFF)
+
+# Focused regression fixture for cancellation of superseded EventQueue and
+# FluidScheduler wakeups. Kept opt-in like the observer fixture.
+option(ANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST
+       "Build the stale-event cancellation regression test" OFF)
+
 # Reuse the repository-vendored yaml-cpp target. The fallback keeps this
 # backend buildable as a standalone CMake project without downloading sources.
 if(NOT TARGET yaml-cpp)
@@ -88,6 +98,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_unaware")
     target_include_directories(Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/)
 endif ()
 
+
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     if (NETWORK_BACKEND_BUILD_AS_LIBRARY)
@@ -122,4 +133,45 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(Analytical_Congestion_Aware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(Analytical_Congestion_Aware PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include/astra-network-analytical/)
     target_include_directories(Analytical_Congestion_Aware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/)
+endif ()
+
+if (ANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST)
+    if (NOT NETWORK_BACKEND_BUILD_AS_LIBRARY)
+        message(FATAL_ERROR
+                "ANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST requires NETWORK_BACKEND_BUILD_AS_LIBRARY=ON")
+    endif ()
+    if (NOT TARGET Analytical_Congestion_Aware)
+        message(FATAL_ERROR
+                "ANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST requires BUILDTARGET=congestion_aware or all")
+    endif ()
+
+    enable_testing()
+    add_executable(Analytical_FluidSchedulerLinkObserverTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/fluid/tests/FluidSchedulerLinkObserverTest.cpp)
+    target_link_libraries(Analytical_FluidSchedulerLinkObserverTest PRIVATE Analytical_Congestion_Aware)
+    set_target_properties(Analytical_FluidSchedulerLinkObserverTest
+            PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+    add_test(NAME Analytical_FluidSchedulerLinkObserverTest
+             COMMAND Analytical_FluidSchedulerLinkObserverTest)
+endif ()
+
+if (ANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST)
+    if (NOT NETWORK_BACKEND_BUILD_AS_LIBRARY)
+        message(FATAL_ERROR
+                "ANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST requires NETWORK_BACKEND_BUILD_AS_LIBRARY=ON")
+    endif ()
+    if (NOT TARGET Analytical_Congestion_Aware)
+        message(FATAL_ERROR
+                "ANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST requires BUILDTARGET=congestion_aware or all")
+    endif ()
+
+    enable_testing()
+    add_executable(Analytical_StaleEventCancellationTest
+            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/fluid/tests/StaleEventCancellationTest.cpp)
+    target_link_libraries(Analytical_StaleEventCancellationTest
+            PRIVATE Analytical_Congestion_Aware)
+    set_target_properties(Analytical_StaleEventCancellationTest
+            PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+    add_test(NAME Analytical_StaleEventCancellationTest
+             COMMAND Analytical_StaleEventCancellationTest)
 endif ()

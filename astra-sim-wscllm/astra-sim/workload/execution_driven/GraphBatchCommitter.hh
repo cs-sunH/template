@@ -16,8 +16,9 @@ The tick-end commit is a two-phase protocol:
   asserts the zero side-effect property directly.
 
   Phase B -- commit(delta, batch): applies the delta facts to the in-flight
-  request tracking, then adds the batch's nodes (persistent (rank, json id)
-  -> store id map, cross-batch), parent edges, watches, future arrival
+  request tracking, then adds the batch's nodes (persistent per-rank affine
+  (json id) -> store-id translation, cross-batch), parent edges, watches,
+  future arrival
   alarms, runs the per-rank issue pass over the batch's TOUCHED RANKS ONLY,
   and updates the counters. The caller (main_online) performs the
   ServiceCoordinator REQUEST_COMPLETE accounting, the completed requests'
@@ -28,17 +29,21 @@ first-30s runs: strategy 3531 batches + replay 3491 batches, zero
 violations):
   [epoch]   batch.batch_id == batch.source_delivery_sequence ==
             delta.delivery_sequence; batch.error empty.
-  [node]    rank in [0, num_ranks); id >= 0, per-rank unique in batch; type
+  [node]    rank in [0, num_ranks); per-rank ids form one strictly contiguous
+            stream (the first id may be non-zero), so committed history is
+            represented by one exact bounded range; type
             in 1..7 (NodeKind); name/inputs_values strings, is_cpu_op /
             is_timer_op booleans; request_id non-empty; stage in
             {prefill, decode}; generation == stage (prefill 0 / decode 1);
-            compute/comm/coll well-typed; comm src/dst/tag range checks are
+            compute/comm/coll well-typed; type-7 collective bytes > 0 (also a
+            mandatory cheap commit preflight when full validation is off);
+            comm src/dst/tag range checks are
             scoped to the comm-typed nodes (5/6) -- send node rank ==
             comm.src, recv node rank == comm.dst (non-comm nodes carry the
             comm defaults in real data and an empty comm in fixtures).
   [edge]    kind == "data"; from != to; from resolves (this batch, an
-            earlier batch's store id, or -- M2 node GC, 2026-08-23 -- a
-            pruned store id below the per-rank prune watermark; cross-batch
+            earlier batch's store id, or -- M2 node GC, 2026-08-23 -- an id
+            in the rank's exact committed range; cross-batch
             parents are legal, e.g. the interval gate chaining the previous
             request's completion barrier); to is a node of THIS batch.
   [cycle]   no cycle among the in-batch edges of one rank.
@@ -78,7 +83,6 @@ max_nodes_per_batch (avg = total / count), total_watches / total_assignments
 #include <optional>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
@@ -90,28 +94,11 @@ namespace ExecutionDriven {
 class NodeStoreGraphSource;
 class WatchRegistry;
 class RequestIngress;
-
-/// Persistent (rank, graph-batch json node id) -> store id key. Nodes are
-/// added to the per-rank NodeStore across batches; edges and watch members
-/// reference the graph-batch ids, which must be translated to the store ids
-/// at commit time.
-struct RankNodeKey {
-    int rank = 0;
-    uint64_t json_id = 0;
-
-    bool operator==(const RankNodeKey& other) const {
-        return rank == other.rank && json_id == other.json_id;
-    }
-};
-
-struct RankNodeKeyHash {
-    size_t operator()(const RankNodeKey& key) const {
-        return std::hash<int>()(key.rank) ^
-               (std::hash<uint64_t>()(key.json_id) << 1);
-    }
-};
+struct GraphBatchCommitterTestAccess;
 
 /// Atomic GraphBatch committer (phase 5). One instance per online run.
+/// Simulation-thread-only: its fixed JSON-id stamp scratch is deliberately
+/// mutable to avoid per-batch allocation and is not externally synchronized.
 class GraphBatchCommitter {
   public:
     /// Services the commit writes through. issue_rank drains one rank's free
@@ -127,26 +114,42 @@ class GraphBatchCommitter {
         std::function<void(int rank)> issue_rank;
         // Phase-7 §10.3: optional side-band metrics anchor registration. When
         // set, commit() invokes it right after Phase B-1 (nodes), BEFORE the
-        // issue pass, with the batch and the (rank, json id) -> store id map
-        // so the anchors bind to the STORE ids (the ids on_node_issue /
+        // issue pass, with the batch and this committer's O(1) affine
+        // resolver so the anchors bind to the STORE ids (the ids on_node_issue /
         // on_node_complete observe). Registering before commit with the json
         // ids would be off by one: NodeStore assigns store ids starting at 1
         // while the online graph's json ids start at 0, so a json-id anchor
         // never matches its own node (the id-0 start anchors never fire at
         // all). The watch registry translates through the same map -- the
-        // anchors must too.
+        // anchors must too. The hook must resolve only the ids it needs; it
+        // must not recreate a per-batch id map.
         std::function<void(const GraphBatch& batch,
-                           const std::unordered_map<RankNodeKey, uint64_t,
-                                                    RankNodeKeyHash>& store_ids)>
+                           const GraphBatchCommitter& committer)>
             metrics_anchor_hook;
-        // M2 node GC (2026-08-23, --online-node-gc on the official path):
-        // when set, the constructor enables collection on every per-rank
-        // store and commit() collects finished childless nodes at its tail,
-        // pruning store_ids_ at the same watermark (see collect_node_garbage
-        // / pruned_json_watermark_). Internal default OFF: the phase fixtures
+        // Mandatory collective-liveness preflight. The committer owns only
+        // NodeStore-backed graph sources, while the declared process-group
+        // membership lives in the per-rank Workload::comm_groups map. The
+        // online entry supplies this read-only resolver. It receives the
+        // candidate collective's participating ranks, must verify that every
+        // one of those Workloads exposes the same ordered members AND
+        // dimension_sizes declaration for pg_name, and returns the members.
+        // Returning nullopt means missing/inconsistent metadata and fails a
+        // collective batch closed before any commit state changes. Batches
+        // without collective nodes do not require the callback.
+        std::function<std::optional<std::vector<int>>(
+            const std::string& pg_name,
+            const std::vector<int>& participant_ranks)>
+            communicator_members_for_pg;
+        // M2 node GC (2026-08-23, --online-node-gc on the official path; A1
+        // amortization 2026-08-28): when set, the constructor enables
+        // collection on every per-rank store and the commit tail counts
+        // pending GC candidates, draining NodeStore records only once
+        // >= kGcAmortizeThreshold have
+        // accumulated; finalize_node_garbage() forces one final drain before
+        // the run-end diagnostics. Internal default OFF: the phase fixtures
         // construct their Context explicitly and keep the pre-M2 behavior
         // (including the memory profile) -- main_online passes the CLI value
-        // (frozen default 0, the 2026-08-23 ruling flip).
+        // (frozen default 1 since the A1 amortization flip).
         bool node_gc = false;
     };
 
@@ -163,7 +166,16 @@ class GraphBatchCommitter {
         uint64_t total_future_alarms = 0;
     };
 
-    explicit GraphBatchCommitter(Context ctx) : ctx_(std::move(ctx)) {
+    explicit GraphBatchCommitter(Context ctx)
+        : ctx_(std::move(ctx)),
+          rank_affines_(ctx_.num_ranks > 0
+                            ? static_cast<size_t>(ctx_.num_ranks)
+                            : size_t{0}) {
+        const size_t rank_count = rank_affines_.size();
+        json_id_expected_by_rank_.assign(rank_count, 0);
+        json_id_seen_stamp_by_rank_.assign(rank_count, 0);
+        json_id_discovered_touched_ranks_.reserve(rank_count);
+        commit_touched_ranks_.reserve(rank_count);
         // M2 (2026-08-23): propagate the node-GC switch to every per-rank
         // store once, here (fixtures leave node_gc off and keep the pre-M2
         // no-collection behavior byte-for-byte).
@@ -181,24 +193,43 @@ class GraphBatchCommitter {
     std::optional<std::string> validate(const StateDelta& delta,
                                         const GraphBatch& batch) const;
 
-    /// Phase B. Precondition: validate(delta, batch) returned nullopt (the
-    /// caller MUST gate on it). Applies the delta facts to the in-flight
+    struct ValidateAndCommitResult {
+        std::optional<std::string> error;
+        uint64_t validation_ns = 0;
+    };
+
+    /// Run the complete validator and, only on success, immediately apply
+    /// Phase B in the same call stack.  There is deliberately no externally
+    /// storable "validated" capability: callers cannot mutate a batch or the
+    /// committer between Phase A and Phase B.  Its by-value result exposes
+    /// only validate_impl() wall time (not Phase B) after the operation has
+    /// returned, so a timing output cannot alias and mutate the inputs.  A
+    /// result error means Phase B was not entered; commit-time internal
+    /// failures still throw like commit().
+    ValidateAndCommitResult validate_and_commit(const StateDelta& delta,
+                                                const GraphBatch& batch);
+
+    /// Phase B. Full semantic validation is caller-selectable; commit always
+    /// runs the mandatory affine/id/liveness safety preflight (including
+    /// cycles, satisfiable watches, exact p2p multiplicities, exact declared
+    /// collective membership, future-alarm accounting, and variant-specific
+    /// resource-liveness checks) before it changes any state.
+    /// Applies the delta facts to the in-flight
     /// tracking, adds the batch's nodes/edges/watches/alarms, runs the
     /// per-rank issue pass over the touched ranks ONLY, updates the
     /// counters. Throws std::runtime_error on internal inconsistency
     /// (unreachable on validated input).
     void commit(const StateDelta& delta, const GraphBatch& batch);
 
-    /// The persistent (rank, json id) -> store id map (cross-batch edges and
-    /// watch members resolve through it; read-only outside commit()). M2
-    /// (--online-node-gc): entries whose node was collected are pruned at
-    /// the per-rank dense prefix watermark at commit tails; pruned parents
-    /// stay resolvable in validate() and their edges become no-ops (the
-    /// collected node was finished -- NodeStore's dead-parent rule).
-    const std::unordered_map<RankNodeKey, uint64_t, RankNodeKeyHash>&
-    store_ids() const {
-        return store_ids_;
-    }
+    /// Translate a committed (rank, json id) to its NodeStore id without
+    /// allocating. The affine range remains valid after NodeStore GC; callers
+    /// that need liveness must query NodeStore::erased() separately.
+    std::optional<uint64_t> resolve_store_id(int rank,
+                                             uint64_t json_id) const;
+
+    /// Test/diagnostic view of the fixed metadata footprint: exactly one
+    /// RankAffine slot per configured rank, independent of node count.
+    size_t rank_affine_count() const { return rank_affines_.size(); }
 
     /// Phase-5 in-flight request tracking (queries for fixtures/diagnostics).
     const std::set<std::string>& in_flight_requests() const {
@@ -217,7 +248,23 @@ class GraphBatchCommitter {
     static std::vector<int> compute_touched_ranks(const GraphBatch& batch,
                                                   int num_ranks);
 
+    /// A1 (2026-08-28): amortization threshold -- the commit tail drains the
+    /// per-rank GC candidate FIFOs only once this many finished nodes have
+    /// accumulated since the last collection. 4096 keeps the retained
+    /// window bounded while making the per-commit cost an O(#ranks) counter
+    /// sum instead of a full drain (the light-load wall regression that
+    /// forced the old default-off ruling came from draining every commit).
+    static constexpr size_t kGcAmortizeThreshold = 4096;
+
+    /// A1 (2026-08-28): run-end forced collection -- drains every candidate
+    /// FIFO regardless of the amortization counter (no-op when node_gc is
+    /// off), so the run-end
+    /// diagnostics report the true final retained window. Call after the
+    /// event loop ends (all anchors/metrics already emitted).
+    void finalize_node_garbage();
+
   private:
+    friend struct GraphBatchCommitterTestAccess;
     /// Delta facts first: arrivals -> in-flight; PREFILL_DRAIN ->
     /// prefill-drained; REQUEST_COMPLETE -> removed from both. Used on local
     /// copies by validate() and on the real sets by commit().
@@ -225,33 +272,62 @@ class GraphBatchCommitter {
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);
 
-    /// M2 (2026-08-23) store_ids_ prune state, per rank. entries is the
-    /// commit-order FIFO of (json id, store id) pairs appended at Phase B-1;
-    /// per-rank json ids are allocated densely and ascending across batches
-    /// (graph_batch_builder next_id counter), so the queue is ascending per
-    /// rank and pruned_json_watermark_ is the strict dense prefix of json
-    /// ids [0, watermark) already erased from store_ids_ (their nodes were
-    /// GC'd). validate()'s cross-batch parent resolution accepts exactly
-    /// in-batch | still-mapped | below-the-prune-watermark, so it never
-    /// weakens: a never-emitted id stays "unresolved" and fail-closes.
-    struct RankPruneQueue {
-        std::vector<std::pair<uint64_t, uint64_t>> entries;
-        size_t head = 0;
+    /// Exact O(1) translation for one rank's strict contiguous json-id stream.
+    /// [json_first, json_next) is the committed json-id range and maps to
+    /// [store_first, store_next) in that rank's monotonic NodeStore id space.
+    /// The first returned store id is captured from add_node(), so preseeded
+    /// stores and arbitrary json starts are represented exactly.
+    struct RankAffine {
+        bool initialized = false;
+        uint64_t json_first = 0;
+        uint64_t json_next = 0;
+        uint64_t store_first = 0;
+        uint64_t store_next = 0;
     };
 
-    /// M2: collect finished childless nodes in every per-rank store and
-    /// prune store_ids_ at the matching watermark. Called at the very end of
-    /// commit() (a quiescent point) only when ctx_.node_gc is set.
+    /// M2: collect finished childless nodes in every per-rank store. The
+    /// affine translations survive collection, allowing an erased committed
+    /// parent to remain an exact finished-parent no-op. Called at the very end
+    /// of commit() (a quiescent point, A1-amortized: only once the pending
+    /// candidate count reaches kGcAmortizeThreshold) and from
+    /// finalize_node_garbage(), only when ctx_.node_gc is set.
     void collect_node_garbage();
+    std::optional<std::string> validate_impl(
+        const StateDelta& delta, const GraphBatch& batch,
+        std::vector<int>* json_id_touched_ranks) const;
+    std::optional<std::string> validate_affine_drift() const;
+    std::optional<std::string> validate_json_id_stream(
+        const GraphBatch& batch,
+        std::vector<int>* touched_ranks = nullptr) const;
+    /// Production-safe subset of validation. Unlike validate(), this checks
+    /// only invariants whose violation can permanently strand a node, watch,
+    /// callback, collective, or request-accounting record. It is pure and
+    /// runs unconditionally at the start of commit().
+    std::optional<std::string> mandatory_liveness_preflight(
+        const StateDelta& delta, const GraphBatch& batch) const;
+    bool was_json_id_committed(int rank, uint64_t id) const;
+    void record_affine_node(int rank, uint64_t json_id, uint64_t store_id);
+    void commit_after_preflight(const StateDelta& delta, const GraphBatch& batch,
+                                const std::vector<int>& touched_ranks);
 
     Context ctx_;
-    std::unordered_map<RankNodeKey, uint64_t, RankNodeKeyHash> store_ids_;
     std::set<std::string> in_flight_;           // arrived, not completed
     std::set<std::string> prefill_drained_;     // prefill watch fired
     Counters counters_;
-    // M2 node GC prune state (sized lazily at the first commit).
-    std::vector<RankPruneQueue> prune_queues_;
-    std::vector<uint64_t> pruned_json_watermark_;
+    // Fixed O(num_ranks) committed-id history and json->store translation.
+    std::vector<RankAffine> rank_affines_;
+    // Commit-time json-id preflight scratch.  A rank stamp replaces the old
+    // per-batch zeroed vectors: one allocation per committer, O(nodes) work
+    // per batch, and sorted touched ranks only over ranks actually present.
+    mutable std::vector<uint64_t> json_id_expected_by_rank_;
+    mutable std::vector<uint64_t> json_id_seen_stamp_by_rank_;
+    mutable uint64_t json_id_stream_stamp_ = 0;
+    mutable std::vector<int> json_id_discovered_touched_ranks_;
+    std::vector<int> commit_touched_ranks_;
+    // validate_and_commit() owns commit_touched_ranks_ across its whole
+    // validation/commit sequence.  Context callbacks attempting a nested
+    // mutating commit fail closed instead of corrupting that scratch.
+    bool validation_commit_in_progress_ = false;
 };
 
 }  // namespace ExecutionDriven

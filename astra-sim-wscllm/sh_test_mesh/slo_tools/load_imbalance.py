@@ -50,38 +50,45 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
-    """逐请求 (instance, admission→drain) 区间重建。"""
-    admissions: dict[str, int] = {}
-    decode_instances: dict[str, Optional[int]] = {}
-    for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
-        kind = record.get("kind")
-        request_id = record.get("request_id")
-        if not request_id:
-            continue
-        decision = record.get("decision") or {}
-        tick = record.get("tick")
-        if not isinstance(tick, int):
-            fail(f"decision log 行缺整数 tick（kind={kind!r}, "
-                 f"request={request_id!r}）")
-        if kind == "prefill":
-            admission = tick
-            for field in EXPLICIT_ADMISSION_FIELDS.get(repo_variant, ()):
-                value = decision.get(field)
-                if isinstance(value, int):
-                    admission = value
-                    break
-            if request_id in admissions:
-                fail(f"请求 {request_id} 出现多次 prefill 决策（准入应恰一次）")
-            admissions[request_id] = admission
-        elif kind == "decode":
-            instance = decision.get("decode_instance_index")
-            if not isinstance(instance, int):
-                fail(f"请求 {request_id} 的 decode 决策缺整数 "
-                     f"decode_instance_index（逐仓字段映射失效？repo="
-                     f"{repo_variant}）")
-            decode_instances[request_id] = instance
+def li_prepare(repo_variant: str) -> dict:
+    """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。"""
+    return {"admissions": {}, "decode_instances": {}}
 
+
+def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
+    """单条决策记录的 admission/decode 归集（循环体逐语句等价）。"""
+    admissions = state["admissions"]
+    decode_instances = state["decode_instances"]
+    kind = record.get("kind")
+    request_id = record.get("request_id")
+    if not request_id:
+        return  # 原循环体的 continue（无 request_id 行不参与归集）
+    decision = record.get("decision") or {}
+    tick = record.get("tick")
+    if not isinstance(tick, int):
+        fail(f"decision log 行缺整数 tick（kind={kind!r}, "
+             f"request={request_id!r}）")
+    if kind == "prefill":
+        admission = tick
+        for field in EXPLICIT_ADMISSION_FIELDS.get(repo_variant, ()):
+            value = decision.get(field)
+            if isinstance(value, int):
+                admission = value
+                break
+        if request_id in admissions:
+            fail(f"请求 {request_id} 出现多次 prefill 决策（准入应恰一次）")
+        admissions[request_id] = admission
+    elif kind == "decode":
+        instance = decision.get("decode_instance_index")
+        if not isinstance(instance, int):
+            fail(f"请求 {request_id} 的 decode 决策缺整数 "
+                 f"decode_instance_index（逐仓字段映射失效？repo="
+                 f"{repo_variant}）")
+        decode_instances[request_id] = instance
+
+
+def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
+    """train_ledger 读（仅本工具使用，保留独立读；读数仍 1 次）。"""
     drains: dict[str, tuple[int, int]] = {}  # request_id -> (tick, instance)
     skipped_first_step_rows = 0
     for record in iter_jsonl(run_dir / TRAIN_LEDGER_RELPATH):
@@ -105,7 +112,14 @@ def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
             if request_id in drains:
                 fail(f"请求 {request_id} 被多条列车 drain（应恰一次）")
             drains[request_id] = (tick, instance)
+    return drains, skipped_first_step_rows
 
+
+def li_assemble_intervals(state: dict, drains: dict,
+                          skipped_first_step_rows: int) -> list[dict]:
+    """admission/decode/drain 三源合并 + 跳过计数 stderr（顺序原样）。"""
+    admissions = state["admissions"]
+    decode_instances = state["decode_instances"]
     intervals = []
     skipped_no_admission = []
     skipped_no_decode = []
@@ -152,49 +166,100 @@ def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
     return intervals
 
 
+def collect_intervals(run_dir: Path, repo_variant: str) -> list[dict]:
+    """逐请求 (instance, admission→drain) 区间重建（CLI/独立调用入口）。"""
+    state = li_prepare(repo_variant)
+    for record in iter_jsonl(run_dir / DECISION_LOG_RELPATH):
+        li_consume_decision(record, repo_variant, state)
+    drains, skipped_first_step_rows = li_collect_drains(run_dir)
+    return li_assemble_intervals(state, drains, skipped_first_step_rows)
+
+
+def _interval_covered_buckets(admission_ns: int, drain_ns: int,
+                              span_start: int, bucket_ns: int,
+                              n_buckets: int) -> int:
+    """单区间 [admission, drain) 对 sum(series) 的桶贡献数（O(1)）。
+
+    与逐桶累加逐语句等价：admission < bucket_end(b) ⟺ b >= first；
+    drain > bucket_start(b) ⟺ b < last 或（b == last 且 drain 不落桶边界）。
+    """
+    first = (admission_ns - span_start) // bucket_ns
+    last = (drain_ns - span_start) // bucket_ns
+    hi = last - 1 if (drain_ns - span_start) % bucket_ns == 0 else last
+    lo = max(0, first)
+    hi = min(n_buckets - 1, hi)
+    return hi - lo + 1 if hi >= lo else 0
+
+
 def instance_timeavg_backlog(intervals: list[dict], bucket_ns: int,
                              span_start: int, span_end: int
                              ) -> dict[int, tuple[float, int]]:
-    """各 instance 积压时间序列 → 时间平均积压（返回 instance -> (b̄, n_req)）。
+    """各 instance 积压 → 时间平均积压（返回 instance -> (b̄, n_req)）。
 
     桶 j 覆盖 [span_start + j*bucket, +bucket)；请求区间对桶的覆盖按
     时间重叠 >0 计入（区间端点闭开 [admission, drain)）。
+
+    2026-08-30 爆内存根治：原实现为每实例预分配 ``[0] * n_buckets``
+    稠密分桶序列并逐桶累加，稠密序列的唯一消费方式是
+    ``sum(series) * bucket_ns``（Σ桶计数×桶长）。全量 tracelab 跨度
+    2.7e15 ns ÷ 1ms 桶 = 每实例 27 亿桶 × 9 实例 ≈ 182 GiB，曾把
+    80GB VM 拖入全局 OOM。现改为 O(1) 区间算术（_interval_covered_buckets
+    逐语句等价推导见其 docstring），每实例只持一个整数累加器，
+    内存 O(区间数)，与时间跨度/桶长彻底解耦。
     """
     n_buckets = max(1, math.ceil((span_end - span_start) / bucket_ns))
-    per_instance: dict[int, list[int]] = {}
+    covered_buckets: dict[int, int] = {}
     counts: dict[int, int] = {}
     for interval in intervals:
-        series = per_instance.setdefault(interval["instance"],
-                                         [0] * n_buckets)
-        counts[interval["instance"]] = counts.get(
-            interval["instance"], 0) + 1
-        first = (interval["admission_ns"] - span_start) // bucket_ns
-        last = (interval["drain_ns"] - span_start) // bucket_ns
-        for b in range(max(0, int(first)), min(n_buckets, int(last) + 1)):
-            bucket_start = span_start + b * bucket_ns
-            bucket_end = bucket_start + bucket_ns
-            if interval["drain_ns"] > bucket_start and \
-                    interval["admission_ns"] < bucket_end:
-                series[b] += 1
+        instance = interval["instance"]
+        covered_buckets[instance] = covered_buckets.get(instance, 0) + \
+            _interval_covered_buckets(interval["admission_ns"],
+                                      interval["drain_ns"], span_start,
+                                      bucket_ns, n_buckets)
+        counts[instance] = counts.get(instance, 0) + 1
     result: dict[int, tuple[float, int]] = {}
     total = span_end - span_start
     if total <= 0:
         fail("load_imbalance：时间跨度为 0，无法做时间平均")
-    for instance, series in per_instance.items():
-        covered = sum(series) * bucket_ns
+    for instance, covered in covered_buckets.items():
+        covered_ns = covered * bucket_ns
         # 末桶可能被 span 截断：按实际桶数×桶长覆盖，误差 ≤1 桶（记录于
         # 输出的 bucket_ns/span，供交叉核对）。
-        result[instance] = (covered / total, counts[instance])
+        result[instance] = (covered_ns / total, counts[instance])
     return result
 
 
-def cmd_load_imbalance(args: argparse.Namespace) -> int:
-    manifest = load_slo_manifest(args.manifest or default_manifest_path())
+def load_imbalance_bucket_ns(manifest: dict) -> int:
+    """A4 driver 用：manifest 参数读取（保持步骤内时点，红线 R7）。"""
     bucket_ns = require_param_int(manifest, "imbalance_bucket_ns")
     if bucket_ns <= 0:
         fail("imbalance_bucket_ns 必须为正整数（ns）")
+    return bucket_ns
+
+
+def load_imbalance_finish(args: argparse.Namespace, repo_variant: str,
+                          bucket_ns: int, state: dict) -> int:
+    """A4 driver 用：drains 读 + 区间合并 + 输出（顺序与 CLI 一致）。"""
+    drains, skipped_first_step_rows = li_collect_drains(args.run_dir)
+    intervals = li_assemble_intervals(state, drains, skipped_first_step_rows)
+    return load_imbalance_emit(args, repo_variant, bucket_ns, intervals)
+
+
+def cmd_load_imbalance(args: argparse.Namespace) -> int:
+    # CLI 入口（独立运行行为不变；顺序与拆分前逐语句一致）。A4 driver 经
+    # load_imbalance_bucket_ns / li_prepare / li_consume_decision /
+    # load_imbalance_finish 组合复用同一逻辑（单遍 decision log）。
+    manifest = load_slo_manifest(args.manifest or default_manifest_path())
+    bucket_ns = load_imbalance_bucket_ns(manifest)
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
-    intervals = collect_intervals(args.run_dir, repo_variant)
+    state = li_prepare(repo_variant)
+    for record in iter_jsonl(args.run_dir / DECISION_LOG_RELPATH):
+        li_consume_decision(record, repo_variant, state)
+    return load_imbalance_finish(args, repo_variant, bucket_ns, state)
+
+
+def load_imbalance_emit(args: argparse.Namespace, repo_variant: str,
+                        bucket_ns: int, intervals: list[dict]) -> int:
     span_start = min(i["admission_ns"] for i in intervals)
     span_end = max(i["drain_ns"] for i in intervals)
     stats = instance_timeavg_backlog(intervals, bucket_ns, span_start,

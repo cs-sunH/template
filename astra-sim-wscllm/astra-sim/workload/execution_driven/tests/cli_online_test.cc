@@ -31,9 +31,25 @@ token):
        the frozen default; both inline and separate value forms legal;
        negative / garbage / over-int-range values are hard errors).
   R12 M2 node GC (2026-08-23): --online-node-gc <0|1> with frozen default
-       0 (off, ruling flip 2026-08-23: light-load wall regression); 1 =
-       collection enabled (memory arm); both value forms legal; garbage /
-       missing values and --online-node typos are hard errors.
+       1 (on -- A1 amortization avoids the former light-load per-commit
+       collection cost); 0 = pre-M2 never-erase rollback arm; both
+       value forms legal; garbage / missing values and --online-node typos
+       are hard errors.
+  R13 FP1 hardened unsigned lexicon (2026-09-01, sync-A16 batch P; E25/E32):
+       every integer option (--request-window-rows / --request-max-arrival-ns
+       / --bridge-timeout-ms / --online-validate) rejects leading-whitespace
+       negatives (" -1", "\t-1"), explicit "+1", ERANGE-saturating tokens
+       (ULLONG_MAX+1, 40-digit strings) BEFORE any value is written; the two
+       int-typed options reject INT_MAX+1 (and 4294967296 for
+       --online-validate, which would wrap to 0 and silently disable
+       validation) and accept exactly INT_MAX; any failed parse leaves the
+       out struct untouched (sentinel check).
+  R14 FP1 watchdog lexicon and bounds (E26 ordering): --idle-watchdog-s
+       accepts 0 (off), sub-second values, 1e-9 and 1e9 (the bounds
+       themselves); rejects tokens containing whitespace or a sign
+       character (" +1", " -1", "\t-1"), nan/inf/garbage tails, ERANGE
+       under/overflow, (0, 1e-9) "below clock resolution", and anything
+       above 1e9; failed parses leave out untouched.
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I . astra-sim/workload/execution_driven/tests/cli_online_test.cc \
@@ -261,12 +277,12 @@ int main() {
     assert(out.sensing_enabled && out.close_input &&
            out.bridge_dir == "/tmp/bridge");
 
-    // R12: M2 node GC (2026-08-23) --online-node-gc <0|1>, default 0 (off,
-    // ruling flip 2026-08-23: light-load wall regression); 1 = collection
-    // enabled (memory arm); both value forms legal; garbage / missing
+    // R12: M2 node GC (2026-08-23) --online-node-gc <0|1>, frozen default
+    // 1 (on -- A1 amortization makes collection cheap on light runs); 0
+    // remains the pre-M2 never-erase behavior; both value forms legal; garbage / missing
     // values and --online-node typos are hard errors.
     assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.online_node_gc == 0);
+    assert(out.online_node_gc == 1);
     assert(parse_ok({"--online-mode", "strategy", "--online-node-gc=0"}, out));
     assert(out.online_node_gc == 0);
     assert(parse_ok({"--online-mode", "strategy", "--online-node-gc", "1"},
@@ -283,7 +299,115 @@ int main() {
     assert(parse_error({"--online-mode", "strategy", "--online-node-gc-x=1"})
                .find("unknown online-family") != std::string::npos);
 
-    std::printf("[cli] ALL PASS: R1-R12 online CLI contract verified "
-                "(incl. phase-7 §10.4 window knobs, M2 node-gc arm)\n");
+    // R13: FP1 hardened unsigned lexicon (2026-09-01, sync-A16 batch P;
+    // E25/E32). The whitespace-negative shapes defeated the old
+    // first-character '-' check (strtoull skips leading whitespace, parses
+    // the negation, wraps to ULLONG_MAX and sets no ERANGE on 64-bit);
+    // "+1" was silently accepted. All four integer options now share the
+    // pure-ASCII-digit lexicon and must reject every one of these shapes
+    // with no partial write into `out`.
+    const std::vector<std::string> int_opts = {
+        "--request-window-rows", "--request-max-arrival-ns",
+        "--bridge-timeout-ms", "--online-validate"};
+    for (const std::string& opt : int_opts) {
+        // sentinel: prove a failed parse writes nothing
+        OnlineCliOptions sentinel;
+        sentinel.request_window_rows = 777;
+        sentinel.request_max_arrival_ns = 777;
+        sentinel.bridge_timeout_ms = 777;
+        sentinel.online_validate = 777;
+        for (const std::string& bad : {" -1", "\t-1", "+1", "-1", "1x", " 1",
+                                       "18446744073709551616",
+                                       "9999999999999999999999999999999999"
+                                       "999999999"}) {
+            OnlineCliOptions probe = sentinel;
+            assert(parse_error({"--online-mode", "strategy", opt, bad})
+                       .find("integer") != std::string::npos);
+            // separate-value form reaches the same lexicon
+            assert(!parse_ok({"--online-mode", "strategy", opt, bad}, probe));
+            assert(probe.request_window_rows == 777 &&
+                   probe.request_max_arrival_ns == 777 &&
+                   probe.bridge_timeout_ms == 777 &&
+                   probe.online_validate == 777);
+        }
+    }
+    // R13: int-typed options bound at exactly INT_MAX.
+    assert(parse_ok({"--online-mode", "strategy",
+                     "--online-validate=2147483647"}, out));
+    assert(out.online_validate == 2147483647);
+    assert(parse_ok({"--online-mode", "strategy",
+                     "--bridge-timeout-ms=2147483647"}, out));
+    assert(out.bridge_timeout_ms == 2147483647);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--online-validate=2147483648"})
+               .find("integer range") != std::string::npos);
+    // 4294967296 wraps to 0 under the old unchecked cast -- silent
+    // fail-OPEN for the validation switch; must be rejected.
+    assert(parse_error({"--online-mode", "strategy",
+                        "--online-validate=4294967296"})
+               .find("integer range") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--bridge-timeout-ms=2147483648"})
+               .find("int range") != std::string::npos);
+
+    // R14: FP1 watchdog lexicon and E26 bounds ordering.
+    // accepted: 0 = off, sub-second, both bounds themselves
+    assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s", "0"},
+                    out));
+    assert(out.idle_watchdog_s == 0.0);
+    assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s=0.5"},
+                    out));
+    assert(out.idle_watchdog_s == 0.5);
+    {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%.17g", kMinIdleWatchdogSeconds);
+        assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
+                         buf}, out));
+        assert(out.idle_watchdog_s == kMinIdleWatchdogSeconds);
+        std::snprintf(buf, sizeof(buf), "%.17g", kMaxIdleWatchdogSeconds);
+        assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s",
+                         buf}, out));
+        assert(out.idle_watchdog_s == kMaxIdleWatchdogSeconds);
+    }
+    // rejected lexicon: whitespace / sign characters anywhere
+    for (const std::string& bad : {" +1", " -1", "\t-1", "+900", "-0.5",
+                                   "1 ", "9 00"}) {
+        OnlineCliOptions probe;
+        probe.idle_watchdog_s = -42.5;
+        assert(parse_error({"--online-mode", "strategy",
+                            "--idle-watchdog-s", bad})
+                   .find("whitespace or sign") != std::string::npos);
+        assert(!parse_ok({"--online-mode", "strategy",
+                          "--idle-watchdog-s", bad}, probe));
+        assert(probe.idle_watchdog_s == -42.5);
+    }
+    // rejected: garbage tails / non-finite / ERANGE both directions
+    for (const std::string& bad : {"abc", "1e", "nan", "inf", "1e309",
+                                   "1e-320", "0.0e0x"}) {
+        assert(parse_error({"--online-mode", "strategy",
+                            "--idle-watchdog-s", bad})
+                   .find("finite number") != std::string::npos);
+    }
+    // rejected between the bounds (E26 order): below clock resolution and
+    // above the platform cap
+    assert(parse_error({"--online-mode", "strategy",
+                        "--idle-watchdog-s=1e-10"})
+               .find("clock resolution") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--idle-watchdog-s=9.3e9"})
+               .find("upper bound") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy",
+                        "--idle-watchdog-s=1e308"})
+               .find("upper bound") != std::string::npos);
+    // missing value
+    assert(parse_error({"--online-mode", "strategy", "--idle-watchdog-s"})
+               .find("requires a value") != std::string::npos);
+    // --idle-* typos stay hard errors (family fail-closed)
+    assert(parse_error({"--online-mode", "strategy", "--idle-watchdog=1"})
+               .find("unknown online-family") != std::string::npos);
+
+    std::printf("[cli] ALL PASS: R1-R14 online CLI contract verified "
+                "(incl. phase-7 §10.4 window knobs, M2 node-gc arm, FP1 "
+                "hardened unsigned lexicon + watchdog bounds)\n");
     return 0;
 }

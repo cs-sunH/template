@@ -73,6 +73,7 @@ start_online() {  # $1=run_dir $2=scenario
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
+    --online-validate 1 \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \

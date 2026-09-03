@@ -608,12 +608,47 @@ class WscLlmSchedulerTests(unittest.TestCase):
             )
             manager.mark_complete(session_id, completion_ns, f"{session_id}0")
 
-        c_decision = manager.prepare_history(
-            "c", 0, 0, 30, "c0", required_context_tokens=30
-        )
+        candidate_calls = 0
+        original_candidate_sessions = manager._candidate_sessions
+
+        def snapshot_candidates(*args, **kwargs):
+            nonlocal candidate_calls
+            candidate_calls += 1
+            return original_candidate_sessions(*args, **kwargs)
+
+        manager._candidate_sessions = snapshot_candidates
+        try:
+            c_decision = manager.prepare_history(
+                "c", 0, 0, 30, "c0", required_context_tokens=30
+            )
+        finally:
+            manager._candidate_sessions = original_candidate_sessions
+
+        # The admission needs two deletions, but one stage-local LRU snapshot.
+        self.assertEqual(candidate_calls, 1)
         self.assertEqual(
             tuple(record.victim_session_id for record in c_decision.evictions),
             ("a", "b"),
+        )
+        self.assertEqual(
+            [
+                (event.event_type, event.session_id, event.phase,
+                 event.reason, event.trigger_request_id)
+                for event in manager.events
+            ],
+            [
+                ("no_history", "a", "history", "window_first_request", "a0"),
+                ("retain_complete", "a", "completion", "request_completed_keep_kv", "a0"),
+                ("no_history", "b", "history", "window_first_request", "b0"),
+                ("retain_complete", "b", "completion", "request_completed_keep_kv", "b0"),
+                ("evict_delete", "a", "history", "history_and_prefill_admission", "c0"),
+                ("evict_delete", "b", "history", "history_and_prefill_admission", "c0"),
+                ("no_history", "c", "history", "window_first_request", "c0"),
+            ],
+        )
+        self.assertEqual(
+            tuple(snapshot.remaining_bytes for snapshot in manager.hbm_snapshots(0)),
+            (256,),
         )
         self.assertEqual(manager.session_snapshot("a").logical_context_tokens, 10)
         self.assertEqual(manager.session_snapshot("a").state, "EVICTED")
@@ -622,6 +657,175 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertTrue(deferred.deferred)
         self.assertTrue(manager.session_snapshot("c").active)
         manager.mark_complete("c", 31, "c0")
+        manager.assert_final_state()
+
+    def test_terminal_retirement_releases_local_kv_and_fails_closed(self) -> None:
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 400, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        self.assertFalse(
+            manager.prepare_history(
+                "terminal", 0, 0, 10, "terminal_r0",
+                required_context_tokens=10,
+            ).admission_blocked
+        )
+        self.assertTrue(manager.grow_prefill("terminal", 10, 10, "terminal_r0").admitted)
+        with self.assertRaisesRegex(RuntimeError, "inactive completed"):
+            manager.retire_terminal_session("terminal", 10, "terminal_r0")
+
+        manager.mark_complete("terminal", 10, "terminal_r0")
+        completion_actions = manager.events
+        self.assertEqual(
+            manager.retire_terminal_session("terminal", 10, "terminal_r0"),
+            0,
+        )
+        self.assertEqual(manager.events, completion_actions)
+        self.assertEqual(manager.session_ids, ())
+        self.assertIsNone(manager.session_snapshot("terminal"))
+        self.assertTrue(
+            all(snapshot.resident_kv_bytes == 0
+                for snapshot in manager.hbm_snapshots())
+        )
+        with self.assertRaises(KeyError):
+            manager.retire_terminal_session("terminal", 10, "terminal_r0")
+
+    def test_terminal_retirement_bounds_many_single_turn_sessions(self) -> None:
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 400, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        for index in range(32):
+            session_id = f"single_{index}"
+            request_id = f"{session_id}_r0"
+            self.assertFalse(
+                manager.prepare_history(
+                    session_id, 0, 0, index, request_id,
+                    required_context_tokens=10,
+                ).admission_blocked
+            )
+            self.assertTrue(manager.grow_prefill(session_id, 10, index, request_id).admitted)
+            manager._pressure_event(
+                now_ns=index,
+                phase="admission",
+                event_type="admission_blocked",
+                reason="test_pressure_ownership",
+                trigger_request_id=request_id,
+                target_instance_index=0,
+                before=(),
+                after=(),
+                insufficient_ranks=(),
+            )
+            self.assertIn(request_id, manager._pressure_event_keys_by_request)
+            manager.mark_complete(session_id, index, request_id)
+            self.assertNotIn(request_id, manager._pressure_event_keys_by_request)
+            self.assertFalse(manager._pressure_event_keys)
+            manager.retire_terminal_session(session_id, index, request_id)
+            self.assertEqual(manager.session_ids, ())
+
+    def test_pressure_event_dedup_is_request_scoped_and_retired(self) -> None:
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 1_000, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        requests = (("first", "first_r0"), ("second", "second_r0"))
+        for index, (session_id, request_id) in enumerate(requests):
+            self.assertFalse(
+                manager.prepare_history(
+                    session_id,
+                    0,
+                    0,
+                    index,
+                    request_id,
+                    required_context_tokens=10,
+                ).admission_blocked
+            )
+            self.assertTrue(
+                manager.grow_prefill(session_id, 10, index, request_id).admitted
+            )
+
+        def record_pressure(request_id: str, now_ns: int) -> None:
+            manager._pressure_event(
+                now_ns=now_ns,
+                phase="admission",
+                event_type="admission_blocked",
+                reason="test_request_scoped_pressure",
+                trigger_request_id=request_id,
+                target_instance_index=0,
+                before=(),
+                after=(),
+                insufficient_ranks=(),
+            )
+
+        for now_ns in range(3):
+            record_pressure("first_r0", now_ns)
+        for now_ns in range(3, 6):
+            record_pressure("second_r0", now_ns)
+
+        pressure_events = [
+            event
+            for event in manager.events
+            if event.reason in {
+                "test_request_scoped_pressure",
+                "retry_after_previous_capacity_block",
+            }
+        ]
+        self.assertEqual(
+            [(event.event_type, event.trigger_request_id) for event in pressure_events],
+            [
+                ("admission_blocked", "first_r0"),
+                ("admission_retry", "first_r0"),
+                ("admission_blocked", "second_r0"),
+                ("admission_retry", "second_r0"),
+            ],
+        )
+        self.assertEqual(
+            set(manager._pressure_event_keys_by_request),
+            {"first_r0", "second_r0"},
+        )
+        self.assertEqual(
+            manager._pressure_event_keys,
+            {
+                ("admission_blocked", "admission", "first_r0", 0),
+                ("admission_retry", "admission", "first_r0", 0),
+                ("admission_blocked", "admission", "second_r0", 0),
+                ("admission_retry", "admission", "second_r0", 0),
+            },
+        )
+
+        manager.mark_complete("first", 10, "first_r0")
+        manager.retire_terminal_session("first", 10, "first_r0")
+        self.assertEqual(set(manager._pressure_event_keys_by_request), {"second_r0"})
+        self.assertEqual(
+            manager._pressure_event_keys,
+            {
+                ("admission_blocked", "admission", "second_r0", 0),
+                ("admission_retry", "admission", "second_r0", 0),
+            },
+        )
+
+        manager.mark_complete("second", 11, "second_r0")
+        manager.retire_terminal_session("second", 11, "second_r0")
+        self.assertFalse(manager._pressure_event_keys)
+        self.assertFalse(manager._pressure_event_keys_by_request)
         manager.assert_final_state()
 
 

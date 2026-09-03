@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/CallbackTracker.hh"
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace AstraSimAnalytical;
 
@@ -76,7 +78,15 @@ void CallbackTracker::pop_entry(const int tag,
 
     // find entry
     const auto entry = tracker.find(key);
-    assert(entry != tracker.end());  // entry must exist
+    if (entry == tracker.end()) {
+        std::fprintf(stderr,
+                     "[Error] (network/analytical) CallbackTracker pop "
+                     "without an entry (tag=%d src=%d dest=%d size=%llu "
+                     "chunk=%d)\n",
+                     tag, src, dest,
+                     static_cast<unsigned long long>(chunk_size), chunk_id);
+        std::abort();
+    }
 
     // erase entry from the tracker
     tracker.erase(entry);

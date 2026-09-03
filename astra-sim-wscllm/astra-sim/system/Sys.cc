@@ -44,6 +44,14 @@ namespace AstraSim {
 uint8_t* Sys::dummy_data = new uint8_t[2];
 vector<Sys*> Sys::all_sys;
 
+namespace {
+
+void cancel_call_events_alarm(void* const arg) {
+    delete static_cast<BasicEventHandlerData*>(arg);
+}
+
+}  // namespace
+
 // SchedulerUnit --------------------------------------------------------------
 Sys::SchedulerUnit::SchedulerUnit(Sys* sys,
                                   vector<int> queues,
@@ -69,7 +77,8 @@ Sys::SchedulerUnit::SchedulerUnit(Sys* sys,
             base++;
         }
         dimension++;
-        UsageTracker u(2);
+        UsageTracker u(
+            2, sys->execution_mode_ != ExecutionDriven::ExecutionMode::Online);
         usage.push_back(u);
     }
 }
@@ -518,20 +527,38 @@ void Sys::exit_sim_loop(string msg) {
 void Sys::call(EventType type, CallData* data) {}
 
 void Sys::call_events() {
-    for (auto& callable : event_queue[Sys::boostedTick()]) {
+    const Tick now = Sys::boostedTick();
+    auto event_list_it = event_queue.find(now);
+    if (event_list_it == event_queue.end()) {
+        // A previously cancelled last event may still have a backend alarm
+        // queued. Its payload/list node is already gone, so this is a true
+        // no-op rather than recreating an empty map bucket with operator[].
+        return;
+    }
+
+    dispatching_events = true;
+    dispatching_event_time = now;
+    auto& scheduled_events = event_list_it->second.events;
+    // The analytical frontend removes its registry entry before calling us.
+    // Forget this weak outer identity before user callbacks can re-enter Sys.
+    event_list_it->second.outer_alarm.reset();
+    while (!scheduled_events.empty()) {
+        // Pop before callback invocation. A re-entrant cancellation can thus
+        // only remove a later pending node; it cannot free the CallData the
+        // current callback is executing with.
+        ScheduledEvent callable = std::move(scheduled_events.front());
+        scheduled_events.pop_front();
         try {
             pending_events--;
-            (get<0>(callable))->call(get<1>(callable), get<2>(callable));
+            callable.callable->call(callable.event, callable.call_data);
         } catch (const std::exception& e) {
             auto logger = LoggerFactory::get_logger("system");
             logger->critical("warning! a callable is removed before call {}",
                              e.what());
         }
     }
-    if (event_queue[Sys::boostedTick()].size() > 0) {
-        event_queue[Sys::boostedTick()].clear();
-    }
-    event_queue.erase(Sys::boostedTick());
+    dispatching_events = false;
+    event_queue.erase(event_list_it);
 }
 
 void Sys::register_event(Callable* callable,
@@ -541,18 +568,83 @@ void Sys::register_event(Callable* callable,
     try_register_event(callable, event, callData, delta_cycles);
 }
 
+SystemEventHandle Sys::register_event_cancellable(
+    Callable* callable,
+    EventType event,
+    CallData* callData,
+    Tick delta_cycles,
+    EventDataCancellationCallback cancellation_callback) {
+    if (next_cancellable_event_id == 0) {
+        sys_panic("cancellable system event id space exhausted");
+    }
+    const uint64_t event_id = next_cancellable_event_id++;
+    const Tick event_time = Sys::boostedTick() + delta_cycles;
+    auto [event_list_it, should_schedule] = event_queue.try_emplace(event_time);
+    event_list_it->second.events.push_back(
+        {callable, event, callData, event_id, cancellation_callback});
+    if (should_schedule) {
+        timespec_t tmp;
+        tmp.time_res = NS;
+        tmp.time_val = delta_cycles;
+        BasicEventHandlerData* data =
+            new BasicEventHandlerData(id, EventType::CallEvents);
+        data->sys_id = id;
+        event_list_it->second.outer_alarm = comm_NI->sim_schedule_cancellable(
+            tmp, &Sys::handleEvent, data, &cancel_call_events_alarm);
+    }
+    pending_events++;
+    SystemEventHandle handle;
+    handle.owner_ = this;
+    handle.event_time_ = event_time;
+    handle.event_id_ = event_id;
+    return handle;
+}
+
+bool Sys::cancel_event(SystemEventHandle& handle) {
+    if (!handle.valid() || handle.owner_ != this) {
+        handle.reset();
+        return false;
+    }
+
+    const auto event_list_it = event_queue.find(handle.event_time_);
+    if (event_list_it == event_queue.end()) {
+        handle.reset();
+        return false;
+    }
+    for (auto event_it = event_list_it->second.events.begin();
+         event_it != event_list_it->second.events.end(); ++event_it) {
+        if (event_it->event_id != handle.event_id_) {
+            continue;
+        }
+        CallData* const payload = event_it->call_data;
+        const auto cancellation_callback = event_it->cancellation_callback;
+        event_list_it->second.events.erase(event_it);
+        pending_events--;
+        handle.reset();
+        if (event_list_it->second.events.empty() &&
+            (!dispatching_events ||
+             event_list_it->first != dispatching_event_time)) {
+            static_cast<void>(
+                comm_NI->sim_cancel_event(event_list_it->second.outer_alarm));
+            event_queue.erase(event_list_it);
+        }
+        if (cancellation_callback != nullptr) {
+            cancellation_callback(payload);
+        }
+        return true;
+    }
+    handle.reset();
+    return false;
+}
+
 void Sys::try_register_event(Callable* callable,
                              EventType event,
                              CallData* callData,
                              Tick& delta_cycles) {
-    bool should_schedule = false;
     auto event_time = Sys::boostedTick() + delta_cycles;
-    if (event_queue.find(event_time) == event_queue.end()) {
-        list<tuple<Callable*, EventType, CallData*>> tmp;
-        event_queue[event_time] = tmp;
-        should_schedule = true;
-    }
-    event_queue[event_time].push_back(make_tuple(callable, event, callData));
+    auto [event_list_it, should_schedule] = event_queue.try_emplace(event_time);
+    event_list_it->second.events.push_back(
+        {callable, event, callData, 0, nullptr});
     if (should_schedule) {
         timespec_t tmp;
         tmp.time_res = NS;
@@ -576,7 +668,14 @@ void Sys::handleEvent(void* arg) {
     EventType event = ehd->event;
 
     if (event == EventType::CallEvents) {
-        all_sys[id]->call_events();
+        // Analytical frontends cancel the matching outer alarm when the final
+        // Sys event disappears. Legacy/fake frontends retain sim_schedule's
+        // old behavior, so keep this fallback safe if such a stale alarm
+        // arrives after its Sys (and HBM model) has gone away.
+        if (id >= 0 && static_cast<size_t>(id) < all_sys.size() &&
+            all_sys[id] != nullptr) {
+            all_sys[id]->call_events();
+        }
         delete ehd;
     } else if ((event == EventType::NPU_to_MA) ||
                (event == EventType::MA_to_NPU)) {
@@ -805,7 +904,15 @@ DataSet* Sys::generate_collective(
                         InterDimensionScheduling::OfflineGreedyFlex)) {
             uint64_t prev_size = size;
             dim_mapper = offline_greedy->get_chunk_scheduling(
-                num_streams, size, recommended_chunk_size, dimensions_involved,
+                communicator_group == nullptr ? 0
+                                              : communicator_group->get_id(),
+                communicator_group == nullptr
+                    ? num_streams
+                    : communicator_group->num_streams,
+                communicator_group == nullptr
+                    ? all_sys.size()
+                    : communicator_group->involved_NPUs.size(),
+                size, recommended_chunk_size, dimensions_involved,
                 inter_dimension_scheduling, collective_type);
             chunk_size = prev_size - size;
         }
@@ -1178,9 +1285,7 @@ void Sys::insert_stream(list<BaseStream*>* queue, BaseStream* baseStream) {
 }
 
 void Sys::ask_for_schedule(int max) {
-    if (ready_list.size() == 0 ||
-        ready_list.front()->synchronizer[ready_list.front()->stream_id] <
-            all_sys.size()) {
+    if (ready_list.size() == 0) {
         return;
     }
     int top = ready_list.front()->stream_id;
@@ -1214,16 +1319,11 @@ void Sys::schedule(int num) {
         proceed_to_next_vnet_baseline((StreamBaseline*)ready_list.front());
 
         if (ready_list.front()->current_queue_id == -1) {
-            Sys::sys_panic(
-                "should not happen! " +
-                to_string(
-                    BaseStream::synchronizer[ready_list.front()->stream_id]) +
-                " , " +
-                to_string(
-                    BaseStream::ready_counter[ready_list.front()->stream_id]) +
-                " , top queue id: " + to_string(top_vn) +
-                " , total phases: " + to_string(total_phases) +
-                " , waiting streams: " + to_string(total_waiting_streams));
+            Sys::sys_panic("should not happen! top queue id: " +
+                           to_string(top_vn) + " , total phases: " +
+                           to_string(total_phases) +
+                           " , waiting streams: " +
+                           to_string(total_waiting_streams));
         }
 
         ready_list.pop_front();
