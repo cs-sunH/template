@@ -25,18 +25,35 @@ ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
-# 长跑楔死看门狗（2026-08-22 楔死诊断建议，可选）：设 BRIDGE_TIMEOUT_MS
-# 为正毫秒数时向 C++ 桥传 --bridge-timeout-ms——Python 决策侧停滞超时即
-# fail-closed abort（cpp.log 出现 Python side died 行），替代"永等+外部盲杀"。
-# 值必须大于本负载最慢单决策耗时，且大于 Python 服务启动的 FIFO 开启
-# 等待（实际下界是秒级，建议 ≥10000=10s——过小会在启动窗口 abort C++，
-# Python 侧将阻塞在 fifo open）；缺省不设 = 永等（冻结默认）。
+# 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正）：向 C++ 桥传
+# --bridge-timeout-ms——Python 决策侧单次交换停滞超时即 fail-closed abort
+# （cpp.log 出现 Python side died 行），替代"永等+外部盲杀"。
+# BRIDGE_TIMEOUT_MS 三态语义：
+#   未设/空  -> 缺省 120000（campaign 常态；值必须大于本负载最慢单决策耗时，
+#               且大于 Python 服务启动的 FIFO 开启等待——实际下界是秒级，
+#               建议 >=10000=10s，过小会在启动窗口 abort C++）；
+#   显式 =0  -> 永等（冻结旧默认的逃生口：桥侧 poll 不设超时）；
+#   正值     -> 该值（毫秒）。
+# 定位（修正 2026-08-22 楔死报告 §6.2 的覆盖面误标）：本看门狗只武装 C++ 桥的
+# 两处 response poll（DecisionBridge.cc），覆盖"Python 侧单次决策交换停滞"族；
+# 它管不到 C++ 主循环 wait_for_work() 停泊族（2026-08-31 实锤的 41 分钟静默
+# 楔死形态）——后者由 --idle-watchdog-s 墙钟停泊看门狗兜住（本仓已无
+# input-open 死端分支，对齐 wscllm 合同 §2.1；缺省关），不在本变量职责内。
 # 监督纪律：终止长跑用 SIGTERM（kill <pid>），勿用 SIGINT/Ctrl-C——后者会
 # 冻结健康瞬态造成"楔死"伪影（2026-08-22 诊断结论）；疑似楔死时先保留
-# bridge 目录盘态与双方 /proc/<pid>/stack 再清理。
-BRIDGE_TIMEOUT_ARGS=()
-if [[ -n "${BRIDGE_TIMEOUT_MS:-}" ]]; then
-  BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
+# bridge 目录盘态与双方 /proc/<pid>/{wchan,syscall,stack} 再清理。
+BRIDGE_TIMEOUT_MS="${BRIDGE_TIMEOUT_MS:-120000}"
+BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
+
+# P0-2 (2026-08-31)：可选透传 SH_REQUEST_WINDOW_ROWS——缺省不传（C++ 侧
+# --request-window-rows 缺省 128）。四仓对齐 wscllm（sync-A16 批次4）：本仓
+# 窗口为 advisory（calendar reader 按 arrival 序提交，窗口值不改变任何行为；
+# 无 C++ 启动 span 预检——不设 A1 拒绝门，合同 §3.1），0/正数照原 token 透传
+# 仅为 CLI/checkpoint 兼容口径统一；非法 token 原样交给 C++ 统一
+# fail-closed，runner 不自行吞掉。
+WINDOW_ROWS_ARGS=()
+if [[ -n "${SH_REQUEST_WINDOW_ROWS:-}" ]]; then
+  WINDOW_ROWS_ARGS=(--request-window-rows "${SH_REQUEST_WINDOW_ROWS}")
 fi
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 
@@ -75,11 +92,38 @@ rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
 cd "${PROJECT}"
 
+# P2(2026-08-28):per-request manifest 拷入 run_dir 根——run_dir 自包含、
+# 与仓还原状态解耦(slo_common.load_request_manifest 优先级:run_dir/
+# metrics_manifest.json > cpp.log init 行指向的 generated/ 副本;裸仓还原
+# 会删 generated/,且仓内副本每仿真点重写、跨点不可复现)。
+cp "${ET_DIR}/metrics_manifest.json" "${RUN_DIR}/metrics_manifest.json"
+if [ -f "${ET_DIR}/manifest.json" ]; then
+  cp "${ET_DIR}/manifest.json" "${RUN_DIR}/manifest.json"
+fi
+
+# A1/C1/D3(2026-08-28)三个降耗开关(runner 默认值,env 可覆盖):
+#   --online-node-gc   默认 1(摊销化 NodeStore GC,含 store_ids prune);
+#   --online-validate  默认 0(生产关全量校验;冒烟/对拍显式 SH_ONLINE_VALIDATE=1);
+#   ASTRA_LINK_OBSERVER 默认 0(在线模式 link_bucket/link_total 行无消费者;
+#                       metrics_postprocess 不读,hopbytes 走 decision log;
+#                       =1 恢复发射)。
+export ASTRA_LINK_OBSERVER="${ASTRA_LINK_OBSERVER:-0}"
+
+# P0-2 (2026-08-31, 总文档 §4 P0-2.5): Python 侧无缓冲输出——下方启动行已是
+# python3 -u，此处再 export PYTHONUNBUFFERED=1 属防御性冗余：确保本 runner
+# 后续拉起的任何非 -u python 子进程（诊断/后处理脚本）也不再 block-buffer
+# stdout。2026-08-31 楔死现场 python.log 0 字节即 block-buffered stdout 吞掉
+# 了 Python 侧全部痕迹，楔死归因被迫全靠盘态法证。
+export PYTHONUNBUFFERED=1
+
 # C++ first: creates the bridge dir + FIFOs (decision_bridge contract).
 "${BIN}" \
   --online-mode strategy \
   --bridge-dir "${RUN_DIR}/bridge" \
+  --online-node-gc "${SH_ONLINE_NODE_GC:-1}" \
+  --online-validate "${SH_ONLINE_VALIDATE:-0}" \
   "${BRIDGE_TIMEOUT_ARGS[@]}" \
+  "${WINDOW_ROWS_ARGS[@]}" \
   --request-queue-csv "${REQUEST_CSV}" \
   --close-input \
   --workload-configuration="${ET_PREFIX}" \
@@ -142,13 +186,13 @@ fi
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
 #    run 一份,run 目录即版本,不轮转;run 脚本开头 rm -rf 保证有界。
 #  - checkpoints/: C++ 窗口位置检查点(bridge/checkpoints/,run 结束原子写)。
-#  - 临时产物    : response/ack 在协议层消费即删(阶段 7 §10.3);bridge/
-#    保留 request_*.json(幂等重放输入 + 决策序列审计证据)与 fifo。
+#  - 临时产物    : response/ack 消费即删;request 散装文件按 256 条批量
+#    并入 request_journal.jsonl 后删除,成功结束仅保留单一顺序审计流与 fifo。
 #  - 失败清理    : 失败时 bridge 保留为调试证据(不自动删),打印残留计数,
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))
@@ -157,6 +201,25 @@ done
 # Backport 2026-08-16 (对比报告 §5.3): ls with a >2e4-entry glob exceeds
 # ARG_MAX (E2BIG, exit 126 under set -e) -- count via find instead.
 CP_COUNT=$(find "${RUN_DIR}/bridge/checkpoints" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
-REQ_COUNT=$(find "${RUN_DIR}/bridge" -maxdepth 1 -name 'request_*.json' 2>/dev/null | wc -l)
-echo "[run_online_strategy] artifacts: ${ARCHIVED} jsonl archived -> results/; checkpoints=${CP_COUNT}; request retained=${REQ_COUNT}"
+echo "[run_online_strategy] artifacts: ${ARCHIVED} jsonl archived -> results/; checkpoints=${CP_COUNT}; request_journal=results/request_journal.jsonl"
+# P3(2026-08-28):仿真成功后自动 SLO 指标提取(postprocess 成功之后、
+# archive_run_outputs.sh 之前:cpp.log 未压缩、manifest 已拷入、results/
+# 已归位,输入全齐;产物随保留集常驻,最细粒度纪律见脚本头注)。
+# SH_SLO_POSTPROCESS: 1=默认 warn(子命令失败只写 slo_postprocess.FAIL,
+# 不推翻仿真结果); 0=整步跳过; strict=失败即本 runner 非零退出。
+SLO_MODE="${SH_SLO_POSTPROCESS:-1}"
+if [[ "${SLO_MODE}" != "0" ]]; then
+  if ! bash "${SCRIPT_DIR}/run_slo_postprocess.sh" "${RUN_DIR}"; then
+    if [[ "${SLO_MODE}" == "strict" ]]; then
+      echo "[run_online_strategy] FAIL: SLO postprocess failed (SH_SLO_POSTPROCESS=strict)" >&2
+      exit 1
+    fi
+    echo "[run_online_strategy] WARN: SLO postprocess failures flagged in ${RUN_DIR}/slo_postprocess.FAIL (warn mode)" >&2
+  fi
+fi
+# D1(2026-08-28):成功后产物瘦身归档(失败路径早已 exit 1 全量保留)。
+# SH_ARCHIVE_RUN=0 关闭(调试/对拍需要散装 bridge 文件时)。
+if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
+  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" || exit 1
+fi
 echo "[run_online_strategy] PASS: ${RUN_DIR}"

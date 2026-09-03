@@ -11,9 +11,13 @@ tests/cli_online_test.cc).
 
 #include <unistd.h>
 
+#include <cerrno>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 
 namespace AstraSim {
@@ -24,7 +28,31 @@ namespace {
 bool is_online_family(const std::string& token) {
     return token.rfind("--request-", 0) == 0 || token.rfind("--bridge-", 0) == 0 ||
            token.rfind("--close-", 0) == 0 || token.rfind("--online-", 0) == 0 ||
-           token.rfind("--command-", 0) == 0 || token.rfind("--sensing-", 0) == 0;
+           token.rfind("--command-", 0) == 0 || token.rfind("--sensing-", 0) == 0 ||
+           // P0-2 (2026-08-31, 总文档 §4 P0-2.3): the --idle- family
+           // (--idle-watchdog-s). Without this prefix the shared parser
+           // would silently swallow a typo'd --idle-* flag (the header
+           // contract: the online family is parsed fail-closed here).
+           token.rfind("--idle-", 0) == 0;
+}
+
+// FP1 (2026-09-01, sync-A16 batch P; contract E25): the frozen unsigned
+// integer lexicon -- non-empty and every character an ASCII '0'..'9'.
+// This replaces the old first-character '-' rejection: strtoull skips
+// leading whitespace, so " -1" / "\t-1" passed the old check, parsed as a
+// negated wrap-around ULLONG_MAX, and set no ERANGE (the 64-bit range
+// check could not catch it); "+1" was silently accepted as 1. A pure
+// digit lexicon rejects all three shapes before strtoull runs.
+bool is_ascii_digits(const std::string& s) {
+    if (s.empty()) {
+        return false;
+    }
+    for (const char c : s) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Returns the inline value after "=", or false when the value is missing.
@@ -52,8 +80,14 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     bool sensing_enabled = false;
     std::string bridge_dir;
     int bridge_timeout_ms = 0;
+    // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock parking watchdog
+    // seconds; 0 = off (frozen default, original wait_for_work contract).
+    double idle_watchdog_s = 0.0;
     std::string request_queue_csv;
     std::string command_fifo;
+    // P0 fix (2026-08-30): advisory-only calendar-reader compatibility knob
+    // (the turn-0 submission order is driven by the arrival calendar, not by
+    // a row window -- see OnlineCli.hh).
     size_t request_window_rows = 128;
     // Backport fix (2026-08-16, sh_2.0测试 §5.1): default UNBOUNDED (0 = no
     // arrival-window cap). The previous 30e9 default burned the 30s
@@ -62,10 +96,15 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     // (--request-max-arrival-ns), and any drop it causes is fail-closed at
     // the run-end completion audit (see main_online.cc).
     uint64_t request_max_arrival_ns = 0;
-    // M2 node GC (2026-08-23): frozen default 0 (off -- flipped after the
-    // reproducible light-load wall regression; enable per-run for
-    // memory-bound heavy/parallel campaigns, see main_online.cc).
-    int online_node_gc = 0;
+    // M2 node GC (2026-08-23; A1 amortization 2026-08-28): default 1 (on --
+    // the 2026-08-23 light-load-regulation default-off ruling is superseded
+    // by the amortized collection; see OnlineCli.hh).
+    int online_node_gc = 1;
+    // C1 validate switch (2026-08-28): 1 full / 0 off / N >= 2 sample every
+    // Nth batch. Frozen CLI default 1 (fail-closed, matches the pre-C1
+    // behavior for bare invocations); the official runner overrides with
+    // "${SH_ONLINE_VALIDATE:-0}".
+    int online_validate = 1;
 
     for (int i = 1; i < argc; ++i) {
         const std::string token(argv[i]);
@@ -98,9 +137,9 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             }
             mode = value;
         } else if (name == "--online-node-gc") {
-            // M2 node GC (2026-08-23): <0|1>, frozen default 0 (off --
-            // ruling flip 2026-08-23); 1 is the collection arm for
-            // memory-bound heavy/parallel campaigns.
+            // M2 node GC (2026-08-23; A1 amortization 2026-08-28): <0|1>,
+            // frozen default 1 (on -- amortized collection; see
+            // OnlineCli.hh).
             if (!has_inline_value) {
                 if (i + 1 >= argc) {
                     error = "option --online-node-gc requires a value";
@@ -117,6 +156,41 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                         " (expected \"0\" or \"1\")";
                 return false;
             }
+        } else if (name == "--online-validate") {
+            // C1 validate switch (2026-08-28): <0|1|N>. Non-negative
+            // integer (FP1/E32 hardened lexicon: pure ASCII digits ->
+            // errno/ERANGE -> endptr -> <= INT_MAX, only then the
+            // static_cast<int>; 4294967296 would otherwise wrap to 0 and
+            // silently DISABLE validation -- fail-open, the opposite of
+            // this parser's contract); 1 = full validation (pre-C1
+            // behavior), 0 = production skip, N >= 2 = sample every Nth
+            // batch.
+            if (!has_inline_value) {
+                if (i + 1 >= argc) {
+                    error = "option --online-validate requires a value";
+                    return false;
+                }
+                value = argv[++i];
+            }
+            if (!is_ascii_digits(value)) {
+                error = "option --online-validate requires a non-negative "
+                        "integer (ASCII digits only), got: " + value;
+                return false;
+            }
+            char* end = nullptr;
+            errno = 0;
+            const unsigned long long parsed = std::strtoull(
+                value.c_str(), &end, 10);
+            if (errno == ERANGE || end == value.c_str() || *end != '\0' ||
+                parsed > static_cast<unsigned long long>(
+                             std::numeric_limits<int>::max())) {
+                error = "option --online-validate exceeds the accepted "
+                        "integer range (max " +
+                        std::to_string(std::numeric_limits<int>::max()) +
+                        "), got: " + value;
+                return false;
+            }
+            online_validate = static_cast<int>(parsed);
         } else if (name == "--close-input") {
             if (has_inline_value) {
                 error = "flag --close-input takes no value";
@@ -149,9 +223,13 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         } else if (name == "--request-window-rows" ||
                    name == "--request-max-arrival-ns" ||
                    name == "--bridge-timeout-ms") {
-            // Phase 7 §10.4: WindowedTraceReader knobs (window high water /
-            // turn-0 arrival upper bound) + the bridge poll watchdog.
-            // Non-negative integers.
+            // WindowedTraceReader knobs (advisory row window / turn-0
+            // arrival upper bound) + the bridge poll watchdog.
+            // Non-negative integers. FP1 (2026-09-01, sync-A16 batch P;
+            // E25): frozen lexicon -- pure ASCII digits (rejects " -1",
+            // "\t-1", "+1" before strtoull can wrap them), errno=0 +
+            // ERANGE rejection, endptr-at-end, then the per-option target
+            // type range; no partial writes on failure.
             if (!has_inline_value) {
                 if (i + 1 >= argc) {
                     error = "option " + name + " requires a value";
@@ -159,16 +237,27 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
+            if (!is_ascii_digits(value)) {
+                error = "option " + name + " requires a non-negative "
+                        "integer (ASCII digits only), got: " + value;
+                return false;
+            }
             char* end = nullptr;
+            errno = 0;
             const unsigned long long parsed = std::strtoull(
                 value.c_str(), &end, 10);
-            if (value.empty() || value[0] == '-' || end == value.c_str() ||
-                *end != '\0') {
-                error = "option " + name + " requires a non-negative "
-                        "integer, got: " + value;
+            if (errno == ERANGE || end == value.c_str() || *end != '\0') {
+                error = "option " + name + " exceeds the unsigned integer "
+                        "range, got: " + value;
                 return false;
             }
             if (name == "--request-window-rows") {
+                if (parsed > static_cast<unsigned long long>(
+                                 std::numeric_limits<size_t>::max())) {
+                    error = "option --request-window-rows exceeds size_t "
+                            "range, got: " + value;
+                    return false;
+                }
                 request_window_rows = static_cast<size_t>(parsed);
             } else if (name == "--bridge-timeout-ms") {
                 if (parsed > 2147483647ULL) {
@@ -178,7 +267,87 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 bridge_timeout_ms = static_cast<int>(parsed);
             } else {
+                if (parsed > static_cast<unsigned long long>(
+                                 std::numeric_limits<uint64_t>::max())) {
+                    error = "option --request-max-arrival-ns exceeds "
+                            "uint64_t range, got: " + value;
+                    return false;
+                }
                 request_max_arrival_ns = static_cast<uint64_t>(parsed);
+            }
+        } else if (name == "--idle-watchdog-s") {
+            // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop
+            // parking watchdog. Double seconds (sub-second armings are legal
+            // for fixtures; campaigns use >= 600), 0 = off (frozen default).
+            // FP1 (2026-09-01, sync-A16 batch P; E25/E26) frozen lexicon and
+            // the ONE ordering that removes the "0 = off" ambiguity:
+            //   1) token non-empty, contains no whitespace character, and
+            //      its first character is neither '+' nor '-' (strtod
+            //      accepts " +1"/" -1"/"\t-1" shapes that no CLI contract
+            //      should honor);
+            //   2) errno=0 strtod, reject ERANGE (overflow AND underflow:
+            //      a subnormal underflow would round to 0.0 and be
+            //      misread as "off");
+            //   3) reject non-finite (nan/inf degenerate the deadline);
+            //   4) == 0.0 -> ACCEPT, meaning OFF (E26: zero closes the
+            //      watchdog only; the main loop then takes the original
+            //      blocking wait_for_work(), never the checked helper);
+            //   5) 0 < v < kMinIdleWatchdogSeconds -> reject ("below clock
+            //      resolution": parses but could never survive the tick
+            //      conversion);
+            //   6) v > kMaxIdleWatchdogSeconds -> reject (platform cap).
+            // The bounds themselves (1e-9 / 1e9) are accepted.
+            if (!has_inline_value) {
+                if (i + 1 >= argc) {
+                    error = "option --idle-watchdog-s requires a value";
+                    return false;
+                }
+                value = argv[++i];
+            }
+            bool lex_bad = value.empty();
+            for (const char c : value) {
+                if (std::isspace(static_cast<unsigned char>(c))) {
+                    lex_bad = true;
+                    break;
+                }
+            }
+            if (!value.empty() && (value[0] == '+' || value[0] == '-')) {
+                lex_bad = true;
+            }
+            if (lex_bad) {
+                error = "option --idle-watchdog-s requires a non-negative "
+                        "number of seconds with no whitespace or sign "
+                        "characters, got: " + value;
+                return false;
+            }
+            char* end = nullptr;
+            errno = 0;
+            const double parsed_s =
+                std::strtod(value.c_str(), &end);
+            if (errno == ERANGE || end == value.c_str() || *end != '\0' ||
+                !std::isfinite(parsed_s)) {
+                error = "option --idle-watchdog-s requires a finite number "
+                        "of seconds within the accepted range, got: " +
+                        value;
+                return false;
+            }
+            if (parsed_s == 0.0) {
+                // E26: 0 = off -- accepted, no bound applies.
+                idle_watchdog_s = parsed_s;
+            } else if (parsed_s < kMinIdleWatchdogSeconds) {
+                error = "option --idle-watchdog-s is below the clock "
+                        "resolution (minimum " +
+                        std::to_string(kMinIdleWatchdogSeconds) +
+                        " s), got: " + value;
+                return false;
+            } else if (parsed_s > kMaxIdleWatchdogSeconds) {
+                error = "option --idle-watchdog-s exceeds the accepted "
+                        "upper bound (maximum " +
+                        std::to_string(kMaxIdleWatchdogSeconds) +
+                        " s), got: " + value;
+                return false;
+            } else {
+                idle_watchdog_s = parsed_s;
             }
         } else {
             error = "unknown online-family option: " + name;
@@ -202,12 +371,14 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     out.close_input = close_input;
     out.bridge_dir = bridge_dir;
     out.bridge_timeout_ms = bridge_timeout_ms;
+    out.idle_watchdog_s = idle_watchdog_s;
     out.request_queue_csv = request_queue_csv;
     out.command_fifo = command_fifo;
     out.sensing_enabled = sensing_enabled;
     out.request_window_rows = request_window_rows;
     out.request_max_arrival_ns = request_max_arrival_ns;
     out.online_node_gc = online_node_gc;
+    out.online_validate = online_validate;
     return true;
 }
 

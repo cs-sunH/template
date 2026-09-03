@@ -14,18 +14,14 @@ main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
     real physics (step 1-9);
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;
-  - runs the request-neutral main loop, drain_commands() BEFORE the
-    finished() check (drain-before-finished per 主控裁决 2026-08-15:
-    commands submitted before Close are never dropped):
-    while (true) {
-        ingress.drain_commands();
-        if (svc.finished()) { break; }
-        if (event_queue->finished()) { svc.wait_for_work(); }  // block, no busy wait
-        else { event_queue->proceed(); }
-    }
-    The final end authority is ServiceCoordinator::finished() only
-    (input closed && active==0 && no pending alarm/fence); an empty
-    EventQueue never ends the run.
+  - runs the request-neutral main loop, draining ingress commands before
+    every state decision (drain-before-finished per 主控裁决 2026-08-15:
+    commands submitted before Close are never dropped).  svc.finished()
+    denotes logical request-lifecycle completion only; it is not an immediate
+    process-exit condition.  The loop must continue to drain the EventQueue,
+    its deferred issue pass, and the DecisionMailbox, and exits only after all
+    four are physically quiescent.  Conversely, an empty EventQueue never
+    ends a run while the service is still logically active.
 
 Step 1-6: the DecisionMailbox aggregates scheduler-visible events (ARRIVAL
 from the ingress alarm, PREFILL_DRAIN / DECODE_COMPLETION / REQUEST_COMPLETE
@@ -40,8 +36,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
     same-tick deferred event (hard rule: from inside the tick-end callback,
     same-tick events MUST go through schedule_event_deferred);
   - ed_commit_cb executes the four-phase commit:
-      1. nodes  -> NodeStore::add_node, keeping the persistent
-         (rank, graph-batch id) -> store id map (跨批次);
+      1. nodes  -> NodeStore::add_node, extending the persistent per-rank
+         affine graph-batch-id -> store-id translation (跨批次);
       2. parent_edges -> add_dependency (Data kind; the phase-1 DepKind
          resolves all kinds identically);
       3. watches -> WatchRegistry::register_stage_watch with the
@@ -64,7 +60,9 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
     future_alarm-driven -- submitting them here would double-arrive them)
     and counts ALL data rows for the run-end completion assertion
     (expected: 1177 for the 20.csv first-30-seconds input).
-  - run end: svc.finished() only; assertions completed == CSV data rows and
+  - run end: svc.finished() marks logical completion; process exit additionally
+    requires the EventQueue, deferred issue pass, and DecisionMailbox to be
+    drained.  Assertions completed == CSV data rows and
     no_decision_python_callback_count == 0 (acceptance: 1177/1177 replay).
 
 Step 1-10 (runners + IDLE fixture):
@@ -147,9 +145,8 @@ namespace {
 // Step-1-8 decision-loop context
 // ---------------------------------------------------------------------------
 
-// NOTE (phase 5): RankNodeKey / RankNodeKeyHash moved to
-// GraphBatchCommitter.hh (the committer owns the persistent (rank, json id)
-// -> store id map and the in-flight request tracking).
+// NOTE (phase 5): GraphBatchCommitter owns the persistent per-rank affine
+// json-id -> store-id translation and the in-flight request tracking.
 
 struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
@@ -178,12 +175,10 @@ struct OnlineDriverContext {
     // phase 6): when set, the tick-end gate computes the per-rank
     // injected-unfinished ledger summary into StateDelta.injected_unfinished.
     bool sensing_enabled = false;
-    // Phase 4 (schema v1): the per-delivery completed-facts buffer
-    // (StateDelta.completed_nodes). The online CompletionObserver hook
-    // appends one fact per node terminal; the tick-end gate moves the
-    // buffer into the delivery and clears it. Facts accumulated since the
-    // previous delivery epoch belong to the next delivery.
-    std::vector<CompletedNodeFact> completed_facts;
+    // Phase 4 (schema v1): terminal accounting. Production updates only
+    // O(1) counters and preserves completed_nodes as []; the explicit exact
+    // audit mode retains legacy per-node facts until the next delivery.
+    CompletedFactAccumulator completed_facts;
     // Phase 4 (schema v1): per-epoch affected-rank accumulator
     // (StateDelta.affected_ranks). The watch-fire notifier (main scope)
     // appends fire.member_ranks; the tick-end gate sorts/dedups into the
@@ -194,6 +189,11 @@ struct OnlineDriverContext {
     // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
     // for the field semantics.
     OnlineStatsCounters stats;
+    // C1 validate switch (2026-08-28, --online-validate): 1 = validate every
+    // batch (pre-C1 behavior, the CLI default), 0 = production skip, N >= 2 =
+    // sample every Nth committed batch. Copied from the parsed CLI here so
+    // ed_commit_cb can gate Phase A without reaching back into main's scope.
+    int online_validate = 1;
 };
 
 // The commit payload: the StateDelta + GraphBatch response of one delivery
@@ -248,19 +248,32 @@ struct CommitArg {
 // fire (no store id 0 exists) and every other anchor would bind to the
 // PREVIOUS node on the rank (measured: 103c diagnostic run -- only
 // late-request issue anchors ever matched, 20/1177 issues, and those were
-// shifted by one). The watch registry never hit this because it
-// translates members through the same store_ids_ map at commit time; the
-// anchors must too. store_ids maps every (rank, json id) of THIS batch to
-// its store id (B-1 filled it); any node missing from it is a commit
-// invariant violation and is skipped defensively (registering a json id
-// would resurrect the off-by-one).
+// shifted by one). The watch registry and these anchors instead translate
+// the committed ids through GraphBatchCommitter's per-rank affine resolver.
+// It is exact for every committed JSON id (including a preseeded NodeStore),
+// does not allocate, and avoids rebuilding a whole-batch id hash.
 static void register_online_metrics_anchors(
     const GraphBatch& batch,
-    const std::unordered_map<RankNodeKey, uint64_t, RankNodeKeyHash>&
-        store_ids) {
+    const GraphBatchCommitter& committer,
+    std::vector<std::shared_ptr<NodeStoreGraphSource>>& graph_sources) {
     struct NodeRef {
         int rank = -1;
         uint64_t node_id = 0;
+    };
+    // R2 (2026-08-29) anchor fast path: registration returns true exactly
+    // when a routing entry exists on the registered edge, so the flag is
+    // set HERE (Phase B-1.5: after add_node assigned the store ids, before
+    // the issue pass) -- add_node itself cannot know yet whether the node
+    // will be anchored. OR semantics per edge; a defensive rank-bounds
+    // skip mirrors the collector's unknown-request no-op.
+    const auto set_anchor_flags = [&graph_sources](int rank, uint64_t node_id,
+                                                   bool issue, bool complete) {
+        if (rank < 0 ||
+            rank >= static_cast<int>(graph_sources.size())) {
+            return;  // defensive: bounds mirror the collector's no-ops
+        }
+        graph_sources[rank]->store().set_metric_anchor_flags(node_id, issue,
+                                                             complete);
     };
     // (request_id, rank, stage) -> first node of the group (start anchor).
     std::map<std::tuple<std::string, int, std::string>, NodeRef> first_of;
@@ -272,36 +285,34 @@ static void register_online_metrics_anchors(
     // harmless and cross-TP ranks each contribute).
     std::vector<std::pair<std::pair<std::string, int>, NodeRef>>
         first_token_nodes;
-    for (const auto& node : batch.nodes) {
-        if (!node.contains("request_id") || !node.contains("stage") ||
-            !node.contains("rank") || !node.contains("id")) {
-            continue;  // defensive: every emitted node carries them
-        }
-        const std::string request_id = node.at("request_id").get<std::string>();
-        const std::string stage = node.at("stage").get<std::string>();
-        const int rank = node.at("rank").get<int>();
-        const uint64_t json_id = node.at("id").get<uint64_t>();
-        const auto id_it =
-            store_ids.find(RankNodeKey{rank, json_id});
-        if (id_it == store_ids.end()) {
+    // C1 (2026-08-29): typed walk (this was DOM walk #4) -- request_id /
+    // stage / rank / json id / name are direct field reads off the parsed
+    // batch; the vector preserves the emission order, so the first/last
+    // group selections see the exact same sequence the DOM walk saw.
+    for (const auto& parsed : batch.nodes) {
+        const std::string& request_id = parsed.node.request_id;
+        const std::string& stage = parsed.node.stage;
+        const int rank = parsed.node.rank;
+        const uint64_t json_id = parsed.json_id;
+        const auto store_id = committer.resolve_store_id(rank, json_id);
+        if (!store_id.has_value()) {
             continue;  // defensive: B-1 just inserted every batch node
         }
-        const uint64_t store_id = id_it->second;
-        const std::string name = node.value("name", std::string());
+        const std::string& name = parsed.node.name;
         if (name.find("first_token") != std::string::npos) {
             // WP9 observation-only marker: never feeds the first_of
             // start-anchor or last_transfer groups below.
             first_token_nodes.push_back(
-                {{request_id, rank}, NodeRef{rank, store_id}});
+                {{request_id, rank}, NodeRef{rank, *store_id}});
             continue;
         }
         const auto group = std::make_tuple(request_id, rank, stage);
         auto& first = first_of[group];
         if (first.rank < 0) {
-            first = {rank, store_id};
+            first = {rank, *store_id};
         }
         if (name.find("kv") != std::string::npos) {
-            last_transfer[{request_id, rank}] = {rank, store_id};
+            last_transfer[{request_id, rank}] = {rank, *store_id};
         }
     }
     // Start anchors: the FIRST node of each (request, rank, stage) group
@@ -312,8 +323,11 @@ static void register_online_metrics_anchors(
         (void)rank;
         const std::string kind =
             stage == "prefill" ? "prefill_start" : "decode_start";
-        MetricCollector::instance().online_register_node_anchor(
-            ref.rank, ref.node_id, request_id, kind, false);
+        if (MetricCollector::instance().online_register_node_anchor(
+                ref.rank, ref.node_id, request_id, kind, false)) {
+            set_anchor_flags(ref.rank, ref.node_id, /*issue=*/true,
+                             /*complete=*/false);
+        }
     }
     // End anchors come from the WATCH MEMBERS, not from the last batch node:
     // the watch member value is the stage's real last node per rank (the
@@ -325,31 +339,27 @@ static void register_online_metrics_anchors(
     // member values are json ids and must be translated to store ids the
     // same way.
     for (const auto& watch : batch.watches) {
-        if (!watch.contains("request_id") || !watch.contains("stage") ||
-            !watch.contains("members")) {
-            continue;  // defensive: every watch carries them
-        }
-        const std::string request_id =
-            watch.at("request_id").get<std::string>();
-        const std::string stage = watch.at("stage").get<std::string>();
+        const std::string& request_id = watch.request_id;
+        const std::string& stage = watch.stage;
         const bool is_prefill = stage == "prefill";
         std::vector<int> ranks;
-        for (auto it = watch.at("members").begin();
-             it != watch.at("members").end(); ++it) {
-            try {
-                const int rank = std::stoi(it.key());
-                ranks.push_back(rank);
-                const uint64_t json_id = it.value().get<uint64_t>();
-                const auto id_it =
-                    store_ids.find(RankNodeKey{rank, json_id});
-                if (id_it == store_ids.end()) {
-                    continue;  // defensive: every watch member is a batch node
-                }
-                MetricCollector::instance().online_register_node_anchor(
-                    rank, id_it->second, request_id,
-                    is_prefill ? "prefill_end" : "completion", false);
-            } catch (const std::exception&) {
-                continue;  // defensive: member keys are rank numbers
+        // C1: typed members in JSON key order (rank-string ascending --
+        // the same iteration order the DOM walk saw; the stoi and the
+        // defensive try/catch around it are gone: the parser validated
+        // every member key/range once).
+        for (const auto& member : watch.members) {
+            const int rank = member.rank;
+            ranks.push_back(rank);
+            const uint64_t json_id = member.json_id;
+            const auto store_id = committer.resolve_store_id(rank, json_id);
+            if (!store_id.has_value()) {
+                continue;  // defensive: every watch member is a batch node
+            }
+            if (MetricCollector::instance().online_register_node_anchor(
+                    rank, *store_id, request_id,
+                    is_prefill ? "prefill_end" : "completion", false)) {
+                set_anchor_flags(rank, *store_id, /*issue=*/false,
+                                 /*complete=*/true);
             }
         }
         MetricCollector::instance().online_register_ranks(
@@ -358,16 +368,22 @@ static void register_online_metrics_anchors(
     // Transfer anchors (doc sec.4.3): the last KV-route node per
     // (request_id, rank) -- history_kv / prefill_to_decode_kv routes.
     for (const auto& [key, ref] : last_transfer) {
-        MetricCollector::instance().online_register_node_anchor(
-            ref.rank, ref.node_id, key.first, "", true);
+        if (MetricCollector::instance().online_register_node_anchor(
+                ref.rank, ref.node_id, key.first, "", true)) {
+            set_anchor_flags(ref.rank, ref.node_id, /*issue=*/false,
+                             /*complete=*/true);
+        }
     }
     // WP9 first-token anchors (WP9_CONTRACT §1): kind "first_token" -> event
     // code 8 (complete edge, subject=request, min tick per subject). Every
     // occurrence registers -- cross-TP ranks each contribute their own
     // completion and the collector takes the min.
     for (const auto& [key, ref] : first_token_nodes) {
-        MetricCollector::instance().online_register_node_anchor(
-            ref.rank, ref.node_id, key.first, "first_token", false);
+        if (MetricCollector::instance().online_register_node_anchor(
+                ref.rank, ref.node_id, key.first, "first_token", false)) {
+            set_anchor_flags(ref.rank, ref.node_id, /*issue=*/false,
+                             /*complete=*/true);
+        }
     }
 }
 
@@ -382,27 +398,40 @@ void ed_commit_cb(void* arg) {
     const GraphBatch& batch = commit->batch;
 
     // ---- Phase A: full pre-commit validation (pure, zero state mutation) ----
-    // Phase 6 (方案 §9.1): graph_validate_ns timed at the call site -- the
-    // committer's validate() itself stays PURE (zero side effects, the
-    // phase-5 fixture contract), so the counter lives here in the caller.
-    const auto validate_t0 = std::chrono::steady_clock::now();
-    try {
-        if (auto error = driver->committer->validate(commit->delta, batch)) {
-            online_fatal(
-                "GraphBatch validation failed (delivery_sequence=" +
-                std::to_string(commit->delta.delivery_sequence) + "): " +
-                *error);
+    // C1 (2026-08-28, --online-validate): 1 = every batch (pre-C1 behavior,
+    // the CLI default -- fail-closed for bare invocations); 0 = production
+    // skip; N >= 2 = sample every Nth batch (the committer's
+    // graph_batch_count IS the index of the batch about to be committed).
+    // Sampled/full-validation batches use one atomic validate_and_commit()
+    // call; validation-off batches retain commit()'s mandatory preflight.
+    // Phase 6 (方案 §9.1): graph_validate_ns is the API's validate_impl-only
+    // duration; the public validate() itself remains pure for fixtures.
+    const int validate_mode = driver->online_validate;
+    const bool should_validate =
+        validate_mode == 1 ||
+        (validate_mode >= 2 &&
+         driver->committer->counters().graph_batch_count %
+                 static_cast<uint64_t>(validate_mode) ==
+             0);
+    if (should_validate) {
+        GraphBatchCommitter::ValidateAndCommitResult validation_result;
+        try {
+            validation_result =
+                driver->committer->validate_and_commit(commit->delta, batch);
+            if (validation_result.error.has_value()) {
+                online_fatal(
+                    "GraphBatch validation failed (delivery_sequence=" +
+                    std::to_string(commit->delta.delivery_sequence) + "): " +
+                    *validation_result.error);
+            }
+        } catch (const std::exception& exc) {
+            online_fatal("GraphBatch commit threw (delivery_sequence=" +
+                         std::to_string(commit->delta.delivery_sequence) +
+                         "): " + exc.what());
         }
-    } catch (const std::exception& exc) {
-        online_fatal("GraphBatch validate threw (delivery_sequence=" +
-                     std::to_string(commit->delta.delivery_sequence) + "): " +
-                     exc.what());
+        driver->stats.graph_validate_count += 1;
+        driver->stats.graph_validate_ns += validation_result.validation_ns;
     }
-    driver->stats.graph_validate_count += 1;
-    driver->stats.graph_validate_ns +=
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - validate_t0)
-            .count();
 
     // ---- Phase-7 §10.3: dynamic metrics anchor registration runs INSIDE
     //      commit() (Phase B-1.5, via the Context::metrics_anchor_hook),
@@ -414,15 +443,18 @@ void ed_commit_cb(void* arg) {
     //      pass, so the anchors always exist when on_node_issue fires.
     //      No-op when metrics are disabled (hook not installed). ----
 
-    // ---- Phase B: atomic commit (nodes -> edges -> watches -> alarms ->
-    //      issue pass over the touched ranks only). Throws only on internal
-    //      inconsistency (validated input cannot fail structurally). ----
-    try {
-        driver->committer->commit(commit->delta, batch);
-    } catch (const std::exception& exc) {
-        online_fatal("GraphBatch commit threw (delivery_sequence=" +
-                     std::to_string(commit->delta.delivery_sequence) + "): " +
-                     exc.what());
+    // ---- Phase B: sampled/full-validation batches already committed inside
+    //      validate_and_commit(), so no caller-visible gap exists between the
+    //      full validation and mutation.  Validation-off batches retain the
+    //      independent mandatory affine/id/liveness preflight in commit(). ----
+    if (!should_validate) {
+        try {
+            driver->committer->commit(commit->delta, batch);
+        } catch (const std::exception& exc) {
+            online_fatal("GraphBatch commit threw (delivery_sequence=" +
+                         std::to_string(commit->delta.delivery_sequence) +
+                         "): " + exc.what());
+        }
     }
 
     // ---- REQUEST_COMPLETE accounting (after the alarms: the batch's last
@@ -435,9 +467,16 @@ void ed_commit_cb(void* arg) {
     //      requests (per-request index; by now both stage watches fired).
     //      This keeps the phase-4 run-end end-audit empty-registry
     //      invariant (mailbox/watch/heap/ready set all empty) -- fired
-    //      watches stay registered until the request completes. ----
+    //      watches stay registered until the request completes.
+    //      A2 (2026-08-28): the completed request's metric anchors are dead
+    //      weight by now (every anchored node of the request has fired both
+    //      its issue and complete hooks before the decode watch could fire,
+    //      and the REQUEST_COMPLETE delta fact arrives at a strictly later
+    //      epoch) -- release the routing entries through the same loop. ----
     for (const auto& request_id : commit->completed_requests) {
         driver->watch_registry->remove_watches_for_request(request_id);
+        MetricCollector::instance().online_release_request_anchors(
+            request_id);
     }
 
     // ---- 拼 batch 适配(2026-08-22):回收已 fire 的列车哨兵 watch ----
@@ -515,9 +554,11 @@ void ed_driver_tick_end(void* ctx) {
             std::chrono::steady_clock::now() - snapshot_t0)
             .count();
     // Phase 4 (schema v1): drain the per-epoch affected-rank accumulator
-    // (union of the fired watches' member ranks, sorted unique) and the
-    // completed-facts buffer into the delivery, then reset both. retry_items
-    // is always empty in v1 (no producer until the legacy migration).
+    // (union of the fired watches' member ranks, sorted unique) and, only in
+    // explicit exact-audit mode, terminal facts into the delivery. Production
+    // keeps completed_nodes as [] and retains only O(1) terminal counters.
+    // retry_items is always empty in v1 (no producer until the legacy
+    // migration).
     std::vector<int> affected_ranks;
     if (driver->affected_ranks_accumulator != nullptr &&
         !driver->affected_ranks_accumulator->empty()) {
@@ -531,8 +572,8 @@ void ed_driver_tick_end(void* ctx) {
     StateDelta delta = build_state_delta_v1(
         driver->mailbox->drain(),
         driver->event_queue->get_current_time(),
-        driver->delivery_seq++, deferred_from,
-        std::move(driver->completed_facts), {}, std::move(affected_ranks),
+        driver->delivery_seq++, deferred_from, driver->completed_facts.drain(),
+        {}, std::move(affected_ranks),
         std::move(injected_unfinished));
     auto* commit = new CommitArg;
     commit->driver = driver;
@@ -757,90 +798,129 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
 }
 
 /// Emit the link_bucket / link_total [METRIC] records from the observer's
-/// integrated series (summary/full runs only; the caller gates). Bucket
-/// rows are sparse; trailing/leading zero buckets are simply absent, and a
-/// bucket with all-zero links emits only when at least one link carried
-/// bytes in it. RSS discipline: the caller releases the arrays right
-/// after this returns.
+/// integrated series (summary/full runs only; the caller gates). Closed
+/// bucket rows are replayed in bucket/link order from the scheduler's
+/// anonymous spool, so only this one aggregate stays resident. The documented
+/// first/last-window anchors are emitted without filling empty gaps.
 static void emit_link_observer_records(
     const std::shared_ptr<FluidScheduler>& scheduler,
     const EdgeLinkSet& edge_links) {
-    const auto& bucket_rows = scheduler->link_observer_bucket_bytes();
-    const auto& totals = scheduler->link_observer_totals();
     const uint64_t bucket_ns = scheduler->link_observer_bucket_ns();
     const uint64_t window_ns = scheduler->link_observer_window_ns();
     const auto& collector = MetricCollector::instance();
 
-    size_t bucket_count = 0;
-    for (const auto& row : bucket_rows) {
-        bucket_count = std::max(bucket_count, row.size());
-    }
-    // Coordinator ruling 2026-08-26: the first and last bucket of the
-    // window always emit (window anchors); empty middle buckets do not.
-    if (bucket_ns > 0 && window_ns > 0) {
-        const uint64_t window_buckets =
-            window_ns / bucket_ns + (window_ns % bucket_ns != 0 ? 1 : 0);
-        if (window_buckets > bucket_count) {
-            bucket_count = window_buckets;
-        }
-    }
-    const uint64_t last_bucket =
-        bucket_count > 0 ? static_cast<uint64_t>(bucket_count) - 1 : 0;
-
-    for (uint64_t bucket = 0; bucket < bucket_count; ++bucket) {
-        uint64_t bucket_total = 0;
+    struct BucketAggregate {
+        uint64_t total_bytes = 0;
         uint64_t max_bytes = 0;
         LinkId max_link = 0;
         uint64_t edge_max_bytes = 0;
         LinkId edge_max_link = 0;
-        bool any_bytes = false;
-        for (size_t link = 0; link < bucket_rows.size(); ++link) {
-            const uint64_t bytes =
-                bucket < bucket_rows[link].size() ? bucket_rows[link][bucket]
-                                                  : 0;
+    };
+    struct BucketEmitter {
+        const EdgeLinkSet& edge_links;
+        const MetricCollector& collector;
+        uint64_t bucket_ns;
+        BucketAggregate aggregate{};
+        uint64_t current_bucket = 0;
+        uint64_t last_emitted_bucket = 0;
+        bool have_current = false;
+        bool emitted_any = false;
+
+        void emit(const uint64_t bucket, const BucketAggregate& values) {
+            json record;
+            record["schema"] = 1;
+            record["type"] = "link_bucket";
+            record["source"] = "simulator";
+            record["repo_variant"] = collector.metric_repo_variant();
+            record["run_id"] = collector.metric_run_id();
+            record["bucket_start_ns"] = bucket * bucket_ns;
+            record["max_link"] = values.max_link;
+            record["max_bytes"] = values.max_bytes;
+            record["total_bytes"] = values.total_bytes;
+            if (edge_links.derived) {
+                record["edge_max_link"] = values.edge_max_link;
+                record["edge_max_bytes"] = values.edge_max_bytes;
+                record["edge_note"] = edge_links.note;
+            } else {
+                record["edge_max_link"] = -1;
+                record["edge_max_bytes"] = -1;
+                record["edge_note"] =
+                    "edge link set unavailable: " + edge_links.note;
+            }
+            record["link_bucket_ns"] = bucket_ns;
+            record["provisional"] = collector.slo_sampling_provisional();
+            collector.emit_observer_record(record.dump());
+            last_emitted_bucket = bucket;
+            emitted_any = true;
+        }
+
+        void begin(const uint64_t bucket) {
+            current_bucket = bucket;
+            aggregate = BucketAggregate{};
+            have_current = true;
+        }
+
+        void flush() {
+            emit(current_bucket, aggregate);
+            have_current = false;
+        }
+
+        bool consume(const uint64_t bucket, const LinkId link_id, const uint64_t bytes) {
             if (bytes == 0) {
-                continue;
+                return false;
             }
-            any_bytes = true;
-            bucket_total += bytes;
-            if (bytes > max_bytes) {
-                max_bytes = bytes;
-                max_link = static_cast<LinkId>(link);
+            if (!have_current) {
+                if (bucket != 0) {
+                    emit(0, BucketAggregate{});
+                }
+                begin(bucket);
+            } else if (bucket != current_bucket) {
+                if (bucket < current_bucket) {
+                    return false;
+                }
+                flush();
+                begin(bucket);
             }
-            if (edge_links.derived && edge_links.links.count(link) > 0 &&
-                bytes > edge_max_bytes) {
-                edge_max_bytes = bytes;
-                edge_max_link = static_cast<LinkId>(link);
+
+            aggregate.total_bytes += bytes;
+            // The scheduler's spool order is ascending LinkId. Strict > keeps
+            // the legacy lowest-link result when equal byte counts tie.
+            if (bytes > aggregate.max_bytes) {
+                aggregate.max_bytes = bytes;
+                aggregate.max_link = link_id;
             }
+            if (edge_links.derived && edge_links.links.count(link_id) > 0 &&
+                bytes > aggregate.edge_max_bytes) {
+                aggregate.edge_max_bytes = bytes;
+                aggregate.edge_max_link = link_id;
+            }
+            return true;
         }
-        if (!any_bytes && bucket != 0 && bucket != last_bucket) {
-            continue;
+    };
+
+    BucketEmitter emitter{edge_links, collector, bucket_ns};
+    const auto visitor = [](void* const context, const uint64_t bucket,
+                            const LinkId link_id, const uint64_t bytes) -> bool {
+        return static_cast<BucketEmitter*>(context)->consume(bucket, link_id, bytes);
+    };
+    scheduler->link_observer_visit_buckets(visitor, &emitter);
+
+    // Coordinator ruling 2026-08-26: emit first and last window buckets even
+    // when empty, without filling intervening zero buckets.
+    if (emitter.have_current) {
+        emitter.flush();
+    }
+    if (!emitter.emitted_any && window_ns > 0) {
+        emitter.emit(0, BucketAggregate{});
+    }
+    if (bucket_ns > 0 && window_ns > 0) {
+        const auto last_bucket = (window_ns - 1) / bucket_ns;
+        if (last_bucket > emitter.last_emitted_bucket) {
+            emitter.emit(last_bucket, BucketAggregate{});
         }
-        json record;
-        record["schema"] = 1;
-        record["type"] = "link_bucket";
-        record["source"] = "simulator";
-        record["repo_variant"] = collector.metric_repo_variant();
-        record["run_id"] = collector.metric_run_id();
-        record["bucket_start_ns"] = bucket * bucket_ns;
-        record["max_link"] = max_link;
-        record["max_bytes"] = max_bytes;
-        record["total_bytes"] = bucket_total;
-        if (edge_links.derived) {
-            record["edge_max_link"] = edge_max_link;
-            record["edge_max_bytes"] = edge_max_bytes;
-            record["edge_note"] = edge_links.note;
-        } else {
-            record["edge_max_link"] = -1;
-            record["edge_max_bytes"] = -1;
-            record["edge_note"] =
-                "edge link set unavailable: " + edge_links.note;
-        }
-        record["link_bucket_ns"] = bucket_ns;
-        record["provisional"] = collector.slo_sampling_provisional();
-        collector.emit_observer_record(record.dump());
     }
 
+    const auto& totals = scheduler->link_observer_totals();
     for (size_t link = 0; link < totals.size(); ++link) {
         json record;
         record["schema"] = 1;
@@ -1061,17 +1141,20 @@ int main(int argc, char* argv[]) {
     // file itself, when given, still fails closed if unreadable (OnlineCli
     // already rejects unreadable paths; the reader re-checks for the file
     // disappearing in between). No preset/stub queue is ever created.
-    // Phase 7 §10.4: the CSV is read through the bounded-window
-    // WindowedTraceReader (high watermark = --request-window-rows, frozen
-    // 128; 0 = unbounded full pass). The initial pump below tops the window
-    // up once before the loop starts -- every turn-0 row (112 for the
-    // 20.csv first-30-seconds input) sits in the first high_water rows, so
-    // all Submit commands are queued before the simulation starts, exactly
-    // like the phase-1 full loader (zero decision-sequence perturbation).
-    // expected_requests is filled from reader.data_rows() once the window
-    // reached EOF (the run-end completion assertion target; guaranteed
-    // before finished() because pump() runs before every finished() check
-    // and completion requires every arrival alarm to have fired).
+    // P0 turn-0 late-discovery fix (2026-08-30): the CSV is read through the
+    // index-pass + turn-0-calendar WindowedTraceReader. The first pump
+    // streams the whole file once (structure validation fail-closed,
+    // provenance sidecar gate, per-row metrics registration and turn>0
+    // queue-index pre-registration in row order), stable-sorts the turn-0
+    // calendar by (arrival, queue_index) and queues every turn-0 Submit in
+    // ARRIVAL order -- the submission order is fully decoupled from the file
+    // position (the old row-order window made late-file early arrivals fire
+    // after their declared time; 491 clamped Submits on the full TraceLab
+    // run). --request-window-rows is advisory only now. expected_requests is
+    // filled from reader.data_rows() once the calendar is fully drained
+    // (guaranteed before finished() because pump() runs before every
+    // finished() check and completion requires every arrival alarm to have
+    // fired).
     uint64_t expected_requests = 0;
     WindowedTraceReader windowed(
         online_cli.request_queue_csv.empty() ? "" :
@@ -1086,18 +1169,17 @@ int main(int argc, char* argv[]) {
         windowed.pump();
         std::cout << "[online] request queue: "
                   << online_cli.request_queue_csv
-                  << " (windowed reader, high_water="
-                  << windowed.high_water()
-                  << " max_arrival_ns="
+                  << " (calendar reader, window=" << windowed.high_water()
+                  << " (advisory) max_arrival_ns="
                   << online_cli.request_max_arrival_ns
                   << (online_cli.request_max_arrival_ns == 0 ?
                           " (unbounded default; backport fix "
                           "2026-08-16, sh_2.0测试 §5.1)" :
                           "")
                   << ")" << std::endl;
-        // The arrival hook (simulation thread, from arrival_cb) advances the
-        // window's consumed prefix: a row leaves the window when its arrival
-        // alarm fires.
+        // The arrival hook (simulation thread, from arrival_cb) retires the
+        // outstanding turn-0 entry: a submitted turn-0 row leaves the
+        // outstanding set when its arrival alarm fires.
         ingress.set_arrival_hook(
             [&windowed](const RequestEnvelope& env) {
                 windowed.notify_consumed(env.queue_index);
@@ -1142,7 +1224,12 @@ int main(int argc, char* argv[]) {
             .detach();
     }
 
-    if (online_cli.close_input) {
+    // --close-input closes external production only after every CSV row has
+    // entered the bounded reader. Closing at startup made later window pumps
+    // enqueue into an already-finished service and defeated ingress close
+    // linearization. No-CSV and already-at-EOF inputs still close immediately.
+    if (online_cli.close_input &&
+        (online_cli.request_queue_csv.empty() || windowed.eof())) {
         ingress.mark_input_closed();
     }
 
@@ -1154,8 +1241,12 @@ int main(int argc, char* argv[]) {
     // even when the run delivers nothing (IDLE fixture / zero-request runs),
     // so a zero-delivery run still terminates Python via EOF at exit.
     FileDecisionBridge::ensure_bridge_dir(online_cli.bridge_dir);
+    // C1 (2026-08-29): pass the NPU count so parse_graph_batch can enforce
+    // the rank domains (node/edge/watch-member/touched-rank ranges) at the
+    // single structural parse, before any consumer sees the batch.
     FileDecisionBridge bridge(online_cli.bridge_dir,
-                              online_cli.bridge_timeout_ms);
+                              online_cli.bridge_timeout_ms,
+                              static_cast<int>(npus_count));
     // timeout 0 = wait forever (frozen default; --bridge-timeout-ms opt-in).
     bridge.open_notify();
 
@@ -1179,8 +1270,14 @@ int main(int argc, char* argv[]) {
     }
     OnlineCompletionHookContext online_hook_ctx;
     online_hook_ctx.registry = &watch_registry;
-    online_hook_ctx.event_queue = event_queue.get();
-    online_hook_ctx.workloads = &workloads;
+    online_hook_ctx.configure_issue_passes(
+        event_queue.get(), workloads.size(),
+        [](void* opaque, const int rank) {
+            auto* const online_workloads =
+                static_cast<std::vector<Workload*>*>(opaque);
+            (*online_workloads)[rank]->issue_dep_free_nodes();
+        },
+        &workloads);
     CompletionObserver::instance().set_hook(online_completion_hook,
                                             &online_hook_ctx);
 
@@ -1256,7 +1353,8 @@ int main(int argc, char* argv[]) {
     online_hook_ctx.completed_facts = &driver_ctx.completed_facts;
     driver_ctx.affected_ranks_accumulator = &epoch_affected_ranks;
     // Phase 5 (方案 §8): the atomic GraphBatch committer. Owns the
-    // persistent (rank, json id) -> store id map, the in-flight request
+    // persistent per-rank affine json-id -> store-id translation, the in-flight
+    // request
     // tracking and the phase-5 counters; ed_commit_cb runs its
     // validate-then-commit two-phase protocol. The issue pass covers the
     // batch's touched ranks ONLY (ranks without new nodes cannot have new
@@ -1270,48 +1368,129 @@ int main(int argc, char* argv[]) {
     committer_ctx.issue_rank = [&systems](int rank) {
         systems[rank]->workload->issue_dep_free_nodes();
     };
+    // The mandatory GraphBatch liveness preflight cannot infer a collective's
+    // true process-group membership from the batch itself: that declaration is
+    // owned by each participating Workload.  Resolve it read-only here, across
+    // precisely the participating ranks, and fail closed when a pg is missing
+    // or those Workloads disagree.  Preserve and compare BOTH the declared
+    // rank order and dimension_sizes: rank order selects algorithm positions,
+    // while dimension_sizes select topology/phase semantics.  The preflight
+    // compares the returned membership set to the batch participants
+    // separately.
+    committer_ctx.communicator_members_for_pg =
+        [&systems](const std::string& pg_name,
+                   const std::vector<int>& participant_ranks)
+        -> std::optional<std::vector<int>> {
+        int pg_id = 0;
+        size_t parsed = 0;
+        try {
+            pg_id = std::stoi(pg_name, &parsed);
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+        if (parsed != pg_name.size()) {
+            return std::nullopt;
+        }
+
+        std::optional<std::vector<int>> declared_members;
+        std::optional<std::vector<int>> declared_dimension_sizes;
+        for (const int rank : participant_ranks) {
+            if (rank < 0 || rank >= static_cast<int>(systems.size()) ||
+                systems[rank] == nullptr || systems[rank]->workload == nullptr) {
+                return std::nullopt;
+            }
+            const auto group_it =
+                systems[rank]->workload->comm_groups.find(pg_id);
+            if (group_it == systems[rank]->workload->comm_groups.end() ||
+                !group_it->second) {
+                return std::nullopt;
+            }
+            const std::vector<int>& members = group_it->second->involved_NPUs;
+            const std::vector<int>& dimension_sizes =
+                group_it->second->get_dimension_sizes();
+            if (!declared_members.has_value()) {
+                declared_members = members;
+                declared_dimension_sizes = dimension_sizes;
+            } else if (*declared_members != members ||
+                       *declared_dimension_sizes != dimension_sizes) {
+                return std::nullopt;
+            }
+        }
+        return declared_members;
+    };
     // Phase-7 §10.3: metrics anchors register from inside commit() so they
-    // bind to the STORE ids (B-1 fills the (rank, json id) -> store id map
-    // just before the hook runs). Installed ONLY when metrics are enabled:
+    // bind to the STORE ids (B-1 establishes the affine translation just
+    // before the hook runs). Installed ONLY when metrics are enabled:
     // with metrics off the hook stays empty and the commit pays zero extra
     // cost per batch (the enabled() gate is checked once here, not per
     // commit).
     if (MetricCollector::instance().enabled()) {
-        committer_ctx.metrics_anchor_hook = register_online_metrics_anchors;
+        // R2 (2026-08-29): the hook gains the per-rank sources so anchor
+        // registration can set the OnlineNode fast-path flags in the same
+        // Phase B-1.5 step (add_node has already stored the nodes; the
+        // issue pass runs later in the same commit). graph_sources is this
+        // scope's vector and outlives the committer (same function), so the
+        // reference capture is safe.
+        committer_ctx.metrics_anchor_hook =
+            [&graph_sources](const GraphBatch& batch,
+                             const GraphBatchCommitter& committer) {
+                register_online_metrics_anchors(batch, committer,
+                                                graph_sources);
+            };
     }
-    // M2 node GC (2026-08-23): the CLI arm (--online-node-gc, frozen
-    // default 0 after the 2026-08-23 ruling flip -- GC on showed a
-    // reproducible light-load wall regression; enable explicitly for
-    // memory-bound heavy/parallel campaigns) reaches the committer here;
-    // its constructor propagates the switch to every per-rank store and
-    // commit() collects at its tail (0 = pre-M2 never-erase behavior).
+    // M2 node GC (2026-08-23; A1 amortization 2026-08-28): the CLI arm
+    // (--online-node-gc, frozen default 1 since the A1 flip) reaches the
+    // committer here; its constructor propagates the switch to every
+    // per-rank store and the commit tail collects amortized (drain once
+    // >= kGcAmortizeThreshold candidates accumulated; the run end forces
+    // one final drain -- 0 = pre-M2 never-erase behavior).
     committer_ctx.node_gc = online_cli.online_node_gc != 0;
     GraphBatchCommitter committer(committer_ctx);
     driver_ctx.committer = &committer;
+    driver_ctx.online_validate = online_cli.online_validate;
     if (online_cli.sensing_enabled) {
         std::cout << "[online] sensing: enabled (--sensing-enabled; "
                      "injected-unfinished ledger summary delivered per "
                      "epoch)" << std::endl;
     }
-    // M2 node GC (2026-08-23): evidence line (cpp.log is an allowed-diff
-    // log). The frozen default is 0; --online-node-gc 1 enables collection
-    // (default-off keeps the pre-M2 never-erase behavior: nodes and
-    // store_ids grow for the whole run).
+    // M2 node GC (2026-08-23; A1 2026-08-28): evidence line (cpp.log is an
+    // allowed-diff log). The frozen default is 1 (amortized collection);
+    // --online-node-gc 0 restores the pre-M2 never-erase behavior (retained
+    // NodeStore records grow for the whole run).
     std::cout << "[online] node gc: "
               << (online_cli.online_node_gc != 0 ? "enabled" : "disabled")
               << " (--online-node-gc "
-              << online_cli.online_node_gc << "; finished childless nodes "
-              "collected at commit tails)" << std::endl;
+              << online_cli.online_node_gc << "; amortized: commit tails "
+              "drain once >= "
+              << GraphBatchCommitter::kGcAmortizeThreshold
+              << " finished nodes accumulate, run end forces a final drain)"
+              << std::endl;
+    // C1 (2026-08-28): evidence line for the validate mode (cpp.log is an
+    // allowed-diff log; the counters themselves are whitelisted diffs).
+    std::cout << "[online] graph validate: "
+              << (online_cli.online_validate == 0
+                      ? "off"
+                      : online_cli.online_validate == 1
+                            ? "full"
+                            : "sampled-every-" +
+                                  std::to_string(online_cli.online_validate))
+              << " (--online-validate " << online_cli.online_validate
+              << "; production runners default 0, smoke/fixture/verify runs "
+                 "pass 1)"
+              << std::endl;
     event_queue->set_tick_end_callback(ed_driver_tick_end, &driver_ctx);
 
     fluid_scheduler->flush_pending_starts();
     fluid_scheduler->mark_event_loop_started();
 
     // Online main loop: empty queue => block for work (no busy wait, no
-    // exit); the only end authority is svc.finished(). wait_for_work returns
-    // only when a command was enqueued or the input closed; the loop then
-    // drains (alarms land in the queue) or re-checks finished(), so it never
-    // spins forever.
+    // exit); svc.finished() remains the logical request-lifecycle authority.
+    // After that logical end, however, already-issued graph tail events must
+    // still reach physical quiescence before process exit: a decode watch can
+    // complete a request before its train's end-barrier collective terminals.
+    // wait_for_work returns only when a command was enqueued or the input
+    // closed; the loop then drains (alarms land in the queue) or re-checks
+    // finished(), so it never spins forever.
     // Drain-first (主控裁决 2026-08-15, steps-1-6 偏差①): finished() is
     // checked AFTER drain_commands(), so commands submitted before a Close
     // (e.g. --close-input at startup with a preloaded CSV) are never
@@ -1327,6 +1506,13 @@ int main(int argc, char* argv[]) {
         // only advance when rows were consumed (arrival alarms fired), so
         // every turn>0 row is registered before its future alarm can fire.
         windowed.pump();
+        if (online_cli.close_input && !svc.input_closed() && windowed.eof()) {
+            // Every turn-0 Submit is now either already drained or queued, and
+            // every turn>0 row has registered its future-arrival identity.
+            // Linearize the producer close only at this exact finite-input
+            // boundary so no later CSV Submit is rejected.
+            ingress.mark_input_closed();
+        }
         // Defect fix A (2026-08-16, face主动测试错误分析.md 缺陷 A): pump()
         // QUEUES Submit commands into the bounded ingress queue; they only
         // register as pending alarms (on_alarm_scheduled) on the NEXT
@@ -1350,7 +1536,8 @@ int main(int argc, char* argv[]) {
             // 20.csv first-30-seconds input).
             expected_requests = windowed.data_rows();
         }
-        if (svc.finished()) {
+        const bool service_finished = svc.finished();
+        if (service_finished) {
             // Defect fix A (belt-and-braces audit): with the drain above,
             // finished() while the window has NOT reached EOF is impossible
             // (unread rows => queued Submits => drained => pending_alarm>0
@@ -1367,9 +1554,58 @@ int main(int argc, char* argv[]) {
                     " queued_commands=" +
                     std::to_string(ingress.pending_command_count()) + ")");
             }
-            break;
         }
         if (event_queue->finished()) {
+            // P0-2 (2026-08-31, 总文档 §4 P0-2.2/§4 P0-2.3): shared
+            // parking-point diagnostics for the fail-loud guard below
+            // (wall-clock idle watchdog). Every counter the 形态判据
+            // reasons over is printed: tick, service counters
+            // (active/pending alarm/fence), reader window state
+            // (occupancy/rows_read/data_rows/EOF), the input-close knob,
+            // and the four emptiness witnesses (mailbox/deferred/commands
+            // + the event queue itself, which finished() already proved).
+            // wscllm (sync-A16 批次4, 2026-09-01, 合同 §2.1/P1): the
+            // input-open dead-end BRANCH is intentionally NOT ported -- the
+            // calendar reader's machine states make that shape unreachable
+            // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
+            // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
+            // 12-field report itself is kept for the A3 watchdog so any
+            // silent-stall family stays attributable. window_occupancy in
+            // the calendar reader counts committed-but-untriggered turn-0
+            // entries.
+            const auto parking_diagnostics = [&]() {
+                return "tick=" +
+                       std::to_string(event_queue->get_current_time()) +
+                       " active=" +
+                       std::to_string(svc.active_request_count()) +
+                       " pending_alarm=" +
+                       std::to_string(svc.pending_alarm_count()) +
+                       " pending_fence=" +
+                       std::to_string(svc.pending_fence_count()) +
+                       " window_occupancy=" +
+                       std::to_string(
+                           windowed.current_window_occupancy()) +
+                       " rows_read=" +
+                       std::to_string(windowed.rows_read()) +
+                       " data_rows=" +
+                       std::to_string(windowed.data_rows()) +
+                       " reader_eof=" + (windowed.eof() ? "yes" : "no") +
+                       " close_input=" +
+                       (online_cli.close_input ? "1" : "0") +
+                       " mailbox_work=" +
+                       (mailbox.has_decision_work() ? "yes" : "no") +
+                       " deferred_work=" +
+                       (event_queue->has_deferred_work() ? "yes" : "no") +
+                       " pending_commands=" +
+                       std::to_string(ingress.pending_command_count());
+            };
+            if (ingress.pending_command_count() > 0) {
+                // A producer command may have linearized just before a
+                // concurrent close but after the top-of-loop drain. Go around
+                // once more; closed_ now makes this count stable at zero before
+                // the service_finished exit can be taken.
+                continue;
+            }
             if (mailbox.has_decision_work()) {
                 // Step 1-11 (CORE): post-commit same-tick milestone. The
                 // tick that just ended committed a graph whose dep-free
@@ -1408,6 +1644,14 @@ int main(int argc, char* argv[]) {
                 event_queue->schedule_event(
                     event_queue->get_current_time() + 1,
                     ed_delivery_wakeup, &driver_ctx);
+            } else if (service_finished) {
+                // The service has no more logical requests, and all physical
+                // events, deferred issue passes, and scheduler-visible work
+                // are now drained.  Do not move this branch above the queue
+                // checks: the final decode watch fires before the last shared
+                // end-barrier collective, whose terminal callbacks are part
+                // of the committed-node audit.
+                break;
             } else if (svc.input_closed()) {
                 // Defect fix C (2026-08-16): official-run lost-wakeup dead
                 // end. Reaching here means: input closed (the runners close
@@ -1439,7 +1683,48 @@ int main(int argc, char* argv[]) {
             } else {
                 // IDLE fixture contract (step 1-10): input still open --
                 // block for the external producer's signal_work().
-                svc.wait_for_work();
+                // P0-2 (2026-08-31, 总文档 §4 P0-2.3): --idle-watchdog-s > 0
+                // arms a WALL-CLOCK deadline (steady_clock, never the
+                // simulation clock -- real-time traces space turn arrivals
+                // hours apart) on the parking point; a timeout is a
+                // fail-closed abort with the parking diagnostics above.
+                // Default 0 = the original unbounded wait_for_work()
+                // contract (fixtures, IDLE runs).
+                // wscllm (sync-A16 批次4, 2026-09-01, 合同 §2.1/P1): with
+                // no input-open dead-end branch (that shape is unreachable
+                // under the calendar invariants), this watchdog is the
+                // sole backstop for every silent-stall family -- including
+                // any future refactor that breaks the pump/drain order the
+                // unreachability proof leans on.
+                // FP1 (2026-09-01, sync-A16 batch P; contract §2.4/E9):
+                // exactly one now() and one deadline computation per
+                // arming -- checked_wait_deadline does the tick-domain and
+                // pre-addition bound checks, then wait_for_work_until
+                // waits on the absolute deadline and does no arithmetic of
+                // its own. E26: with the watchdog OFF (0) the loop MUST
+                // stay on the original blocking wait_for_work() -- "off"
+                // closes the watchdog only, never the wait itself.
+                if (online_cli.idle_watchdog_s <= 0.0) {
+                    svc.wait_for_work();
+                } else {
+                    const auto now = std::chrono::steady_clock::now();
+                    std::chrono::steady_clock::time_point deadline;
+                    if (!ServiceCoordinator::checked_wait_deadline(
+                            online_cli.idle_watchdog_s, now, deadline) ||
+                        !svc.wait_for_work_until(deadline)) {
+                        online_fatal(
+                            "idle watchdog: no work within " +
+                            std::to_string(online_cli.idle_watchdog_s) +
+                            "s of wall clock at the event-loop parking "
+                            "point (" +
+                            parking_diagnostics() +
+                            "); every producer channel is silent -- "
+                            "fail-closed abort instead of an unbounded "
+                            "wait (raise --idle-watchdog-s above the "
+                            "largest legal idle gap if this run is "
+                            "legitimately long-idle)");
+                    }
+                }
             }
         } else {
             event_queue->proceed();
@@ -1457,6 +1742,10 @@ int main(int argc, char* argv[]) {
     if (fluid_link_observer_on) {
         emit_link_observer_records(fluid_scheduler, edge_links);
         fluid_scheduler->link_observer_release();
+        // C5 (2026-08-28): the observer records went through the buffered
+        // [METRIC] channel -- drain it so the block is complete before the
+        // run-end log lines below.
+        MetricCollector::instance().flush_emit_buffer();
     }
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
@@ -1514,15 +1803,22 @@ int main(int argc, char* argv[]) {
     // watch ever left unfired). The per-epoch affected-rank accumulator must
     // be drained (non-empty = a watch fired after the final delivery, i.e.
     // mailbox work without a delivery -- impossible under the main loop's
-    // wakeup rule). The completed-facts buffer holds the run-end tail facts
-    // (the final requests' end-barrier control nodes complete AFTER the
-    // final delivery, phase-3 R5); reported, not asserted.
+    // wakeup rule). Final end-barrier control nodes can complete after the
+    // last delivery (phase-3 R5), so terminal counters are run-lifetime and
+    // are audited below against every committed node.
+    const auto& terminal_counts = driver_ctx.completed_facts.counters();
     std::cout << "[online] phase-4 end audit: watch_registry_size="
               << watch_registry.size()
               << " watch_stale=" << watch_registry.stale_count()
               << " completed_facts_residual="
               << driver_ctx.completed_facts.size()
               << " affected_ranks_residual=" << epoch_affected_ranks.size()
+              << " issue_pass_pending="
+              << online_hook_ctx.pending_issue_pass_count()
+              << " terminal_total=" << terminal_counts.total
+              << " terminal_success=" << terminal_counts.success
+              << " terminal_skipped=" << terminal_counts.skipped
+              << " terminal_other=" << terminal_counts.other
               << std::endl;
 
     // Phase 5 (方案 §8.3): the atomic-commit counters. Every delivery epoch
@@ -1535,11 +1831,13 @@ int main(int argc, char* argv[]) {
     std::cout << "[online] phase-5 commit counters: "
               << committer.counters_report() << std::endl;
 
-    // M2 node GC (2026-08-23): run-end evidence (measurement only; cpp.log
-    // is an allowed-diff log). erased = nodes collected over the run;
-    // retained = records still in the stores at run end (the in-flight
-    // window + the post-final-delivery tail nodes that finish after the
-    // last commit, never collected).
+    // M2 node GC (2026-08-23; A1 2026-08-28): run-end evidence (measurement
+    // only; cpp.log is an allowed-diff log). erased = nodes collected over
+    // the run; retained = records still in the stores at run end (the
+    // in-flight window). A1: the forced final drain right above leaves only
+    // genuinely unfinished / pinned nodes behind (the pre-A1 tail -- nodes
+    // finishing after the last commit -- is collected too).
+    committer.finalize_node_garbage();
     {
         uint64_t node_gc_erased = 0;
         uint64_t node_gc_retained = 0;
@@ -1558,19 +1856,55 @@ int main(int argc, char* argv[]) {
               << driver_ctx.stats.report() << " " << bridge.stats_report()
               << std::endl;
 
-    // Phase 7 §10.4: windowed-reader report (rows / read pumps / peak
-    // window occupancy / I/O time / throughput), the frozen late-arrival
-    // clamp counter (policy: clamp to current+1; count = observation), the
-    // out-of-range rejection counter (frozen rule: turn-0 arrival beyond
+    // Phase 7 §10.4 / P0 fix (2026-08-30): calendar-reader report (rows /
+    // sessions / calendar stats / io time / throughput), the late-arrival
+    // clamp counters SPLIT by producer path (static-CSV Submit / external
+    // stream / future-alarm rounding / t=0 boundary), the out-of-range
+    // rejection counter (frozen rule: turn-0 arrival beyond
     // --request-max-arrival-ns is rejected; 0 on the allowed 20.csv input),
-    // and the peak RSS (getrusage ru_maxrss, KiB -- the window benchmark's
-    // memory column).
+    // and the peak RSS (getrusage ru_maxrss, KiB).
     windowed.report(std::cout);
-    std::cout << "[online] ingress late arrivals: "
-              << ingress.late_arrival_count() << std::endl;
+    std::cout << "[online] ingress late arrivals: total="
+              << ingress.late_arrival_count()
+              << " late_static_submit="
+              << ingress.late_static_submit_count()
+              << " late_external_stream="
+              << ingress.late_external_stream_count()
+              << " late_future_alarm_rounding="
+              << ingress.late_future_alarm_rounding_count()
+              << " t0_boundary_clamp=" << ingress.t0_boundary_clamp_count()
+              << std::endl;
 
-    // Phase 7 §10.5: window-position checkpoint (audit state + same-process
-    // restore input for the phase-7 §10.7 lifecycle work). Written into
+    // P0 fix: per-turn-0 arrival audit + the formal static-arrival gate
+    // (finite static CSV runs only; external stream and future alarms are
+    // never gated). Gate: late_static_submit == 0 and every turn-0
+    // ingress_delay == 0 except the t=0 boundary rows (declared 0,
+    // discovered 0, effective 1 -- the EventQueue strict-future rule's
+    // inherent boundary; REPORT design ruling). Metric origins stay
+    // DECLARED arrivals -- the gate exists so a reader defect can never be
+    // masked by rebasing metrics onto effective arrivals.
+    const auto arrival_summary = windowed.audit_static_arrivals();
+    std::cout << "[online] arrival audit: turn0_submitted="
+              << arrival_summary.turn0_submitted
+              << " late_static_submit="
+              << arrival_summary.late_static_submit
+              << " late_external_stream="
+              << arrival_summary.late_external_stream
+              << " late_future_alarm_rounding="
+              << arrival_summary.late_future_alarm_rounding
+              << " t0_boundary_clamp=" << arrival_summary.t0_boundary_clamp
+              << " ingress_delay_ns p50=" << arrival_summary.delay_p50_ns
+              << " p99=" << arrival_summary.delay_p99_ns
+              << " max=" << arrival_summary.delay_max_ns
+              << " nonzero_delay_rows="
+              << arrival_summary.nonzero_delay_rows
+              << " gate=" << (arrival_summary.gate_ok ?
+                                  "ok" : "FAIL")
+              << std::endl;
+
+    // Phase 7 §10.5: audit-only window-position snapshot. It is not a restart
+    // checkpoint: EventQueue/ingress/service/metrics state is not serialized.
+    // Written into
     // <bridge_dir>/checkpoints/; atomic tmp+rename; a failed checkpoint is
     // audit-evidence reporting only, never a run gate. The checkpoints/
     // subdirectory keeps "最终结果 / 检查点 / 临时产物" in separate
@@ -1597,6 +1931,23 @@ int main(int argc, char* argv[]) {
     }
 
     bool gate_ok = true;
+    // P0 turn-0 late-discovery fix (2026-08-30): the FORMAL static-arrival
+    // gate, evaluated with the completion-audit family. Scoped exactly like
+    // the completed==expected audit below: finite static CSV runs only
+    // (expected_requests > 0); external stream (--command-fifo) and
+    // future-alarm clamps are never gated. late_static_submit must be 0 and
+    // every turn-0 ingress_delay must be 0 except the t=0 boundary rows
+    // (see the arrival audit line above for the numbers).
+    if (expected_requests > 0 && !arrival_summary.gate_ok) {
+        std::cerr << "[Error] (execution_driven/online) static-arrival "
+                     "gate FAIL: "
+                  << arrival_summary.gate_why
+                  << " (finite static CSV input must submit every turn-0 "
+                     "before its declared arrival; see the arrival audit "
+                     "above)"
+                  << std::endl;
+        gate_ok = false;
+    }
     // Step 1-10: the completed==expected audit only applies to CSV-driven
     // runs (the CSV is the source of truth). Injection-only runs
     // (--command-fifo, no --request-queue-csv) complete requests that the
@@ -1645,13 +1996,28 @@ int main(int argc, char* argv[]) {
         gate_ok = false;
     }
     if (!watch_registry.empty() || watch_registry.stale_count() != 0 ||
-        !epoch_affected_ranks.empty()) {
+        !epoch_affected_ranks.empty() ||
+        online_hook_ctx.pending_issue_pass_count() != 0) {
         std::cerr << "[Error] (execution_driven/online) phase-4 end audit: "
                      "watch registry not empty (size="
                   << watch_registry.size() << " stale="
                   << watch_registry.stale_count() << ") or affected-ranks "
                      "accumulator not drained (residual="
-                  << epoch_affected_ranks.size() << ")" << std::endl;
+                  << epoch_affected_ranks.size()
+                  << ") or deferred issue passes remain (pending="
+                  << online_hook_ctx.pending_issue_pass_count() << ")"
+                  << std::endl;
+        gate_ok = false;
+    }
+    if (terminal_counts.total != committer.counters().total_nodes ||
+        terminal_counts.other != 0) {
+        std::cerr << "[Error] (execution_driven/online) terminal audit: "
+                  << "total=" << terminal_counts.total
+                  << " committed_nodes=" << committer.counters().total_nodes
+                  << " success=" << terminal_counts.success
+                  << " skipped=" << terminal_counts.skipped
+                  << " other=" << terminal_counts.other
+                  << std::endl;
         gate_ok = false;
     }
     // Phase 5 (方案 §8.3) gates: every delivery produced exactly one

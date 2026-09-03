@@ -11,6 +11,8 @@ Implementation (方案 §4 步骤 1-2 操作 2).
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <stdexcept>
 
 using namespace NetworkAnalytical;
 
@@ -43,8 +45,15 @@ bool RequestIngress::enqueue_command(IngressCommand cmd) {
         ++overflow_count_;
         return false;  // bounded; backpressure: producer must retry
     }
+    const bool terminal = cmd.kind != IngressCommandKind::Submit;
     cmd.envelope.ingress_seq = ingress_seq_++;
     queue_.push_back(std::move(cmd));
+    // Linearize terminal input with producers under the same lock. Commands
+    // accepted before the terminal remain ahead of it in queue_; every later
+    // enqueue observes closed_ and is rejected.
+    if (terminal) {
+        closed_ = true;
+    }
     if (queue_.size() > peak_command_occupancy_) {
         peak_command_occupancy_ = queue_.size();
     }
@@ -67,16 +76,44 @@ void RequestIngress::drain_commands() {
                 // a late request is clamped to the next tick (arrives now)
                 const auto current = eq_->get_current_time();
                 const auto arrival = cmd.envelope.arrival_world_ns;
-                // Phase 7 §10.4: count the clamps (observation only; the
-                // clamp policy itself is frozen and unchanged).
-                if (arrival <= current) {
-                    ++late_arrival_count_;
-                }
                 const EventTime alarm_time =
                     (arrival > current) ? arrival : current + 1;
+                // P0 turn-0 late-discovery fix (2026-08-30): count the clamps
+                // SPLIT by producer path (observation only; the clamp policy
+                // itself is frozen and unchanged). A StaticCsv clamp is a
+                // reader defect unless it is the pure t=0 boundary case
+                // (declared 0, drained at current 0, alarm forced to 1 by the
+                // strict-future rule; the source CSV legitimately contains
+                // arrival==0) -- that one is counted separately and exempt
+                // from the run-end gate. discovered <= current always (a
+                // Submit is enqueued at the queue's then-current time), so
+                // current==0 also implies the reader discovered it at t=0.
+                if (arrival <= current) {
+                    if (cmd.envelope.source == RequestSource::StaticCsv) {
+                        if (arrival == 0 && current == 0) {
+                            ++t0_boundary_clamp_;
+                        } else {
+                            ++late_static_submit_;
+                        }
+                    } else if (cmd.envelope.source ==
+                               RequestSource::ExternalStream) {
+                        ++late_external_stream_;
+                    } else {
+                        ++late_future_alarm_rounding_;
+                    }
+                }
+                if (cmd.envelope.source == RequestSource::StaticCsv) {
+                    // Run-end arrival audit record (bounded by turn-0 rows).
+                    std::lock_guard<std::mutex> lock(mtx_);
+                    static_csv_arrivals_[cmd.envelope.queue_index] =
+                        StaticCsvArrivalRecord{arrival,
+                                               static_cast<uint64_t>(
+                                                   alarm_time)};
+                }
                 svc_->on_command_accepted();
                 svc_->on_alarm_scheduled();
-                auto* arg = new ArrivalAlarmArg{this, std::move(cmd.envelope)};
+                auto* arg = new ArrivalAlarmArg{
+                    this, std::move(cmd.envelope), false};
                 eq_->schedule_event(alarm_time, RequestIngress::arrival_cb,
                                     arg);
                 break;
@@ -110,44 +147,150 @@ void RequestIngress::drain_commands() {
     }
 }
 
+void RequestIngress::enable_queue_index_tracking() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    queue_index_tracking_enabled_ = true;
+}
+
 void RequestIngress::register_queue_index(const std::string& request_id,
                                           const int64_t queue_index) {
     std::lock_guard<std::mutex> lock(mtx_);
-    queue_index_map_[request_id] = queue_index;
+    if (request_id.empty() || queue_index < 0 ||
+        scheduled_future_request_ids_.count(request_id) != 0 ||
+        !queue_index_map_.emplace(request_id, queue_index).second) {
+        std::fprintf(stderr,
+                     "[Error] (execution_driven/ingress) duplicate or invalid "
+                     "future queue index: request_id=%s queue_index=%lld\n",
+                     request_id.c_str(), static_cast<long long>(queue_index));
+        std::abort();
+    }
+    queue_index_tracking_enabled_ = true;
+}
+
+std::optional<std::string> RequestIngress::validate_future_arrivals_locked(
+    const std::vector<RequestEnvelope>& envelopes) const {
+    std::unordered_set<std::string> batch_request_ids;
+    batch_request_ids.reserve(envelopes.size());
+    for (const RequestEnvelope& envelope : envelopes) {
+        if (envelope.request_id.empty()) {
+            return "future arrival has empty request_id";
+        }
+        if (envelope.queue_index < -1) {
+            return "future arrival request_id " + envelope.request_id +
+                   " has invalid queue_index " +
+                   std::to_string(envelope.queue_index);
+        }
+        if (!batch_request_ids.insert(envelope.request_id).second) {
+            return "future arrival request_id " + envelope.request_id +
+                   " appears more than once in the batch";
+        }
+        if (scheduled_future_request_ids_.count(envelope.request_id) != 0) {
+            return "future arrival request_id " + envelope.request_id +
+                   " is already scheduled and awaiting arrival";
+        }
+        if (!queue_index_tracking_enabled_) {
+            continue;
+        }
+        const auto index_it = queue_index_map_.find(envelope.request_id);
+        if (index_it == queue_index_map_.end()) {
+            return "future arrival request_id " + envelope.request_id +
+                   " has no registered queue index";
+        }
+        if (envelope.queue_index >= 0 &&
+            envelope.queue_index != index_it->second) {
+            return "future arrival request_id " + envelope.request_id +
+                   " queue_index " + std::to_string(envelope.queue_index) +
+                   " does not match registered queue index " +
+                   std::to_string(index_it->second);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> RequestIngress::validate_future_arrivals(
+    const std::vector<RequestEnvelope>& envelopes) const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return validate_future_arrivals_locked(envelopes);
 }
 
 void RequestIngress::schedule_future_arrival(const RequestEnvelope& envelope) {
+    // Allocate and copy the callback payload before reserving the request id,
+    // consuming its one-shot queue index, or advancing the ingress serial.
+    // A bad_alloc therefore leaves every observable ingress field unchanged.
+    std::unique_ptr<ArrivalAlarmArg> arg(
+        new ArrivalAlarmArg{this, envelope, true});
+    RequestEnvelope& filled = arg->envelope;
+    const std::vector<RequestEnvelope> one_envelope{envelope};
+    std::optional<std::string> validation_error;
+    // Phase 4: resolve the one-shot turn>0 queue index and reserve the id
+    // before changing arrival accounting. A successful GraphBatch preflight
+    // makes this repetition defensive in the single simulation-thread commit
+    // path; keeping it here prevents an unsafe direct caller from consuming a
+    // map entry or scheduling a duplicate future arrival.
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        validation_error = validate_future_arrivals_locked(one_envelope);
+        if (!validation_error.has_value()) {
+            const auto inserted =
+                scheduled_future_request_ids_.insert(envelope.request_id);
+            if (!inserted.second) {
+                validation_error =
+                    "future arrival request_id " + envelope.request_id +
+                    " is already scheduled and awaiting arrival";
+            }
+        }
+        if (!validation_error.has_value() && queue_index_tracking_enabled_) {
+            const auto it = queue_index_map_.find(envelope.request_id);
+            assert(it != queue_index_map_.end());
+            filled.queue_index = it->second;
+            queue_index_map_.erase(it);
+        }
+        if (!validation_error.has_value()) {
+            // enqueue_command assigns the same serial while holding mtx_. Keep
+            // future scheduling under that lock too: external command producers
+            // may run concurrently with the simulation thread.
+            filled.ingress_seq = ingress_seq_++;
+        }
+    }
+    if (validation_error.has_value()) {
+        throw std::runtime_error("future-arrival scheduling rejected: " +
+                                 *validation_error);
+    }
     // arrival alarms must be strictly future (EventQueue :33); a late
     // arrival is clamped to the next tick (arrives now)
     const auto current = eq_->get_current_time();
     const auto arrival = envelope.arrival_world_ns;
-    // Phase 7 §10.4: count the clamps (observation only; the clamp policy
-    // itself is frozen and unchanged).
+    // P0 fix (2026-08-30): this path only ever schedules FutureAlarm
+    // envelopes; its clamps are relative-interval sub-tick rounding, never a
+    // static-CSV reader defect, and are never gated.
+    filled.source = RequestSource::FutureAlarm;
     if (arrival <= current) {
-        ++late_arrival_count_;
+        ++late_future_alarm_rounding_;
     }
     const EventTime alarm_time =
         (arrival > current) ? arrival : current + 1;
-    svc_->on_alarm_scheduled();
-    RequestEnvelope filled = envelope;
     // Phase 4 (schema v1): every arrival gets a fresh, globally monotonic
     // ingress serial -- future-arrival scheduling assigns it here (the
     // command path assigns it in enqueue_command). The frozen queue index
     // comes from the loader's per-request map (the future_alarm envelope
     // from Python carries no queue_index).
-    filled.ingress_seq = ingress_seq_++;
-    {
-        std::lock_guard<std::mutex> lock(mtx_);
-        const auto it = queue_index_map_.find(envelope.request_id);
-        if (it != queue_index_map_.end()) {
-            filled.queue_index = it->second;
-        }
-    }
-    auto* arg = new ArrivalAlarmArg{this, std::move(filled)};
-    eq_->schedule_event(alarm_time, RequestIngress::arrival_cb, arg);
+    eq_->schedule_event(alarm_time, RequestIngress::arrival_cb, arg.get());
+    (void)arg.release();  // EventQueue callback now owns and deletes it.
+    svc_->on_alarm_scheduled();
 }
 
 void RequestIngress::mark_input_closed() {
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (closed_) {
+            return;
+        }
+        // Set the ingress gate before closing the coordinator. A producer is
+        // therefore either ordered before this close (and left in queue_ for
+        // the drain-first loop) or rejected after it; there is no gap in which
+        // svc.finished() can become true while a new command is still accepted.
+        closed_ = true;
+    }
     if (svc_ != nullptr) {
         svc_->mark_input_closed();
     }
@@ -156,6 +299,10 @@ void RequestIngress::mark_input_closed() {
 void RequestIngress::arrival_cb(void* const arg) {
     auto* const data = static_cast<ArrivalAlarmArg*>(arg);
     auto* const ingress = data->ingress;
+    if (data->is_future_alarm) {
+        std::lock_guard<std::mutex> lock(ingress->mtx_);
+        ingress->scheduled_future_request_ids_.erase(data->envelope.request_id);
+    }
     ingress->svc_->on_request_arrived();
     // Step 1-6: the DecisionMailbox(ARRIVAL, payload) deposit -- the only
     // decision event the ingress produces (a submit is a decision boundary,
@@ -203,6 +350,22 @@ size_t RequestIngress::overflow_count() const {
 size_t RequestIngress::peak_command_occupancy() const {
     std::lock_guard<std::mutex> lock(mtx_);
     return peak_command_occupancy_;
+}
+
+size_t RequestIngress::pending_queue_index_count() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return queue_index_map_.size();
+}
+
+size_t RequestIngress::scheduled_future_arrival_count() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return scheduled_future_request_ids_.size();
+}
+
+std::map<int64_t, RequestIngress::StaticCsvArrivalRecord>
+RequestIngress::static_csv_arrivals() const {
+    std::lock_guard<std::mutex> lock(mtx_);
+    return static_csv_arrivals_;
 }
 
 }  // namespace ExecutionDriven
