@@ -83,6 +83,7 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
     "kv_cache_policy": "legacy",
+    "kv_remote_read": "physical",
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
@@ -150,6 +151,8 @@ class WscLlmTraceConfig:
     trace_granularity: str
     prefill_chunk_size: int
     kv_cache_policy: str
+    # relevant_distributed 变体专用(缺省 physical,其余变体不消费)。
+    kv_remote_read: str
     kv_reserve_context_tokens: int
     record_planning_iterations: bool
     configuration_digest: str
@@ -266,10 +269,24 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "record_planning_iterations":
         return parse_bool(value, key)
     if key == "kv_cache_policy":
-        if value not in {"legacy", "session_lru_recompute"}:
+        # relevant_distributed(第三变体,总文档 §2):值域扩为三值;legacy
+        # 代码 fallback 与 checked-in csv 缺省两处均不动(裁决 #21)。
+        if value not in {"legacy", "session_lru_recompute",
+                         "relevant_distributed"}:
             raise ValueError(
-                "config key kv_cache_policy must be legacy or "
-                "session_lru_recompute"
+                "config key kv_cache_policy must be legacy, "
+                "session_lru_recompute, or relevant_distributed"
+            )
+        return value
+    if key == "kv_remote_read":
+        # relevant_distributed 变体的 decode 远程读 A/B 开关(总文档 §3.2
+        # 裁决 #11):physical(缺省)= 发射 3300 读边 + 裁远程 KV 分量;
+        # ideal_masked = 不发 3300、不裁 KV 分量(现状字节口径)。其余
+        # 变体不消费本键,缺省值保持其行为不变。
+        if value not in {"physical", "ideal_masked"}:
+            raise ValueError(
+                "config key kv_remote_read must be physical or "
+                f"ideal_masked, got {value!r}"
             )
         return value
     if key == "trace_granularity":
@@ -504,6 +521,7 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         trace_granularity=str(parsed["trace_granularity"]),
         prefill_chunk_size=int(parsed["prefill_chunk_size"]),
         kv_cache_policy=str(parsed["kv_cache_policy"]),
+        kv_remote_read=str(parsed["kv_remote_read"]),
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
         record_planning_iterations=bool(parsed["record_planning_iterations"]),
         configuration_digest=configuration_digest,

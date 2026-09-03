@@ -69,14 +69,6 @@ from generate_wsc_llm_trace import (  # noqa: E402
 from generate_wsc_llm_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
 
 
-# M1 收集即释放的摊销压缩水位(2026-08-23,批次B 移植自 sh_3.0 母本):
-# _collect 把已发射节点切片进当批后,per-rank 已收集前缀达到该水位即
-# 整段删除(节点 id 来自 next_id 计数器,与 list 位置无关)。8192 保证
-# 工作集有界且删除频度足够低——每节点均摊 O(1),禁止逐批前缀删除
-# (O(n²) 反例)。
-_COLLECT_COMPACT_THRESHOLD = 8192
-
-
 def first_token_split_enabled() -> bool:
     """WP9 首步批拆分总开关(SH_FIRST_TOKEN_SPLIT,B4 起缺省 "0" 关)。
 
@@ -101,6 +93,24 @@ def first_token_split_enabled() -> bool:
     return os.environ.get("SH_FIRST_TOKEN_SPLIT", "0") == "1"
 
 
+def _apply_hbm_charge(node: dict, hbm_charge, where: str) -> None:
+    """comm 节点 optional 键 hbm_charge(relevant_distributed 变体,
+    2026-09-02;总文档 §2.3/裁决 #35)。
+
+    在线 JSON GraphBatch 路径的合法键 = snake_case ``hbm_charge``
+    (C++ ParsedGraphBatch N13,check_key_set fail-closed 拒未知键/错拼
+    键,缺省 true 两端自动计费)。``None`` = 不写键 = 现状行为(字节
+    等价,golden 兼容);显式 bool = 写键。3300 读边的 recv 端传
+    ``False``(读边不落 D 的 HBM)——全仓首个显式 false。
+    """
+    if hbm_charge is None:
+        return
+    if not isinstance(hbm_charge, bool):
+        raise ValueError(
+            f"{where}: hbm_charge must be None or bool, got {hbm_charge!r}")
+    node["comm"]["hbm_charge"] = hbm_charge
+
+
 class OnlineTraceBuilder:
     """与共享 TraceBuilder API 同构的在线侧每-rank builder。
 
@@ -119,12 +129,12 @@ class OnlineTraceBuilder:
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
-        # M1 收集即释放(2026-08-23,批次B 移植自 sh_3.0 母本):本 list 只
-        # 保留"已发射未收集"的尾部——_collect 切片进批后按水位摊销压缩
-        # 前缀(见 _collect),全量历史节点不再常驻。禁止按 list 位置回读
-        # 节点(id 来自 next_id 计数器,与位置无关)。
-        self.nodes = []   # 本 rank 已发射节点 dict(发射序,可被压缩)
-        self.edges = []   # 本 rank parent edges(随节点水位一并压缩)
+        # M1 收集即释放(2026-08-29):这两个 list 只保存自上次 _collect
+        # 以来尚未交付的记录；交付后立即 clear，跨批状态只由 next_id、
+        # previous_id 与账本保存。禁止按 list 位置回读节点(id 来自
+        # next_id 计数器,与位置无关)。
+        self.nodes = []   # 本 rank 尚未交付的节点 dict(发射序)
+        self.edges = []   # 本 rank 尚未交付的 parent edges
         self.node_count = 0
         # 当前 request-stage 反向索引上下文(每次 per-request 发射前设置)。
         self.request_id = ""
@@ -156,18 +166,48 @@ class OnlineTraceBuilder:
             "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
                      "pg_name": "", "involved_dim": []},
         }
-        dependency_ids = []
-        if self.previous_id is not None:
-            dependency_ids.append(self.previous_id)
-        dependency_ids.extend(self.pending_extra_dependencies)
-        for dependency_id in dict.fromkeys(dependency_ids):
-            self.edges.append({
-                "rank": self.rank,
-                "from": dependency_id,
-                "to": self.next_id,
-                "kind": "data",
-            })
-        self.pending_extra_dependencies.clear()
+        previous_id = self.previous_id
+        pending_dependencies = self.pending_extra_dependencies
+        # The common serial chain has no extra dependency: avoid allocating a
+        # temporary list and deduplication dict.  The multi-dependency fallback
+        # deliberately keeps dict.fromkeys() for its stable first-seen order.
+        if not pending_dependencies:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        elif len(pending_dependencies) == 1:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+            dependency_id = pending_dependencies[0]
+            if previous_id is None or dependency_id != previous_id:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        else:
+            dependency_ids = []
+            if previous_id is not None:
+                dependency_ids.append(previous_id)
+            dependency_ids.extend(pending_dependencies)
+            for dependency_id in dict.fromkeys(dependency_ids):
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        pending_dependencies.clear()
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
@@ -248,20 +288,22 @@ class OnlineTraceBuilder:
         node["coll"]["involved_dim"] = [True, True]
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge=None) -> None:
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        _apply_hbm_charge(node, hbm_charge, name)
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int) -> None:
+                  comm_tag: int, hbm_charge=None) -> None:
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
+        _apply_hbm_charge(node, hbm_charge, name)
 
     # ------------------------------------------------------------- 只读属性 --
 
@@ -284,7 +326,8 @@ class GraphBatchBuilder:
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
         # session_id -> (decode_instance_index, {rank: end_barrier_id});
-        # completion_gates 保存动态跨 turn interval gate 的 after_node_id 来源。
+        # completion_gates 只保存下一同 session turn 尚未消费的 interval
+        # gate 来源；turn>0 admission 或 terminal completion 后即释放。
         self.completion_gates = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -294,6 +337,10 @@ class GraphBatchBuilder:
         self.batch = {
             "nodes": [],
             "parent_edges": [],
+            # Private exact ledger: _collect already knows the source rank of
+            # every appended node, so downstream GraphBatch metadata need not
+            # rescan the complete node payload.
+            "_touched_ranks": set(),
             "watches": [],
             "assignments": [],
             "kv_actions": [],
@@ -304,20 +351,20 @@ class GraphBatchBuilder:
         """把各 builder 自 marker 起新增的节点/边并入本批次。"""
         for rank, builder in self.builders.items():
             node_mark, edge_mark = marker[rank]
-            self.batch["nodes"].extend(builder.nodes[node_mark:])
-            self.batch["parent_edges"].extend(builder.edges[edge_mark:])
-            # M1 收集即释放(摊销压缩,2026-08-23,批次B 移植自 sh_3.0
-            # 母本):已切片进本批的节点/边不再驻留 builder——已收集水位
-            # ≥ 8192 且不小于现存总量一半时才删前缀(每次删除搬运的尾部
-            # ≤ 现存一半,均摊 O(1)/节点)。安全前提(本仓 grep 证实):
-            # 节点 id 来自 next_id 计数器,无任何按 list 位置回读节点的
-            # 代码;每个 _mark() 都在同一次发射调用内被紧随的单次
-            # _collect() 消费(无跨发射延迟消费),水位即本次切片在当前
-            # list 中的绝对长度,压缩后下一次 _mark 重新取 len,自洽。
-            if (node_mark >= _COLLECT_COMPACT_THRESHOLD
-                    and node_mark * 2 >= len(builder.nodes)):
-                del builder.nodes[:node_mark]
-                del builder.edges[:edge_mark]
+            nodes = builder.nodes
+            edges = builder.edges
+            # 正常路径的 marker 为 0，直接 extend 避免临时 slice；非零
+            # marker 仅保留本次新增尾部。所有 _mark() 都在同一发射调用内
+            # 被单次 _collect() 消费，故旧前缀已在先前批次交付，可立即
+            # clear 释放对节点/边 dict 的最后一层 builder 引用。
+            if len(nodes) > node_mark:
+                self.batch["_touched_ranks"].add(int(rank))
+            self.batch["nodes"].extend(
+                nodes if node_mark == 0 else nodes[node_mark:])
+            self.batch["parent_edges"].extend(
+                edges if edge_mark == 0 else edges[edge_mark:])
+            nodes.clear()
+            edges.clear()
 
     def _mark(self) -> dict:
         return {
@@ -371,6 +418,10 @@ class GraphBatchBuilder:
         for builder in self.builders.values():
             builder.set_context(request_id, stage, generation)
 
+    def retire_completion_gate(self, session_id: str) -> None:
+        """释放 terminal session 不会再被下一 turn 消费的完成门。"""
+        self.completion_gates.pop(session_id, None)
+
     # ------------------------------------------------- per-request 发射主体 --
 
     def _emit_prelim(self, request_plan: dict) -> dict:
@@ -393,7 +444,10 @@ class GraphBatchBuilder:
             for rank in prefill_group.ranks:
                 builders[rank].arm_timer_gate(timers[rank])
         else:
-            previous = self.completion_gates.get(request_plan["session_id"])
+            # interval gate 是该 session completion gate 的唯一正常消费者；
+            # 取用即删，后续只保留已在图边中编码的 after_node_id。
+            previous = self.completion_gates.pop(
+                request_plan["session_id"], None)
             if previous is None or request.inter_request_interval_ns is None:
                 raise RuntimeError(
                     "later request has no completion interval gate")
@@ -697,14 +751,28 @@ class GraphBatchBuilder:
         """折叠列车体(17 类聚合节点;weight_passes = 权重读取次数)。
 
         拆分时首步批传首步 span 组 + weight_passes=1,余量批传余量组 +
-        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。"""
+        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。
+
+        relevant_distributed 变体(2026-09-02,总文档 §3.3 KV 归因覆盖):
+        train_plan 可选键 "local_kv_bytes"(缺省 None = 现状全量 KV 口径,
+        逐字节等价)——与 train_plan["pass_spans"] 对齐的 per-span 列表,
+        每元素 None 或逐 rank D 本地 piece 字节序列,透传到
+        transformer_pass_aggregated 的 local_kv_bytes(远程成员的 span 只
+        计 D 本地 piece 字节,防与 3300 源端计费双计)。"""
         instance_index = train_plan["instance_index"]
         decode_group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
+        local_kv_values = _select_train_local_kv_bytes(train_plan, pass_spans)
         for builder in self.builders.values():
             builder.set_context(train_id, "decode", 1)
         tensor_parallel = len(decode_group.ranks)
         for relative_rank, rank in enumerate(decode_group.ranks):
+            local_kv_bytes = None
+            if local_kv_values is not None:
+                local_kv_bytes = [
+                    None if value is None else int(value[relative_rank])
+                    for value in local_kv_values
+                ]
             transformer_pass_aggregated(
                 self.builders[rank],
                 phase=train_id,
@@ -720,6 +788,7 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
                 weight_passes=weight_passes,
+                local_kv_bytes=local_kv_bytes,
             )
 
     def _emit_first_token_markers(self, train_plan: dict,
@@ -827,6 +896,41 @@ class GraphBatchBuilder:
         """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
         self.builders[rank].comp(name, 1, 1)
         return self.builders[rank].previous_id
+
+
+def _select_train_local_kv_bytes(train_plan: dict, body_spans):
+    """relevant_distributed 变体:列车体 local_kv_bytes 的 per-span 选值。
+
+    train_plan 可选键 "local_kv_bytes" = 与 train_plan["pass_spans"] 逐位
+    对齐的 per-span 列表(每元素 None = 该 span 全量 KV 口径,或逐 rank
+    D 本地 piece 字节序列,由 B3 调度器按 KVPlacement 精确计算)。
+
+    拆分列车(首步批/余量批)的 body_spans 是全列表的保序子序列——按
+    "最早未消费位置"的贪心子序列匹配逐位选取(重复 span 值亦正确);
+    整列发射时 body_spans == 全列表,退化为逐位恒等。长度不对齐/子序列
+    不匹配 fail-closed(RuntimeError,与其他构图校验同款)。
+    """
+    local_kv_bytes = train_plan.get("local_kv_bytes")
+    if local_kv_bytes is None:
+        return None
+    full_spans = list(train_plan["pass_spans"])
+    if len(local_kv_bytes) != len(full_spans):
+        raise RuntimeError(
+            "train local_kv_bytes must align with pass_spans "
+            f"({len(local_kv_bytes)} values for {len(full_spans)} spans)")
+    selected = []
+    cursor = 0
+    for span in body_spans:
+        key = tuple(span)
+        while cursor < len(full_spans) and tuple(full_spans[cursor]) != key:
+            cursor += 1
+        if cursor >= len(full_spans):
+            raise RuntimeError(
+                "train body spans are not a subsequence of the frozen "
+                f"pass_spans (mismatch at span {key!r})")
+        selected.append(local_kv_bytes[cursor])
+        cursor += 1
+    return selected
 
 
 def _prefix_of(request_plan: dict) -> str:

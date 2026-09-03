@@ -59,6 +59,33 @@ from generate_wsc_llm_trace import load_wsc_llm_trace_config  # noqa: E402  (REA
 PREFIX = "llama2_7b_wsc_llm_inference"
 REPO_VARIANT = "astra-sim-wscllm"
 
+# B4a（2026-09-02，relevant_distributed 第三变体）policy 透传取值集：
+# 与 generate_wsc_llm_trace._parse_config_value 的 kv_cache_policy 值域
+# 同源。loader 已做值域校验，此处为防御性断言（防账本漂移同族语义）；
+# stdout 权威 provenance 记录增携 kv_cache_policy / kv_remote_read 两个
+# 字段，供 B4b 核对"relevant_distributed 物化后 run 头/配置一致"
+# （物化 stdout vs 决策日志 run 头）。机制零改动：不写 manifest
+# （既有字段冻结），仅 stdout 增字段。
+_KNOWN_KV_POLICIES = frozenset({
+    "legacy", "session_lru_recompute", "relevant_distributed",
+})
+_KNOWN_KV_REMOTE_READ = frozenset({"physical", "ideal_masked"})
+
+
+def _assert_policy_passthrough(config) -> dict:
+    """policy 透传断言（B4a 轻校验，fail-closed；机制零改动）。"""
+    policy = config.kv_cache_policy
+    if policy not in _KNOWN_KV_POLICIES:
+        raise RuntimeError(
+            f"kv_cache_policy {policy!r} not in the known set "
+            f"{sorted(_KNOWN_KV_POLICIES)} (loader value domain drifted?)")
+    remote_read = config.kv_remote_read
+    if remote_read not in _KNOWN_KV_REMOTE_READ:
+        raise RuntimeError(
+            f"kv_remote_read {remote_read!r} not in the known set "
+            f"{sorted(_KNOWN_KV_REMOTE_READ)} (loader value domain drifted?)")
+    return {"kv_cache_policy": policy, "kv_remote_read": remote_read}
+
 
 def _config_digest8(config_csv: Path) -> str:
     return hashlib.sha256(config_csv.read_bytes()).hexdigest()[:8]
@@ -226,6 +253,72 @@ def _derive_metrics_requests(config):
     return records
 
 
+def _scan_max_session_span(queue_csv):
+    """P0-2 (2026-08-31, 总文档 §4 P0-2.1) provenance audit: the queue CSV's
+    max consecutive same-session data-row span.
+
+    流式单遍（逐行、不驻留行内容），与 sh/face 系 C++ 启动预检
+    WindowedTraceReader::scan_max_session_span 同一判定口径：第 1 列
+    session_id、跳过表头（首个非空行）、空行既不算数据行也不断开同
+    session 连续段；行号口径 = 1-based CSV 文件行号（表头=第 1 行，
+    首个数据行=第 2 行）。并列取首个最大段（确定性）。
+
+    wscllm 裁决（sync-A16 批次4，合同 §2.1/§3.1）：本仓 window 为
+    advisory（calendar reader），不设 C++ span 预检/拒绝门——本字段
+    仅 provenance（campaign 复核与根因归档），无任何运行期强制的
+    拒绝点。
+    """
+    max_span = 0
+    span_session = ""
+    span_first_line = 0
+    span_last_line = 0
+    data_rows = 0
+    run_session = None
+    run_length = 0
+    run_first_line = 0
+    run_last_line = 0
+    header_seen = False
+    with open(queue_csv, newline="", encoding="utf-8") as source:
+        for file_line, raw in enumerate(source, start=1):
+            line = raw.rstrip("\n").rstrip("\r")
+            if not line:
+                continue  # 空行：非数据行，也不断开 session 连续段
+            if not header_seen:
+                header_seen = True  # 首个非空行 = 表头
+                continue
+            session_id = line.split(",", 1)[0]
+            data_rows += 1
+            if run_length > 0 and session_id == run_session:
+                run_length += 1
+                run_last_line = file_line
+            else:
+                # 严格大于：并列保留首个最大段
+                if run_length > max_span:
+                    max_span = run_length
+                    span_session = run_session or ""
+                    span_first_line = run_first_line
+                    span_last_line = run_last_line
+                run_session = session_id
+                run_length = 1
+                run_first_line = file_line
+                run_last_line = file_line
+    # 收尾段（EOF 结束的最大段，如单 session 文件）
+    if run_length > max_span:
+        max_span = run_length
+        span_session = run_session or ""
+        span_first_line = run_first_line
+        span_last_line = run_last_line
+    return {
+        "max_same_session_span": max_span,
+        "span_session_id": span_session,
+        "span_row_range": [span_first_line, span_last_line],
+        "span_row_range_convention":
+            "1-based csv file lines (header=line 1; mirrors C++ "
+            "WindowedTraceReader::scan_max_session_span)",
+        "scanned_data_rows": data_rows,
+    }
+
+
 def main() -> int:
     config = load_wsc_llm_trace_config()
     if not config.request_queue:
@@ -235,11 +328,17 @@ def main() -> int:
             "trace_config.csv request_queue_csv at it",
             file=sys.stderr)
         return 1
+    # B4a（2026-09-02）：policy 透传断言 + provenance（见函数 docstring）。
+    policy_provenance = _assert_policy_passthrough(config)
     cfg8 = _config_digest8(config.config_csv)
     output_dir = GENERATED_ROOT / f"{PREFIX}_54npus_plan_{cfg8}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     sidecar_rows = _load_sidecar_rows(config.request_queue_csv)
+    # P0-2 (2026-08-31, 总文档 §4 P0-2.1): max consecutive same-session span
+    # ——与 sh/face 系启动预检同口径的 provenance 审计字段。wscllm 裁决
+    # （批次4）：本仓无 C++ 拒绝门（window advisory），字段仅 provenance。
+    span_scan = _scan_max_session_span(config.request_queue_csv)
     manifest = {
         "requests": _derive_manifest_requests(config, sidecar_rows),
         "selected_request_count": len(config.request_queue),
@@ -247,6 +346,12 @@ def main() -> int:
             spec.session_id for spec in config.request_queue}),
         "manifest_source": "synthetic-prerun",
         "repo_variant": REPO_VARIANT,
+        # P0-2 provenance: 同 session 连续段审计字段（wscllm 无 C++ 拒绝门，
+        # window advisory——字段仅供 campaign 复核，见函数 docstring 裁决）。
+        "max_same_session_span": span_scan["max_same_session_span"],
+        "span_session_id": span_scan["span_session_id"],
+        "span_row_range": span_scan["span_row_range"],
+        "span_row_range_convention": span_scan["span_row_range_convention"],
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -275,6 +380,14 @@ def main() -> int:
         "plan_dir": str(output_dir),
         "requests": len(manifest["requests"]),
         "sessions": manifest["selected_session_count"],
+        # B4a (2026-09-02): policy 透传 provenance（relevant_distributed
+        # 物化后 run 头/配置一致的核对锚点；既有变体同样回显其值）。
+        **policy_provenance,
+        # P0-2 (2026-08-31): span 审计字段随 stdout 权威 provenance 记录
+        # 一并输出（与 manifest.json 持久字段同源同值）。
+        "max_same_session_span": span_scan["max_same_session_span"],
+        "span_session_id": span_scan["span_session_id"],
+        "span_row_range": span_scan["span_row_range"],
         "sidecar": str(_sidecar_path_for_queue(config.request_queue_csv)),
         "sidecar_rows_joined": len(sidecar_rows),
         "request_type_counts": request_type_counts,
