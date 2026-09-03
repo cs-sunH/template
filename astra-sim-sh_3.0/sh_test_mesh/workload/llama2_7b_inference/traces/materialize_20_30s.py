@@ -10,8 +10,10 @@ applies the same session-inclusion / turn-truncation rule to the new
 bound.  ``arrival_scale`` divides ONLY the emitted turn-0
 ``session_arrival_time_ns`` (arrivals compress by 1/scale);
 ``inter_request_interval_ns`` and the window selection are untouched.
-Runs are serialized through flock /tmp/slo_wps/locks/heavy_mat.lock (the
-full-source load peaks ~15-20 GB RSS).
+The source is scanned with only one contiguous session buffered and output is
+written incrementally, so peak memory is bounded by the largest session rather
+than a full-source Python object expansion.  Runs remain serialized through
+flock /tmp/slo_wps/locks/heavy_mat.lock to protect native output names.
 
 Rebuild entry (backport re-verification 2026-08-16): the phase-0
 materializer + PROVENANCE were removed by the phase-7 bare-repo restore;
@@ -65,6 +67,7 @@ import csv
 import fcntl
 import os
 import hashlib
+import json
 import sys
 
 SOURCE_DEFAULT = "/home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv"
@@ -75,8 +78,7 @@ ARRIVAL_SCALE = 1.0
 # divisibility property survives arrival_scale != 1.0.
 ARRIVAL_GRID_NS = 1000
 HERE = os.path.dirname(os.path.abspath(__file__))
-# B1/WP2: the full-source CSV load peaks ~15-20 GB RSS; serialize concurrent
-# materializations repo-wide through this lock (execution plan §1).
+# Serialize concurrent materializations that may target the native outputs.
 HEAVY_MAT_LOCK = "/tmp/slo_wps/locks/heavy_mat.lock"
 
 QUEUE_HEADER = [
@@ -170,6 +172,129 @@ def _scaled_session_ns(arrival, scale):
     return max(0, int(round(arrival / scale / ARRIVAL_GRID_NS)) * ARRIVAL_GRID_NS)
 
 
+def _iter_sessions(reader):
+    """Yield one contiguous source session at a time (source-order contract)."""
+    current_sid = None
+    current_rows = []
+    for row in reader:
+        sid = "session_%s" % row["session_id"]
+        if current_sid is None:
+            current_sid = sid
+        elif sid != current_sid:
+            yield current_sid, current_rows
+            current_sid = sid
+            current_rows = []
+        current_rows.append(row)
+    if current_sid is not None:
+        yield current_sid, current_rows
+
+
+def _md5_file(path):
+    digest = hashlib.md5()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fnv1a64_cont(h, data):
+    """FNV-1a 64 continuation over one chunk of raw bytes.
+
+    Byte-for-byte identical to the C++ reader implementation
+    (WindowedTraceReader.cc): offset basis 14695981039346656037, prime
+    1099511628211, per byte h = (h ^ byte) * prime, all mod 2^64.
+    (Ported from the wscllm mother derive_20_first_30_seconds.py, P0
+    turn-0 fix 2026-08-30 lineage.)
+    """
+    for byte in data:
+        h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def queue_provenance(queue_path, generator_version):
+    """Provenance record of a materialized queue, computed from the WRITTEN
+    file bytes (exactly what the C++ reader re-derives and compares).
+
+    Definitions mirror the reader's index pass byte-for-byte: lines split on
+    b"\\n" (a trailing "\\r" from the CSV writer stays on the line and rides
+    on the unparsed description column, exactly as in C++); the first
+    non-empty line is the header; every later non-empty line is a data row;
+    turn-0 = non-empty session_arrival_time_ns (6th comma field); adjacent
+    inversions are counted over turn-0 arrivals in file order; session
+    blocks must be contiguous (a session id may never reappear).
+    (Ported from the wscllm mother derive_20_first_30_seconds.py.)
+    """
+    sha = hashlib.sha256()
+    fnv = 14695981039346656037
+    csv_bytes = 0
+    data_rows = 0
+    turn0_count = 0
+    turn0_min = None
+    turn0_max = None
+    inversions = 0
+    prev_turn0 = None
+    header_seen = False
+    current_session = b""
+    seen_sessions = set()
+    contiguous = True
+    pending = b""
+
+    def consume(line):
+        nonlocal data_rows, turn0_count, turn0_min, turn0_max, inversions
+        nonlocal prev_turn0, header_seen, current_session, contiguous
+        if not line:
+            return
+        if not header_seen:
+            header_seen = True
+            return
+        data_rows += 1
+        fields = line.split(b",")
+        session = fields[0]
+        arrival_text = fields[5] if len(fields) > 5 else b""
+        if session != current_session:
+            if session in seen_sessions:
+                contiguous = False
+            seen_sessions.add(session)
+            current_session = session
+        if arrival_text:
+            turn0_count += 1
+            arrival = int(arrival_text)
+            turn0_min = arrival if turn0_min is None else min(turn0_min, arrival)
+            turn0_max = arrival if turn0_max is None else max(turn0_max, arrival)
+            if prev_turn0 is not None and arrival < prev_turn0:
+                inversions += 1
+            prev_turn0 = arrival
+
+    with open(queue_path, "rb") as fin:
+        while True:
+            chunk = fin.read(1 << 20)
+            if not chunk:
+                break
+            csv_bytes += len(chunk)
+            sha.update(chunk)
+            fnv = fnv1a64_cont(fnv, chunk)
+            pending += chunk
+            *complete, pending = pending.split(b"\n")
+            for line in complete:
+                consume(line)
+        if pending:
+            consume(pending)
+    return {
+        "schema": 1,
+        "generator_version": generator_version,
+        "csv_sha256": sha.hexdigest(),
+        "csv_fnv1a64": fnv,
+        "csv_bytes": csv_bytes,
+        "data_rows": data_rows,
+        "sessions": len(seen_sessions),
+        "turn0_count": turn0_count,
+        "turn0_arrival_min_ns": turn0_min if turn0_min is not None else 0,
+        "turn0_arrival_max_ns": turn0_max if turn0_max is not None else 0,
+        "turn0_adjacent_inversions": inversions,
+        "session_blocks_contiguous": contiguous,
+    }
+
+
 def main():
     source, out_queue, window_ns, arrival_scale = _parse_args(sys.argv)
     if out_queue.endswith("_request_queue.csv"):
@@ -190,84 +315,88 @@ def main():
 
 
 def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
-    with open(src, newline="") as f:
-        rows = list(csv.DictReader(f))
-
-    # single grouping pass (source is already ordered by session/turn)
-    sessions = {}
-    order = []
-    for r in rows:
-        sid = "session_%s" % r["session_id"]
-        if sid not in sessions:
-            sessions[sid] = []
-            order.append(sid)
-        sessions[sid].append(r)
-
-    queue_rows, digest_rows = [], []
     session_count = 0
+    request_count = 0
+    decode_length_sum = 0
     turn0_prefix_rows = 0
     t0_grid_snapped = 0
     max_total = 0
-    for sid in order:
-        srows = sessions[sid]
-        first_arrival = int(srows[0]["arrival_time"])
-        if first_arrival >= window_ns:
-            continue
-        session_count += 1
-        arrival = first_arrival
-        for turn, r in enumerate(srows):
-            if turn > 0:
-                prev = srows[turn - 1]
-                arrival = arrival + _gap_ns(prev["human_time"], prev["tool_time"])
-                if arrival >= window_ns:
-                    break
-            rid = "%s_request_%d" % (sid, turn)
-            new_prefill = int(r["prefill_length"])
-            prefix = int(r["prefix_len"])
-            # Folded recompute caliber: turn-0 prefill carries the full
-            # source prefix (prefix + new tokens); later turns keep only
-            # their new tokens (history comes from the runtime KV ledger).
-            prefill = new_prefill + prefix if turn == 0 else new_prefill
-            total = prefix + new_prefill
-            if turn == 0 and prefix > 0:
-                turn0_prefix_rows += 1
-            max_total = max(max_total, total)
-            if turn == 0:
-                scaled_ns = _scaled_session_ns(arrival, arrival_scale)
-                if arrival_scale != 1.0 and scaled_ns != int(arrival / arrival_scale):
-                    t0_grid_snapped += 1
-                session_ns = str(scaled_ns)
-                interval_ns = ""
-            else:
-                session_ns = ""
-                interval_ns = str(_gap_ns(srows[turn - 1]["human_time"], srows[turn - 1]["tool_time"]))
-            trigger_type = _next_trigger_type(
-                r["human_time"], r["tool_time"],
-                is_last_row=(turn == len(srows) - 1),
-            )
-            queue_rows.append([
-                sid, turn, rid, prefill, r["decode_length"], session_ns,
-                interval_ns, trigger_type,
-                "compute_20 first-30-seconds window; turn-0 prefix folded "
-                "into prefill_length (recompute caliber)",
-            ])
-            digest = hashlib.sha256(
-                ("%s|%d|%d|%d" % (rid, prefix, new_prefill, total)).encode()
-            ).hexdigest()
-            digest_rows.append([rid, prefix, new_prefill, total, digest, "recompute"])
+    with open(src, newline="") as source, \
+            open(out_queue, "w", newline="") as queue_output, \
+            open(out_digest, "w", newline="") as digest_output:
+        queue_writer = csv.writer(queue_output)
+        digest_writer = csv.writer(digest_output)
+        queue_writer.writerow(QUEUE_HEADER)
+        digest_writer.writerow(DIGEST_HEADER)
+        for sid, srows in _iter_sessions(csv.DictReader(source)):
+            first_arrival = int(srows[0]["arrival_time"])
+            if first_arrival >= window_ns:
+                continue
+            session_count += 1
+            arrival = first_arrival
+            for turn, r in enumerate(srows):
+                if turn > 0:
+                    prev = srows[turn - 1]
+                    arrival += _gap_ns(prev["human_time"], prev["tool_time"])
+                    if arrival >= window_ns:
+                        break
+                rid = "%s_request_%d" % (sid, turn)
+                new_prefill = int(r["prefill_length"])
+                prefix = int(r["prefix_len"])
+                prefill = new_prefill + prefix if turn == 0 else new_prefill
+                total = prefix + new_prefill
+                if turn == 0 and prefix > 0:
+                    turn0_prefix_rows += 1
+                max_total = max(max_total, total)
+                if turn == 0:
+                    scaled_ns = _scaled_session_ns(arrival, arrival_scale)
+                    if (arrival_scale != 1.0 and
+                            scaled_ns != int(arrival / arrival_scale)):
+                        t0_grid_snapped += 1
+                    session_ns = str(scaled_ns)
+                    interval_ns = ""
+                else:
+                    session_ns = ""
+                    interval_ns = str(_gap_ns(
+                        srows[turn - 1]["human_time"],
+                        srows[turn - 1]["tool_time"]))
+                trigger_type = _next_trigger_type(
+                    r["human_time"], r["tool_time"],
+                    is_last_row=(turn == len(srows) - 1),
+                )
+                queue_writer.writerow([
+                    sid, turn, rid, prefill, r["decode_length"], session_ns,
+                    interval_ns, trigger_type,
+                    "compute_20 first-30-seconds window; turn-0 prefix folded "
+                    "into prefill_length (recompute caliber)",
+                ])
+                digest = hashlib.sha256(
+                    ("%s|%d|%d|%d" %
+                     (rid, prefix, new_prefill, total)).encode()
+                ).hexdigest()
+                digest_writer.writerow([
+                    rid, prefix, new_prefill, total, digest, "recompute",
+                ])
+                request_count += 1
+                decode_length_sum += int(r["decode_length"])
 
-    def write(path, header, data):
-        with open(path, "w", newline="") as f:
-            w = csv.writer(f)
-            w.writerow(header)
-            w.writerows(data)
+    src_md5 = _md5_file(src)
+    queue_md5 = _md5_file(out_queue)
+    digest_md5 = _md5_file(out_digest)
 
-    write(out_queue, QUEUE_HEADER, queue_rows)
-    write(out_digest, DIGEST_HEADER, digest_rows)
+    # P0 turn-0 fix (2026-08-30, ported from the wscllm mother): provenance
+    # sidecar next to the queue; the C++ calendar reader fail-closes on any
+    # mismatch with these stats (absent sidecar = no gate).
+    generator_version = (
+        "materialize_20_30s.py window_ns=%d arrival_scale=%s"
+        % (window_ns, arrival_scale)
+    )
+    provenance = queue_provenance(out_queue, generator_version)
+    provenance_path = out_queue + ".provenance.json"
+    with open(provenance_path, "w", encoding="utf-8") as pout:
+        json.dump(provenance, pout, indent=2, sort_keys=True)
+        pout.write("\n")
 
-    src_md5 = hashlib.md5(open(src, "rb").read()).hexdigest()
-    queue_md5 = hashlib.md5(open(out_queue, "rb").read()).hexdigest()
-    digest_md5 = hashlib.md5(open(out_digest, "rb").read()).hexdigest()
     print("source=%s" % src)
     print("source_md5=%s" % src_md5)
     print("window_ns=%d arrival_scale=%s" % (window_ns, arrival_scale))
@@ -278,12 +407,19 @@ def _materialize(src, out_queue, out_digest, window_ns, arrival_scale):
     # defaults window=30e9/scale=1.0 reproduce them byte-exactly).
     print("queue_md5=%s (frozen: ff18f42df40e5f35582fe3e356c214e8)" % queue_md5)
     print("digest_md5=%s (frozen: a049d7308b4c2c39c13f8a2da55d95ff)" % digest_md5)
-    print("sessions=%d requests=%d" % (session_count, len(queue_rows)))
+    print("sessions=%d requests=%d" % (session_count, request_count))
     print("turn0_t0_grid_snapped_rows=%d (scale=%s grid=%dns)"
           % (t0_grid_snapped, arrival_scale, ARRIVAL_GRID_NS))
     print("turn0_prefix_gt0_rows=%d max_input_tokens_total=%d" % (turn0_prefix_rows, max_total))
     print("average_decode_length=%s"
-          % (sum(int(r[4]) for r in queue_rows) / float(len(queue_rows))))
+          % (decode_length_sum / float(request_count)))
+    print("provenance: " + json.dumps(
+        {k: provenance[k] for k in (
+            "csv_fnv1a64", "csv_bytes", "data_rows", "sessions",
+            "turn0_count", "turn0_arrival_min_ns", "turn0_arrival_max_ns",
+            "turn0_adjacent_inversions", "session_blocks_contiguous")},
+        sort_keys=True))
+    print("provenance sidecar: %s" % provenance_path)
     print("[next-steps] 1) trace_config.csv:12 request_queue_csv -> %s" % out_queue)
 
 
