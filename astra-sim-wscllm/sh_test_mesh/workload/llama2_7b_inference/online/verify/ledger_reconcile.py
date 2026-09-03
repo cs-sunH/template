@@ -68,20 +68,55 @@ strategy 感知运行目录):
 
 八层账本口径(§10.1):admitted / committed / ready / issued / network
 pending/active 参与对平;remote FIFO 与 local HBM 为"不适用"显式占位
-(wscllm 无远端内存、无 LocalHbmBandwidthModel),报告中列示不参与对平。
+(wscllm 无远端内存后端 FIFO;local HBM 计时模型已激活——comm 边端点
+计费 hbm_charge 在案(裁决 #35),缺的是独立 local-HBM 节点账本,故
+该层无 job 账本可对平),报告中列示不参与对平。
 
 退出码:0 = 对平;1 = 存在失配(报告逐项列出差异与证据)。"""
 
 import argparse
+import gzip
 import json
 import os
 import re
 import sys
 
+_ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ONLINE_DIR not in sys.path:
+    sys.path.insert(0, _ONLINE_DIR)
+from bridge_request_journal import iter_request_records  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # 输入加载
 # ---------------------------------------------------------------------------
+
+def _artifact_path(bridge_dir, name):
+    """Resolve live bridge artifacts first, then runner-archived results/."""
+    live = os.path.join(bridge_dir, name)
+    if os.path.isfile(live):
+        return live
+    run_dir = os.path.dirname(os.path.abspath(bridge_dir))
+    archived = os.path.join(run_dir, "results", name)
+    if os.path.isfile(archived):
+        return archived
+    return live
+
+
+def _read_cpp_log(cpp_log_path):
+    """Read cpp.log or its transparent post-archive cpp.log.gz form."""
+    if not cpp_log_path:
+        return None
+    path = cpp_log_path
+    if not os.path.isfile(path) and not path.endswith(".gz") \
+            and os.path.isfile(path + ".gz"):
+        path += ".gz"
+    if not os.path.isfile(path):
+        return None
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as source:
+        return source.read()
+
 
 def _iter_jsonl(path):
     with open(path, "r", encoding="utf-8") as source:
@@ -107,10 +142,7 @@ def load_cpp_facts(bridge_dir):
     同一 (request, stage, generation) 重复出现 = 失配。"""
     completions = {}
     arrival_epochs = 0
-    for seq in _seq_files(bridge_dir, "request_"):
-        path = os.path.join(bridge_dir, "request_{}.json".format(seq))
-        with open(path, "r", encoding="utf-8") as source:
-            req = json.load(source)
+    for seq, req in iter_request_records(bridge_dir):
         arrival_epochs += len(req.get("arrivals") or [])
         for group in req.get("completed_groups") or []:
             request_id = group["request_id"]
@@ -146,10 +178,7 @@ def load_committed(bridge_dir):
     committed_ranks = {}
     group_pairs = set()
     completed_nodes_total = 0
-    for seq in _seq_files(bridge_dir, "request_"):
-        path = os.path.join(bridge_dir, "request_{}.json".format(seq))
-        with open(path, "r", encoding="utf-8") as source:
-            req = json.load(source)
+    for seq, req in iter_request_records(bridge_dir):
         for group in req.get("completed_groups") or []:
             group_pairs.add((group["request_id"], group["stage"]))
         for node in req.get("completed_nodes") or []:
@@ -170,7 +199,7 @@ def load_digests(bridge_dir):
     digests = []
     watch_total = 0
     node_total = 0
-    for row in _iter_jsonl(os.path.join(
+    for row in _iter_jsonl(_artifact_path(
             bridge_dir, "graph_batch_digests.jsonl")):
         digests.append(row)
         watch_total += row.get("watch_count", 0)
@@ -184,7 +213,7 @@ def load_decision_log(bridge_dir):
     by_kind = {"prefill": {}, "decode": {}, "completion": {}}
     kind_counts = {}
     rows = 0
-    for row in _iter_jsonl(os.path.join(
+    for row in _iter_jsonl(_artifact_path(
             bridge_dir, "online_decision_log.jsonl")):
         rows += 1
         kind = row.get("kind")
@@ -197,11 +226,9 @@ def load_decision_log(bridge_dir):
 def load_cpp_audit(cpp_log_path):
     """cpp.log 的 phase-5 commit counters 与 phase-4 end audit(phase-7
     新契约的 committed/watch/kv 权威计数)。"""
-    if not cpp_log_path or not os.path.exists(cpp_log_path):
+    text = _read_cpp_log(cpp_log_path)
+    if text is None:
         return None
-    with open(cpp_log_path, "r", encoding="utf-8",
-              errors="replace") as source:
-        text = source.read()
     out = {}
     m5 = re.search(
         r"\[online\] phase-5 commit counters: graph_batch_count=(\d+) "
@@ -238,23 +265,22 @@ def load_python_ledger(bridge_dir):
     """ledger.jsonl:request_id -> {admitted, committed,
     completed_unreconciled}(各层可能缺省)。"""
     ledger = {}
-    for row in _iter_jsonl(os.path.join(bridge_dir, "ledger.jsonl")):
+    for row in _iter_jsonl(_artifact_path(bridge_dir, "ledger.jsonl")):
         ledger[row["request_id"]] = row.get("layers", {})
     return ledger
 
 
 def load_sensing_query_log(bridge_dir):
     return list(_iter_jsonl(
-        os.path.join(bridge_dir, "sensing_query_log.jsonl")))
+        _artifact_path(bridge_dir, "sensing_query_log.jsonl")))
 
 
 def load_cpp_counters(cpp_log_path):
     """cpp.log 的 gate/service counters:[online] service counters:
     accepted=112 completed=1177 active=0 pending_alarm=0"""
-    if not cpp_log_path or not os.path.exists(cpp_log_path):
+    text = _read_cpp_log(cpp_log_path)
+    if text is None:
         return None
-    with open(cpp_log_path, "r", encoding="utf-8", errors="replace") as source:
-        text = source.read()
     match = re.search(
         r"\[online\] service counters: accepted=(\d+) completed=(\d+)"
         r" active=(\d+) pending_alarm=(\d+)", text)
@@ -928,8 +954,9 @@ def _render_report(balanced, failures, manifest_count, arrival_epochs,
     lines.append("| issued(已发射未完成) | Python 常驻 | 对平 R7 |")
     lines.append("| remote-memory FIFO | 不适用(wscllm 无远端内存后端 FIFO) | 显式占位,无账本 |")
     lines.append("| network pending/active | C++ 执行事实(injected-unfinished 摘要) | 对平 R8(计数/审计) |")
-    lines.append("| local HBM job | 不适用(wscllm 无 LocalHbmBandwidthModel,"
-                 "全仓 grep 零命中) | 显式占位,无账本 |")
+    lines.append("| local HBM job | 无 local-HBM job 账本(计时模型已激活:"
+                 "comm 边端点计费 hbm_charge 在案,裁决 #35;缺的是独立 "
+                 "local-HBM 节点账本) | 显式占位,无账本 |")
     lines.append("| completed-unreconciled | Python 常驻 | 对平 R0 |")
     lines.append("")
     if failures:

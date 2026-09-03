@@ -25,7 +25,17 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
                    history_recompute_tokens==history_tokens_before
                    （83/83 全量重算 → miss，无 partial 语义）。
   astra-sim-wscllm 同 face（RECOMPUTE 802/802 全量重算）；decode 决策另有
-                   static_route（hopbytes.py 用）。
+                   static_route（hopbytes.py 用）。第三变体
+                   relevant_distributed（2026-09-02 B3 起，仓内 policy
+                   分发，非新 repo_variant）：prefill 行带
+                   history_canonical_hit_state（full/partial/null）→
+                   full/partial/no_history，无 miss 枚举路径（历史必经
+                   1000 拉回复用，总文档 §3.4）；1000 拉回
+                   （history_pull_routes）按源实例聚合 → history_transfer
+                   事件（源=P local-hit 零边不产事件）；kv_scatter 行
+                   routes（3100）按 owner 聚合 → prefill_decode_transfer；
+                   3300 读边/逐出无 cache 事件（读边归
+                   relevant_observations.py 观测，裁决 #24）。
   astra-sim-sh_1.0 prefill.decision.history_transfer ∈ null | {kind:
                    noc_migrate|local_hit|remote_load, shards[{
                    bytes,noc_path,source_rank,target_rank}...],
@@ -33,10 +43,12 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
                    local_hit 无数据 shard（generate_face_trace.py:541），
                    total_bytes 为名义规模——不产 canonical 事件。
   astra-sim-sh_2.0 决策只落 history_transfer_bytes /
-                   prefill_decode_transfer_bytes / *_eviction_count 聚合值；
-                   准入时点的 history_location_before 在运行态存在但未序列化
-                   （sh20_online_scheduler.py:1104-1108 解包、:1159-1167
-                   决策字典未含）→ turn>0 的 kv_hit_state=not_supported。
+                   prefill_decode_transfer_bytes / *_eviction_count 聚合值;
+                   WP9-线5（2026-08-26）起 admission 决策附加序列化
+                   history_location_before（三态：local_hbm /
+                   partial_hbm_remote / remote_memory）+
+                   history_resident_prefix_layers → full/partial/full
+                   （remote 整体恢复非重算;无 recompute,miss 不出现）。
   astra-sim-sh_3.0 prefill.decision.prefill_affinity_reason ∈
                    {first_request_non_edge, first_request_edge_fallback,
                    resident_local_hbm, resident_prefix_layers,
@@ -124,16 +136,38 @@ def _hit_state_sh10(decision: dict, turn: Optional[int],
 
 
 def _hit_state_sh20(decision: dict, turn: Optional[int],
-                    request_id: str) -> tuple[str, str]:
-    if turn is not None and turn == 0:
-        return "no_history", "turn_index=0（首请求无历史）"
-    if turn is None:
+                     request_id: str) -> tuple[str, str]:
+    """S2：准入时点会话历史位置（WP9-线5 起 decision 序列化
+    history_location_before）映射三态语义。
+
+    local_hbm → full（全量驻留本_instance HBM）；partial_hbm_remote →
+    partial（resident 前缀层在 HBM、suffix 在远存）；remote_memory →
+    full（整体驻留远存并恢复，非重算，与 S1 remote_load 口径一致）。
+    S2 无 recompute 语义，miss 不出现属预期（映射表保持封闭集合，
+    未知位置 fail 到 not_supported 不猜测）。旧日志（字段缺失，B2
+    线4 基线）保持 not_supported，可区分新旧产物。"""
+    location = decision.get("history_location_before")
+    if location is None:
+        if turn is not None and turn == 0:
+            # 首请求无历史：turn-0 无位置快照是正常态（SessionKVSnapshot
+            # 仅在会话已有 KV 状态时返回）。
+            return "no_history", "turn_index=0（首请求无历史）"
         return ("not_supported",
-                "manifest 缺 turn_index，且 sh_2.0 决策未落准入时点历史位置")
-    return ("not_supported",
-            "sh_2.0 decision log 未序列化 admission 时点 history_location"
-            "_before（代码证据 sh20_online_scheduler.py:1104-1167）——"
-            "不得由聚合 bytes 猜测 full/miss")
+                "sh_2.0 decision log 未序列化 admission 时点 history_location"
+                "_before（旧产物；新产物见 WP9-线5 序列化字段）")
+    resident = decision.get("history_resident_prefix_layers")
+    evidence = (
+        f"history_location_before={location};"
+        f"resident_prefix_layers={resident};"
+        f"instance_index={decision.get('history_location_before_instance_index')}")
+    mapping = {
+        "local_hbm": "full",
+        "partial_hbm_remote": "partial",
+        "remote_memory": "full",
+    }
+    if location not in mapping:
+        return "not_supported", evidence
+    return mapping[location], evidence
 
 
 def _hit_state_sh30(decision: dict, turn: Optional[int],
@@ -154,6 +188,48 @@ def _hit_state_sh30(decision: dict, turn: Optional[int],
     if reason not in mapping:
         return "not_supported", evidence
     return mapping[reason], evidence
+
+
+def _hit_state_wscllm_relevant(decision: dict, turn: Optional[int],
+                               request_id: str) -> tuple[str, str]:
+    """W 第三变体 relevant_distributed（2026-09-02 B3 起）：prefill 决策行
+    序列化 ``history_canonical_hit_state``（调度器侧 _canonical_hit_state：
+    拉回源全源=P → full；否则 partial）。本策略历史必经 1000 拉回复用、
+    无 recompute 枚举路径 → canonical 映射永不产生 miss（总文档 §3.4）。
+
+    turn-0 无历史（字段 null）→ no_history；turn>0 缺字段属异常产物 →
+    not_supported，不猜测。"""
+    state = decision.get("history_canonical_hit_state")
+    evidence = (
+        f"history_canonical_hit_state={state};"
+        f"local_hit_tokens={decision.get('history_local_hit_tokens')};"
+        f"remote_transfer_bytes="
+        f"{decision.get('history_remote_transfer_bytes')}")
+    if state is None:
+        if turn is not None and turn == 0:
+            return "no_history", evidence
+        return ("not_supported",
+                f"history_canonical_hit_state=null;turn_index={turn}"
+                "（relevant 变体 turn>0 决策行必带 canonical 状态）")
+    mapping = {"full": "full", "partial": "partial"}
+    if state not in mapping:
+        return "not_supported", evidence
+    return mapping[state], evidence
+
+
+def _relevant_prefill_row(decision: dict) -> bool:
+    """relevant_distributed prefill 决策行标记：B3 起恒序列化
+    history_canonical_hit_state 证据字段（legacy/session_lru 无此字段）。"""
+    return "history_canonical_hit_state" in decision
+
+
+def _hit_state_wscllm(decision: dict, turn: Optional[int],
+                      request_id: str) -> tuple[str, str]:
+    """wscllm 仓内 policy 分发：relevant_distributed 决策行走 canonical
+    映射；legacy / session_lru 共用 face 口径（history_action 四值）。"""
+    if _relevant_prefill_row(decision):
+        return _hit_state_wscllm_relevant(decision, turn, request_id)
+    return _hit_state_face_wscllm(decision, turn, request_id)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +358,12 @@ def extract_events_sh10(record: dict) -> list[dict]:
 
 
 def extract_events_sh20(record: dict) -> list[dict]:
-    """S2：只有聚合 bytes，无 shard/路由/逐出字节（计数不产事件）。"""
+    """S2：B3-6（2026-08-27）起新产物逐条序列化 *_evictions 与
+    history_transfers——字段在场时按 S1 同构逐条产事件（victim 归因
+    trigger 请求行，layer 区间进 cause 证据由 reason/kind 承载）；
+    旧产物只有聚合 bytes（history_transfer_bytes /
+    prefill_decode_transfer_bytes，计数不产事件）→ aggregate_bytes_only
+    回退，两代产物可区分。"""
     events = []
     kind = record.get("kind")
     decision = record.get("decision") or {}
@@ -291,17 +372,38 @@ def extract_events_sh20(record: dict) -> list[dict]:
     if not isinstance(tick, int):
         fail(f"decision log 行缺整数 tick（request={request_id!r}）")
     if kind == "prefill":
-        nbytes = decision.get("history_transfer_bytes")
-        if isinstance(nbytes, int) and nbytes > 0:
-            events.append(_event(
-                request_id, tick, nbytes, NA, NA,
-                f"{FAMILY_HISTORY}:aggregate_bytes_only"))
+        transfers = decision.get("history_transfers")
+        if isinstance(transfers, list):
+            for entry in transfers:
+                events.extend(_transfer_object_events(
+                    entry, request_id, tick, FAMILY_HISTORY))
+        else:
+            nbytes = decision.get("history_transfer_bytes")
+            if isinstance(nbytes, int) and nbytes > 0:
+                events.append(_event(
+                    request_id, tick, nbytes, NA, NA,
+                    f"{FAMILY_HISTORY}:aggregate_bytes_only"))
+        for field in ("history_evictions", "prefill_evictions"):
+            for entry in decision.get(field) or []:
+                events.extend(_transfer_object_events(
+                    entry, request_id, tick, FAMILY_EVICTION))
     elif kind == "decode":
+        decode_list = decision.get("decode_evictions")
+        if isinstance(decode_list, list):
+            for entry in decode_list:
+                events.extend(_transfer_object_events(
+                    entry, request_id, tick, FAMILY_EVICTION))
         nbytes = decision.get("prefill_decode_transfer_bytes")
         if isinstance(nbytes, int) and nbytes > 0:
             events.append(_event(
                 request_id, tick, nbytes, NA, NA,
                 f"{FAMILY_PD}:aggregate_bytes_only"))
+    elif kind == "completion":
+        completion_list = decision.get("completion_evictions")
+        if isinstance(completion_list, list):
+            for entry in completion_list:
+                events.extend(_transfer_object_events(
+                    entry, request_id, tick, FAMILY_EVICTION))
     return events
 
 
@@ -339,6 +441,86 @@ def extract_events_sh30(record: dict) -> list[dict]:
     return events
 
 
+def _relevant_routes_instance_totals(routes: Any, by: str,
+                                     other: str) -> list[tuple[int, Any, int]]:
+    """relevant 路由行（B2 发射层逐 rank shard 行）按 ``by`` 实例键聚合为
+    实例级字节（native 为准的聚合口径，canonical 提取与 --reconcile 的
+    native 重放共用同一式）。返回 (key 实例, 对端实例, bytes)，键升序。"""
+    if routes is None:
+        return []
+    if not isinstance(routes, list):
+        fail(f"relevant 路由行集合非列表：{type(routes).__name__}")
+    totals: dict[int, dict] = {}
+    for route in routes:
+        if not isinstance(route, dict):
+            fail(f"relevant 路由行非对象：{route!r}")
+        key = route.get(by)
+        nbytes = route.get("bytes")
+        if isinstance(key, bool) or not isinstance(key, int):
+            fail(f"relevant 路由行缺整数 {by}：{route!r}")
+        if not isinstance(nbytes, int):
+            fail(f"relevant 路由行缺整数 bytes：{route!r}")
+        slot = totals.setdefault(key, {"bytes": 0, "other": route.get(other)})
+        slot["bytes"] += nbytes
+    return [(key, totals[key]["other"], totals[key]["bytes"])
+            for key in sorted(totals)]
+
+
+def extract_events_wscllm_relevant(record: dict) -> list[dict]:
+    """relevant_distributed 变体（裁决 #23 决策日志新行）的 canonical 事件：
+
+    * prefill 行 ``history_pull_routes``（1000 族，逐 rank 行）→ 按源实例
+      聚合成实例级 history_transfer 事件（源=P 的 local-hit 部分零边、不
+      产事件——与 legacy LOCAL_HIT / S1 local_hit 的"名义规模不产事件"
+      口径一致）；
+    * kv_scatter 行 ``routes``（3100 族）→ 按 owner 实例聚合为
+      prefill_decode_transfer 事件（P→owner write-once 散布）；
+    * kv_remote_reads（3300 读边）/ kv_placement / run_header 不产 cache
+      事件——读边是重复远程读而非 KV 搬迁（其字节分布归
+      relevant_observations.py 观测后处理承载，总文档裁决 #24）；本变体
+      无逐出语义（admission/completion_evictions 恒空）。
+    """
+    events = []
+    kind = record.get("kind")
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id")
+    tick = record.get("tick")
+    if not isinstance(tick, int):
+        fail(f"decision log 行缺整数 tick（request={request_id!r}）")
+    if kind == "prefill":
+        for source, target, nbytes in _relevant_routes_instance_totals(
+                decision.get("history_pull_routes"),
+                by="source_instance_index",
+                other="target_instance_index"):
+            events.append(_event(
+                request_id, tick, nbytes, source, target,
+                f"{FAMILY_HISTORY}:history_pull"))
+    elif kind == "kv_scatter":
+        for target, source, nbytes in _relevant_routes_instance_totals(
+                decision.get("routes"),
+                by="target_instance_index",
+                other="source_instance_index"):
+            events.append(_event(
+                request_id, tick, nbytes, source, target,
+                f"{FAMILY_PD}:scatter"))
+    return events
+
+
+def extract_events_wscllm(record: dict) -> list[dict]:
+    """wscllm 仓内 policy 分发：relevant_distributed 专属决策行
+    （kv_scatter / kv_remote_reads / kv_placement / run_header，或带
+    history_pull_routes 的 prefill 行）走 relevant 提取；其余（legacy /
+    session_lru）共用 face 口径。"""
+    kind = record.get("kind")
+    if (kind in ("kv_scatter", "kv_remote_reads", "kv_placement",
+                 "run_header")
+            or (kind == "prefill"
+                and isinstance(record.get("decision"), dict)
+                and "history_pull_routes" in record["decision"])):
+        return extract_events_wscllm_relevant(record)
+    return extract_events_face_wscllm(record)
+
+
 REPO_VARIANTS: dict[str, dict[str, Any]] = {
     "astra-sim-face": {
         "hit_state": _hit_state_face_wscllm,
@@ -350,12 +532,19 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
                  "RECOMPUTE 全量重算（83/83）→ 无 partial 语义",
     },
     "astra-sim-wscllm": {
-        "hit_state": _hit_state_face_wscllm,
-        "extract_events": extract_events_face_wscllm,
+        "hit_state": _hit_state_wscllm,
+        "extract_events": extract_events_wscllm,
         "shard_sum_check": True,
         "partial_semantics": False,
         "notes": "同 face（RECOMPUTE 802/802 全量重算）；PD 迁移 100% "
-                 "NOC_MIGRATE；decode 另有 static_route（hopbytes.py）",
+                 "NOC_MIGRATE；decode 另有 static_route（hopbytes.py）；"
+                 "第三变体 relevant_distributed（2026-09-02 B3 起）prefill "
+                 "行带 history_canonical_hit_state 证据字段 → full/partial、"
+                 "无 miss（拉回源全 P=full；本策略无 recompute 路径），"
+                 "1000 拉回/kv_scatter 3100 路由行逐实例聚合成 canonical "
+                 "事件（partial_semantics_native 汇总字段对 legacy/"
+                 "session_lru 保持 False，relevant 行出现时由 emit 侧置 "
+                 "True）",
     },
     "astra-sim-sh_1.0": {
         "hit_state": _hit_state_sh10,
@@ -372,10 +561,12 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
         "shard_sum_check": False,
         "partial_semantics": True,
         "notes": "决策仅聚合 bytes（history_transfer_bytes>0 1086）；"
-                 "admission 时点 history_location_before 未序列化"
-                 "（sh20_online_scheduler.py:1104-1167）→ kv_hit_state="
-                 "not_supported（turn0 除外）；TODO_S2：需 native 侧补落"
-                 "位置字段后重评",
+                 "WP9-线5（2026-08-26）起 admission 决策序列化 "
+                 "history_location_before{,_instance_index} 与 "
+                 "history_resident_prefix_layers → kv_hit_state 三态映射"
+                 "（local_hbm=full/partial_hbm_remote=partial/"
+                 "remote_memory=full；无 recompute，miss 不出现属预期）；"
+                 "旧产物（字段缺失）保持 not_supported",
     },
     "astra-sim-sh_3.0": {
         "hit_state": _hit_state_sh30,
@@ -394,55 +585,109 @@ def family_of(cause: str) -> str:
     return cause.split(":", 1)[0]
 
 
+class AdapterState:
+    """单遍累积态（A4：driver 单遍 decision log 复用；CLI 路径同构）。
+
+    events 为紧凑 6 元组列表（2026-08-30 阶段2加固 §3.4a），元素下标：
+    0=request_id / 1=start_ns / 2=bytes / 3=source / 4=target / 5=cause
+    （end_ns 恒 NA 不缓存，CSV 写出层补 NA；None bytes 由 write_csv 统一
+    转 NA）。原每事件 ~350B dict 降为 ~120B 元组。仅两处消费：emit 的
+    len()（n_events）与 canonical CSV 写出（按下标取值）。注意：不得改成
+    "边消费边写最终 CSV"——driver 是单遍 sink 扇出架构，kv sink 可能中途
+    死亡且不调 emit，边写会在死 sink 场景留下半截产物，改变失败语义。
+    """
+
+    __slots__ = ("events", "hit_states", "shard_sum_violations",
+                 "saw_relevant_rows")
+
+    def __init__(self) -> None:
+        self.events: list[tuple] = []
+        self.hit_states: dict[str, tuple[str, str]] = {}
+        self.shard_sum_violations = 0
+        # wscllm relevant_distributed 行出现标记（emit 侧把汇总字段
+        # partial_semantics_native 置 True；legacy/session_lru 保持仓级
+        # 缺省 False，输出不变）。
+        self.saw_relevant_rows = False
+
+
+def adapter_prepare(repo_variant: str, manifest: dict
+                    ) -> tuple[dict, dict[str, int], AdapterState]:
+    variant = REPO_VARIANTS.get(repo_variant)
+    if variant is None:
+        fail(f"未登记的 repo_variant：{repo_variant}（REPO_VARIANTS 需扩表，"
+             f"禁止猜测映射）")
+    turns = _turn_index_map(manifest)
+    return variant, turns, AdapterState()
+
+
+def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
+                    state: AdapterState) -> None:
+    """单条决策记录的适配器处理（与独立 CLI 的循环体逐语句等价）。"""
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id")
+    if record.get("kind") == "prefill" and isinstance(request_id, str):
+        if _relevant_prefill_row(decision):
+            state.saw_relevant_rows = True
+        hit_state, evidence = variant["hit_state"](
+            decision, turns.get(request_id), request_id)
+        state.hit_states[request_id] = (hit_state, evidence)
+    extracted = variant["extract_events"](record)
+    # extract_events 返回逐事件 dict（各仓映射代码零改动），此处统一转
+    # 紧凑元组缓存（下标含义见 AdapterState；end_ns 恒 NA 不入缓存）。
+    state.events.extend(
+        (event["request_id"], event["start_ns"], event["bytes"],
+         event["source"], event["target"], event["cause"])
+        for event in extracted)
+    if variant["shard_sum_check"]:
+        # native 不变量复检：Σshards == total_bytes（以 native 为准）。
+        for holder in (decision.get("prefill_decode_transfer"),
+                       decision.get("history_transfer")):
+            if isinstance(holder, dict):
+                total = holder.get("total_bytes")
+                shards = holder.get("shards")
+                if (isinstance(total, int) and isinstance(shards, list)
+                        and shards):
+                    shard_total = sum(int(s.get("bytes", 0))
+                                      for s in shards
+                                      if isinstance(s, dict))
+                    if shard_total != total:
+                        state.shard_sum_violations += 1
+        for field in ("completion_evictions", "history_evictions",
+                      "prefill_evictions", "decode_evictions"):
+            for holder in decision.get(field) or []:
+                if isinstance(holder, dict):
+                    total = holder.get("total_bytes")
+                    shards = holder.get("shards")
+                    if isinstance(total, int) and isinstance(shards, list):
+                        shard_total = sum(int(s.get("bytes", 0))
+                                          for s in shards
+                                          if isinstance(s, dict))
+                        if shard_total != total:
+                            state.shard_sum_violations += 1
+
+
 def cmd_adapter(args: argparse.Namespace) -> int:
+    # CLI 入口（独立运行行为不变）。A4 driver 经 adapter_prepare /
+    # adapter_consume / adapter_emit 组合复用同一逻辑（单遍 decision log）。
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
     variant = REPO_VARIANTS.get(repo_variant)
     if variant is None:
         fail(f"未登记的 repo_variant：{repo_variant}（REPO_VARIANTS 需扩表，"
              f"禁止猜测映射）")
     manifest = load_request_manifest(args.run_dir, args.request_manifest)
-    turns = _turn_index_map(manifest)
-
-    events: list[dict] = []
-    hit_states: dict[str, tuple[str, str]] = {}
-    shard_sum_violations = 0
+    variant, turns, state = adapter_prepare(repo_variant, manifest)
     log_path = args.run_dir / DECISION_LOG_RELPATH
     for record in iter_jsonl(log_path):
-        decision = record.get("decision") or {}
-        request_id = record.get("request_id")
-        if record.get("kind") == "prefill" and isinstance(request_id, str):
-            state, evidence = variant["hit_state"](
-                decision, turns.get(request_id), request_id)
-            hit_states[request_id] = (state, evidence)
-        extracted = variant["extract_events"](record)
-        events.extend(extracted)
-        if variant["shard_sum_check"]:
-            # native 不变量复检：Σshards == total_bytes（以 native 为准）。
-            for holder in (decision.get("prefill_decode_transfer"),
-                           decision.get("history_transfer")):
-                if isinstance(holder, dict):
-                    total = holder.get("total_bytes")
-                    shards = holder.get("shards")
-                    if (isinstance(total, int) and isinstance(shards, list)
-                            and shards):
-                        shard_total = sum(int(s.get("bytes", 0))
-                                          for s in shards
-                                          if isinstance(s, dict))
-                        if shard_total != total:
-                            shard_sum_violations += 1
-            for field in ("completion_evictions", "history_evictions",
-                          "prefill_evictions", "decode_evictions"):
-                for holder in decision.get(field) or []:
-                    if isinstance(holder, dict):
-                        total = holder.get("total_bytes")
-                        shards = holder.get("shards")
-                        if isinstance(total, int) and isinstance(shards, list):
-                            shard_total = sum(int(s.get("bytes", 0))
-                                              for s in shards
-                                              if isinstance(s, dict))
-                            if shard_total != total:
-                                shard_sum_violations += 1
+        adapter_consume(record, variant, turns, state)
+    return adapter_emit(args, repo_variant, variant, manifest, turns, state)
 
+
+def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
+                 manifest: dict, turns: dict[str, int],
+                 adapter_state: AdapterState) -> int:
+    events = adapter_state.events
+    hit_states = adapter_state.hit_states
+    shard_sum_violations = adapter_state.shard_sum_violations
     manifest_ids = [str(e.get("request_id")) for e in
                     manifest_requests(manifest) if e.get("request_id")]
     state_rows = []
@@ -467,7 +712,8 @@ def cmd_adapter(args: argparse.Namespace) -> int:
         "command": "kv_cache_adapter",
         "repo_variant": repo_variant,
         "notes": variant["notes"],
-        "partial_semantics_native": variant["partial_semantics"],
+        "partial_semantics_native": (variant["partial_semantics"]
+                                     or adapter_state.saw_relevant_rows),
         "n_requests": n_all,
         "kv_hit_state_counts": counts,
         "hit_rate_over_requests_with_history": (
@@ -491,9 +737,8 @@ def cmd_adapter(args: argparse.Namespace) -> int:
     try:
         write_csv(
             stream, CACHE_EVENT_COLUMNS,
-            ((f"a{index:06d}", event["request_id"], event["start_ns"],
-              NA, event["bytes"], event["source"], event["target"],
-              event["cause"])
+            ((f"a{index:06d}", event[0], event[1], NA, event[2], event[3],
+              event[4], event[5])
              for index, event in enumerate(events, start=1)))
     finally:
         if close:
@@ -517,18 +762,20 @@ def cmd_adapter(args: argparse.Namespace) -> int:
 
     if args.reconcile:
         return reconcile(run_dir=args.run_dir, repo_variant=repo_variant,
-                         variant=variant, events=events, out_path=out_path,
+                         variant=variant, out_path=out_path,
                          summary=summary)
     return 0
 
 
 def reconcile(run_dir: Path, repo_variant: str, variant: dict,
-              events: list[dict], out_path: Optional[Path],
+              out_path: Optional[Path],
               summary: dict) -> int:
     """canonical bytes/count vs native 逐项对账（以 native 为准）。
 
     native 侧：独立从 decision log 重放聚合（按 family）；canonical 侧：
-    重新解析已写出的 cache_events.csv 聚合。
+    重新解析已写出的 cache_events.csv 聚合。（原形参 events 在函数体内
+    零使用——对账始终重读 CSV + 独立重放 native，2026-08-30 阶段2加固
+    §3.4a 删除该死参数。）
     """
     import csv as _csv
 
@@ -540,17 +787,39 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
         tick = record.get("tick")
         buckets = []
         if kind == "prefill":
-            nbytes = decision.get("history_transfer_bytes")
-            transfer = decision.get("history_transfer")
-            if isinstance(transfer, dict):
-                if transfer.get("kind") == "local_hit":
-                    nbytes = 0  # 名义 KV 规模，无物理搬运
-                else:
-                    total = transfer.get("total_bytes")
-                    if isinstance(total, int):
-                        nbytes = total
-            if isinstance(nbytes, int) and nbytes > 0:
-                buckets.append((FAMILY_HISTORY, nbytes))
+            if "history_pull_routes" in decision:
+                # relevant_distributed（B3）：1000 拉回逐 rank 路由行按源
+                # 聚合（与 canonical 提取同式）；不走 legacy 的
+                # history_transfer_bytes 读法——那是含 local-hit 的名义
+                # 总量，非物理搬运字节。
+                for _, _, nbytes in _relevant_routes_instance_totals(
+                        decision.get("history_pull_routes"),
+                        by="source_instance_index",
+                        other="target_instance_index"):
+                    buckets.append((FAMILY_HISTORY, nbytes))
+            elif isinstance(decision.get("history_transfers"), list):
+                transfer_list = decision.get("history_transfers")
+                # B3-6（S2 新产物）：partial 两段式恢复逐段对象——native
+                # 侧按段计数/求和（与 canonical 逐段事件同粒度对账）。
+                for entry in transfer_list:
+                    if not isinstance(entry, dict) or entry.get(
+                            "kind") == "local_hit":
+                        continue
+                    total = entry.get("total_bytes")
+                    if isinstance(total, int) and total > 0:
+                        buckets.append((FAMILY_HISTORY, total))
+            else:
+                nbytes = decision.get("history_transfer_bytes")
+                transfer = decision.get("history_transfer")
+                if isinstance(transfer, dict):
+                    if transfer.get("kind") == "local_hit":
+                        nbytes = 0  # 名义 KV 规模，无物理搬运
+                    else:
+                        total = transfer.get("total_bytes")
+                        if isinstance(total, int):
+                            nbytes = total
+                if isinstance(nbytes, int) and nbytes > 0:
+                    buckets.append((FAMILY_HISTORY, nbytes))
             for field in ("admission_evictions", "decode_target_evictions",
                           "history_evictions", "prefill_evictions"):
                 for entry in decision.get(field) or []:
@@ -611,6 +880,16 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                                          if isinstance(s, dict))
                 if nbytes:
                     buckets.append((FAMILY_EVICTION, nbytes))
+        elif kind == "kv_scatter":
+            # relevant_distributed（B3）：3100 散布逐 rank 路由行按 owner
+            # 聚合为 prefill_decode_transfer（与 canonical 提取同式）。
+            # kv_remote_reads/kv_placement/run_header 无 cache 事件，两侧
+            # 一致为空（3300 读边字节分布归观测后处理，裁决 #24）。
+            for _, _, nbytes in _relevant_routes_instance_totals(
+                    decision.get("routes"),
+                    by="target_instance_index",
+                    other="source_instance_index"):
+                buckets.append((FAMILY_PD, nbytes))
         for family, nbytes in buckets:
             slot = native.setdefault(family, {"count": 0, "bytes": 0})
             slot["count"] += 1
