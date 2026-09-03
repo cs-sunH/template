@@ -2,71 +2,114 @@
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-WindowedTraceReader -- execution-driven mechanism layer (wscllm phase 7 §10.4).
+WindowedTraceReader -- execution-driven mechanism layer (wscllm phase 7 §10.4;
+P0 turn-0 late-discovery fix 2026-08-30: index pass + turn-0 arrival calendar).
 
-Bounded-window CSV reader (总体方案 §5.5/§5.6; 方案 §10.4). The request queue
-CSV is read in a bounded row window instead of one full pass: the reader keeps
-a file position and tops the window up to `high_water` un-consumed rows on
-every pump (called from the simulation thread right after drain_commands()).
-A row is "consumed" when its arrival alarm fired (RequestIngress::arrival_cb);
-turn-0 rows are consumed on their alarm, turn>0 rows are consumed when the
-REQUEST_COMPLETE future_alarm fires (the reader never schedules those -- the
-commit path does, via RequestIngress::schedule_future_arrival).
+P0 FIX CONTEXT (the defect this rewrite eradicates). The request queue CSV is
+laid out in SESSION BLOCKS: one contiguous block of rows per session, the
+block's first row (turn 0) carrying the session's ABSOLUTE arrival in
+session_arrival_time_ns, later turns carrying only relative inter-request
+intervals. Turn-0 absolute arrivals are therefore NOT monotonic in file order
+(measured on the full TraceLab queue, 22,816 rows / 496 turn-0 rows: 250
+adjacent inversions spanning 243.41 days). The pre-fix reader discovered rows
+in CSV row order inside a bounded row window and submitted each turn-0 row
+per-Submit as it was DISCOVERED: an early-arriving turn-0 sitting late in the
+file was submitted after the clock had already passed its declared arrival,
+and RequestIngress clamped its alarm to current+1 (491 clamped Submits on the
+full run) -- polluting every downstream timing. The fix decouples the turn-0
+SUBMISSION ORDER from the file position entirely.
 
-Contract (mirrors the phase-1 full loader, byte-for-byte request semantics):
+NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
 
-  - rows WITH an explicit session_arrival_time_ns (turn-0) are enqueued as
-    Submit commands (alarm-only: no policy decision). A turn-0 arrival beyond
-    `max_arrival_ns` (仿真输入窗口上限; backport fix 2026-08-16, sh_2.0测试
-    §5.1: default 0 = UNBOUNDED -- the old 30e9 default burned the 30s
-    acceptance window into the code and silently dropped over-window
-    requests; the bound now exists only as the explicit
-    --request-max-arrival-ns experiment knob) is REJECTED: counted in
-    rejected_out_of_range(), logged once at report time, never submitted --
-    the row still gets its queue_index registered and its metrics request
-    registered (conservative: "every data row registered" stays true). The
-    rejected row is marked consumed at reject time (a rejected row
-    never fires an arrival alarm, so it must not clog the window). Any
-    rejection fail-closes the run-end completion audit (the drop is never
-    silent; see audit_completion below).
-  - rows with an EMPTY arrival (turn>0) are never submitted directly; their
-    arrivals are scheduled by the REQUEST_COMPLETE commit through
-    future_alarms. The reader registers their queue_index as soon as the row
-    is read so the future-arrival scheduling can fill the envelope (the
-    high_water >= max consecutive same-session span guarantee: the window
-    tops up every pump, so a turn>0 row is always registered before its
-    future alarm can fire -- the parent row was consumed earlier, which
-    lowered the occupancy and triggered the read of the following rows).
-  - ALL data rows are counted toward the run-end completion assertion
-    (completed_request_count == data_rows; 1177 for the 20.csv first-30s
-    input), exactly like the full loader. Backport fix (2026-08-16,
-    unified 2026-08-20 中-3): the assertion denominator is the file's
-    TOTAL data rows. A rejected row is consumed at reject time, so the
-    window always flows to EOF and total_data_rows() at run end IS the
-    whole-file count (no tail scan needed).
+  1. Single streaming INDEX PASS before the first Submit. The whole file is
+     read once in binary mode (chunked; the FNV-1a 64 digest and byte count
+     are accumulated over the raw bytes on the fly). Per data row, in file
+     order, the pass keeps the previous loader semantics EXACTLY: metrics
+     online_register_request runs row by row (row order, AFTER_REQUEST
+     parent = previous same-session row, frozen queue_index = data-row order
+     0-based), and every turn>0 row registers its one-shot queue index in
+     RequestIngress up front (O(rows), same order as the metrics side; the
+     map is consumed by schedule_future_arrival exactly as before). Turn-0
+     rows are COLLECTED, not submitted.
+  2. FAIL-CLOSED structure validation during the pass: session rows must be
+     contiguous in the file (a session id may never reappear after its block
+     ended), each block must start at turn_index 0 with a non-empty arrival,
+     and turn_index must increase by exactly 1 per row within a block, with
+     empty arrival on every turn>0 row. Any violation: [Error] + exit before
+     a single Submit exists.
+  3. TURN-0 CALENDAR. The collected turn-0 entries are stable-sorted by
+     (arrival_ns, queue_index) IN MEMORY this round (entry count = session
+     count; external sort for very large traces is a registered follow-up).
+     Submissions then walk the calendar in arrival order, applying the
+     max_arrival_ns rejection per entry (same counting semantics as before:
+     counted, never submitted, reported; any drop fail-closes the run-end
+     completion audit). Ingress backpressure (full command queue) parks a
+     cursor; later pump() calls resume from it.
+  4. EQUIVALENCE ARGUMENT (why the calendar is not a behavior change for
+     inputs that were already correct). EventQueue is a
+     std::map<EventTime, EventList>; all events scheduled within one drain at
+     a given tick share that tick's EventList and fire in INSERTION order.
+     The old UNBOUNDED arm (window 0) read the whole file in row order at
+     t=0, queued every turn-0 Submit in ROW order, and one drain scheduled
+     them all: within an equal-alarm group the insertion order was therefore
+     queue_index ascending (row order). The calendar submits in
+     (arrival, queue_index) order: within an equal-arrival group the
+     insertion order is again queue_index ascending. Equal alarm groups are
+     equal arrival groups (all turn-0 Submits drain at t=0 before any event
+     fires, so no Submit is ever clamped except arrival==0 -> 1, and those
+     rows form one group whose internal order is row order == queue_index
+     order in both arms). Hence the (alarm_time, queue_index) fire sequence
+     is ELEMENTWISE IDENTICAL to the old unbounded arm -- for ANY input, not
+     just monotonic ones. For inputs that were already arrival-monotonic in
+     file order (the 20.csv smoke input) the calendar order IS the row order,
+     so the old bounded-window arm is byte-identical too (V3 three-way
+     comparison anchors on this). What changes is only that a
+     NON-monotonic input (the full TraceLab queue) now submits every turn-0
+     BEFORE its declared arrival instead of 491 times after.
+  5. `--request-window-rows` is demoted to ADVISORY (design ruling
+     2026-08-30, REPORT item). The old window semantics -- bounding how far
+     ahead rows may be READ -- is exactly the defect: it made turn-0
+     discovery depend on file position. The knob is still parsed, stored,
+     checkpointed and reported ("calendar reader: advisory"), including 0,
+     but it no longer constrains discovery or submission in any way.
+  6. PROVENANCE GATE (fail-closed). The index pass computes over the raw
+     file: FNV-1a 64 (offset basis 14695981039346656037, prime 1099511628211,
+     per byte: h ^= b; h *= prime, all mod 2^64 -- byte-for-byte the same
+     algorithm as the Python materializer's sidecar writer), csv byte count,
+     data-row count, session count, turn-0 count, turn-0 arrival min/max,
+     turn-0 file-order adjacent inversion count, and session-block
+     contiguity. If a sidecar `<queue_csv>.provenance.json` exists, every
+     field is compared; any mismatch (or unparsable JSON, or schema != 1)
+     fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
+     logs one "[online] provenance sidecar: absent (no gate)" line and
+     continues (smoke fixtures materialized by older scripts).
+  7. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
+     declared arrival and the simulation tick at which its Submit was
+     enqueued (discovered; via RequestIngress::current_time()). The ingress
+     records the effective alarm tick per static Submit. At run end the
+     reader joins the two (audit_static_arrivals): per-entry
+     declared/discovered/effective/late_by_ns/late_source (static_late /
+     t0_boundary / on_time) plus summary counters and ingress-delay
+     percentiles (nearest-rank p50/p99/max). The GATE for a finite static
+     CSV run: late_static_submit_count == 0 AND every turn-0 ingress_delay
+     == 0 except t0-boundary rows (declared==0, discovered==0, effective==1
+     -- the EventQueue strict-future rule's inherent boundary; the source
+     CSV legally contains arrival==0; counted separately, never gated).
+     External stream (command FIFO) and future-alarm clamps are never gated.
+     Metric origins stay DECLARED (the fix must never mask itself by
+     rebasing metrics onto effective arrivals).
 
-Zero decision-sequence perturbation by construction: the same CSV rows are
-read in the same order and submitted through the same RequestIngress; the
-window only decides WHEN a row is read off disk. In the 20.csv input the 112
-turn-0 rows are SCATTERED across the whole file (data rows 2..1165, grouped
-by session, arrivals monotonic non-decreasing), so the initial pump alone
-never covers them all -- instead consumption advances the window (a turn-0
-row is consumed when its arrival alarm fires, turn>0 rows when their future
-alarm fires) and every pump tops the window back up to high_water. A turn-0
-row is therefore read before its arrival as long as high_water covers the
-un-consumed rows ahead of it; measured on the 20.csv input at high_water=128:
-read_pumps=101, peak un-consumed occupancy=128, and the frozen 128 arm reads
-every turn-0 row in time -- Submit-path late clamps 0, and the run-end late
-count (33) matches the unbounded arm exactly, coming entirely from
-future_alarm scheduling (the same alarm sequence -> byte-identical decision
-log). turn>0 rows never schedule anything by themselves. The queue_index map
-holds at most the rows read so far; peak un-consumed envelope count is
-bounded by high_water.
+Backport fixes retained unchanged (2026-08-16 sh_2.0测试 §5.1; 2026-08-20 中-3):
+max_arrival_ns default 0 = UNBOUNDED (explicit experiment knob only; any drop
+is visible and fail-closes the run-end completion audit); the completion
+audit denominator is the file's TOTAL data rows (a rejected row is consumed
+at reject time, so the reader always reaches EOF).
 
-Thread contract: pump()/notify_consumed()/report() are all simulation-thread
-(notify_consumed is invoked from the arrival hook installed by the caller,
-which arrival_cb runs on the simulation thread). The ingress command queue
-keeps its own mutex; this reader owns no shared state with producers.
+Thread contract: pump()/notify_consumed()/report()/audit_static_arrivals()
+are all simulation-thread (notify_consumed is invoked from the arrival hook
+installed by the caller, which arrival_cb runs on the simulation thread). The
+ingress command queue keeps its own mutex; this reader owns no shared state
+with producers.
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_WINDOWEDTRACEREADER_HH
@@ -78,6 +121,8 @@ keeps its own mutex; this reader owns no shared state with producers.
 #include <map>
 #include <ostream>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #include "astra-sim/workload/execution_driven/RequestIngress.hh"
 
@@ -89,91 +134,166 @@ class WindowedTraceReader {
     /// @param csv_path     8-column request queue CSV (same schema as the
     ///                     phase-1 loader).
     /// @param ingress      shared RequestIngress (合同: 共用同一 ingress).
-    /// @param high_water   window high watermark: max un-consumed rows read
-    ///                     ahead. Frozen at 128 for the phase-7 runs (the
-    ///                     20.csv max consecutive same-session span is 72;
-    ///                     0 = unbounded, one pump reads the whole file --
-    ///                     the full-pass control arm of the phase-7 §10.4
-    ///                     window benchmark).
+    /// @param high_water   ADVISORY ONLY since the P0 fix (2026-08-30): the
+    ///                     turn-0 calendar is always complete and submissions
+    ///                     always follow arrival order; this value no longer
+    ///                     bounds discovery. Parsed/reported/checkpointed for
+    ///                     compatibility (0 included).
     /// @param max_arrival_ns simulation input window upper bound; turn-0
     ///                     rows with arrival > this are rejected (counted,
-    ///                     never submitted). Backport fix 2026-08-16: the
-    ///                     default 0 = UNBOUNDED (no cap); a nonzero value is
-    ///                     an explicit experiment knob whose drops fail-close
-    ///                     the run-end completion audit.
+    ///                     never submitted). Default 0 = UNBOUNDED; a nonzero
+    ///                     value is an explicit experiment knob whose drops
+    ///                     fail-close the run-end completion audit.
     WindowedTraceReader(const std::string& csv_path, RequestIngress& ingress,
                         size_t high_water = 128,
                         uint64_t max_arrival_ns = 0);
 
-    /// Simulation thread only: read rows off disk until the window occupancy
-    /// reaches high_water (or EOF). Returns false once EOF was reached.
+    /// Simulation thread only. First call: run the streaming index pass,
+    /// validate structure, check the provenance sidecar, build+sort the
+    /// turn-0 calendar, then submit from the calendar cursor while the
+    /// ingress has room (backpressure parks the cursor). Later calls: resume
+    /// submission. Returns false once the calendar is fully drained
+    /// (indexed_ && cursor at end).
     bool pump();
 
     /// Simulation thread only (arrival hook): mark the row with queue index
-    /// `queue_index` as consumed (its arrival alarm fired).
+    /// `queue_index` as consumed (its arrival alarm fired). Turn-0 rows leave
+    /// the outstanding set here; turn>0 notifications (future alarms) are
+    /// harmless no-ops for the set.
     void notify_consumed(int64_t queue_index);
 
-    /// Total data rows read (including rejected ones).
+    /// Total data rows read (including rejected ones). Equals the whole-file
+    /// count after the index pass.
     size_t rows_read() const { return rows_read_; }
-    /// Data-row counter (queue indices are 0..data_rows()-1). After EOF this
-    /// equals the file's total data-row count (the run-end completion
-    /// assertion target: 1177 for the 20.csv first-30-seconds input).
+    /// Data-row counter (queue indices are 0..data_rows()-1). After the
+    /// index pass this equals the file's total data-row count (the run-end
+    /// completion assertion target).
     uint64_t data_rows() const { return data_rows_; }
-    /// Backport fix (2026-08-16): turn-0 data rows (arrival column
-    /// non-empty), read by read_one_row. The accepted-request accounting
-    /// invariant of the run-end completion audit (accepted + dropped ==
-    /// turn-0 rows: every turn-0 row was either submitted to the service
-    /// or rejected out-of-window; turn>0 rows arrive via the future-alarm
-    /// path and are covered by the completed == total - dropped check).
+    /// Turn-0 data rows (arrival column non-empty) -- the accepted-request
+    /// accounting invariant denominator of the run-end completion audit
+    /// (accepted + dropped == turn0 rows).
     uint64_t turn0_data_rows() const { return turn0_rows_; }
-    /// True once the file was fully read.
+    /// True once the file was fully indexed AND every calendar entry was
+    /// submitted or rejected (the producer-close boundary).
     bool eof() const { return eof_; }
     /// Turn-0 rows rejected because arrival > max_arrival_ns.
     size_t rejected_out_of_range() const { return rejected_out_of_range_; }
-    /// The whole-file data-row count. Equals data_rows() once EOF was
-    /// reached (consume-at-reject guarantees EOF under any explicit
-    /// window). The run-end completion audit denominator (backport fix).
+    /// The whole-file data-row count. Equals data_rows() after the index
+    /// pass. The run-end completion audit denominator.
     uint64_t total_data_rows() const { return data_rows_; }
-    /// Number of pump calls that actually read at least one row.
+    /// Number of pump calls that indexed rows or submitted at least one
+    /// calendar entry.
     size_t read_pumps() const { return read_pumps_; }
-    /// Accumulated wall time spent reading/parsing rows.
+    /// Accumulated wall time spent reading/parsing the index pass.
     uint64_t io_read_ns() const { return io_read_ns_; }
-    /// Peak un-consumed row count inside the window.
+    /// Peak outstanding (submitted-but-unfired turn-0) count.
     size_t peak_window_occupancy() const { return peak_occupancy_; }
+    /// Exact current count of submitted turn-0 rows whose alarm has not
+    /// fired yet.
+    size_t current_window_occupancy() const { return outstanding_rows_.size(); }
+    /// Advisory window knob (see constructor).
     size_t high_water() const { return high_water_; }
 
-    /// One [online] windowed reader: ... line (rows, pumps, occupancy peak,
-    /// io ns, throughput rows/s, late arrivals, rejected).
+    /// Index-pass provenance statistics (all computed over the raw file
+    /// bytes; identical definitions on the Python materializer side).
+    struct ProvenanceStats {
+        uint64_t fnv1a64 = 0;
+        uint64_t csv_bytes = 0;
+        uint64_t data_rows = 0;
+        uint64_t sessions = 0;
+        uint64_t turn0_count = 0;
+        uint64_t turn0_arrival_min_ns = 0;
+        uint64_t turn0_arrival_max_ns = 0;
+        uint64_t turn0_adjacent_inversions = 0;
+        bool session_blocks_contiguous = true;
+    };
+    const ProvenanceStats& provenance() const { return prov_; }
+    /// Sidecar comparison outcome for the checkpoint JSON.
+    /// "matched" / "absent-no-gate".
+    const std::string& provenance_sidecar_status() const {
+        return provenance_status_;
+    }
+
+    /// Per-turn-0 arrival audit record (joined from the reader's calendar
+    /// and the ingress's effective-arrival records). late_source:
+    /// "on_time" / "t0_boundary" / "static_submit_late" / "no_effective_record"
+    /// (the last one is itself a gate failure: a submitted turn-0 whose
+    /// Submit never drained -- impossible on a completed run).
+    struct ArrivalAuditEntry {
+        int64_t queue_index = -1;
+        uint64_t declared_arrival_ns = 0;
+        uint64_t reader_discovered_tick = 0;
+        uint64_t effective_arrival_ns = 0;
+        uint64_t late_by_ns = 0;
+        const char* late_source = "no_effective_record";
+    };
+
+    /// Summary of the arrival audit + the run-end static-arrival gate
+    /// (finite static CSV runs; external stream / future alarms never
+    /// gated). delay percentiles are nearest-rank over ALL turn-0 entries
+    /// (t0-boundary rows contribute delay 1).
+    struct ArrivalAuditSummary {
+        uint64_t turn0_submitted = 0;
+        uint64_t late_static_submit = 0;
+        uint64_t late_external_stream = 0;
+        uint64_t late_future_alarm_rounding = 0;
+        uint64_t t0_boundary_clamp = 0;
+        uint64_t delay_p50_ns = 0;
+        uint64_t delay_p99_ns = 0;
+        uint64_t delay_max_ns = 0;
+        uint64_t nonzero_delay_rows = 0;  // delay>0 excluding t0-boundary
+        bool gate_ok = true;
+        std::string gate_why;
+    };
+
+    /// Simulation thread only, run end. Joins the calendar with the ingress
+    /// records; entries are returned sorted by queue_index (deterministic
+    /// audit encoding).
+    std::vector<ArrivalAuditEntry> arrival_audit() const;
+    ArrivalAuditSummary audit_static_arrivals() const;
+
+    /// One [online] windowed reader: ... line (rows, sessions, calendar
+    /// stats, io ns, throughput, late split, rejected).
     void report(std::ostream& os) const;
 
-    /// Phase 7 §10.5: window-position checkpoint (audit state + same-process
-    /// window restore). JSON, atomically written (tmp + rename). Returns
-    /// false if the file could not be written (run-end reporting only; a
-    /// failed checkpoint never fails the run -- it is audit evidence, not a
-    /// gate).
+    /// Phase 7 §10.5 / P0 fix: run-end audit snapshot (now also carrying
+    /// the provenance block and the full arrival audit). JSON, atomically
+    /// written (tmp + rename). It deliberately is NOT a restart checkpoint:
+    /// the reader alone cannot serialize EventQueue alarms, RequestIngress
+    /// commands/one-shot indices, ServiceCoordinator counters, or
+    /// MetricCollector parent state. Returns false if the audit snapshot
+    /// could not be written; failure never changes simulation state.
     bool write_checkpoint(const std::string& path) const;
 
-    /// Phase 7 §10.5: restore the window state from a checkpoint written by
-    /// write_checkpoint. FAIL-CLOSED: a missing or corrupt file, or a
-    /// checkpoint whose high_water/max_arrival_ns disagree with this
-    /// reader's construction parameters, returns false and leaves the
-    /// reader state untouched. Restore semantics: the file position is NOT
-    /// persistent across processes, so a restored reader continues pumping
-    /// from its current (already open) file position; the checkpoint
-    /// carries the window bookkeeping (consumed_idx_, rows_read_, ...) so a
-    /// same-process restart can resume with the correct occupancy and
-    /// completion accounting.
+    /// Compatibility API retained fail-closed. Run-end snapshots are audit
+    /// evidence only, so every call returns false and leaves both the reader
+    /// and ingress untouched. A future restart feature must checkpoint the
+    /// complete event/ingress/service/metrics state atomically instead of
+    /// partially rewinding this reader.
     bool read_checkpoint(const std::string& path);
 
   private:
-    std::ifstream file_;
+    struct CalendarEntry {
+        uint64_t arrival_ns = 0;
+        int64_t queue_index = -1;
+        RequestEnvelope envelope;
+        bool submitted = false;
+        bool rejected = false;
+        uint64_t discovered_tick = 0;  // eq time when its Submit was enqueued
+    };
+
+    std::string csv_path_;
     RequestIngress& ingress_;
-    size_t high_water_;
+    size_t high_water_;  // advisory (P0 fix)
     uint64_t max_arrival_ns_;
     bool header_seen_ = false;
-    bool eof_ = false;
+    bool indexed_ = false;  // index pass completed (sidecar gate included)
+    bool eof_ = false;      // indexed_ && calendar fully drained
     uint64_t data_rows_ = 0;
-    int64_t consumed_idx_ = -1;  // max queue index whose alarm has fired
+    // Compatibility/audit watermark only (not an occupancy measure).
+    int64_t consumed_idx_ = -1;
+    // Submitted-but-unfired turn-0 rows (occupancy).
+    std::unordered_set<int64_t> outstanding_rows_;
     size_t rows_read_ = 0;
     size_t rejected_out_of_range_ = 0;
     size_t read_pumps_ = 0;
@@ -182,14 +302,31 @@ class WindowedTraceReader {
     // Previous CSV row per session, for the AFTER_REQUEST metrics
     // registration of turn>0 rows (mirrors the phase-1 loader).
     std::map<std::string, int64_t> last_queue_index_by_session_;
-    // Byte position of the next un-read row (sampled before each read; the
-    // checkpoint's file_pos). -1 = never read / stream not open.
-    int64_t last_file_pos_ = -1;
+
+    // ---- index pass state ----
+    std::ifstream file_;  // binary; chunked raw-byte reads
+    ProvenanceStats prov_;
+    std::string provenance_status_ = "not-indexed";
+    uint64_t fnv1a64_ = 14695981039346656037ULL;  // FNV-1a 64 offset basis
+    // Session-block validation state.
+    std::string current_session_;
+    bool in_block_ = false;
+    int64_t expected_next_turn_ = 0;
+    uint64_t prev_turn0_arrival_ = 0;
+    bool have_prev_turn0_ = false;
+    std::unordered_set<std::string> seen_sessions_;
+
+    // ---- turn-0 calendar ----
+    std::vector<CalendarEntry> calendar_;
+    size_t calendar_cursor_ = 0;
 
     size_t occupancy() const;
-    void read_one_row();
+    void run_index_pass();          // whole file, fail-closed, no Submits
+    void process_indexed_row(const std::string& line);
+    void check_provenance_sidecar();
+    void submit_from_calendar();
 
-    // Turn-0 rows (arrival non-empty): read by read_one_row.
+    // Turn-0 rows (arrival non-empty): collected by the index pass.
     uint64_t turn0_rows_ = 0;
 };
 

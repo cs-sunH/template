@@ -63,15 +63,17 @@ source row's own trigger fields.  request_type follows the SLO B1 rule
 non-empty -> "human"; tool_time non-empty -> "tool"; both empty ->
 turn_index 0 "human", otherwise "unknown" (count printed).
 
-Runtime footprint: the full source CSV is still loaded into memory, so the
-script serializes against other heavy materializers via flock on
-/tmp/slo_wps/locks/heavy_mat.lock (best effort; if the lock file cannot be
-created the script warns and proceeds unlocked).
+Runtime footprint: the source is scanned once with only the current session
+buffered, and queue/digest rows are written immediately.  Peak memory is thus
+bounded by the largest session rather than the 512 MB source expanded into
+Python dictionaries.  The existing flock remains to serialize writers that
+target the same native output names.
 """
 
 import csv
 import fcntl
 import hashlib
+import json
 import math
 import os
 import sys
@@ -153,7 +155,7 @@ def _scaled_t0(arrival_ns, scale):
 
 
 def _acquire_heavy_lock():
-    """Serialize heavy in-memory materialization (EXECUTION_PLAN sec.1)."""
+    """Serialize materializers that may target the same native outputs."""
     try:
         os.makedirs(os.path.dirname(HEAVY_LOCK), exist_ok=True)
         handle = open(HEAVY_LOCK, "a")
@@ -173,6 +175,121 @@ def _digest_path_for(queue_path):
     else:
         sibling = base + ".canonical_digest.csv"
     return os.path.join(os.path.dirname(os.path.abspath(queue_path)), sibling)
+
+
+def _iter_sessions(reader):
+    """Yield one contiguous source session at a time (source-order contract)."""
+    current_sid = None
+    current_rows = []
+    for row in reader:
+        sid = "session_%s" % row["session_id"]
+        if current_sid is None:
+            current_sid = sid
+        elif sid != current_sid:
+            yield current_sid, current_rows
+            current_sid = sid
+            current_rows = []
+        current_rows.append(row)
+    if current_sid is not None:
+        yield current_sid, current_rows
+
+
+def _md5_file(path):
+    digest = hashlib.md5()
+    with open(path, "rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fnv1a64_cont(h: int, data: bytes) -> int:
+    """FNV-1a 64 continuation over one chunk of raw bytes."""
+    for byte in data:
+        h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def queue_provenance(queue_path: str, generator_version: str) -> dict:
+    """Provenance record of a materialized queue, computed from the WRITTEN
+    file bytes (exactly what the C++ reader re-derives and compares).
+
+    Definitions mirror the reader's index pass byte-for-byte: lines split on
+    b"\n" (a trailing "\r" from the CSV writer stays on the line and rides
+    on the unparsed description column, exactly as in C++); the first
+    non-empty line is the header; every later non-empty line is a data row;
+    turn-0 = non-empty session_arrival_time_ns (6th comma field); adjacent
+    inversions are counted over turn-0 arrivals in file order; session
+    blocks must be contiguous (a session id may never reappear).
+    """
+    sha = hashlib.sha256()
+    fnv = 14695981039346656037
+    csv_bytes = 0
+    data_rows = 0
+    turn0_count = 0
+    turn0_min = None
+    turn0_max = None
+    inversions = 0
+    prev_turn0 = None
+    header_seen = False
+    current_session = b""
+    seen_sessions = set()
+    contiguous = True
+    pending = b""
+
+    def consume(line: bytes) -> None:
+        nonlocal data_rows, turn0_count, turn0_min, turn0_max, inversions
+        nonlocal prev_turn0, header_seen, current_session, contiguous
+        if not line:
+            return
+        if not header_seen:
+            header_seen = True
+            return
+        data_rows += 1
+        fields = line.split(b",")
+        session = fields[0]
+        arrival_text = fields[5] if len(fields) > 5 else b""
+        if session != current_session:
+            if session in seen_sessions:
+                contiguous = False
+            seen_sessions.add(session)
+            current_session = session
+        if arrival_text:
+            turn0_count += 1
+            arrival = int(arrival_text)
+            turn0_min = arrival if turn0_min is None else min(turn0_min, arrival)
+            turn0_max = arrival if turn0_max is None else max(turn0_max, arrival)
+            if prev_turn0 is not None and arrival < prev_turn0:
+                inversions += 1
+            prev_turn0 = arrival
+
+    with open(queue_path, "rb") as fin:
+        while True:
+            chunk = fin.read(1 << 20)
+            if not chunk:
+                break
+            csv_bytes += len(chunk)
+            sha.update(chunk)
+            fnv = fnv1a64_cont(fnv, chunk)
+            pending += chunk
+            *complete, pending = pending.split(b"\n")
+            for line in complete:
+                consume(line)
+        if pending:
+            consume(pending)
+    return {
+        "schema": 1,
+        "generator_version": generator_version,
+        "csv_sha256": sha.hexdigest(),
+        "csv_fnv1a64": fnv,
+        "csv_bytes": csv_bytes,
+        "data_rows": data_rows,
+        "sessions": len(seen_sessions),
+        "turn0_count": turn0_count,
+        "turn0_arrival_min_ns": turn0_min if turn0_min is not None else 0,
+        "turn0_arrival_max_ns": turn0_max if turn0_max is not None else 0,
+        "turn0_adjacent_inversions": inversions,
+        "session_blocks_contiguous": contiguous,
+    }
 
 
 def main():
@@ -195,95 +312,79 @@ def main():
 
     lock_handle = _acquire_heavy_lock()
     try:
-        with open(src, newline="") as f:
-            rows = list(csv.DictReader(f))
-
-        # single grouping pass (source is already ordered by session/turn)
-        sessions = {}
-        order = []
-        for r in rows:
-            sid = "session_%s" % r["session_id"]
-            if sid not in sessions:
-                sessions[sid] = []
-                order.append(sid)
-            sessions[sid].append(r)
-
-        queue_rows, digest_rows = [], []
         session_count = 0
+        request_count = 0
+        decode_length_sum = 0
         turn0_prefix_rows = 0
         max_total = 0
         unknown_type_rows = 0
-        for sid in order:
-            srows = sessions[sid]
-            first_arrival = int(srows[0]["arrival_time"])
-            if first_arrival >= window_ns:
-                continue
-            session_count += 1
-            arrival = first_arrival
-            for turn, r in enumerate(srows):
-                if turn > 0:
-                    prev = srows[turn - 1]
-                    arrival = arrival + _gap_ns(prev["human_time"], prev["tool_time"])
-                    if arrival >= window_ns:
-                        break
-                rid = "%s_request_%d" % (sid, turn)
-                new_prefill = int(r["prefill_length"])
-                prefix = int(r["prefix_len"])
-                # Folded recompute caliber: turn-0 prefill carries the full
-                # source prefix (prefix + new tokens); later turns keep only
-                # their new tokens (history comes from the runtime KV ledger).
-                prefill = new_prefill + prefix if turn == 0 else new_prefill
-                total = prefix + new_prefill
-                if turn == 0 and prefix > 0:
-                    turn0_prefix_rows += 1
-                max_total = max(max_total, total)
-                if turn == 0:
-                    # WP2 scaling: only the session t0 is divided by the
-                    # scale; intervals and window membership are untouched.
-                    session_ns = str(_scaled_t0(arrival, arrival_scale))
-                    interval_ns = ""
-                else:
-                    session_ns = ""
-                    interval_ns = str(_gap_ns(srows[turn - 1]["human_time"], srows[turn - 1]["tool_time"]))
-                trigger_type = _next_trigger_type(
-                    r["human_time"], r["tool_time"],
-                    is_last_row=(turn == len(srows) - 1),
-                )
-                human_text = (r["human_time"] or "").strip()
-                tool_text = (r["tool_time"] or "").strip()
-                request_type, type_unknown = _request_type(
-                    human_text, tool_text, turn)
-                if type_unknown:
-                    unknown_type_rows += 1
-                queue_rows.append([
-                    sid, turn, rid, prefill, r["decode_length"], session_ns,
-                    interval_ns, trigger_type,
-                    description,
-                ])
-                digest = hashlib.sha256(
-                    ("%s|%d|%d|%d" % (rid, prefix, new_prefill, total)).encode()
-                ).hexdigest()
-                digest_rows.append([
-                    rid, prefix, new_prefill, total, digest, "recompute",
-                    human_text, tool_text, request_type, r["decode_length"],
-                ])
-
-        def write(path, header, data):
-            with open(path, "w", newline="") as f:
-                w = csv.writer(f)
-                w.writerow(header)
-                w.writerows(data)
-
-        write(out_queue, QUEUE_HEADER, queue_rows)
-        write(out_digest, DIGEST_HEADER, digest_rows)
+        with open(src, newline="") as source, \
+                open(out_queue, "w", newline="") as queue_output, \
+                open(out_digest, "w", newline="") as digest_output:
+            queue_writer = csv.writer(queue_output)
+            digest_writer = csv.writer(digest_output)
+            queue_writer.writerow(QUEUE_HEADER)
+            digest_writer.writerow(DIGEST_HEADER)
+            for sid, srows in _iter_sessions(csv.DictReader(source)):
+                first_arrival = int(srows[0]["arrival_time"])
+                if first_arrival >= window_ns:
+                    continue
+                session_count += 1
+                arrival = first_arrival
+                for turn, r in enumerate(srows):
+                    if turn > 0:
+                        prev = srows[turn - 1]
+                        arrival += _gap_ns(prev["human_time"], prev["tool_time"])
+                        if arrival >= window_ns:
+                            break
+                    rid = "%s_request_%d" % (sid, turn)
+                    new_prefill = int(r["prefill_length"])
+                    prefix = int(r["prefix_len"])
+                    prefill = new_prefill + prefix if turn == 0 else new_prefill
+                    total = prefix + new_prefill
+                    if turn == 0 and prefix > 0:
+                        turn0_prefix_rows += 1
+                    max_total = max(max_total, total)
+                    if turn == 0:
+                        session_ns = str(_scaled_t0(arrival, arrival_scale))
+                        interval_ns = ""
+                    else:
+                        session_ns = ""
+                        interval_ns = str(_gap_ns(
+                            srows[turn - 1]["human_time"],
+                            srows[turn - 1]["tool_time"]))
+                    trigger_type = _next_trigger_type(
+                        r["human_time"], r["tool_time"],
+                        is_last_row=(turn == len(srows) - 1),
+                    )
+                    human_text = (r["human_time"] or "").strip()
+                    tool_text = (r["tool_time"] or "").strip()
+                    request_type, type_unknown = _request_type(
+                        human_text, tool_text, turn)
+                    if type_unknown:
+                        unknown_type_rows += 1
+                    queue_writer.writerow([
+                        sid, turn, rid, prefill, r["decode_length"], session_ns,
+                        interval_ns, trigger_type, description,
+                    ])
+                    digest = hashlib.sha256(
+                        ("%s|%d|%d|%d" %
+                         (rid, prefix, new_prefill, total)).encode()
+                    ).hexdigest()
+                    digest_writer.writerow([
+                        rid, prefix, new_prefill, total, digest, "recompute",
+                        human_text, tool_text, request_type, r["decode_length"],
+                    ])
+                    request_count += 1
+                    decode_length_sum += int(r["decode_length"])
     finally:
         if lock_handle is not None:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
             lock_handle.close()
 
-    src_md5 = hashlib.md5(open(src, "rb").read()).hexdigest()
-    queue_md5 = hashlib.md5(open(out_queue, "rb").read()).hexdigest()
-    digest_md5 = hashlib.md5(open(out_digest, "rb").read()).hexdigest()
+    src_md5 = _md5_file(src)
+    queue_md5 = _md5_file(out_queue)
+    digest_md5 = _md5_file(out_digest)
     print("source_md5=%s" % src_md5)
     # Frozen references registered 2026-08-21 (KV 账本统一维护改造):
     # sidecar_restore double-file form removed; turn-0 prefix folded into
@@ -297,11 +398,30 @@ def main():
     print("digest_md5=%s (frozen post-B1: 1430b64ce0fb38b4304bb67082b025b3; "
           "pre-B1 six-column form: a049d7308b4c2c39c13f8a2da55d95ff)" % digest_md5)
     print("window_ns=%d arrival_scale=%g" % (window_ns, arrival_scale))
-    print("sessions=%d requests=%d" % (session_count, len(queue_rows)))
+    print("sessions=%d requests=%d" % (session_count, request_count))
     print("turn0_prefix_gt0_rows=%d max_input_tokens_total=%d" % (turn0_prefix_rows, max_total))
     print("average_decode_length=%s"
-          % (sum(int(r[4]) for r in queue_rows) / float(len(queue_rows))))
+          % (decode_length_sum / float(request_count)))
     print("request_type_unknown_rows=%d" % unknown_type_rows)
+    # P0 turn-0 fix (2026-08-30): provenance sidecar next to the queue; the
+    # C++ reader fail-closes on any mismatch with these stats.
+    generator_version = (
+        "materialize_first_30s.py window_ns=%d arrival_scale=%g"
+        % (window_ns, arrival_scale)
+    )
+    provenance = queue_provenance(out_queue, generator_version)
+    provenance_path = out_queue + ".provenance.json"
+    with open(provenance_path, "w", encoding="utf-8") as pout:
+        json.dump(provenance, pout, indent=2, sort_keys=True)
+        pout.write("\n")
+    print(
+        "provenance: " + json.dumps(
+            {k: provenance[k] for k in (
+                "csv_fnv1a64", "csv_bytes", "data_rows", "sessions",
+                "turn0_count", "turn0_arrival_min_ns", "turn0_arrival_max_ns",
+                "turn0_adjacent_inversions", "session_blocks_contiguous")},
+            sort_keys=True))
+    print("provenance sidecar: %s" % provenance_path)
     print("[next-steps] 1) trace_config.csv:12 request_queue_csv -> %s" % out_queue)
 
 
