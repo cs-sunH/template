@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import subprocess
@@ -151,13 +152,16 @@ class FailClosedTests(unittest.TestCase):
             require_bucket_edges(manifest)
 
     def test_bucket_index_semantics(self):
+        # 2026-09-05 口径裁决：interior edges 为左桶闭上界（边界值归左桶），
+        # 末桶无上限（x > edges[-1] 归末桶，不再报错）；x < edges[0] 仍报错。
         edges = [0, 100, 200]
         self.assertEqual(bucket_index(edges, 0), 0)
         self.assertEqual(bucket_index(edges, 99), 0)
-        self.assertEqual(bucket_index(edges, 100), 1)
-        self.assertEqual(bucket_index(edges, 200), 1)  # 末桶闭合
-        with self.assertRaises(SloToolError):
-            bucket_index(edges, 201)
+        self.assertEqual(bucket_index(edges, 100), 0)  # interior 边界归左桶
+        self.assertEqual(bucket_index(edges, 101), 1)
+        self.assertEqual(bucket_index(edges, 200), 1)
+        self.assertEqual(bucket_index(edges, 201), 1)  # 末桶吸收越界
+        self.assertEqual(bucket_index(edges, 10**9), 1)
         with self.assertRaises(SloToolError):
             bucket_index(edges, -1)
 
@@ -534,6 +538,39 @@ class HopbytesTests(unittest.TestCase):
             {"noc_path": [1, 2, 3]}), 2)
         self.assertIsNone(hopbytes._shard_hops({"bytes": 1}))
 
+    def test_sh30_consumes_new_shards_field(self):
+        """B4 升级：S3 决策日志 completion_evictions[].shards[].noc_hops
+        （B3 60s 证据字段）进入 Hop-Bytes；无 shards 的聚合字段不计。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "completion", "request_id": "r0", "tick": 9,
+                  "decision": {
+                      "history_transfer_bytes": 4096,
+                      "completion_evictions": [{
+                          "kind": "remote_store", "total_bytes": 3000,
+                          "shards": [
+                              {"bytes": 1000, "noc_hops": 2,
+                               "noc_path": [20, 19, 18]},
+                              {"bytes": 500, "noc_hops": 2,
+                               "noc_path": [21, 22, 23]},
+                              {"bytes": 500, "noc_path": [26, 25]}],
+                      }]}}
+        hopbytes.collect_sh30(record, acc, per_request)
+        # 1000*2 + 500*2 + 500*1 = 3500；noc_path 兜底推导（len-1）。
+        self.assertEqual(acc["hop_bytes_total"], 3500)
+        self.assertEqual(acc["bytes_with_hops"], 2000)
+        self.assertEqual(acc["actions_with_hops"], 3)
+        # 聚合 bytes 字段（无路由）不进本账（B4 语义，见 notes）。
+        self.assertEqual(acc["bytes_without_hops"], 0)
+        # 无 shards 的 shard 条目（bytes 无 hops）→ bytes_without_hops。
+        record2 = {"kind": "completion", "request_id": "r1", "tick": 10,
+                   "decision": {"completion_evictions": [{
+                       "total_bytes": 700,
+                       "shards": [{"bytes": 700}]}]}}
+        hopbytes.collect_sh30(record2, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 700)
+
     def test_wscllm_static_route_hand_computed(self):
         acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
                "bytes_with_hops": 0, "bytes_without_hops": 0}
@@ -591,6 +628,56 @@ class CliSurfaceTests(unittest.TestCase):
         self.assertIn("参数未推导", proc.stderr)
 
 
+class SessionPassthroughTests(unittest.TestCase):
+    """B4（S3 异常③）：metrics_manifest 透传 human_time_ns/tool_time_ns 后
+    T_session 可算；turn-0 双侧 null=0 贡献（非缺数据）；键缺席才 NA。"""
+
+    def _write_run(self, manifest_requests):
+        run_dir = synthetic.make_run_dir("sess")
+        synthetic.write_request_metrics(run_dir, [
+            synthetic.request_row(
+                queue_index="0", request_id="s0t0", session_id="s0",
+                turn_index="0", arrival_ns="1000", completion_ns="5000"),
+            synthetic.request_row(
+                queue_index="1", request_id="s0t1", session_id="s0",
+                turn_index="1", arrival_ns="5200", completion_ns="9000"),
+        ])
+        synthetic.write_metrics_manifest(run_dir, manifest_requests)
+        return run_dir
+
+    def test_t_session_with_passthrough_keys(self):
+        # Σ(human+tool) = 0(turn-0) + 200(turn-1) = 200；
+        # T_session = 9000 - 1000 - 200 = 7800。
+        run_dir = self._write_run([
+            synthetic.manifest_request(
+                "s0t0", "s0", 0, 0, human_time_ns=None, tool_time_ns=None),
+            synthetic.manifest_request(
+                "s0t1", "s0", 1, 1, human_time_ns=200, tool_time_ns=None),
+        ])
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["t_session_ns"], "7800")
+        self.assertEqual(rows[0]["sum_human_tool_ns"], "200")
+        self.assertIn("turn0/0-gap", rows[0]["missing_fields_sample"])
+
+    def test_t_session_na_when_keys_absent(self):
+        run_dir = self._write_run([
+            synthetic.manifest_request("s0t0", "s0", 0, 0),
+            synthetic.manifest_request("s0t1", "s0", 1, 1),
+        ])
+        out = run_dir / "slo_session.csv"
+        args = slo_argv(["session", str(run_dir), "-o", str(out)])
+        self.assertEqual(slo_stats.cmd_session(args), 0)
+        with out.open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["t_session_ns"], "NA")
+        self.assertEqual(rows[0]["missing_field_count"], "4")
+
+
 class BacklogTests(unittest.TestCase):
     def test_backlog_reconstruction(self):
         run_dir = synthetic.make_run_dir("bl1")
@@ -634,6 +721,96 @@ class WarmupTests(unittest.TestCase):
         self.assertAlmostEqual(payload["relative_change"], 0.8)
         self.assertFalse(payload["warmup_stable"])
 
+
+
+class CppLogFallbackTests(unittest.TestCase):
+    """P1 契约：cpp.log → metrics.log → cpp.log.gz 统一回退。
+
+    归档（archive_run_outputs.sh）后 run_dir 只剩 metrics.log（[METRIC]
+    无损抽取）与 cpp.log.gz（全量原文）；三条路径读到的记录集必须同一。
+    """
+
+    RECORDS = [
+        {"type": "request", "queue_index": 0, "request_id": "r0",
+         "prefill_start_ns": 100, "prefill_end_ns": 200},
+        {"type": "memory_anchor", "subject_id": 0, "rank": 1,
+         "node_id": "n1", "tick_ns": 150},
+    ]
+
+    def _metric_lines(self, run_dir: Path) -> str:
+        cpp_log = run_dir / "cpp.log"
+        return "".join(line + "\n" for line in
+                       cpp_log.read_text(encoding="utf-8").splitlines()
+                       if line.startswith("[METRIC] "))
+
+    def _read_all(self, run_dir: Path) -> list[dict]:
+        return list(slo_common.read_cpp_metric_records(
+            slo_common.resolve_cpp_metric_log(run_dir)))
+
+    def test_plain_cpp_log(self):
+        run_dir = synthetic.make_run_dir("fb0")
+        synthetic.write_cpp_log(run_dir, self.RECORDS)
+        records = self._read_all(run_dir)
+        self.assertEqual([r.get("type") for r in records],
+                         ["init", "request", "memory_anchor"])
+        self.assertEqual(slo_common.read_init_record(run_dir)["repo_variant"],
+                         "astra-sim-face")
+
+    def test_metrics_log_only_matches_cpp_log_records(self):
+        plain = synthetic.make_run_dir("fb1a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb1b")
+        (archived / "metrics.log").write_text(self._metric_lines(plain),
+                                              encoding="utf-8")
+        self.assertEqual(self._read_all(archived), self._read_all(plain))
+        self.assertEqual(slo_common.read_init_record(archived),
+                         slo_common.read_init_record(plain))
+
+    def test_cpp_log_gz_only_matches_cpp_log_records(self):
+        import gzip
+        plain = synthetic.make_run_dir("fb2a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb2b")
+        raw = plain.joinpath("cpp.log").read_text(encoding="utf-8")
+        # 混入非 [METRIC] 行验证过滤不受压缩形态影响。
+        raw = "[sim] some non-metric line\n" + raw + "[sim] tail\n"
+        with gzip.open(archived / "cpp.log.gz", "wt",
+                       encoding="utf-8") as handle:
+            handle.write(raw)
+        self.assertEqual(self._read_all(archived), self._read_all(plain))
+        self.assertEqual(slo_common.read_init_record(archived),
+                         slo_common.read_init_record(plain))
+
+    def test_fallback_order_prefers_cpp_log_then_metrics_log(self):
+        run_dir = synthetic.make_run_dir("fb3")
+        synthetic.write_cpp_log(run_dir, self.RECORDS)
+        (run_dir / "metrics.log").write_text(
+            "[METRIC] {\"type\": \"init\", \"repo_variant\": \"decoy\"}\n",
+            encoding="utf-8")
+        self.assertEqual(slo_common.resolve_cpp_metric_log(run_dir).name,
+                         "cpp.log")
+        (run_dir / "cpp.log").unlink()
+        self.assertEqual(slo_common.resolve_cpp_metric_log(run_dir).name,
+                         "metrics.log")
+        self.assertEqual(slo_common.read_init_record(run_dir)
+                         ["repo_variant"], "decoy")
+
+    def test_missing_all_three_fails_closed(self):
+        run_dir = synthetic.make_run_dir("fb4")
+        with self.assertRaises(SloToolError):
+            slo_common.resolve_cpp_metric_log(run_dir)
+
+    def test_restore_decomposition_entry_reads_archived_run_dir(self):
+        plain = synthetic.make_run_dir("fb5a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb5b")
+        (archived / "metrics.log").write_text(self._metric_lines(plain),
+                                              encoding="utf-8")
+        rows_plain, summary_plain = restore_decomposition.collect(plain)
+        rows_archived, summary_archived = restore_decomposition.collect(
+            archived)
+        self.assertEqual((rows_plain, summary_plain),
+                         (rows_archived, summary_archived))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

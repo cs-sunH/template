@@ -29,7 +29,7 @@ B2 oracle 已逐字节验证）。本脚本按 sh_2.0 工件口径核对 R0-R6�
      R3c completion 决策 tick == ledger completed_tick（零失配）+
      cpp total_kv_actions >= 请求数（wscllm 修复版 R3 同款计数保证）。
 """
-import argparse, collections, json, os, re, sys
+import argparse, collections, gzip, json, os, re, sys
 
 
 def main():
@@ -40,8 +40,12 @@ def main():
     results = os.path.join(args.run_dir, "results")
     cpp = ""
     path = os.path.join(args.run_dir, "cpp.log")
-    if os.path.exists(path):
-        cpp = open(path, encoding="utf-8", errors="replace").read()
+    if not os.path.isfile(path) and os.path.isfile(path + ".gz"):
+        path += ".gz"
+    if os.path.isfile(path):
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8", errors="replace") as source:
+            cpp = source.read()
 
     def jsonl(name):
         rows = []

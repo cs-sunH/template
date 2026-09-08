@@ -73,7 +73,7 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
-    "kv_cache_policy": "legacy",
+    "kv_cache_policy": "session_lru_recompute",
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
@@ -122,7 +122,6 @@ class FaceTraceConfig:
     system_config: Path
     network_config: Path
     comm_group_config: Path
-    remote_memory_config: Path
     remote_operand_loads: bool
     inference_groups: tuple[InferenceGroup, ...]
     request_queue_session_limit: int
@@ -176,10 +175,10 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "record_planning_iterations":
         return parse_bool(value, key)
     if key == "kv_cache_policy":
-        if value not in {"legacy", "session_lru_recompute"}:
+        if value != "session_lru_recompute":
             raise ValueError(
-                "config key kv_cache_policy must be legacy or "
-                "session_lru_recompute"
+                "config key kv_cache_policy must be "
+                f"session_lru_recompute, got {value!r}"
             )
         return value
     if key == "trace_granularity":
@@ -224,15 +223,6 @@ def _to_face_hardware(hardware: ResolvedHardware) -> FaceHardware:
         local_hbm_latency_ns=hardware.local_hbm_latency_ns,
         label=hardware.label,
     )
-
-
-def _validate_no_memory_expansion(path: Path) -> None:
-    if not path.exists():
-        raise FileNotFoundError(f"remote-memory config not found: {path}")
-    with path.open(encoding="utf-8") as source:
-        raw = json.load(source)
-    if raw.get("memory-type") != "NO_MEMORY_EXPANSION":
-        raise ValueError("FACE default must use NO_MEMORY_EXPANSION")
 
 
 def select_first_session_requests(
@@ -367,7 +357,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         inference_groups=tuple((group.pg_name, group.ranks) for group in groups),
         output_dir=runtime_config_dir,
     )
-    _validate_no_memory_expansion(runtime_configs.remote_memory)
     digest_paths = [
             config_csv.resolve(),
             request_queue_csv,
@@ -399,7 +388,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         system_config=runtime_configs.system,
         network_config=runtime_configs.network,
         comm_group_config=runtime_configs.comm_group,
-        remote_memory_config=runtime_configs.remote_memory,
         remote_operand_loads=bool(parsed["remote_operand_loads"]),
         inference_groups=tuple(groups),
         request_queue_session_limit=int(parsed["request_queue_session_limit"]),

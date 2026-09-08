@@ -152,13 +152,16 @@ class FailClosedTests(unittest.TestCase):
             require_bucket_edges(manifest)
 
     def test_bucket_index_semantics(self):
+        # 2026-09-05 口径裁决：interior edges 为左桶闭上界（边界值归左桶），
+        # 末桶无上限（x > edges[-1] 归末桶，不再报错）；x < edges[0] 仍报错。
         edges = [0, 100, 200]
         self.assertEqual(bucket_index(edges, 0), 0)
         self.assertEqual(bucket_index(edges, 99), 0)
-        self.assertEqual(bucket_index(edges, 100), 1)
-        self.assertEqual(bucket_index(edges, 200), 1)  # 末桶闭合
-        with self.assertRaises(SloToolError):
-            bucket_index(edges, 201)
+        self.assertEqual(bucket_index(edges, 100), 0)  # interior 边界归左桶
+        self.assertEqual(bucket_index(edges, 101), 1)
+        self.assertEqual(bucket_index(edges, 200), 1)
+        self.assertEqual(bucket_index(edges, 201), 1)  # 末桶吸收越界
+        self.assertEqual(bucket_index(edges, 10**9), 1)
         with self.assertRaises(SloToolError):
             bucket_index(edges, -1)
 
@@ -582,6 +585,82 @@ class HopbytesTests(unittest.TestCase):
                    "decision": {"history_transfer_bytes": 50}}
         hopbytes.collect_wscllm(record2, acc, per_request)
         self.assertEqual(acc["bytes_without_hops"], 50)
+
+    def test_wscllm_decode_shards_aggregate_per_shard(self):
+        """问题 4b（2026-09-05）：decode 行 shards[] 携带 noc_hops/
+        noc_path 时逐 shard bytes×hops（100B×2 + 50B×3 = 350），
+        legacy 聚合口径（total_bytes×hop_count）不再叠加（防双计）。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "decode", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "static_route": {"hop_count": 7},
+                      "prefill_decode_transfer": {
+                          "total_bytes": 150,
+                          "shards": [
+                              {"relative_tp_rank": 0, "bytes": 100,
+                               "noc_hops": 2, "noc_path": [0, 1, 5]},
+                              {"relative_tp_rank": 1, "bytes": 50,
+                               "noc_hops": 3, "noc_path": [2, 3, 6, 7]},
+                          ]}}}
+        hopbytes.collect_wscllm(record, acc, per_request)
+        self.assertEqual(acc["hop_bytes_total"], 350)
+        self.assertEqual(acc["actions_with_hops"], 2)
+        self.assertEqual(acc["bytes_with_hops"], 150)
+        self.assertEqual(acc["bytes_without_hops"], 0)
+        self.assertEqual(per_request["r0"]["hop_bytes"], 350)
+
+    def test_wscllm_decode_shards_without_routes_fall_back(self):
+        """旧产物（shards 无 noc 字段）必须走 legacy 回退——0902 控制
+        变量回归的读取端前提：total_bytes×static_route.hop_count。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "decode", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "static_route": {"hop_count": 2},
+                      "prefill_decode_transfer": {
+                          "total_bytes": 100,
+                          "shards": [
+                              {"relative_tp_rank": 0, "bytes": 60},
+                              {"relative_tp_rank": 1, "bytes": 40},
+                          ]}}}
+        hopbytes.collect_wscllm(record, acc, per_request)
+        self.assertEqual(acc["hop_bytes_total"], 200)
+        self.assertEqual(acc["actions_with_hops"], 1)
+        self.assertEqual(acc["bytes_with_hops"], 100)
+        self.assertEqual(acc["bytes_without_hops"], 0)
+
+    def test_wscllm_prefill_history_transfer_shards(self):
+        """问题 4b：prefill 行 history_transfer_shards[] 逐 shard 聚合
+        （100B×2 + 50B×3 = 350）；legacy 聚合字段不再叠加（防双计）；
+        无路由 shard 计 bytes_without_hops（宁缺勿造）。"""
+        acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
+               "bytes_with_hops": 0, "bytes_without_hops": 0}
+        per_request: dict = {}
+        record = {"kind": "prefill", "request_id": "r0", "tick": 1,
+                  "decision": {
+                      "history_transfer_bytes": 250,
+                      "noc_hops": 9,
+                      "history_transfer_shards": [
+                          {"relative_tp_rank": 0, "source_rank": 0,
+                           "target_rank": 5, "bytes": 100,
+                           "noc_hops": 2, "noc_path": [0, 1, 5]},
+                          {"relative_tp_rank": 1, "source_rank": 2,
+                           "target_rank": 7, "bytes": 50,
+                           "noc_path": [2, 3, 6, 7]},
+                          {"relative_tp_rank": 2, "source_rank": 4,
+                           "target_rank": 4, "bytes": 100},
+                      ]}}
+        hopbytes.collect_wscllm(record, acc, per_request)
+        # 100*2 + 50*(len-1=3) = 350；第三 shard 无路由 → bytes_without。
+        self.assertEqual(acc["hop_bytes_total"], 350)
+        self.assertEqual(acc["actions_with_hops"], 2)
+        self.assertEqual(acc["bytes_with_hops"], 150)
+        self.assertEqual(acc["bytes_without_hops"], 100)
+        self.assertEqual(per_request["r0"]["hop_bytes"], 350)
+        self.assertEqual(per_request["r0"]["bytes_without"], 100)
 
 
 class CliSurfaceTests(unittest.TestCase):

@@ -19,8 +19,6 @@ Reason closed set (wscllm, phase-1 minimal; written into contract ④):
                         graph granularity per the step 0-4 contract).
   REQUEST_COMPLETE   -- the request's stages are all done (wrap-up / ledger
                         close-out / next-session-arrival scheduling edge).
-  RESOURCE_READY     -- enum bit RESERVED for the legacy migration (阶段 1
-                        never produces it).
 There is deliberately NO DECODE_ITERATION_COMPLETE: one decode iteration
 advancing all active requests by one token is ledger/queueing logic inside
 the OnlineScheduler, not a graph-structure event (构图粒度见步骤 1-9).
@@ -64,14 +62,12 @@ Counters (report at run end):
 namespace AstraSim {
 namespace ExecutionDriven {
 
-/// Decision reasons (closed set, phase-1 minimal). RESOURCE_READY is
-/// reserved (legacy migration), never produced in phase 1.
+/// Decision reasons (closed set, phase-1 minimal).
 enum class DecisionReason : int {
     ARRIVAL = 0,
     PREFILL_DRAIN = 1,
     DECODE_COMPLETION = 2,
     REQUEST_COMPLETE = 3,
-    RESOURCE_READY = 4,  // reserved bit; not produced in phase 1
 };
 
 /// Per-reason payload (phase-1 minimal; fields documented per reason).
@@ -107,12 +103,12 @@ struct DecisionEvent {
     DecisionPayload payload;
 };
 
-/// One per-node terminal fact (schema v1, phase 4): every node terminal
-/// (or skip) recorded by the online CompletionObserver hook since the
-/// previous delivery epoch. terminal_status follows NodeTerminalStatus
-/// (0 = Success, 1 = Skipped). Audit/reconciliation input only -- never a
-/// strategy decision input (红线 §0.4). See
-/// online_contracts/state_delta_v1.md §5.2.
+/// One legacy per-node terminal-fact wire record. Production deliberately
+/// does not retain or serialize these facts: completed_nodes stays present as
+/// an empty schema field. ASTRA_SIM_ONLINE_COMPLETED_NODES=exact enables this
+/// record for deep audit/replay only. terminal_status follows
+/// NodeTerminalStatus (0 = Success, 1 = Skipped); it is never a strategy
+/// decision input (红线 §0.4). See 原契约 §5.2 (文档已删除).
 struct CompletedNodeFact {
     int rank = 0;
     uint64_t node_id = 0;
@@ -123,13 +119,56 @@ struct CompletedNodeFact {
     int terminal_status = 0;
 };
 
+/// Run-lifetime terminal accounting. These counters include terminal nodes
+/// that complete after the final bridge delivery (for example an end-barrier
+/// control tail), so the online run-end audit can fail closed against the
+/// GraphBatchCommitter's total committed-node count without keeping node
+/// metadata or JSON facts resident. `other` is an invalid observer status.
+struct CompletedFactCounters {
+    uint64_t total = 0;
+    uint64_t success = 0;
+    uint64_t skipped = 0;
+    uint64_t other = 0;
+};
+
+/// Per-delivery terminal-fact collector. Default production mode updates only
+/// CompletedFactCounters and drains an empty completed_nodes array. The
+/// explicit ASTRA_SIM_ONLINE_COMPLETED_NODES=exact mode retains the frozen
+/// legacy per-node records for deep audit/replay. The collector is
+/// simulation-thread-only, matching CompletionObserver's contract.
+class CompletedFactAccumulator {
+  public:
+    CompletedFactAccumulator();
+
+    void record(int rank, uint64_t node_id, const char* request_id,
+                const char* stage, uint64_t generation, uint64_t tick,
+                int terminal_status);
+
+    /// Transfer this delivery's exact-audit records and reset that buffer.
+    std::vector<CompletedNodeFact> drain();
+    [[nodiscard]] size_t size() const;
+    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
+    [[nodiscard]] const CompletedFactCounters& counters() const {
+        return counters_;
+    }
+
+    /// Test/embedding override. It is only legal before the first terminal,
+    /// preventing one run from silently switching its audit representation.
+    void set_exact_mode(bool exact_mode);
+
+  private:
+    bool exact_mode_ = false;
+    std::vector<CompletedNodeFact> exact_facts_;
+    CompletedFactCounters counters_;
+};
+
 /// Snapshot handle (schema v1, phase 4): a placeholder until phase 7 wires
 /// the congestion snapshot. v1 self-consistent value: {"epoch": delivery_
 /// sequence, "tick": tick, "kind": ""}. Expiry rule (frozen now): the
 /// handle is valid ONLY in the same delivery epoch and the same tick it was
 /// created in; any cross-tick/cross-epoch use fails closed. The Python
 /// validator asserts epoch == delivery_sequence && tick == tick.
-/// See online_contracts/state_delta_v1.md §4.
+/// See 原契约 §4 (文档已删除).
 struct SnapshotHandle {
     uint64_t epoch = 0;
     uint64_t tick = 0;
@@ -139,8 +178,8 @@ struct SnapshotHandle {
 /// StateDelta: the C++->Python delivery payload of one delivery epoch
 /// (built from a mailbox drain by the tick-end gate). GraphBatch (the
 /// response type) lands with the step-1-7 bridge header. Schema v1 fields
-/// (phase 4) are documented in online_contracts/state_delta_v1.md -- the
-/// frozen contract; this struct mirrors it exactly.
+/// (phase 4) were documented in a deleted contract doc; this struct is
+/// the authority.
 struct StateDelta {
     uint64_t delivery_sequence = 0;  // monotonically increasing epoch number
     // Phase 4 (v1): the delivery-epoch counter. In v1 it is ALWAYS equal to
@@ -159,9 +198,6 @@ struct StateDelta {
     // Phase 4 (v1): per-node terminal facts since the previous delivery
     // (hook facts buffer; drained into the delivery at the tick-end gate).
     std::vector<CompletedNodeFact> completed_nodes;
-    // Phase 4 (v1): admission-retry items. ALWAYS empty in v1 (no producer
-    // until the legacy migration; the Python validator asserts emptiness).
-    std::vector<int64_t> retry_items;
     // Phase 4 (v1): affected rank set = union of the member ranks of this
     // epoch's completed_groups (WatchFire::member_ranks), sorted unique.
     std::vector<int> affected_ranks;
@@ -180,7 +216,7 @@ struct StateDelta {
 /// T+1 wakeup delivered events formed at that tick (step 1-11).
 /// injected_unfinished: phase-3 sensing summary (empty when sensing is off).
 /// Phase-4 v1 defaults: delivery_epoch == delivery_sequence; completed_nodes
-/// / retry_items / affected_ranks empty; snapshot_handle self-consistent
+/// / affected_ranks empty; snapshot_handle self-consistent
 /// {epoch: delivery_sequence, tick: tick, kind: ""} -- existing 4/5-arg call
 /// sites (fixtures) compile unchanged and stay v1-consistent.
 StateDelta build_state_delta(
@@ -194,7 +230,7 @@ StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, uint64_t tick,
     uint64_t delivery_sequence, uint64_t deferred_from_tick,
     std::vector<CompletedNodeFact> completed_nodes,
-    std::vector<int64_t> retry_items, std::vector<int> affected_ranks,
+    std::vector<int> affected_ranks,
     std::vector<RankInjectedSummary> injected_unfinished = {});
 
 class DecisionMailbox {

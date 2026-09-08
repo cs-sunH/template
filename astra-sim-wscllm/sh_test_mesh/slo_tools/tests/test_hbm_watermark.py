@@ -1342,6 +1342,39 @@ class EvictBytesCoverageTests(unittest.TestCase):
         self.assertEqual(summary["instances"]["0"]["residual_occupancy_bytes"],
                          0)
 
+    def test_wscllm_passive_arm_empty_completion_evictions_tolerated(self):
+        """被动驱逐机制修改方案 v2 D7(2026-09-05):wscllm passive 臂
+        completion 行 completion_evictions=[] 必须容忍(零动作不 fail),
+        eviction_coverage 口径仍 full_reconciled、evict_bytes 输出真实
+        值 0(NA 只保留给 count_only)。"""
+        reset_seq()
+        records = [
+            prefill_record("sA_r0", 0, instance=0),
+            decode_record("sA_r0", 10, instance=0),
+            # passive 臂合成形态:完成边界零水位逐出,列表显式为空;
+            # KV 保留(terminal_kv_release_at_completion=False)。
+            completion_record("sA_r0", 20, decision={
+                "terminal_kv_release_at_completion": False,
+                "completion_evictions": []}),
+        ]
+        tokens = [token_row("sA_r0", "sA", 0, 1, 2)]
+        run_dir = make_run_dir("evpassive")
+        write_fixture(run_dir, repo_variant="astra-sim-wscllm",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["eviction_coverage"], "full_reconciled")
+        with (run_dir / "instances.csv").open(newline="") as handle:
+            row = next(csv.DictReader(handle))
+        self.assertEqual(row["evict_bytes"], "0")
+        instance = summary["instances"]["0"]
+        self.assertEqual(instance["evict_bytes"], 0)
+        self.assertEqual(instance["evict_events"], 0)
+        # 手算:prefill f(1)=100 → decode f(2)=200;完成保留(零逐出)。
+        self.assertEqual(instance["peak_occupancy_bytes"], 200)
+        self.assertEqual(instance["residual_occupancy_bytes"], 200)
+
     def test_s2_count_only_evict_bytes_still_na(self):
         reset_seq()
         records = [

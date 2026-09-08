@@ -75,16 +75,13 @@ SOURCE_MICROBENCHMARK = "simulator_microbenchmark"
 SOURCE_PLANNER_LUT = "planner_lut"
 SOURCE_PLANNER_MEMORY = "planner_memory_ledger"
 
-# kv_policy label 取值集（B4a/2026-09-02：+relevant_distributed 第三变体）。
+# kv_policy label 取值集（A.5/2026-09-05：legacy 与 relevant 两个历史
+# 变体已清除，唯一合法 label session_lru_recompute）。
 # 与 generate_wsc_llm_trace._parse_config_value 的 kv_cache_policy 值域同源
 # （label 与配置键同名同域）；空串 = 未标注（既有产物/合成 manifest 无
 # kv_management 节时缺省），保持向后兼容。非空且不在集合内 → fail-closed
 # （防止拼错的 label 静默分裂对比组，sec.11.4 同族防线）。
-KV_POLICY_LABELS = frozenset({
-    "legacy",
-    "session_lru_recompute",
-    "relevant_distributed",
-})
+KV_POLICY_LABELS = frozenset({"session_lru_recompute"})
 
 RAW_COLUMNS = [
     "run_id",
@@ -747,6 +744,16 @@ def _first_token_proxy_value(
     if completion is not None and proxy_ns > completion:
         proxy_ns = completion
         note += " clamped_to_completion(train_end_boundary>completion)"
+    elif (completion is not None and decode_length == 1
+          and proxy_ns < completion):
+        # decode_length==1: the request's only decode iteration IS its first
+        # token, so exact-mode semantics is first_token==completion (see the
+        # clamp note above).  A dl1 debut riding a MULTI-iteration train gets
+        # share<1 and the interpolation lands BEFORE the recorded completion
+        # tick (face 0902 full_rt: 18/268 dl1 rows, up to 4.9s early); pin to
+        # completion -- the same value the N=1 clamp above yields.
+        proxy_ns = completion
+        note += " pinned_to_completion(decode_length==1,proxy<completion)"
     return proxy_ns, note
 
 
@@ -810,6 +817,24 @@ def _request_metric_rows(
             _check_request_row_invariants(run.run_id, checked, queue_index)
         else:
             _check_request_row_invariants(run.run_id, record, queue_index)
+        # Hard invariant (dl1, 2026-09-05): a train_interpolated row with
+        # decode_length==1 must carry first_token_ns == completion_ns -- the
+        # pin/clamp in _first_token_proxy_value guarantees it, so a mismatch
+        # means that path broke (fail-closed, the silent-early lesson).
+        # exact rows are EXEMPT: WP9_CONTRACT §6 relaxes dl1 equality to an
+        # informational TP skew (first_token <= completion is legal).
+        completion_ns = _int_or_none(record.get("completion_ns"))
+        if (first_token_source == FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED
+                and first_token_ns is not None
+                and completion_ns is not None
+                and entry.get("decode_length") == 1
+                and first_token_ns != completion_ns):
+            raise PostprocessError(
+                f"run {run.run_id}: queue_index {queue_index} request "
+                f"{record.get('request_id')!r}: decode_length==1 proxy "
+                "first_token_ns != completion_ns (dl1 first token IS the "
+                "last token; pinned_to_completion path broken)"
+            )
         request_type = entry.get("request_type")
         if request_type not in (REQUEST_TYPE_HUMAN, REQUEST_TYPE_TOOL):
             if request_type is None:
@@ -955,8 +980,9 @@ def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, An
     )
     kv_policy = run_config.get("kv_policy") or service_manifest.get("kv_management", {}).get("policy", "")
     if kv_policy and str(kv_policy) not in KV_POLICY_LABELS:
-        # B4a/2026-09-02：kv_policy label 枚举校验（+relevant_distributed）；
-        # 空串=未标注仍放行（既有产物兼容），非空未知值 fail-closed。
+        # A.5/2026-09-05：kv_policy label 枚举校验（唯一合法值
+        # session_lru_recompute）；空串=未标注仍放行（既有产物兼容），
+        # 非空未知值 fail-closed。
         raise PostprocessError(
             f"kv_policy label {kv_policy!r} not in the known set "
             f"{sorted(KV_POLICY_LABELS)} (typo would silently split "

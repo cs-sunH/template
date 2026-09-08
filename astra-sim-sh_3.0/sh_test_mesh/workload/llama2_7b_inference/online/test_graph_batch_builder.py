@@ -21,6 +21,7 @@ chain_checkpoint/restore_chain 双捕获/双回滚语义钉子（2026-08-20 低�
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_graph_batch_builder.py   （或 pytest 同路径）
 """
+import json
 import os
 import sys
 import unittest
@@ -146,8 +147,8 @@ def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
 
 
 def _rank_nodes(builder, rank):
-    """M1 适配（2026-08-23 收集即释放）：builder.nodes 不再保证驻留全部
-    历史节点（已收集前缀按水位摊销压缩）——改读当前批次累加器
+    """M1 适配（2026-08-29 收集即释放）：_collect 立即清空 builder.nodes，
+    已交付节点只在当前批次累加器中保留——改读当前批次累加器
     batch["nodes"]（发射序，自 begin_batch 起含本批全部节点），保持
     "直读已发射节点"的测试意图；测试内单批发射，节点 id 自 0 连续，
     rank 过滤后位置 == 节点 id，与改前等价。"""
@@ -162,6 +163,99 @@ def _edge_sources(builder, node_id):
         for edge in builder.edges
         if edge["to"] == node_id and edge["rank"] == builder.rank
     }
+
+
+def _node_edge_payload(batch):
+    return json.dumps(
+        {"nodes": batch["nodes"], "parent_edges": batch["parent_edges"]},
+        separators=(",", ":"), sort_keys=True,
+    )
+
+
+class DependencyFastPathTest(unittest.TestCase):
+    """_new_node 的 0/1 fast path 必须与有序去重旧逻辑逐案等价。"""
+
+    def test_dependency_edge_order_and_state_matrix(self):
+        cases = (
+            ("no_previous_or_pending", None, (), ()),
+            ("previous_only", 4, (), (4,)),
+            ("one_pending_only", None, (8,), (8,)),
+            ("one_pending_matches_previous", 4, (4,), (4,)),
+            ("one_pending_differs_from_previous", 4, (8,), (4, 8)),
+            ("many_pending_with_duplicates", 4, (8, 4, 9, 8), (4, 8, 9)),
+            ("many_pending_without_previous", None, (8, 8, 9), (8, 9)),
+        )
+        for label, previous_id, pending, expected_sources in cases:
+            with self.subTest(case=label):
+                trace = OnlineTraceBuilder(7, remote_operand_loads=False)
+                trace.next_id = 17
+                trace.previous_id = previous_id
+                trace.pending_extra_dependencies.extend(pending)
+
+                trace.comp("dependency_matrix", 1, 1)
+
+                self.assertEqual(
+                    trace.edges,
+                    [{"rank": 7, "from": source, "to": 17, "kind": "data"}
+                     for source in expected_sources],
+                )
+                self.assertEqual(trace.nodes[-1]["id"], 17)
+                self.assertEqual(trace.next_id, 18)
+                self.assertEqual(trace.previous_id, 17)
+                self.assertEqual(trace.pending_extra_dependencies, [])
+
+
+class CollectionLifecycleTest(unittest.TestCase):
+    """交付后 builder 缓冲区只应保留尚未收集的节点与边。"""
+
+    def test_collect_releases_buffers_without_changing_payload(self):
+        builder = GraphBatchBuilder(_make_config())
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"first_{rank}_0", 1, 1)
+            trace_builder.comp(f"first_{rank}_1", 1, 1)
+        expected_first_payload = json.dumps(
+            {
+                "nodes": [
+                    node for trace_builder in builder.builders.values()
+                    for node in trace_builder.nodes
+                ],
+                "parent_edges": [
+                    edge for trace_builder in builder.builders.values()
+                    for edge in trace_builder.edges
+                ],
+            },
+            separators=(",", ":"), sort_keys=True,
+        )
+
+        builder._collect(marker)
+        first_batch = builder.batch
+        first_payload = _node_edge_payload(first_batch)
+        self.assertEqual(first_payload, expected_first_payload)
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
+
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"second_{rank}", 1, 1)
+        builder._collect(marker)
+
+        self.assertEqual(_node_edge_payload(first_batch), first_payload)
+        self.assertEqual(
+            [(node["rank"], node["id"]) for node in builder.batch["nodes"]],
+            [(rank, 2) for rank in builder.builders],
+        )
+        self.assertEqual(
+            [(edge["rank"], edge["from"], edge["to"])
+             for edge in builder.batch["parent_edges"]],
+            [(rank, 1, 2) for rank in builder.builders],
+        )
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
 
 
 class TrainEmissionNailTest(unittest.TestCase):
@@ -326,7 +420,7 @@ class TrainEmissionNailTest(unittest.TestCase):
 
 
 def _edge_sources_of(graph_builder, rank, node_id):
-    """M1 适配：边列表同 nodes 改读批次累加器（builder.edges 可被压缩）。"""
+    """M1 适配：_collect 后 builder.edges 已清空，边改读批次累加器。"""
     return {
         edge["from"]
         for edge in graph_builder.batch["parent_edges"]
@@ -408,6 +502,67 @@ class ChainCheckpointRestoreTest(unittest.TestCase):
             _edge_sources(builder, builder.previous_id),
             {checkpoint_previous},
         )
+
+
+class NextPlanLifecycleTest(unittest.TestCase):
+    """completion 是 next_plan 的唯一消费者，terminal None 也必须释放。"""
+
+    @staticmethod
+    def _completion_plan(request_id, *, queue_index):
+        return {
+            "request_id": request_id,
+            "session_id": SESSION,
+            "turn_index": queue_index,
+            "queue_index": queue_index,
+            "decode_instance_index": 1,
+            "completion_evictions": [],
+            "kv_location_after_completion": "local_hbm",
+        }
+
+    @staticmethod
+    def _config_with_two_turns():
+        config = _make_config()
+        config.request_queue = [
+            SimpleNamespace(session_arrival_time_ns=0,
+                            inter_request_interval_ns=None),
+            SimpleNamespace(session_arrival_time_ns=None,
+                            inter_request_interval_ns=1000),
+        ]
+        return config
+
+    def test_each_completion_pops_one_next_plan_including_terminal_none(self):
+        builder = GraphBatchBuilder(self._config_with_two_turns())
+        builder.set_next_plan({REQUEST_A: REQUEST_B, REQUEST_B: None})
+        builder.set_plan_resolver(lambda request_id: {
+            "request_id": request_id,
+            "queue_index": 1,
+            "hbm_wait_ns": 0,
+        })
+
+        builder._block_ends[REQUEST_A] = {"seg2": {2: 0, 3: 0}}
+        builder.begin_batch()
+        builder.emit_completion_batch(
+            self._completion_plan(REQUEST_A, queue_index=0))
+        self.assertNotIn(REQUEST_A, builder.next_plan)
+        self.assertIn(REQUEST_B, builder.next_plan)
+        self.assertIn(REQUEST_B, builder.pending_history)
+        self.assertEqual(
+            builder.pending_request_by_session[SESSION], REQUEST_B)
+
+        # 下一 turn 的 final None 也是一条真实账本项；完成后 map 必须为空。
+        builder._block_ends[REQUEST_B] = {"seg2": {2: 1, 3: 1}}
+        builder.begin_batch()
+        builder.emit_completion_batch(
+            self._completion_plan(REQUEST_B, queue_index=1))
+        self.assertEqual(builder.next_plan, {})
+
+        # 已消费的 request 不得再次读取旧计划，防止无界 retained map 掩盖
+        # completion 重放或错误调用。
+        builder._block_ends[REQUEST_A] = {"seg2": {2: 2, 3: 2}}
+        builder.begin_batch()
+        with self.assertRaisesRegex(RuntimeError, "no next-plan entry"):
+            builder.emit_completion_batch(
+                self._completion_plan(REQUEST_A, queue_index=0))
 
 
 if __name__ == "__main__":

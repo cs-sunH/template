@@ -12,8 +12,7 @@ the scheduler's reply. This bridge is a DECISION channel, NOT a runtime
 request injection channel -- Producer -> C++ submit/close/EOF/error always
 go through the step-1-2 command queue and never touch req_notify.fifo.
 
-Protocol v1 (frozen rules, written into contract ②/④ and
-online_contracts/state_delta_v1.md; phase 4 §7.1):
+Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
   - Wire: <run_dir>/bridge/ with req_notify.fifo / resp_notify.fifo
     (mkfifo). FIFO open order: the bridge directory and both FIFOs are
     created (ensure_bridge_dir) BEFORE either side starts.
@@ -36,17 +35,16 @@ online_contracts/state_delta_v1.md; phase 4 §7.1):
     response / commit_ack file names for one epoch all share the same seq.
   - Request fields:  {schema_version, delivery_sequence, delivery_epoch,
     tick, deferred_from_tick, reasons[], arrivals[], completed_groups[],
-    completed_nodes[], retry_items[], affected_ranks[], snapshot_handle,
+    completed_nodes[], affected_ranks[], snapshot_handle,
     snapshot:{}, ledger_summary}. reasons[] holds one reason name per event
     in epoch order (ARRIVAL/PREFILL_DRAIN/DECODE_COMPLETION/
     REQUEST_COMPLETE); arrivals[] carries the ARRIVAL envelope facts
     (incl. ingress_seq/queue_index, v1); completed_groups[] carries the
     watch-fire facts (request_id/stage/generation/node_count);
     completed_nodes[] the per-node terminal facts (v1);
-    retry_items[] is always empty in v1; affected_ranks[] the epoch's
-    affected rank set (v1); snapshot_handle the placeholder (v1, expiry
-    rule frozen in the contract); snapshot is the v0 reserved field kept
-    empty for backward comprehension.
+    affected_ranks[] the epoch's affected rank set (v1); snapshot_handle
+    the placeholder (v1, expiry rule frozen in the contract); snapshot is
+    the v0 reserved field kept empty for backward comprehension.
   - Response fields: {schema_version, batch_id, source_delivery_sequence,
     nodes[], parent_edges[], watches[], assignments[], kv_actions[],
     future_alarms[], error?}. The inner node/edge/watch/assignment/kv-action
@@ -90,8 +88,8 @@ online_contracts/state_delta_v1.md; phase 4 §7.1):
 namespace AstraSim {
 namespace ExecutionDriven {
 
-/// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1;
-/// online_contracts/state_delta_v1.md is the authority).
+/// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
+/// header and the Python validator are the authority).
 inline constexpr int kDecisionBridgeSchemaVersion = 1;
 
 /// GraphBatch: the C++<-Python reply of one delivery epoch.
@@ -116,9 +114,8 @@ inline constexpr int kDecisionBridgeSchemaVersion = 1;
 ///     all-empty arrays, so the message must be the decision error).
 using GraphBatch = ParsedGraphBatch;
 
-/// Serialize one StateDelta into the v1 request JSON (protocol contract,
-/// online_contracts/state_delta_v1.md; exposed for fixtures and the
-/// step-1-8 wiring).
+/// Serialize one StateDelta into the v1 request JSON (protocol contract;
+/// exposed for fixtures and the step-1-8 wiring).
 nlohmann::json build_request_json(const StateDelta& delta);
 
 /// Decision channel interface (方案 §4 步骤 1-7 操作 2).

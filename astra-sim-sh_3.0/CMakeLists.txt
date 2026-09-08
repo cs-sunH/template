@@ -113,3 +113,17 @@ set_target_properties(AstraSim
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
 )
+
+option(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST
+       "Build the communicator-scoped OfflineGreedy schedule journal test" OFF)
+if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
+    enable_testing()
+    add_executable(AstraSim_OfflineGreedyScheduleJournalTest
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/OfflineGreedyScheduleJournalTest.cc)
+    target_link_libraries(AstraSim_OfflineGreedyScheduleJournalTest
+        PRIVATE AstraSim)
+    target_include_directories(AstraSim_OfflineGreedyScheduleJournalTest
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/helper)
+    add_test(NAME AstraSim_OfflineGreedyScheduleJournalTest
+        COMMAND AstraSim_OfflineGreedyScheduleJournalTest)
+endif()

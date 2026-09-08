@@ -67,9 +67,13 @@ start_online() {  # $1=run_dir $2=scenario
   mkdir -p "${run_dir}/bridge"
   mkfifo "${run_dir}/cmd.fifo"
   cd "${PROJECT}"
+  # --idle-watchdog-s 0 (2026-09-05): 看门狗默认已武装为 1s；本 fixture 的契约是刻意
+  # IDLE 停车（request-neutral 无输入必须保持 IDLE 不退出），显式 0 恢复无界停车契约。
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
+    --online-validate 1 \
+    --idle-watchdog-s 0 \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \

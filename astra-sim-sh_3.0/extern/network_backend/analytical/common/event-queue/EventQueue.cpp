@@ -19,6 +19,15 @@ bool EventQueue::finished() const noexcept {
     return event_queue.empty();
 }
 
+size_t EventQueue::scheduled_event_count() const noexcept {
+    size_t count = 0;
+    for (const auto& [event_time, events] : event_queue) {
+        (void)event_time;
+        count += events.size();
+    }
+    return count;
+}
+
 bool EventQueue::has_deferred_work() const noexcept {
     // defect-C fix (2026-08-16, 同步自 face 0049ef5): the same-tick
     // deferred queue drains only inside proceed(); deferred events pended
@@ -74,9 +83,11 @@ void EventQueue::proceed() noexcept {
     // from within a deferred handler. Deferred handlers may append further
     // deferred events; the while loop picks them up in the same drain pass.
     while (!deferred_queue_.empty()) {
-        EventList deferred = std::move(deferred_queue_.front());
+        // Copy before invocation: a nested callback may grow/reallocate the
+        // deque, while the local pair remains stable.
+        const auto deferred = deferred_queue_.front();
         deferred_queue_.pop_front();
-        deferred.invoke_events();
+        deferred.first(deferred.second);
     }
 }
 
@@ -90,10 +101,11 @@ bool EventQueue::in_invoke_context() const noexcept {
 }
 
 void EventQueue::schedule_event_deferred(const Callback callback, const CallbackArg callback_arg) noexcept {
-    // deferred events belong to the current tick: construct an EventList at
-    // current_time; it is executed by the deferred drain of the current
-    // proceed() (or of the next one if called outside a proceed context).
-    deferred_queue_.emplace_back(current_time).add_event(callback, callback_arg);
+    assert(callback != nullptr);
+    // Deferred events belong to the current tick. The compact pair FIFO is
+    // executed by the current proceed() drain (or the next one when scheduled
+    // outside a proceed context), without a per-event list-node allocation.
+    deferred_queue_.emplace_back(callback, callback_arg);
 }
 
 void EventQueue::schedule_event(const EventTime event_time,
@@ -104,4 +116,41 @@ void EventQueue::schedule_event(const EventTime event_time,
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
     event_list_it->second.add_event(callback, callback_arg);
+}
+
+EventHandle EventQueue::schedule_event_cancellable(
+    const EventTime event_time,
+    const Callback callback,
+    const CallbackArg callback_arg,
+    const EventCancellationCallback cancellation_callback) noexcept {
+    assert(event_time >= current_time);
+    assert(callback != nullptr);
+
+    auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
+    return event_list_it->second.add_cancellable_event(
+        callback, callback_arg, cancellation_callback);
+}
+
+bool EventQueue::cancel_event(EventHandle& handle) noexcept {
+    if (!handle.valid()) {
+        handle.reset();
+        return false;
+    }
+
+    const auto event_list_it = event_queue.find(handle.event_time_);
+    if (event_list_it == event_queue.end()) {
+        handle.reset();
+        return false;
+    }
+
+    const bool cancelled = event_list_it->second.cancel_event(handle);
+    handle.reset();
+    if (cancelled && event_list_it->second.empty() &&
+        !(in_invoke_ && event_list_it->first == current_time)) {
+        // Do not erase the EventList currently being invoked: proceed() owns
+        // its iterator until the pass ends. A future empty bucket has no
+        // payload or list node left, so drop it immediately.
+        event_queue.erase(event_list_it);
+    }
+    return cancelled;
 }

@@ -6,11 +6,11 @@
 > fail-closed。
 >
 > 本仓是 ASTRA-sim 2.0 的晶圆级芯片（Wafer-Scale Chip, WSC）推理仿真改造仓。
-> 五个同源仓 `astra-sim-face / astra-sim-wscllm / astra-sim-sh_1.0 / astra-sim-sh_2.0 / astra-sim-sh_3.0`
+> 四个同源仓 `astra-sim-face / astra-sim-wscllm / astra-sim-sh_2.0 / astra-sim-sh_3.0`
 > 共享同一套硬件架构建模与同一套术语，仅在"请求→实例映射与 KV 管理策略"上分化（见文末对照表）。
 > 阅读仓内任何代码、配置或文档前，请先建立以下概念。硬件参数唯一权威来源是
 > `sh_test_mesh/hardware/face_case5_config_c.json`，运行时配置
-> （system.json / network.yml / remote_memory.json / comm_group.json）由
+> （system.json / network.yml / comm_group.json）由
 > `sh_test_mesh/config_resolver.py` 从它派生，禁止手改。
 
 ## 核心概念与硬件架构建模
@@ -61,11 +61,11 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
   `logical_pool_shared_across_edges: true`），因此称为统一内存池。
 - **端口代价模型**：每个边缘端口为严格 FIFO 事务队列，单次访问
   `耗时 = 端口时延 + 字节数 / 端口带宽`（取硬件配置 `remote-memory` 的值）；
-  端口之间完全并行，远端池总容量不设限
-  （`extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.cc`）。
-- **本仓配置**：`NO_MEMORY_EXPANSION`（远端池未启用）：远端内存的建模能力保留在代码中
-  （`PER_NPU_MEMORY_EXPANSION` 类型与 mesh 边界端口派生逻辑俱在），但本仓场景下 C++
-  一旦遇到远端访问节点即 fail-closed 退出。因此本仓 KV 只有片上一层——全部驻留本地
+  端口之间完全并行，远端池总容量不设限（sh 系仓实现于各自仓的
+  `extern/remote_memory_backend/`）。
+- **本仓配置**：远端内存机制已整体移除（2026-09-05，A.2 清除）：本仓既不启用也不保留
+  远端内存建模代码，硬件配置声明任何 memory expansion 会在
+  `config_resolver.py` 解析层 fail-closed 拒绝。因此本仓 KV 只有片上一层——全部驻留本地
   HBM，容量不足时按 LRU 整 session 零代价删除，历史 KV 恢复一律重算（recompute）。
 
 ### E. 实例（instance）＝NoC 上紧密相邻芯粒组成的矩形区域，共同承担一个请求的推理
@@ -88,20 +88,19 @@ TP rank，不切割单个头）；
 instance）：每实例同时持有 FCFS prefill 队列与活跃 decode 列表，同一 TP 组时分复用，
 prefill 与 decode 不分池。
 
-### F. 本仓在五仓中的定位
+### F. 本仓在四仓中的定位
 
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
-| **astra-sim-face（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 未启用（NO_MEMORY_EXPANSION） |
+| **astra-sim-face（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 不支持（机制已整体移除） |
 | astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
-| astra-sim-sh_1.0 | 统一实例 | prefill HBM 可行过滤 + 剩余 chunk 最少；decode 按 per-die Roofline 增量代价 | LOCAL_HBM/REMOTE_MEMORY 两态；整 session 粒度逐出；恢复＝远端全量取回 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
-五仓还共享同一套 Execution-Driven 在线仿真机制层（`astra-sim/workload/execution_driven/`：
+四仓还共享同一套 Execution-Driven 在线仿真机制层（`astra-sim/workload/execution_driven/`：
 RequestIngress / DecisionMailbox / DecisionBridge / GraphBatchCommitter 等）：策略决策由
 Python 在线服务层实时给出，计时由 C++ 物理时钟推进；各仓仅保留路径③（strategy 关感知）
-与路径④（strategy 开感知）两条在线路线。五仓在线决策均不再使用任何离线 LUT
+与路径④（strategy 开感知）两条在线路线。四仓在线决策均不再使用任何离线 LUT
 （残留 LUT 查表已随静态链路一并删除）：face / sh_1.0 / sh_2.0 的 decode 候选代价由
 在线 Roofline 模型即时计算（`per_die_delta_ns`），决策确定可复算复放。
 
@@ -158,7 +157,7 @@ served bytes（compute / comm_read / comm_write）、峰值并发作业数、均
 - **策略语义（保留对象，未改动）**：FACE 原始映射：加权实例图 + per-die Roofline 增量代价选择 decode 实例（平局轮流裁决）；RESIDENT/EVICTED 两态 + LRU recompute；无远端内存；prefix 走 recompute；session 驻留状态/字节数由运行时 KV 账本（SessionKVCacheManager）动态维护，无 sidecar
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
-  DecisionBridge 等），五仓接口一致。
+  DecisionBridge 等），四仓接口一致。
 - **验证证据**：Tier B 等价、感知开/关决策逐字节一致、分层账本对账、
   机制 fixtures。
 
@@ -196,7 +195,6 @@ cd sh_test_mesh/workload/llama2_7b_inference && python3 plan_materializer.py && 
 # ④ 跑③④（GEN_MATCH：generated/ 下须恰一个 llama2_7b_inference_54npus_* 目录）
 bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <绝对路径 request_csv>
 bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <绝对路径 request_csv>
-bash sh_test_mesh/run_scripts/run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
 
 # ⑤ 指标后处理 + ④对账
 bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
@@ -205,7 +203,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    request_id fail-closed 连接；summary/off 档不产该文件，原因写
 #    postprocess.log）
 # ⑤b 自动 SLO 指标提取（P3，2026-08-28；A4/2026-08-29 单遍化）：在线
-#    runner（strategy/sensing/legacy 三变体）在 postprocess 成功后、归档前
+#    runner（strategy/sensing 两变体）在 postprocess 成功后、归档前
 #    自动调用 run_slo_postprocess.sh——内部一次调起 slo_tools/
 #    slo_postprocess_driver.py 单进程单遍驱动（9 步产物集/行序/公式/
 #    slo_postprocess.log 与逐工具串行逐字节一致；读放大收敛：
@@ -220,9 +218,6 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    journal 的旧 run 为 upper_bound_only 上界层，超限只诊断不认证、exit 0），
 #    一律不传分桶/聚合参数（粗化留给下游画图脚本）；
 #    非 full 档依赖 request_metrics.csv 的子命令按设计跳过并写说明；
-#    legacy 变体（face/wscllm）额外跳过 load_imbalance/hbm_watermark
-#    （legacy 无列车台账；分配器语义不兼容 session-KV 水位重建），
-#    均写说明、不算失败。
 #    env SH_SLO_POSTPROCESS：1=默认 warn（任一步失败只写
 #    slo_postprocess.FAIL 标记，不推翻仿真结果）、0=整步跳过、
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
@@ -231,7 +226,7 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py（--bridge-dir/--manifest，详见其 --help）
 
 # ⑥ 一键清空测试记录 + 编译产物（还原裸仓库 = 无物化输入 + 无 build/）
-bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config[_legacy] 指针回占位）
+bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config 指针回占位）
 bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（build/）
 #    （或一步到位：clean_test_records.sh --full）
 ```
@@ -246,7 +241,7 @@ bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（bui
 PASS 判据：completed == 物化请求数、no_decision=0、single_node=0、
 delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据）。
 
-指标档位（B1/WP0 起）：三变体 runner 的 `--metrics-detail` 不再硬编码
+指标档位（B1/WP0 起）：runner 的 `--metrics-detail` 不再硬编码
 summary——优先级 env `SH_METRICS_DETAIL` > 本仓
 `sh_test_mesh/workload/llama2_7b_inference/metrics_config.json` 的
 `detail_level`（off|summary|full）；env 与 json 均非法/缺失时 fail-closed
@@ -292,7 +287,7 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   与逐 shard 求和严格相等）。60s 窗 coverage 0 → 1.0。
 - `slo_tools/load_imbalance.py`：跳过 WP9 首步批台账行
   （`first_step: true` 的发射边界记录非终态 drain；真实 drain 在余量批
-  行）——否则 SPLIT=ON 产物触发"每请求恰一次 drain"fail-closed。五仓
+  行）——否则 SPLIT=ON 产物触发"每请求恰一次 drain"fail-closed。四仓
   逐字节同文由主控同步。
 - `slo_tools/tests/run_golden_live.py`（新）：T2 golden G1-G4 运行版
   ——hand-craft 队列+sidecar（`traces/golden_g{1..4}_request_queue_
@@ -305,7 +300,7 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   （`…_first_10s_request_queue_recompute.csv`，oracle 门-3 用）。
 - `sh_test_mesh/tests/test_metrics_contract.py`：B3-7 增补（事件码 8
   常量/edge/SERVICE_EVENT_CODES、request_metrics 29 列 frozen、
-  terminal_status/first_token_source 枚举、NA 语义用例；五仓逐字节
+  terminal_status/first_token_source 枚举、NA 语义用例；四仓逐字节
   相同）。
 
 ### 3.3 WP9 退回处置：拆分缺省关 + train-interpolated proxy（2026-08-26）
@@ -367,15 +362,19 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
 ### 3.1 在线二进制机制旗标（--online-* 家族）
 
 `AstraSim_Analytical_Congestion_Aware_Online` 显式解析 `--online-*` 家族
-（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标两枚：
+（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标一枚：
 
 | 旗标 | 取值 | 缺省 | 语义 |
 |---|---|---|---|
-| `--online-node-gc` | `0\|1` | `1`（开） | M2 节点 GC（2026-08-23）+ **A1 摊销化（2026-08-28，默认翻转）**：GraphBatchCommitter 在批提交静止点（issue pass 完全返回后）回收各 rank NodeStore 中"已 finish 且无未完 children"的节点，并按同水位修剪 (rank, json id) → store id 映射，C++ 侧内存维持在途窗口而非全程累计图（2s 冒烟实测 cpp 峰值 −61%，retained 146046→12）。被回收节点必已 finished，仍指向它的跨批边按 NodeStore 死父规则无阻塞（validate 仅按 per-rank 稠密前缀水位线放行已修剪 id，从未存在的 id 照旧 fail-closed）。`0` = M2 前永不删除行为（应急回退臂）。决策序列与全部工件不受该旗标影响（GC 开/关两臂均字节对拍验收）。**摊销化设计（替代 2026-08-23"默认关"裁决）**：commit 尾只做 O(#ranks) 的候选计数，攒够 4096 个 finished 节点才真正回收一次，run 末强制收尾一次——旧实现"每 commit 全量回收"是当时轻载墙钟回归（30s 档 +35~55%）的来源，摊销后 2s 冒烟墙钟对基线 −15%（7.22s vs 8.50s），回归消除。 |
-| `--online-validate` | `0\|1\|N` | `1`（全量） | **C1（2026-08-28）**：GraphBatch 提交前全量校验开关（占 face 重载墙钟 ~42%）。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验）；`N≥2` = 每 N 批抽 1 批（按 committer 的 graph_batch_count 取模）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
+| `--online-validate` | `0\|1` | `1`（全量） | **C1（2026-08-28）；B.2 清除（2026-09-05）移除 N 抽检档**：GraphBatch 提交前全量校验开关（占 face 重载墙钟 ~42%）。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验，commit() 的强制活性预检保留）。取值域为严格 `0\|1` 枚举，`N≥2` 或其它任何值启动即硬错误（杜绝陈旧脚本静默改变校验频率）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
 
-runner 脚本（strategy/sensing/legacy 三变体）显式传
-`--online-node-gc "${SH_ONLINE_NODE_GC:-1}"` 与
+`--online-node-gc` 旗标已由 **B.3 清除（2026-09-05）** 整支移除：M2 节点 GC
+摊销回收恒开（原 `0` 臂 = pre-M2 永不删除应急回退臂已删，现仅 fixtures 内部
+Context 开关可达），任何 `--online-node-gc` 调用按家族未知旗标规则启动即
+硬错误（`unknown online-family option`），陈旧脚本无法静默禁用 GC；决策序列
+与全部工件不受影响（历史生产调用恒为默认 1）。
+
+runner 脚本（strategy/sensing 两变体）显式传
 `--online-validate "${SH_ONLINE_VALIDATE:-0}"`；fixture runner（idle/
 wakeup_guard/same_tick_milestone）显式 `--online-validate 1`。运行期证据：
 cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
@@ -393,12 +392,13 @@ OnlineCli 在线家族解析）：
   `late_static_submit=0`，run-end 输出 arrival audit 行并以
   `late_static_submit==0 且逐行 ingress_delay==0（t=0 边界行除外）` 为正式
   门禁（fail 则非零退出）。
-- **window advisory 裁决（四仓对齐 wscllm，2026-08-30 P0 fix 延续；sync-A16
-  批次4，合同 §3.1）**：`--request-window-rows` 在本仓不改变任何行为
-  （calendar reader 按 arrival 序提交，窗口值不约束读取与提交）；runner 的
-  `SH_REQUEST_WINDOW_ROWS` 透传仅为五仓 CLI/checkpoint 兼容口径统一，
-  **本仓不设 C++ 启动 span 预检/拒绝门**，任何取值（含 0/正数）都不构成
-  非法配置（非法 token 词法仍统一 fail-closed）。plan_materializer 的
+- **--request-window-rows 死旋钮已清除（2026-09-05，A.4）**：该 advisory
+  旋钮（2026-08-30 P0 turn-0 fix 后 calendar reader 按 arrival 序提交，窗口
+  值不约束读取与提交，不改变任何行为）已从本仓彻底移除——OnlineCli 解析/
+  选项成员、main_online 调用实参、runner 的 `SH_REQUEST_WINDOW_ROWS` 透传
+  一并删除；WindowedTraceReader 的 high_water 缺省 128 仅留作 reader 内部
+  advisory 记录，无 CLI 暴露口。**本仓不设 C++ 启动 span 预检/拒绝门**。
+  plan_materializer 的
   manifest.json 仍持久化 `max_same_session_span`/`span_session_id`/
   `span_row_range`/`span_row_range_convention`，仅作 provenance 审计
   （campaign 复核与根因归档），无任何运行期强制拒绝点。
@@ -415,8 +415,11 @@ OnlineCli 在线家族解析）：
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
   （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文保留
   （`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
-- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `0`=关（`wait_for_work()`
-  原契约不动，IDLE fixture 零影响）；开时停泊点墙钟超时即同款诊断 fatal
+- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `1.0`=武装（2026-09-05：
+  静默楔死 ~1s 即 fail-closed abort，不再无声挂死；官方 CSV run 到达全量
+  预排为队列事件、健康运行不停车不受影响。显式 `0`=关恢复 `wait_for_work()`
+  原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
+  墙钟超时即同款诊断 fatal
   （`--idle-` 前缀同受家族未知旗标硬错保护）。
   **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
   空白或符号字符（拒 `" +1"`/`" -1"`）；判界唯一顺序为 `==0` 接受（=关）
@@ -427,23 +430,18 @@ OnlineCli 在线家族解析）：
   判界→转换→加法前判界→单次 deadline）+ `wait_for_work_until`（绝对
   deadline，协调器内不再二次 `now()+timeout`）；主循环单次取 now、单次算
   deadline；`0`=关时必须走原 `wait_for_work()` 阻塞等待。
-- **FP1 整数解析加固（同上批次）**：`--request-window-rows` /
-  `--request-max-arrival-ns` / `--bridge-timeout-ms` / `--online-validate`
+- **FP1 整数解析加固（同上批次）；B.2 清除（2026-09-05）修订**：
+  `--request-max-arrival-ns` / `--bridge-timeout-ms`
   统一"纯 ASCII 数字词法（拒 `" -1"`/`"\t-1"`/`"+1"`）→ `errno=0` +
-  ERANGE 拒 → endptr 到串尾 → 目标类型上限（前两者 size_t/uint64_t、
-  bridge-timeout-ms 与 online-validate 另加 `<= INT_MAX`）→ 才转换"合同，
-  失败不部分写入 `out`；`--online-validate=4294967296` 曾会回绕为 0 静默
-  关闭图验证（fail-open），现启动即拒。
+  ERANGE 拒 → endptr 到串尾 → 目标类型上限（request-max-arrival-ns uint64_t、
+  bridge-timeout-ms 另加 `<= INT_MAX`）→ 才转换"合同，失败不部分写入 `out`。
+  `--online-validate` 原同属该整数词法族（`--online-validate=4294967296`
+  曾会回绕为 0 静默关闭图验证，fail-open）；B.2 清除后改为严格 `0|1` 枚举
+  解析，任何其它值（含抽检 N≥2 与越界大数）启动即硬错误。
 - runner 透传 env：`BRIDGE_TIMEOUT_MS` 三态——未设=缺省 120000（须大于
   负载最慢单决策与 Python 侧 FIFO 开启等待）、显式 `0`=永等逃生口、正值=
   该毫秒值；它只武装 C++ 桥 response poll（Python 单次交换停滞族），管不到
-  停泊族（由上面看门狗兜住）。`SH_REQUEST_WINDOW_ROWS` 缺省不传
-  （=C++ 缺省 128），设 `0` 或正数（均 advisory，见上裁决）时透传
-  `--request-window-rows`。
-  **FP3（同上批次）**：sensing/legacy 两个变体 runner 补齐同款
-  `SH_REQUEST_WINDOW_ROWS` 透传（与主 runner 共享同一 CSV reader）；
-  非法 token 原样传给 C++ 统一 fail-closed，
-  runner 不自行吞掉。
+  停泊族（由上面看门狗兜住）。
 
 ### 3.1.1 运行开销与日志瘦身开关（2026-08-28，A/B/C/D 系列改造）
 
@@ -460,7 +458,7 @@ OnlineCli 在线家族解析）：
   `results/train_ledger.jsonl`、`results/ledger.jsonl`、
   `results/sensing_query_log.jsonl`（仅 sensing 跑产生，对账输入，strategy 跑
   保留集不受影响）、campaign_provenance.json、
-  bridge/checkpoints/、P2 拷入的 `metrics_manifest.json`/`manifest.json`、
+  P2 拷入的 `metrics_manifest.json`/`manifest.json`、
   P3 自动 SLO 提取产物（`slo_*.csv`、`slo_*.json`、`cache_events.csv`、
   `kv_hit_states.csv`、`slo_postprocess.log`、`slo_postprocess.FAIL` 若有）。
   任一阶段失败不归档、
@@ -519,7 +517,7 @@ OnlineCli 在线家族解析）：
 `run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
 另有 C++ 聚焦单测（target 注册于 `astra-sim/network_frontend/analytical/CMakeLists.txt`，
 随 §2 ① 构建树编译，可执行文件落在 `build/astra_analytical/build_congestion_aware/bin/`，
-无参数直跑；2026-08-29 新增三项，五仓同构）：`..._AlarmCancellationTest`（可取消 alarm
+无参数直跑；2026-08-29 新增三项，四仓同构）：`..._AlarmCancellationTest`（可取消 alarm
 链路：bucket 清空时 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、
 legacy 后端回退 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot
 node bucket 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、
@@ -608,7 +606,7 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   原选——绝不 remap 已冻结列车），介入时记 `admission_probe` 决策行供
   对拍剥离；探针零副作用（只读快照/纯函数，不触碰任何 mutation）。
 - 接栅栏与段末屏障：列车发射不做块末恢复/段内清链，per-rank `previous_id`
-  无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 五仓
+  无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 四仓
   统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟列车一个共享 TP 组
   `batch_train_i*_*_end_barrier`（替代每请求一个）+ 列车体后、barrier 前的
   drain/exit/哨兵标记节点（承载 PREFILL_DRAIN / DECODE_COMPLETION watch，

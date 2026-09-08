@@ -53,8 +53,6 @@ std::string reason_name(const DecisionReason reason) {
             return "DECODE_COMPLETION";
         case DecisionReason::REQUEST_COMPLETE:
             return "REQUEST_COMPLETE";
-        case DecisionReason::RESOURCE_READY:
-            return "RESOURCE_READY";  // reserved bit; never produced in 1-6
     }
     return "UNKNOWN";
 }
@@ -136,8 +134,7 @@ nlohmann::json build_request_json(const StateDelta& delta) {
     req["schema_version"] = kDecisionBridgeSchemaVersion;
     req["delivery_sequence"] = delta.delivery_sequence;
     // Phase 4 (v1): the delivery-epoch counter (== delivery_sequence in v1;
-    // the Python validator asserts equality -- online_contracts/
-    // state_delta_v1.md §3.2).
+    // the Python validator asserts equality).
     req["delivery_epoch"] = delta.delivery_epoch;
     req["tick"] = delta.tick;
     // Step 1-11: the explicit T->T+1 deferral record (0 = same-tick delivery).
@@ -157,12 +154,6 @@ nlohmann::json build_request_json(const StateDelta& delta) {
         f["tick"] = fact.tick;
         f["terminal_status"] = fact.terminal_status;
         req["completed_nodes"].push_back(std::move(f));
-    }
-    // Phase 4 (v1): admission-retry items -- ALWAYS empty in v1 (no producer
-    // until the legacy migration; the Python validator asserts emptiness).
-    req["retry_items"] = nlohmann::json::array();
-    for (const auto& retry : delta.retry_items) {
-        req["retry_items"].push_back(retry);
     }
     // Phase 4 (v1): the affected-rank set (union of the epoch's
     // completed_groups member ranks, sorted unique).
@@ -226,7 +217,7 @@ nlohmann::json build_request_json(const StateDelta& delta) {
                     ev.payload.inter_request_interval_ns;
                 a["arrival_world_ns"] = ev.payload.arrival_world_ns;
                 // Phase 4 (v1): ingress serial + frozen queue index
-                // (online_contracts/state_delta_v1.md §5.1).
+                // (原契约 §5.1,文档已删除).
                 a["ingress_seq"] = ev.payload.ingress_seq;
                 a["queue_index"] = ev.payload.queue_index;
                 req["arrivals"].push_back(std::move(a));
@@ -243,17 +234,13 @@ nlohmann::json build_request_json(const StateDelta& delta) {
                 req["completed_groups"].push_back(std::move(g));
                 break;
             }
-            case DecisionReason::RESOURCE_READY:
-                // reserved bit; phase 1 never produces it -- keep the switch
-                // exhaustive instead of a default arm.
-                break;
         }
     }
     // Phase 4 (schema v1): the frozen queue order -- arrivals[] is sorted by
     // (queue_index, ingress_seq) ascending, deterministically, regardless of
     // the mailbox drain order (alarm order). The Python validator asserts
-    // the ascending order (fail-closed; online_contracts/state_delta_v1.md
-    // §3.3/§6). queue_index is unique within one batch (a request arrives
+    // the ascending order (fail-closed; 原契约 §3.3/§6,文档已删除).
+    // queue_index is unique within one batch (a request arrives
     // once per epoch), so the sort is total.
     std::sort(req["arrivals"].begin(), req["arrivals"].end(),
               [](const nlohmann::json& a, const nlohmann::json& b) {

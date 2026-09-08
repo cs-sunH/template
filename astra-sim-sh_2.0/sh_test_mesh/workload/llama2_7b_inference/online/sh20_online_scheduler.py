@@ -44,7 +44,7 @@ sh_2.0 特性保留（拼 batch 改造红线，策略公式/阈值/KV 语义/映
                                                  移至列车核销）
   completion 收尾（:3968-4002）                    _complete_requests 的完成
                                                  处理段：mark_complete →
-                                                 enforce_reserve → 快照 +
+                                                 快照 +
                                                  completion 段发射 + 下一 turn
                                                  arrival 排程（alarm）
   arrival 批（:4004-4018）                         _on_arrival（arrival 落账 →
@@ -120,6 +120,29 @@ from online.online_scheduler_base import (  # noqa: E402
     STAGE_REQUEST,
     OnlineSchedulerBase,
 )
+
+
+_TASK_LOAD_CACHE_CAPACITY = 4096
+
+
+def _bounded_task_load_memo(cache: dict, key, compute, *, capacity: int) -> int:
+    """确定性 FIFO 的精确 Roofline memo。
+
+    仅缓存纯估算器的整数返回值；满时逐出最早插入的 key。逐出不会改变
+    任何决策输入，只会让同一纯函数在下次访问时重新计算。普通 ``dict``
+    的插入序即该 FIFO 序，避免额外的 LRU 元数据常驻。
+    """
+    if capacity <= 0:
+        raise ValueError("task-load memo capacity must be positive")
+    try:
+        return cache[key]
+    except KeyError:
+        pass
+    value = compute()
+    if len(cache) >= capacity:
+        del cache[next(iter(cache))]
+    cache[key] = value
+    return value
 
 
 def _transfer_hop_rows(transfers) -> list:
@@ -264,7 +287,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                  profile_sink=None, mode: str = "strategy",
                  sensing: bool = False,
                  defensive_reply_cache: bool = False,
-                 calibrated_constants: dict = None):
+                 calibrated_constants: dict = None,
+                 sensing_query_sink=None, online_stats_sink=None,
+                 ledger_sink=None):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -275,6 +300,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             decision_log_sink=decision_log_sink,
             profile_sink=profile_sink,
             defensive_reply_cache=defensive_reply_cache,
+            sensing_query_sink=sensing_query_sink,
+            online_stats_sink=online_stats_sink,
+            ledger_sink=ledger_sink,
         )
         if mode != "strategy":
             raise ValueError("Sh20OnlineScheduler requires mode == 'strategy'")
@@ -294,6 +322,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         # 改法A：estimate_decode_remaining_task_load_ns 的全参 key memo
         # （与 _prefill_task_cache 同款；见 _decode_task_load_ns_cached）。
         self._decode_task_load_cache = {}
+        # 纯 Roofline memo 只服务同参重算；固定上限保证上下文 token 的
+        # 高基数输入不会按请求数永久增长。
+        self._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
 
         # offline: face_scheduler.py（topology）
         specs = tuple(
@@ -316,7 +347,6 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             self.topology,
             config.model,
             edge_ranks=config.remote_memory.edge_npus,
-            reserve_context_tokens=config.kv_reserve_context_tokens,
         )
         self.instances = [
             _OnlineInstanceState(index=i)
@@ -357,6 +387,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         self.next_request = [
             self._next_request_map.get(index)
             for index in range(len(self.runtimes))]
+        # _next_request_map only seeds next_request and otherwise retains the
+        # full prebuild needlessly for the lifetime of the scheduler.
+        del self._next_request_map
 
         self.completed_requests = 0
         # 拼 batch 列车推进字段（2026-08-22；face_scheduler 的 _RequestRuntime
@@ -1262,13 +1295,9 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             next_request_type=runtime.request.next_trigger_type,
         )
         self._bump_kv_ledger_epoch()  # 改法D：mark_complete 后 bump
-        # offline: face_scheduler.py（enforce_reserve）
-        (runtime.completion_evictions,
-         runtime.reserve_unmet_ranks) = self.kv_manager.enforce_reserve(
-            instance_index=runtime.decode_instance_index,
-            trigger_request_id=runtime.request.request_id,
-        )
-        self._bump_kv_ledger_epoch()  # 改法D：enforce_reserve 后 bump
+        # D-clear (2026-09-05): 主动驱逐已物理清除——完成路径零逐出、
+        # 零未达标 rank；mark_complete（上方）的类型记录不受影响。
+        runtime.completion_evictions = ()
         self.graph.sync_pending_history_after_evictions(
             runtime.completion_evictions)
         # offline: face_scheduler.py（快照）
@@ -1292,7 +1321,6 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     runtime.completion_evictions),
                 "kv_location_after_completion": (
                     runtime.kv_location_after_completion),
-                "reserve_unmet_ranks": list(runtime.reserve_unmet_ranks),
                 # WP9-线5 hopbytes 诊断：completion 段传输对象 noc 路由
                 # 摘要。
                 "transfer_hop_bytes": _transfer_hop_rows(
@@ -1319,6 +1347,16 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
                     "inter_request_interval_ns": interval,
                 },
             })
+        else:
+            # The completion batch, KV-action serialization, decision row and
+            # snapshot have all consumed this state.  A terminal session owns
+            # no future history, so retire it without creating a transfer.
+            self.kv_manager.retire_terminal_session(
+                runtime.request.session_id,
+                tick,
+                request_id,
+            )
+            self._bump_kv_ledger_epoch()
         # M4 核销即删（2026-08-23）：请求完成后其 KV 转移对象/准入
         # 负载快照等胖字段再无读者（逐出已随 completion 批发射进图、
         # 审计已随决策行落盘；下一 turn 是独立 runtime；runtimes 列表
@@ -1336,6 +1374,14 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         runtime.history_location_before = None
         runtime.drain_block_ends = None
         runtime.prefill_instance_loads = ()
+        # REQUEST_COMPLETE 边界后该 runtime 及其索引再无读者。释放 map、
+        # list slot 和已消费的 next link，避免完成请求仍被预构建链持有。
+        self.runtime_by_request_id.pop(request_id, None)
+        if self._runtime_index.pop(request_id, None) != index:
+            raise RuntimeError(
+                "completed request lost runtime index {!r}".format(request_id))
+        self.next_request[index] = None
+        self.runtimes[index] = None
 
     # ------------------------------------------------------------- 准入 --
 
@@ -1543,15 +1589,18 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         """逐 chunk Roofline 估计（缓存 key 同离线 prefill_task_cache；
         sh_3.0 修复版同款助手）。"""
         key = (instance_size, chunk_tokens, context_tokens)
-        if key not in self._prefill_task_cache:
-            self._prefill_task_cache[key] = estimate_prefill_task_load_ns(
+        return _bounded_task_load_memo(
+            self._prefill_task_cache, key,
+            lambda: estimate_prefill_task_load_ns(
                 hardware=self.config.hardware,
                 model=self.config.model,
                 instance_size=instance_size,
                 chunk_tokens=chunk_tokens,
                 context_tokens=context_tokens,
-            )
-        return self._prefill_task_cache[key]
+            ),
+            capacity=getattr(
+                self, "_task_load_cache_capacity", _TASK_LOAD_CACHE_CAPACITY),
+        )
 
     def _decode_task_load_ns_cached(self, *, instance_size,
                                     current_context_tokens, generated_tokens,
@@ -1563,17 +1612,18 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
         hardware/model 为运行期不可变量，经绑定不入 key。"""
         key = (instance_size, current_context_tokens, generated_tokens,
                average_decode_length, running_step_fraction_remaining)
-        cached = self._decode_task_load_cache.get(key)
-        if cached is None:
-            cached = estimate_decode_remaining_task_load_ns(
+        return _bounded_task_load_memo(
+            self._decode_task_load_cache, key,
+            lambda: estimate_decode_remaining_task_load_ns(
                 self.config_hardware(), self.config_model(),
                 instance_size=instance_size,
                 current_context_tokens=current_context_tokens,
                 generated_tokens=generated_tokens,
                 average_decode_length=average_decode_length,
-                running_step_fraction_remaining=running_step_fraction_remaining)
-            self._decode_task_load_cache[key] = cached
-        return cached
+                running_step_fraction_remaining=running_step_fraction_remaining),
+            capacity=getattr(
+                self, "_task_load_cache_capacity", _TASK_LOAD_CACHE_CAPACITY),
+        )
 
     def _task_load_snapshot(self, state: _OnlineInstanceState,
                             now_ns: int) -> InstanceTaskLoadSnapshot:
@@ -1860,10 +1910,13 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with blocked HBM admissions: "
                 "{}".format(pending_ids[:5]))
-        if self.completed_requests != len(self.runtimes):
+        if self.completed_requests != self.expected_request_count:
             raise RuntimeError(
                 "strategy run ended with {}/{} requests complete".format(
-                    self.completed_requests, len(self.runtimes)))
+                    self.completed_requests, self.expected_request_count))
+        if self.runtime_by_request_id or self._runtime_index or \
+                any(runtime is not None for runtime in self.runtimes):
+            raise RuntimeError("strategy run ended with unreleased runtimes")
         if any(state.qp or state.active_decode or state.pending_decode_ready
                or state.in_flight_train is not None
                or state.finalized_trains
@@ -1887,3 +1940,4 @@ class Sh20OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with stale admit attempt epochs: "
                 "{}".format(sorted(self._admit_attempt_epoch)[:5]))
+        self.kv_manager.assert_final_state()

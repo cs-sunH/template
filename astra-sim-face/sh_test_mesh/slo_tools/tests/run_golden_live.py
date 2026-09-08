@@ -411,7 +411,9 @@ def load_imbalance_handcheck(run_dir: Path, notes: list[str],
     for entry in ledger:
         if entry.get("first_step"):
             continue  # WP9 emission-boundary rows are not terminal drains
-        for req in entry.get("drains", []) or []:
+        if str(entry.get("train_id", "")).startswith("prefill_train"):
+            continue  # P-side degenerate rows drain at admission, not terminal
+        for req in entry.get("exits", []) or []:
             drain.setdefault(req, entry["tick"])
     spans = []
     for rid, adm in admission.items():

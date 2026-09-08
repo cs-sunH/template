@@ -8,7 +8,7 @@
 注入一次），已删除，基类恢复与四仓逐字节一致。
 
 用例 1 正是原容忍分支放行的场景（回归钉子，修复前必失败）：同一
-request_id 到达两次且 prefill 仍在待办 -> ValueError("arrived twice")。
+request_id 到达两次且 prefill 仍在待办 -> ValueError("already-arrived")。
 用例 2 sanity：不同请求各到达一次 -> in_flight 登记 prefill+decode 两段待办。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
@@ -48,7 +48,7 @@ def test_duplicate_arrival_with_prefill_pending_fails_closed():
     """回归钉子：prefill 仍在待办的重复到达不再被容忍块 continue 吞掉，
     恢复与其余四仓一致的 fail-closed raise。"""
     scheduler = _make_scheduler()
-    with pytest.raises(ValueError, match=r"arrived twice"):
+    with pytest.raises(ValueError, match=r"already-arrived"):
         scheduler._process_arrivals(
             {"arrivals": [{"request_id": "r1"}, {"request_id": "r1"}]})
     # 第一次到达已合法登记（prefill+decode 待办），异常由第二次到达触发。

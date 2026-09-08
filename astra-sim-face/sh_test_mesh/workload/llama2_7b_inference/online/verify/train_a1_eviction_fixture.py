@@ -97,9 +97,6 @@ def main() -> int:
     config = config.replace(
         "config,local_hbm_capacity_profile,validation-160gib",
         "config,local_hbm_capacity_profile,a1-eviction-4gib")
-    config = config.replace(
-        "config,kv_reserve_context_tokens,1000000",
-        "config,kv_reserve_context_tokens,10000")
     lines = [line for line in config.splitlines()
              if line.startswith("config,request_queue_csv,")]
     if len(lines) != 1:

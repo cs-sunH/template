@@ -59,32 +59,25 @@ from generate_wsc_llm_trace import load_wsc_llm_trace_config  # noqa: E402  (REA
 PREFIX = "llama2_7b_wsc_llm_inference"
 REPO_VARIANT = "astra-sim-wscllm"
 
-# B4a（2026-09-02，relevant_distributed 第三变体）policy 透传取值集：
+# A.5（2026-09-05，legacy 与 relevant 两个历史变体清除）policy 取值集：
 # 与 generate_wsc_llm_trace._parse_config_value 的 kv_cache_policy 值域
 # 同源。loader 已做值域校验，此处为防御性断言（防账本漂移同族语义）；
-# stdout 权威 provenance 记录增携 kv_cache_policy / kv_remote_read 两个
-# 字段，供 B4b 核对"relevant_distributed 物化后 run 头/配置一致"
-# （物化 stdout vs 决策日志 run 头）。机制零改动：不写 manifest
-# （既有字段冻结），仅 stdout 增字段。
-_KNOWN_KV_POLICIES = frozenset({
-    "legacy", "session_lru_recompute", "relevant_distributed",
-})
-_KNOWN_KV_REMOTE_READ = frozenset({"physical", "ideal_masked"})
+# stdout 权威 provenance 记录增携 kv_cache_policy 字段
+# （物化 stdout vs 决策日志 run 头的核对锚点）。
+# 机制零改动：不写 manifest（既有字段冻结），仅 stdout 增字段。
+_KNOWN_KV_POLICIES = frozenset({"session_lru_recompute"})
 
 
 def _assert_policy_passthrough(config) -> dict:
-    """policy 透传断言（B4a 轻校验，fail-closed；机制零改动）。"""
+    """policy 透传断言（轻校验，fail-closed；机制零改动）。"""
     policy = config.kv_cache_policy
     if policy not in _KNOWN_KV_POLICIES:
         raise RuntimeError(
             f"kv_cache_policy {policy!r} not in the known set "
             f"{sorted(_KNOWN_KV_POLICIES)} (loader value domain drifted?)")
-    remote_read = config.kv_remote_read
-    if remote_read not in _KNOWN_KV_REMOTE_READ:
-        raise RuntimeError(
-            f"kv_remote_read {remote_read!r} not in the known set "
-            f"{sorted(_KNOWN_KV_REMOTE_READ)} (loader value domain drifted?)")
-    return {"kv_cache_policy": policy, "kv_remote_read": remote_read}
+    return {
+        "kv_cache_policy": policy,
+    }
 
 
 def _config_digest8(config_csv: Path) -> str:
@@ -328,7 +321,7 @@ def main() -> int:
             "trace_config.csv request_queue_csv at it",
             file=sys.stderr)
         return 1
-    # B4a（2026-09-02）：policy 透传断言 + provenance（见函数 docstring）。
+    # A.5（2026-09-05）：policy 透传断言 + provenance（见函数 docstring）。
     policy_provenance = _assert_policy_passthrough(config)
     cfg8 = _config_digest8(config.config_csv)
     output_dir = GENERATED_ROOT / f"{PREFIX}_54npus_plan_{cfg8}"
@@ -380,8 +373,8 @@ def main() -> int:
         "plan_dir": str(output_dir),
         "requests": len(manifest["requests"]),
         "sessions": manifest["selected_session_count"],
-        # B4a (2026-09-02): policy 透传 provenance（relevant_distributed
-        # 物化后 run 头/配置一致的核对锚点；既有变体同样回显其值）。
+        # A.5 (2026-09-05): policy 透传 provenance（物化后 run 头/配置
+        # 一致的核对锚点）。
         **policy_provenance,
         # P0-2 (2026-08-31): span 审计字段随 stdout 权威 provenance 记录
         # 一并输出（与 manifest.json 持久字段同源同值）。

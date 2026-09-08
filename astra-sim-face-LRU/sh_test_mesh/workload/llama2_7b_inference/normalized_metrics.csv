@@ -1,0 +1,2 @@
+run_id,benchmark_point_id,repo_variant,source,normalization_group_id,normalization_method,baseline_run_id,denominator_time,denominator_tput,denominator_iteration_time,normalized_time,normalized_tput,normalized_iteration_time
+cpp.log#run1,,astra-sim-face,simulator,auto_0,group_max,,1925377060.5714285,0.8305583178590382,,1.0,1.0,

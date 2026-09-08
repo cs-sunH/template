@@ -30,20 +30,24 @@ token):
        --bridge-timeout-ms is a non-negative integer (0 = wait forever,
        the frozen default; both inline and separate value forms legal;
        negative / garbage / over-int-range values are hard errors).
-  R12 M2 node GC (2026-08-23): --online-node-gc <0|1> with frozen default
-       1 (on -- A1 amortization avoids the former light-load per-commit
-       collection cost); 0 = pre-M2 never-erase rollback arm; both
-       value forms legal; garbage / missing values and --online-node typos
-       are hard errors.
+  R12 B.3 cleanup (2026-09-05): the --online-node-gc arm was removed (M2
+       node GC is always on, amortized). The literal flag -- both value
+       forms -- is an unknown online-family option now: stale scripts
+       fail closed at parse time instead of silently disabling collection.
   R13 FP1 hardened unsigned lexicon (2026-09-01, sync-A16 batch P; E25/E32):
-       every integer option (--request-window-rows / --request-max-arrival-ns
-       / --bridge-timeout-ms / --online-validate) rejects leading-whitespace
+       every integer option (--request-max-arrival-ns
+       / --bridge-timeout-ms) rejects leading-whitespace
        negatives (" -1", "\t-1"), explicit "+1", ERANGE-saturating tokens
-       (ULLONG_MAX+1, 40-digit strings) BEFORE any value is written; the two
-       int-typed options reject INT_MAX+1 (and 4294967296 for
-       --online-validate, which would wrap to 0 and silently disable
-       validation) and accept exactly INT_MAX; any failed parse leaves the
-       out struct untouched (sentinel check).
+       (ULLONG_MAX+1, 40-digit strings) BEFORE any value is written; the
+       int-typed option rejects INT_MAX+1 and accepts exactly INT_MAX; any
+       failed parse leaves the out struct untouched (sentinel check).
+       (B.2 cleanup, 2026-09-05: --online-validate left the integer-lexicon
+       family -- it is now a strict <0|1> enum, see R13b.)
+  R13b B.2 cleanup (2026-09-05): --online-validate is a strict <0|1> enum
+       (the N >= 2 sample-every-Nth-batch tier is removed). 0/1 accept in
+       both value forms; every other token -- including the former sampling
+       N >= 2, the wrap-around 4294967296, and whitespace/sign shapes -- is
+       a hard parse error with no partial write into `out`.
   R14 FP1 watchdog lexicon and bounds (E26 ordering): --idle-watchdog-s
        accepts 0 (off), sub-second values, 1e-9 and 1e9 (the bounds
        themselves); rejects tokens containing whitespace or a sign
@@ -133,6 +137,10 @@ int main() {
     assert(out.mode == "strategy" && !out.close_input &&
            out.bridge_dir.empty() &&
            out.request_queue_csv.empty() && out.command_fifo.empty());
+    // 2026-09-05 default pin (R3): the parse path writes back its local
+    // default unconditionally, so the BARE-invocation behavioral default of
+    // the parking watchdog is armed at 1.0 s (explicit 0 = off, R14).
+    assert(out.idle_watchdog_s == 1.0);
 
     // R4: existing readable CSV accepted
     assert(parse_ok({"--online-mode", "strategy",
@@ -218,35 +226,22 @@ int main() {
     assert(parse_error({"--request-queue-csv=/proc/self/exe", "--close-input"})
                .find("--online-mode") != std::string::npos);
 
-    // R11: phase-7 §10.4 --request-window-rows / --request-max-arrival-ns
-    // (defaults: 128 rows / 0 = UNBOUNDED arrival window -- backport fix
+    // R11: phase-7 §10.4 --request-max-arrival-ns
+    // (default: 0 = UNBOUNDED arrival window -- backport fix
     // 2026-08-16, sh_2.0测试 §5.1: the old 30e9 default burned the 30s
     // acceptance window into the code and silently dropped over-window
     // requests; the bound is now explicit-only and its drops fail-close
     // the run-end completion audit)
     assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.request_window_rows == 128);
     assert(out.request_max_arrival_ns == 0);
-    assert(parse_ok({"--online-mode", "strategy",
-                     "--request-window-rows=64"}, out));
-    assert(out.request_window_rows == 64);
-    assert(parse_ok({"--online-mode", "strategy", "--request-window-rows",
-                     "0"}, out));
-    assert(out.request_window_rows == 0);  // unbounded control arm
     assert(parse_ok({"--online-mode", "strategy",
                      "--request-max-arrival-ns=12345"}, out));
     assert(out.request_max_arrival_ns == 12345);
     // R11: non-integer / negative values are hard errors
     assert(parse_error({"--online-mode", "strategy",
-                        "--request-window-rows=abc"})
-               .find("non-negative integer") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy",
                         "--request-max-arrival-ns=-5"})
                .find("non-negative integer") != std::string::npos);
     // R11: missing value forms rejected
-    assert(parse_error({"--online-mode", "strategy",
-                        "--request-window-rows"})
-               .find("requires a value") != std::string::npos);
     assert(parse_error({"--online-mode", "strategy",
                         "--request-max-arrival-ns"})
                .find("requires a value") != std::string::npos);
@@ -277,45 +272,29 @@ int main() {
     assert(out.sensing_enabled && out.close_input &&
            out.bridge_dir == "/tmp/bridge");
 
-    // R12: M2 node GC (2026-08-23) --online-node-gc <0|1>, frozen default
-    // 1 (on -- A1 amortization makes collection cheap on light runs); 0
-    // remains the pre-M2 never-erase behavior; both value forms legal; garbage / missing
-    // values and --online-node typos are hard errors.
-    assert(parse_ok({"--online-mode", "strategy"}, out));
-    assert(out.online_node_gc == 1);
-    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc=0"}, out));
-    assert(out.online_node_gc == 0);
-    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc", "1"},
-                    out));
-    assert(out.online_node_gc == 1);
-    assert(parse_ok({"--online-mode", "strategy", "--online-node-gc=1"}, out));
-    assert(out.online_node_gc == 1);
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc=2"})
-               .find("unknown --online-node-gc value") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc", "on"})
-               .find("unknown --online-node-gc value") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc"})
-               .find("requires a value") != std::string::npos);
-    assert(parse_error({"--online-mode", "strategy", "--online-node-gc-x=1"})
+    // R12 B.3 cleanup (2026-09-05): the --online-node-gc arm was removed;
+    // M2 node GC is always on. The literal flag (both value forms) is an
+    // unknown online-family option -- stale scripts fail closed at parse
+    // time instead of silently disabling collection.
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc=0"})
+               .find("unknown online-family") != std::string::npos);
+    assert(parse_error({"--online-mode", "strategy", "--online-node-gc", "1"})
                .find("unknown online-family") != std::string::npos);
 
     // R13: FP1 hardened unsigned lexicon (2026-09-01, sync-A16 batch P;
     // E25/E32). The whitespace-negative shapes defeated the old
     // first-character '-' check (strtoull skips leading whitespace, parses
     // the negation, wraps to ULLONG_MAX and sets no ERANGE on 64-bit);
-    // "+1" was silently accepted. All four integer options now share the
+    // "+1" was silently accepted. All integer options now share the
     // pure-ASCII-digit lexicon and must reject every one of these shapes
     // with no partial write into `out`.
     const std::vector<std::string> int_opts = {
-        "--request-window-rows", "--request-max-arrival-ns",
-        "--bridge-timeout-ms", "--online-validate"};
+        "--request-max-arrival-ns", "--bridge-timeout-ms"};
     for (const std::string& opt : int_opts) {
         // sentinel: prove a failed parse writes nothing
         OnlineCliOptions sentinel;
-        sentinel.request_window_rows = 777;
         sentinel.request_max_arrival_ns = 777;
         sentinel.bridge_timeout_ms = 777;
-        sentinel.online_validate = 777;
         for (const std::string& bad : {" -1", "\t-1", "+1", "-1", "1x", " 1",
                                        "18446744073709551616",
                                        "9999999999999999999999999999999999"
@@ -325,32 +304,64 @@ int main() {
                        .find("integer") != std::string::npos);
             // separate-value form reaches the same lexicon
             assert(!parse_ok({"--online-mode", "strategy", opt, bad}, probe));
-            assert(probe.request_window_rows == 777 &&
-                   probe.request_max_arrival_ns == 777 &&
-                   probe.bridge_timeout_ms == 777 &&
-                   probe.online_validate == 777);
+            assert(probe.request_max_arrival_ns == 777 &&
+                   probe.bridge_timeout_ms == 777);
         }
     }
     // R13: int-typed options bound at exactly INT_MAX.
     assert(parse_ok({"--online-mode", "strategy",
-                     "--online-validate=2147483647"}, out));
-    assert(out.online_validate == 2147483647);
-    assert(parse_ok({"--online-mode", "strategy",
                      "--bridge-timeout-ms=2147483647"}, out));
     assert(out.bridge_timeout_ms == 2147483647);
-    assert(parse_error({"--online-mode", "strategy",
-                        "--online-validate=2147483648"})
-               .find("integer range") != std::string::npos);
-    // 4294967296 wraps to 0 under the old unchecked cast -- silent
-    // fail-OPEN for the validation switch; must be rejected.
-    assert(parse_error({"--online-mode", "strategy",
-                        "--online-validate=4294967296"})
-               .find("integer range") != std::string::npos);
     assert(parse_error({"--online-mode", "strategy",
                         "--bridge-timeout-ms=2147483648"})
                .find("int range") != std::string::npos);
 
+    // R13b (B.2 cleanup, 2026-09-05): --online-validate is a strict <0|1>
+    // enum; the N >= 2 sampled tier is removed. 0/1 accept in both value
+    // forms; every other token (the sampling N, the wrap-around 4294967296,
+    // and the sign/whitespace shapes the old numeric lexicon used to
+    // reject) is a hard parse error with no partial write into `out`.
+    {
+        // sentinel: prove a failed parse writes nothing
+        OnlineCliOptions sentinel;
+        sentinel.online_validate = 777;
+        assert(parse_ok({"--online-mode", "strategy", "--online-validate=0"},
+                        out));
+        assert(out.online_validate == 0);
+        assert(parse_ok({"--online-mode", "strategy", "--online-validate=1"},
+                        out));
+        assert(out.online_validate == 1);
+        OnlineCliOptions probe;
+        assert(parse_ok({"--online-mode", "strategy", "--online-validate",
+                         "0"},
+                        probe));
+        assert(probe.online_validate == 0);
+        assert(parse_ok({"--online-mode", "strategy", "--online-validate",
+                         "1"},
+                        probe));
+        assert(probe.online_validate == 1);
+        for (const std::string& bad :
+             {"2", "3", "01", "on", "true", "-1", "+1", "1x", " 1",
+              "2147483647", "2147483648", "4294967296"}) {
+            OnlineCliOptions p = sentinel;
+            assert(parse_error({"--online-mode", "strategy",
+                                "--online-validate=" + bad})
+                       .find("unknown --online-validate value") !=
+                   std::string::npos);
+            // separate-value form reaches the same enum check
+            assert(!parse_ok(
+                {"--online-mode", "strategy", "--online-validate", bad}, p));
+            assert(p.online_validate == 777);
+        }
+    }
+
     // R14: FP1 watchdog lexicon and E26 bounds ordering.
+    // 2026-09-05 default pin: the struct default is armed at 1.0 s; the
+    // explicit 0 = off escape is asserted immediately below.
+    {
+        OnlineCliOptions defaults_probe;
+        assert(defaults_probe.idle_watchdog_s == 1.0);
+    }
     // accepted: 0 = off, sub-second, both bounds themselves
     assert(parse_ok({"--online-mode", "strategy", "--idle-watchdog-s", "0"},
                     out));
@@ -407,7 +418,7 @@ int main() {
                .find("unknown online-family") != std::string::npos);
 
     std::printf("[cli] ALL PASS: R1-R14 online CLI contract verified "
-                "(incl. phase-7 §10.4 window knobs, M2 node-gc arm, FP1 "
+                "(incl. B.3 node-gc arm removal, FP1 "
                 "hardened unsigned lexicon + watchdog bounds)\n");
     return 0;
 }

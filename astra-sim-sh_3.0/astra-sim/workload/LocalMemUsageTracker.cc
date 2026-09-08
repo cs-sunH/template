@@ -1,6 +1,9 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
 #include <cassert>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <stdexcept>
 #include <memory>
@@ -21,6 +24,55 @@
 using namespace AstraSim;
 using namespace Chakra;
 using namespace Chakra::FeederV3;  // Bring ChakraAttr and other FeederV3 types into scope
+
+namespace {
+
+struct TimelineActions {
+  std::vector<const TensorId*> writes;
+  std::vector<const TensorId*> last_reads;
+};
+
+using TimelineActionsByTick = std::map<Tick, TimelineActions>;
+
+void apply_timeline_actions(
+    const TimelineActions& actions,
+    const std::unordered_map<TensorId, uint64_t>& tensor_sizes,
+    std::unordered_set<TensorId>& live_tensors,
+    uint64_t& current_bytes) {
+  // The legacy code applies all writes at a tick before all final reads at the
+  // same tick.  Preserve that ordering, including its insert/erase semantics.
+  for (const TensorId* const tensor_name : actions.writes) {
+    const auto insertion = live_tensors.insert(*tensor_name);
+    if (insertion.second) {
+      current_bytes += tensor_sizes.at(*tensor_name);
+    }
+  }
+  for (const TensorId* const tensor_name : actions.last_reads) {
+    if (live_tensors.erase(*tensor_name) != 0) {
+      current_bytes -= tensor_sizes.at(*tensor_name);
+    }
+  }
+}
+
+void write_indented_event(std::ostream& output,
+                          const std::string& encoded_event) {
+  output << "    ";
+  for (const char character : encoded_event) {
+    output.put(character);
+    if (character == '\n') {
+      output << "    ";
+    }
+  }
+}
+
+[[noreturn]] void throw_trace_spool_error(const char* const operation) {
+  const int error_number = errno;
+  throw std::runtime_error(
+      std::string("LocalMemUsageTracker trace spool failed while ") + operation +
+      ": " + (error_number == 0 ? "unknown error" : std::strerror(error_number)));
+}
+
+}  // namespace
 
 uint64_t LocalMemUsageTracker::parseIOInfos(
   const google::protobuf::RepeatedPtrField<std::string>& values,
@@ -174,6 +226,49 @@ void LocalMemUsageTracker::recordEnd(
   this->activityStartTime.erase(nodeId);
 }
 
+void LocalMemUsageTracker::close_trace_spool() noexcept {
+  if (this->trace_spool_ != nullptr) {
+    std::fclose(this->trace_spool_);
+    this->trace_spool_ = nullptr;
+  }
+}
+
+void LocalMemUsageTracker::reset_trace_spool() {
+  close_trace_spool();
+  this->trace_spool_event_count_ = 0;
+}
+
+void LocalMemUsageTracker::append_trace_event(const json& event) {
+  if (this->trace_spool_ == nullptr) {
+    errno = 0;
+    this->trace_spool_ = std::tmpfile();
+    if (this->trace_spool_ == nullptr) {
+      throw_trace_spool_error("creating an anonymous spool");
+    }
+  }
+
+  const std::string encoded_event = event.dump(2);
+  if (encoded_event.size() >
+      static_cast<size_t>(std::numeric_limits<uint64_t>::max())) {
+    throw std::runtime_error(
+        "LocalMemUsageTracker trace event is too large for the spool");
+  }
+  if (this->trace_spool_event_count_ ==
+      std::numeric_limits<uint64_t>::max()) {
+    throw std::runtime_error("LocalMemUsageTracker trace event count overflow");
+  }
+
+  const uint64_t encoded_size =
+      static_cast<uint64_t>(encoded_event.size());
+  if (std::fwrite(&encoded_size, 1, sizeof(encoded_size),
+                  this->trace_spool_) != sizeof(encoded_size) ||
+      std::fwrite(encoded_event.data(), 1, encoded_event.size(),
+                  this->trace_spool_) != encoded_event.size()) {
+    throw_trace_spool_error("writing an event");
+  }
+  ++this->trace_spool_event_count_;
+}
+
 void LocalMemUsageTracker::buildMemoryTrace() {
   this->tensorMapId.clear();
   uint64_t idCnt = 0ul;
@@ -182,7 +277,7 @@ void LocalMemUsageTracker::buildMemoryTrace() {
     uint64_t id = idCnt++;
     tensorMapId.insert(std::make_pair(tensorName, id));
   }
-  this->serializedMemoryTrace.clear();
+  this->reset_trace_spool();
   for (const auto& item : tensorMapId) {
     const TensorId& tensorName = item.first;
     if (this->memReads.find(tensorName) == this->memReads.end()) {
@@ -211,8 +306,8 @@ void LocalMemUsageTracker::buildMemoryTrace() {
           {"args", json{{"size", this->tensorSize.at(tensorName)},
                         {"node_name", nodeName},
                         {"node_id", nodeId}}}};
-      this->serializedMemoryTrace.push_back(std::move(objStart));
-      this->serializedMemoryTrace.push_back(std::move(objEnd));
+      this->append_trace_event(objStart);
+      this->append_trace_event(objEnd);
     }
   }
   for (const auto& item : tensorMapId) {
@@ -240,8 +335,8 @@ void LocalMemUsageTracker::buildMemoryTrace() {
         {"args", json{{"size", this->tensorSize.at(tensorName)},
                       {"node_name", nodeName},
                       {"node_id", nodeId}}}};
-    this->serializedMemoryTrace.push_back(std::move(objStart));
-    this->serializedMemoryTrace.push_back(std::move(objEnd));
+    this->append_trace_event(objStart);
+    this->append_trace_event(objEnd);
   }
 }
 
@@ -254,23 +349,68 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
         ->error("failed to open file {}", local_mem_trace_filename);
     return;
   }
-  json trace;
-  trace["traceEvents"] = this->serializedMemoryTrace;
-  file << trace.dump(2);
+  if (this->trace_spool_event_count_ == 0) {
+    file << "{\n  \"traceEvents\": []\n}";
+    file.close();
+    return;
+  }
+  if (this->trace_spool_ == nullptr) {
+    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+        ->error("trace spool is missing despite {} serialized events",
+                this->trace_spool_event_count_);
+    file.close();
+    return;
+  }
+  if (std::fflush(this->trace_spool_) != 0) {
+    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+        ->error("failed to flush trace spool: {}", std::strerror(errno));
+    file.close();
+    return;
+  }
+  std::clearerr(this->trace_spool_);
+  if (std::fseek(this->trace_spool_, 0, SEEK_SET) != 0) {
+    AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+        ->error("failed to rewind trace spool: {}", std::strerror(errno));
+    file.close();
+    return;
+  }
+
+  file << "{\n  \"traceEvents\": [\n";
+  for (uint64_t event_index = 0;
+       event_index < this->trace_spool_event_count_;
+       ++event_index) {
+    uint64_t encoded_size = 0;
+    if (std::fread(&encoded_size, 1, sizeof(encoded_size),
+                   this->trace_spool_) != sizeof(encoded_size) ||
+        encoded_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+          ->error("failed to read trace spool event header");
+      file.close();
+      return;
+    }
+    std::string encoded_event(static_cast<size_t>(encoded_size), '\0');
+    if (std::fread(encoded_event.data(), 1, encoded_event.size(),
+                   this->trace_spool_) != encoded_event.size()) {
+      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+          ->error("failed to read trace spool event body");
+      file.close();
+      return;
+    }
+    if (event_index != 0) {
+      file << ",\n";
+    }
+    write_indented_event(file, encoded_event);
+  }
+  file << "\n  ]\n}";
   file.close();
 }
 
 void LocalMemUsageTracker::buildMemoryTimeline() {
-  this->memoryContents.clear();
-  this->memoryUsage.clear();
-  std::set<Tick> ticks;
-  std::map<Tick, std::vector<TensorId>> tensorWrites;
-  std::map<Tick, std::vector<TensorId>> tensorLastReads;
+  TimelineActionsByTick actions_by_tick;
   for (const auto& item : this->memWrites) {
     const TensorId& tensorName = item.first;
     const MemActivity& writeActivity = item.second;
-    ticks.insert(writeActivity.start);
-    tensorWrites[writeActivity.start].push_back(tensorName);
+    actions_by_tick[writeActivity.start].writes.push_back(&tensorName);
     json tensorWriteEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -279,13 +419,12 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
         {"pid", this->sysId + 1000000ul},
         {"tid", this->tensorMapId.at(tensorName)},
         {"args", json{{"size", this->tensorSize.at(tensorName)}}}};
-    this->serializedMemoryTrace.push_back(std::move(tensorWriteEvent));
+    this->append_trace_event(tensorWriteEvent);
   }
   for (const auto& item : this->memReads) {
     const TensorId& tensorName = item.first;
     const MemActivity& latestReadActivity = item.second.back();
-    ticks.insert(latestReadActivity.end);
-    tensorLastReads[latestReadActivity.end].push_back(tensorName);
+    actions_by_tick[latestReadActivity.end].last_reads.push_back(&tensorName);
     json tensorLastReadEvent = {
         {"name", tensorName},
         {"cat", "tensorLifetime"},
@@ -294,39 +433,35 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
         {"pid", this->sysId + 1000000ul},
         {"tid", this->tensorMapId.at(tensorName)},
         {"args", json{{"size", this->tensorSize.at(tensorName)}}}};
-    this->serializedMemoryTrace.push_back(std::move(tensorLastReadEvent));
+    this->append_trace_event(tensorLastReadEvent);
   }
 
-  // Build the memory timeline as a counter event so that it appears as a line chart.
-  for (auto it = ticks.begin(); it != ticks.end(); it++) {
-    if (it != ticks.begin()) {
-      auto prevIt = std::prev(it);
-      this->memoryContents.emplace(*it, this->memoryContents.at(*prevIt));
-    } else {
-      this->memoryContents.emplace(*it, std::unordered_set<TensorId>());
-    }
-    if (tensorWrites.find(*it) != tensorWrites.end())
-      for (const auto& tensorName : tensorWrites.at(*it))
-        this->memoryContents.at(*it).insert(tensorName);
-    if (tensorLastReads.find(*it) != tensorLastReads.end())
-      for (const auto& tensorName : tensorLastReads.at(*it))
-        this->memoryContents.at(*it).erase(tensorName);
-
-    uint64_t totalSizeBytes = 0ul;
-    for (const auto& tensorName : this->memoryContents.at(*it))
-      totalSizeBytes += this->tensorSize.at(tensorName);
+  // Build the memory timeline as a counter event so that it appears as a line
+  // chart.  Unlike the old implementation, this is a single sweep: only the
+  // current live tensor set, byte total, and peak are retained.
+  std::unordered_set<TensorId> live_tensors;
+  uint64_t current_bytes = 0ul;
+  uint64_t peak_bytes = 0ul;
+  for (const auto& [tick, actions] : actions_by_tick) {
+    apply_timeline_actions(actions, this->tensorSize, live_tensors,
+                           current_bytes);
+    peak_bytes = std::max(peak_bytes, current_bytes);
 
     // Convert bytes to megabytes (1 MB = 1024*1024 bytes)
-    double totalSizeMB = static_cast<double>(totalSizeBytes) / (1024.0 * 1024.0);
+    double totalSizeMB = static_cast<double>(current_bytes) / (1024.0 * 1024.0);
     json memoryTimelineEvent = {
         {"name", "GPU Memory Usage (MB)"},
         {"cat", "GPU Memory"},
         {"ph", "C"},
-        {"ts", 1e-3 * (*it)},
+        {"ts", 1e-3 * tick},
         {"pid", this->sysId + 2000000ul},
         {"args", json{{"Memory_MB", totalSizeMB}}}};
-    this->serializedMemoryTrace.push_back(std::move(memoryTimelineEvent));
-    this->memoryUsage.insert({*it, totalSizeBytes});
+    this->append_trace_event(memoryTimelineEvent);
+  }
+  this->peak_memory_usage_ = peak_bytes;
+  this->has_timeline_tick_ = !actions_by_tick.empty();
+  if (this->has_timeline_tick_) {
+    this->last_timeline_tick_ = actions_by_tick.rbegin()->first;
   }
   
   // Build the tensor lifetime heatmap after building the memory timeline
@@ -347,8 +482,8 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
       end = this->memReads.at(tensorName).back().end;
     } else {
       // No reads; tensor didn't end. Use simulation's last tick if available
-      if (!this->memoryUsage.empty()) {
-          end = this->memoryUsage.rbegin()->first;
+      if (this->has_timeline_tick_) {
+          end = this->last_timeline_tick_;
       } else {
           end = item.second.end;
       }
@@ -376,7 +511,7 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
     {"pid", heatmapProcessId},
     {"args", json{{"name", "Tensor Lifetime Heap"}}}
   };
-  this->serializedMemoryTrace.push_back(std::move(processNameEvent));
+  this->append_trace_event(processNameEvent);
   
   // Add thread name metadata for the legend/scale
   json threadNameEvent = {
@@ -386,7 +521,7 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
     {"tid", 0},
     {"args", json{{"name", "Longest Lifetime → Shortest Lifetime"}}}
   };
-  this->serializedMemoryTrace.push_back(std::move(threadNameEvent));
+  this->append_trace_event(threadNameEvent);
   
   // Use all tensors instead of limiting to 100
   int count = static_cast<int>(tensorLifetimes.size());
@@ -401,9 +536,30 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
   // Generate color gradient for size visualization
   auto getSizeColor = [](uint64_t size, uint64_t maxSize) -> std::string {
     // Simple heat gradient: small tensors are blue, large are red
-    int intensity = std::min(255, static_cast<int>((static_cast<double>(size) / maxSize) * 255));
+    //
+    // R4b (frozen plan §6.3-8, 2026-08-29): intensity is provably in
+    // [0, 255] -- every caller scales by maxTensorSize, the maximum over
+    // all tensorSize entries (>= every size passed here), so the ratio is
+    // in [0, 1]. The explicit clamp plus UNSIGNED arguments additionally
+    // (a) pin the degenerate all-zero case (maxSize == 0 used to divide
+    // by zero and cast NaN -- undefined behavior) to a well-defined
+    // blue, and (b) bound snprintf's "#RRGGBB" output to exactly 7 chars
+    // + NUL in the 8-byte buffer, eliminating the old sprintf
+    // format-overflow warning. Byte output for every well-defined input
+    // is unchanged: truncation semantics and the %02X field widths are
+    // preserved exactly.
+    const double ratio =
+        (maxSize == 0)
+            ? 0.0
+            : std::min(1.0, static_cast<double>(size) /
+                                static_cast<double>(maxSize));
+    unsigned int intensity = static_cast<unsigned int>(ratio * 255.0);
+    if (intensity > 255u) {
+      intensity = 255u;  // defensive clamp; ratio <= 1.0 keeps it <= 255
+    }
     char color[8];
-    sprintf(color, "#%02X%02X%02X", intensity, 100, 255 - intensity);
+    std::snprintf(color, sizeof(color), "#%02X%02X%02X", intensity, 100u,
+                  255u - intensity);
     return std::string(color);
   };
   
@@ -446,7 +602,7 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
         {"position", heapPos}
       }}
     };
-    this->serializedMemoryTrace.push_back(std::move(heatmapEvent));
+    this->append_trace_event(heatmapEvent);
   }
   
   // Add additional metadata to describe the view
@@ -463,20 +619,15 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
       {"displayed_tensors", count}
     }}
   };
-  this->serializedMemoryTrace.push_back(std::move(heatmapInfoEvent));
+  this->append_trace_event(heatmapInfoEvent);
 }
 
 uint64_t LocalMemUsageTracker::getPeakMemUsage() const {
-  uint64_t peakMemUsage = 0ul;
-  for (const auto& item : this->memoryUsage)
-    peakMemUsage = std::max(peakMemUsage, item.second);
-  return peakMemUsage;
+  return this->peak_memory_usage_;
 }
 
 std::tuple<float, std::string> LocalMemUsageTracker::getPeakMemUsageFormatted() const {
-  uint64_t peakMemUsage = 0ul;
-  for (const auto& item : this->memoryUsage)
-      peakMemUsage = std::max(peakMemUsage, item.second);
+  uint64_t peakMemUsage = this->peak_memory_usage_;
 
   float value = static_cast<float>(peakMemUsage);
   std::string unit = "B";
@@ -505,8 +656,6 @@ LocalMemUsageTracker::~LocalMemUsageTracker() {
   this->memWrites.clear();
   this->tensorSize.clear();
   this->activityStartTime.clear();
-  this->serializedMemoryTrace.clear();
-  this->memoryContents.clear();
-  this->memoryUsage.clear();
   this->tensorMapId.clear();
+  this->close_trace_spool();
 }

@@ -18,7 +18,7 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_DIR=$1
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
-# ET 基线目录 = GEN_MATCH 动态解析(五仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
+# ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
 if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
@@ -47,18 +47,6 @@ BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analyt
 # bridge 目录盘态与双方 /proc/<pid>/{wchan,syscall,stack} 再清理。
 BRIDGE_TIMEOUT_MS="${BRIDGE_TIMEOUT_MS:-120000}"
 BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
-
-# FP3 (2026-09-01, sync-A16 batch P; 合同 §2.3/P3)：可选透传
-# SH_REQUEST_WINDOW_ROWS——与 run_online_strategy.sh 同款。缺省不传（C++
-# 侧 --request-window-rows 缺省 128）。四仓对齐 wscllm（sync-A16 批次4）：
-# 本仓窗口为 advisory（calendar reader 按 arrival 序提交，窗口值不改变任何
-# 行为；无 C++ 启动 span 预检——不设 A1 拒绝门，合同 §3.1），0/正数照原
-# token 透传仅为 CLI/checkpoint 兼容口径统一；非法 token 原样交给 C++ 统一
-# fail-closed，runner 不自行吞掉。
-WINDOW_ROWS_ARGS=()
-if [[ -n "${SH_REQUEST_WINDOW_ROWS:-}" ]]; then
-  WINDOW_ROWS_ARGS=(--request-window-rows "${SH_REQUEST_WINDOW_ROWS}")
-fi
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
 
 # --metrics-detail 解析（B1/WP0）：优先级 env SH_METRICS_DETAIL > 本仓
@@ -117,16 +105,13 @@ export PYTHONUNBUFFERED=1
   --online-mode strategy \
   --sensing-enabled \
   --bridge-dir "${RUN_DIR}/bridge" \
-  --online-node-gc "${SH_ONLINE_NODE_GC:-1}" \
   --online-validate "${SH_ONLINE_VALIDATE:-0}" \
   "${BRIDGE_TIMEOUT_ARGS[@]}" \
-  "${WINDOW_ROWS_ARGS[@]}" \
   --request-queue-csv "${REQUEST_CSV}" \
   --close-input \
   --workload-configuration="${ET_PREFIX}" \
   --comm-group-configuration="${RC}/comm_group.json" \
   --system-configuration="${RC}/system.json" \
-  --remote-memory-configuration="${RC}/remote_memory.json" \
   --network-configuration="${RC}/network.yml" \
   --logging-folder=off \
   --metrics-configuration="${ET_DIR}/metrics_manifest.json" \
@@ -183,7 +168,6 @@ fi
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
 #    run 一份,run 目录即版本,不轮转;run 脚本开头 rm -rf 保证有界。
-#  - checkpoints/: C++ 窗口位置检查点(bridge/checkpoints/,run 结束原子写)。
 #  - 临时产物    : response/ack 消费即删;request 散装文件按 256 条批量
 #    并入 request_journal.jsonl 后删除,成功结束仅保留单一顺序审计流与 fifo。
 #  - 失败清理    : 失败时 bridge 保留为调试证据(不自动删),打印残留计数,
@@ -196,10 +180,7 @@ for j in request_journal online_decision_log graph_batch_digests ledger online_s
     ARCHIVED=$((ARCHIVED + 1))
   fi
 done
-CP_COUNT=$(find "${RUN_DIR}/bridge/checkpoints" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l)
-# Backport 2026-08-16 (对比报告 §5.3): ls with a >2e4-entry glob exceeds
-# ARG_MAX (E2BIG, exit 126 under set -e) -- count via find instead.
-echo "[run_online_strategy_sensing] artifacts: ${ARCHIVED} jsonl archived -> results/; checkpoints=${CP_COUNT}; request_journal=results/request_journal.jsonl"
+echo "[run_online_strategy_sensing] artifacts: ${ARCHIVED} jsonl archived -> results/; request_journal=results/request_journal.jsonl"
 # P3(2026-08-28):仿真成功后自动 SLO 指标提取(postprocess 成功之后、
 # archive_run_outputs.sh 之前:cpp.log 未压缩、manifest 已拷入、results/
 # 已归位,输入全齐;产物随保留集常驻,最细粒度纪律见脚本头注)。

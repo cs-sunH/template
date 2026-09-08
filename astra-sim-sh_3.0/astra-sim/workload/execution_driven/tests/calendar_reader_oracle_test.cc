@@ -7,7 +7,7 @@ calendar_reader_oracle_test.cc -- P0 turn-0 fix V2 equivalence oracle
 
 Proves: for the SAME request queue CSV, the NEW calendar reader and the OLD
 (verbatim baseline copy) row-window reader in its UNBOUNDED arm
-(--request-window-rows=0, the integrity control arm) produce an
+(the integrity control arm) produce an
 ELEMENTWISE IDENTICAL turn-0 arrival fire sequence -- the ordered list of
 (alarm_tick, queue_index) pairs as the real RequestIngress drain +
 EventQueue actually fire them. This is the load-bearing equivalence
@@ -95,7 +95,7 @@ std::vector<FireRecord> run_legacy_arm(const std::string& csv) {
     ingress.bind(&eq, &mailbox, &svc);
     // UNBOUNDED arm: window 0 reads the whole file in one pump and queues
     // every turn-0 Submit in ROW order (the pre-P0 full-pass control arm).
-    LegacyOracleWindowedTraceReader reader(csv, ingress, /*high_water=*/0);
+    LegacyOracleWindowedTraceReader reader(csv, ingress);
     return run_arm(csv, ingress, eq, reader);
 }
 
@@ -107,7 +107,7 @@ void compare_arms(const std::string& csv, const char* label) {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/128);
+    WindowedTraceReader reader(csv, ingress);
     const std::vector<FireRecord> calendar = run_arm(csv, ingress, eq, reader);
 
     std::printf("[oracle:%s] turn-0 fire sequence length: legacy=%zu "

@@ -111,7 +111,6 @@ Step 1-10 (runners + IDLE fixture):
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <sys/resource.h>
-#include <sys/stat.h>
 
 #include <cerrno>
 #include <cstdint>
@@ -191,10 +190,11 @@ struct OnlineDriverContext {
     // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
     // for the field semantics.
     OnlineStatsCounters stats;
-    // C1 validate switch (2026-08-28, --online-validate): 1 = validate every
-    // batch (pre-C1 behavior, the CLI default), 0 = production skip, N >= 2 =
-    // sample every Nth committed batch. Copied from the parsed CLI here so
-    // ed_commit_cb can gate Phase A without reaching back into main's scope.
+    // C1 validate switch (2026-08-28, --online-validate), B.2 cleanup
+    // (2026-09-05): strict <0|1> enum -- 1 = validate every batch (pre-C1
+    // behavior, the CLI default), 0 = production skip. Copied from the
+    // parsed CLI here so ed_commit_cb can gate Phase A without reaching
+    // back into main's scope.
     int online_validate = 1;
 };
 
@@ -644,21 +644,15 @@ void ed_commit_cb(void* arg) {
     const GraphBatch& batch = commit->batch;
 
     // ---- Phase A: full pre-commit validation (pure, zero state mutation) ----
-    // C1 (2026-08-28, --online-validate): 1 = every batch (pre-C1 behavior,
-    // the CLI default -- fail-closed for bare invocations); 0 = production
-    // skip; N >= 2 = sample every Nth batch (the committer's
-    // graph_batch_count IS the index of the batch about to be committed).
-    // Sampled/full-validation batches use one atomic validate_and_commit()
+    // C1 (2026-08-28, --online-validate), B.2 cleanup (2026-09-05): 1 = every
+    // batch (pre-C1 behavior, the CLI default -- fail-closed for bare
+    // invocations); 0 = production skip. The former N >= 2 sample-every-Nth
+    // tier is removed (the parser only accepts <0|1>).
+    // Full-validation batches use one atomic validate_and_commit()
     // call; validation-off batches retain commit()'s mandatory preflight.
     // Phase 6 (方案 §9.1): graph_validate_ns is the API's validate_impl-only
     // duration; the public validate() itself remains pure for fixtures.
-    const int validate_mode = driver->online_validate;
-    const bool should_validate =
-        validate_mode == 1 ||
-        (validate_mode >= 2 &&
-         driver->committer->counters().graph_batch_count %
-                 static_cast<uint64_t>(validate_mode) ==
-             0);
+    const bool should_validate = driver->online_validate == 1;
     if (should_validate) {
         GraphBatchCommitter::ValidateAndCommitResult validation_result;
         try {
@@ -689,7 +683,7 @@ void ed_commit_cb(void* arg) {
     //      pass, so the anchors always exist when on_node_issue fires.
     //      No-op when metrics are disabled (hook not installed). ----
 
-    // ---- Phase B: sampled/full-validation batches already committed inside
+    // ---- Phase B: full-validation batches already committed inside
     //      validate_and_commit(), so no caller-visible gap exists between the
     //      full validation and mutation.  Validation-off batches retain the
     //      independent mandatory affine/id/liveness preflight in commit(). ----
@@ -801,8 +795,7 @@ void ed_driver_tick_end(void* ctx) {
             .count();
     // Phase 4 (schema v1): drain the per-epoch affected-rank accumulator
     // (union of the fired watches' member ranks, sorted unique) and the
-    // completed-facts buffer into the delivery, then reset both. retry_items
-    // is always empty in v1 (no producer until the legacy migration).
+    // completed-facts buffer into the delivery, then reset both.
     std::vector<int> affected_ranks;
     if (driver->affected_ranks_accumulator != nullptr &&
         !driver->affected_ranks_accumulator->empty()) {
@@ -817,7 +810,7 @@ void ed_driver_tick_end(void* ctx) {
         driver->mailbox->drain(),
         driver->event_queue->get_current_time(),
         driver->delivery_seq++, deferred_from,
-        driver->completed_facts.drain(), {}, std::move(affected_ranks),
+        driver->completed_facts.drain(), std::move(affected_ranks),
         std::move(injected_unfinished));
     auto* commit = new CommitArg;
     commit->driver = driver;
@@ -1148,7 +1141,7 @@ int main(int argc, char* argv[]) {
     // ARRIVAL order -- the submission order is fully decoupled from the file
     // position (the old row-order window made late-file early arrivals fire
     // after their declared time; 491 clamped Submits on the full TraceLab
-    // run). --request-window-rows is advisory only now. expected_requests is
+    // run). expected_requests is
     // filled from reader.data_rows() once the calendar is fully drained
     // (guaranteed before finished() because pump() runs before every
     // finished() check and completion requires every arrival alarm to have
@@ -1157,8 +1150,7 @@ int main(int argc, char* argv[]) {
     WindowedTraceReader windowed(
         online_cli.request_queue_csv.empty() ? "" :
             online_cli.request_queue_csv,
-        ingress, online_cli.request_window_rows,
-        online_cli.request_max_arrival_ns);
+        ingress, online_cli.request_max_arrival_ns);
     if (online_cli.request_queue_csv.empty()) {
         std::cout << "[online] request queue: none (--request-queue-csv "
                      "absent); request-neutral IDLE start, no preset queue"
@@ -1167,8 +1159,7 @@ int main(int argc, char* argv[]) {
         windowed.pump();
         std::cout << "[online] request queue: "
                   << online_cli.request_queue_csv
-                  << " (calendar reader, window=" << windowed.high_water()
-                  << " (advisory) max_arrival_ns="
+                  << " (calendar reader, max_arrival_ns="
                   << online_cli.request_max_arrival_ns
                   << (online_cli.request_max_arrival_ns == 0 ?
                           " (unbounded default; backport fix "
@@ -1436,13 +1427,13 @@ int main(int argc, char* argv[]) {
                                                 graph_sources);
             };
     }
-    // M2 node GC (2026-08-23; A1 amortization 2026-08-28): the CLI arm
-    // (--online-node-gc, frozen default 1 since the A1 flip) reaches the
-    // committer here; its constructor propagates the switch to every
-    // per-rank store and the commit tail collects amortized (drain once
-    // >= kGcAmortizeThreshold candidates accumulated; the run end forces
-    // one final drain -- 0 = pre-M2 never-erase behavior).
-    committer_ctx.node_gc = online_cli.online_node_gc != 0;
+    // M2 node GC (2026-08-23; A1 amortization 2026-08-28). B.3 cleanup
+    // (2026-09-05): the --online-node-gc CLI arm was removed -- production
+    // always collects (amortized): the constructor propagates the switch to
+    // every per-rank store and the commit tail drains once >=
+    // kGcAmortizeThreshold candidates accumulated; the run end forces one
+    // final drain. Fixtures keep the internal Context switch off.
+    committer_ctx.node_gc = true;
     GraphBatchCommitter committer(committer_ctx);
     driver_ctx.committer = &committer;
     driver_ctx.online_validate = online_cli.online_validate;
@@ -1452,26 +1443,17 @@ int main(int argc, char* argv[]) {
                      "epoch)" << std::endl;
     }
     // M2 node GC (2026-08-23; A1 2026-08-28): evidence line (cpp.log is an
-    // allowed-diff log). The frozen default is 1 (amortized collection);
-    // --online-node-gc 0 restores the pre-M2 never-erase behavior (retained
-    // NodeStore records grow for the whole run).
+    // allowed-diff log). Collection is always on since the B.3 cleanup
+    // (2026-09-05) removed the --online-node-gc CLI arm.
     std::cout << "[online] node gc: "
-              << (online_cli.online_node_gc != 0 ? "enabled" : "disabled")
-              << " (--online-node-gc "
-              << online_cli.online_node_gc << "; amortized: commit tails "
-              "drain once >= "
+              << "enabled (amortized: commit tails drain once >= "
               << GraphBatchCommitter::kGcAmortizeThreshold
               << " finished nodes accumulate, run end forces a final drain)"
               << std::endl;
     // C1 (2026-08-28): evidence line for the validate mode (cpp.log is an
     // allowed-diff log; the counters themselves are whitelisted diffs).
     std::cout << "[online] graph validate: "
-              << (online_cli.online_validate == 0
-                      ? "off"
-                      : online_cli.online_validate == 1
-                            ? "full"
-                            : "sampled-every-" +
-                                  std::to_string(online_cli.online_validate))
+              << (online_cli.online_validate == 0 ? "off" : "full")
               << " (--online-validate " << online_cli.online_validate
               << "; production runners default 0, smoke/fixture/verify runs "
                  "pass 1)"
@@ -1687,8 +1669,12 @@ int main(int argc, char* argv[]) {
                 // simulation clock -- real-time traces space turn arrivals
                 // hours apart) on the parking point; a timeout is a
                 // fail-closed abort with the parking diagnostics above.
-                // Default 0 = the original unbounded wait_for_work()
-                // contract (fixtures, IDLE runs).
+                // Default 1.0 = armed backstop (2026-09-05; healthy
+                // official runs pre-schedule every calendar arrival as a
+                // queue event, so they never park). The explicit
+                // --idle-watchdog-s 0 escape restores the original
+                // unbounded wait_for_work() contract (fixtures, IDLE
+                // runs).
                 // wscllm (sync-A16 批次4, 2026-09-01, 合同 §2.1/P1): with
                 // no input-open dead-end branch (that shape is unreachable
                 // under the calendar invariants), this watchdog is the
@@ -1773,8 +1759,9 @@ int main(int argc, char* argv[]) {
     // terminal command / error); the CSV window EOF is reported separately
     // because it is NOT a close (the input stays open for external
     // injection -- the IDLE fixture contract). The ingress overflow audit
-    // counts bounded-queue rejections (0 on every official run: high_water
-    // 128 << capacity 4096; a growing producer would surface here).
+    // counts bounded-queue rejections (0 on every official run: the queue
+    // capacity 4096 far exceeds the concurrent arrival burst; a growing
+    // producer would surface here).
     const char* close_source = "not_closed";
     if (svc.input_closed()) {
         switch (svc.input_close_reason()) {
@@ -1901,28 +1888,6 @@ int main(int argc, char* argv[]) {
                                   "ok" : "FAIL")
               << std::endl;
 
-    // Phase 7 §10.5: audit-only window-position snapshot. It is not a restart
-    // checkpoint: EventQueue/ingress/service/metrics state is not serialized.
-    // Written into
-    // <bridge_dir>/checkpoints/; atomic tmp+rename; a failed checkpoint is
-    // audit-evidence reporting only, never a run gate. The checkpoints/
-    // subdirectory keeps "最终结果 / 检查点 / 临时产物" in separate
-    // directories (方案 §10.5 中间产物生命周期).
-    if (!online_cli.bridge_dir.empty()) {
-        const std::string cp_dir = online_cli.bridge_dir + "/checkpoints";
-        if (::mkdir(cp_dir.c_str(), 0755) != 0 && errno != EEXIST) {
-            std::cerr << "[Error] (main_online) cannot create checkpoints "
-                         "dir: "
-                      << cp_dir << std::endl;
-        } else {
-            const std::string cp_path =
-                cp_dir + "/window_reader_checkpoint.json";
-            if (windowed.write_checkpoint(cp_path)) {
-                std::cout << "[online] windowed reader checkpoint: "
-                          << cp_path << std::endl;
-            }
-        }
-    }
     struct rusage rusage_usage {};
     if (getrusage(RUSAGE_SELF, &rusage_usage) == 0) {
         std::cout << "[online] peak rss kib: " << rusage_usage.ru_maxrss

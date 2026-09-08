@@ -42,6 +42,6 @@ find . -path ./build -prune -o -type d \( -name "__pycache__" -o -name ".pytest_
 echo "[clean] __pycache__/.pytest_cache 已清除"
 # 6. --full: 构建目录
 if [ "${1:-}" = "--full" ]; then
-  for b in build build_congestion_aware build_congestion_unaware; do rm_art "$b"; done
+  for b in build build_congestion_aware; do rm_art "$b"; done
 fi
 echo "[clean] 完成（还原裸仓库状态）。当前 traces/ 内容: $(ls "$WL/traces" 2>/dev/null | tr '\n' ' ')"

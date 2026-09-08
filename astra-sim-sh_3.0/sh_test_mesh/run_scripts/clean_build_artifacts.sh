@@ -13,7 +13,7 @@ rm_art() { if [ -e "$1" ]; then rm -rf "$1"; echo "[clean-build] removed: $1"; r
 
 echo "[clean-build] repo: $REPO_ROOT"
 # 兼容三种历史布局的编译目录名（现行唯一布局为顶层 build/）
-for b in build build_congestion_aware build_congestion_unaware; do rm_art "$b"; done
+for b in build build_congestion_aware; do rm_art "$b"; done
 if [ "$removed" -eq 0 ]; then
   echo "[clean-build] 无编译产物（本仓已是裸仓库编译态）"
 fi

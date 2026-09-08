@@ -20,6 +20,7 @@
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_graph_batch_builder.py   （或 pytest 同路径）
 """
+import json
 import os
 import sys
 import unittest
@@ -32,7 +33,10 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _p)
 
 from generate_trace import COMP_NODE  # noqa: E402
-from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
+from online.graph_batch_builder import (  # noqa: E402
+    GraphBatchBuilder,
+    OnlineTraceBuilder,
+)
 
 SESSION = "session_train_0"
 REQUEST_A = f"{SESSION}_request_0"
@@ -141,13 +145,106 @@ def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
 
 
 def _rank_nodes(builder, rank):
-    """M1 适配（2026-08-23 收集即释放）：builder.nodes 不再保证驻留全部
-    历史节点（已收集前缀按水位摊销压缩）——改读当前批次累加器
+    """M1 适配（2026-08-29 收集即释放）：_collect 立即清空 builder.nodes，
+    已交付节点只在当前批次累加器中保留——改读当前批次累加器
     batch["nodes"]（发射序，自 begin_batch 起含本批全部节点），保持
     "直读已发射节点"的测试意图；测试内单批发射，节点 id 自 0 连续，
     rank 过滤后位置 == 节点 id，与改前等价。"""
     return [node for node in builder.batch["nodes"]
             if node["rank"] == rank]
+
+
+def _node_edge_payload(batch):
+    return json.dumps(
+        {"nodes": batch["nodes"], "parent_edges": batch["parent_edges"]},
+        separators=(",", ":"), sort_keys=True,
+    )
+
+
+class DependencyFastPathTest(unittest.TestCase):
+    """_new_node 的 0/1 fast path 必须与有序去重旧逻辑逐案等价。"""
+
+    def test_dependency_edge_order_and_state_matrix(self):
+        cases = (
+            ("no_previous_or_pending", None, (), ()),
+            ("previous_only", 4, (), (4,)),
+            ("one_pending_only", None, (8,), (8,)),
+            ("one_pending_matches_previous", 4, (4,), (4,)),
+            ("one_pending_differs_from_previous", 4, (8,), (4, 8)),
+            ("many_pending_with_duplicates", 4, (8, 4, 9, 8), (4, 8, 9)),
+            ("many_pending_without_previous", None, (8, 8, 9), (8, 9)),
+        )
+        for label, previous_id, pending, expected_sources in cases:
+            with self.subTest(case=label):
+                trace = OnlineTraceBuilder(7, remote_operand_loads=False)
+                trace.next_id = 17
+                trace.previous_id = previous_id
+                trace.pending_extra_dependencies.extend(pending)
+
+                trace.comp("dependency_matrix", 1, 1)
+
+                self.assertEqual(
+                    trace.edges,
+                    [{"rank": 7, "from": source, "to": 17, "kind": "data"}
+                     for source in expected_sources],
+                )
+                self.assertEqual(trace.nodes[-1]["id"], 17)
+                self.assertEqual(trace.next_id, 18)
+                self.assertEqual(trace.previous_id, 17)
+                self.assertEqual(trace.pending_extra_dependencies, [])
+
+
+class CollectionLifecycleTest(unittest.TestCase):
+    """交付后 builder 缓冲区只应保留尚未收集的节点与边。"""
+
+    def test_collect_releases_buffers_without_changing_payload(self):
+        builder = GraphBatchBuilder(_make_config())
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"first_{rank}_0", 1, 1)
+            trace_builder.comp(f"first_{rank}_1", 1, 1)
+        expected_first_payload = json.dumps(
+            {
+                "nodes": [
+                    node for trace_builder in builder.builders.values()
+                    for node in trace_builder.nodes
+                ],
+                "parent_edges": [
+                    edge for trace_builder in builder.builders.values()
+                    for edge in trace_builder.edges
+                ],
+            },
+            separators=(",", ":"), sort_keys=True,
+        )
+
+        builder._collect(marker)
+        first_batch = builder.batch
+        first_payload = _node_edge_payload(first_batch)
+        self.assertEqual(first_payload, expected_first_payload)
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
+
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"second_{rank}", 1, 1)
+        builder._collect(marker)
+
+        self.assertEqual(_node_edge_payload(first_batch), first_payload)
+        self.assertEqual(
+            [(node["rank"], node["id"]) for node in builder.batch["nodes"]],
+            [(rank, 2) for rank in builder.builders],
+        )
+        self.assertEqual(
+            [(edge["rank"], edge["from"], edge["to"])
+             for edge in builder.batch["parent_edges"]],
+            [(rank, 1, 2) for rank in builder.builders],
+        )
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
 
 
 class TrainEmissionNailTest(unittest.TestCase):
@@ -319,7 +416,7 @@ class TrainEmissionNailTest(unittest.TestCase):
         self.assertNotIn(REQUEST_A, builder._partial_first_chunk)
         for rank in (0, 1):
             nodes = _rank_nodes(builder, rank)
-            # M1 适配：边列表同 nodes 改读批次累加器（builder.edges 可被压缩）。
+            # M1 适配：_collect 后 builder.edges 已清空，边改读批次累加器。
             edges = [edge for edge in builder.batch["parent_edges"]
                      if edge["rank"] == rank]
             suffix_ready = suffix_ready_by_rank[rank]

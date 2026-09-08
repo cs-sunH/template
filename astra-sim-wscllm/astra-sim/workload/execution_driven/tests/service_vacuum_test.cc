@@ -32,7 +32,7 @@ completed=0/30 and 30 queued-but-undrained commands.
 The fixture drives the REAL WindowedTraceReader / RequestIngress /
 ServiceCoordinator / DecisionMailbox / EventQueue through both loop
 orders on the same CSV (30 single-turn sessions, arrivals in 3 batches of
-10 at ticks 1000/2000/3000; --request-window-rows is advisory):
+10 at ticks 1000/2000/3000):
 
   Part 1 (REPRO, legacy order): the loop breaks with queued-but-undrained
       commands > 0 and completed == 0 -- the counting vacuum, caught as
@@ -77,8 +77,8 @@ void expect(bool cond, const std::string& what) {
 
 // 30 single-turn sessions (P0 fix: one turn-0 row per session, blocks
 // contiguous -- the structure validation fail-closes otherwise); arrivals
-// in 3 batches of 10 (tick 1000/2000/3000). high_water=10 is advisory
-// now: the calendar reader indexes the whole file and queues every turn-0
+// in 3 batches of 10 (tick 1000/2000/3000). The calendar reader indexes
+// the whole file and queues every turn-0
 // Submit during the FIRST pump, so the vacuum window is "queued but not
 // yet drained", not "read window boundary".
 const char* kCsvHeader =
@@ -118,7 +118,7 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     DecisionMailbox mailbox;
     RequestIngress ingress;
     ingress.bind(eq.get(), &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/10,
+    WindowedTraceReader reader(csv, ingress,
                                /*max_arrival_ns=*/0);
     ingress.set_arrival_hook([&](const RequestEnvelope& env) {
         // no-node fixture contract: the request completes at arrival

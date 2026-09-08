@@ -36,6 +36,7 @@ from session_kv_manager import (  # noqa: E402
     model_weight_shard_bytes_by_tp_rank,
 )
 from generate_face_trace import (  # noqa: E402
+    SH_TEST_DIR,
     _candidate_dict,
     load_face_trace_config,
     select_first_session_requests,
@@ -46,7 +47,6 @@ from generate_trace import (  # noqa: E402
     REMOTE_WEIGHT_ATTR,
     RequestSpec,
     TraceBuilder,
-    load_remote_memory_config,
     shard_extent,
     transformer_pass,
     transformer_pass_aggregated,
@@ -133,6 +133,30 @@ def load_checked_in_config() -> object:
     return load_face_trace_config(config_csv)
 
 
+def _load_edited_config(tag, edit, *, source_name="trace_config.csv"):
+    """加载经逐行编辑的 trace 配置副本(D1 loader 三态/坏值用例)。
+
+    edit(line) 返回替换行,返回 None 表示删除该行;request_queue_csv 行
+    无条件重定向到合成队列(与 load_checked_in_config 同款 fixture)。
+    """
+    from generate_face_trace import load_face_trace_config
+    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    _write_synthetic_queue(queue_path)
+    config_csv = Path(_FIXTURE_DIR.name) / f"synthetic_trace_config_{tag}.csv"
+    lines = (Path(__file__).parent / source_name).read_text(
+        encoding="utf-8").splitlines(keepends=True)
+    out = []
+    for line in lines:
+        if line.startswith("config,request_queue_csv,"):
+            out.append("config,request_queue_csv,{},,,,synthetic fixture\n".format(queue_path))
+        else:
+            edited = edit(line)
+            if edited is not None:
+                out.append(edited)
+    config_csv.write_text("".join(out), encoding="utf-8")
+    return load_face_trace_config(config_csv)
+
+
 
 class FaceSchedulerTests(unittest.TestCase):
     @staticmethod
@@ -173,23 +197,30 @@ class FaceSchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_first_session_requests(requests, -1)
 
-    def test_remote_memory_mesh_shape_rejects_malformed_legacy_value(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "remote_memory.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "memory-type": "PER_NPU_MEMORY_EXPANSION",
-                        "npu-ids": [0],
-                        "mesh-shape": 4,
-                        "remote-mem-latency": 0,
-                        "remote-mem-bw": 1,
-                    }
-                ),
-                encoding="utf-8",
+    def test_hardware_remote_memory_expansion_fails_closed_at_parse(self) -> None:
+        """A.2 (2026-09-05): the remote memory backend was removed; a hardware
+        config declaring any expansion must fail closed at parse time."""
+
+        from config_resolver import load_hardware_config
+
+        checked_in = json.loads(
+            (SH_TEST_DIR / "hardware" / "face_case5_config_c.json").read_text(
+                encoding="utf-8"
             )
-            with self.assertRaisesRegex(ValueError, "mesh-shape"):
-                load_remote_memory_config(source, 4, mesh_shape=(2, 2))
+        )
+        expansion = dict(checked_in)
+        expansion["remote-memory"] = {
+            "memory-type": "PER_NPU_MEMORY_EXPANSION",
+            "bandwidth-gbps": 512.0,
+            "latency-ns": 100,
+            "npu-selection": "mesh-boundary",
+            "logical-pool": "unified-kv-cache-pool",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "face_case5_expansion.json"
+            source.write_text(json.dumps(expansion), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "NO_MEMORY_EXPANSION"):
+                load_hardware_config(source, "validation-160gib")
 
     def test_checked_in_three_minute_workload_configuration(self) -> None:
         config = load_checked_in_config()
@@ -205,7 +236,6 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
-        self.assertEqual(config.remote_memory_config.name, "remote_memory.json")
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
@@ -265,21 +295,25 @@ class FaceSchedulerTests(unittest.TestCase):
                 FaceInstanceSpec("ins2", "3", (4, 5)),
             ),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        # Passive 语义手算:容量 400B/rank、权重 72B/rank -> 可用 328B/rank;
+        # a/b 各 40 token(160B/rank),完成后剩 8B/rank;完成期零逐出。
+        manager = SessionKVCacheManager(topology, model)
         for session_id, request_id, completion in (("a", "a0", 10), ("b", "b0", 20)):
             decision = manager.prepare_history(
                 session_id, 0, 0, completion, request_id, required_context_tokens=40
             )
             self.assertFalse(decision.admission_blocked)
             self.assertTrue(manager.grow_prefill(session_id, 40, completion, request_id).admitted)
-            manager.mark_complete(session_id, completion, request_id)
+            self.assertEqual(manager.mark_complete(session_id, completion, request_id), ())
         snapshot_a = manager.session_snapshot("a")
         self.assertIsNotNone(snapshot_a)
-        self.assertEqual(snapshot_a.state, "EVICTED")
+        self.assertEqual(snapshot_a.state, "RESIDENT")
         self.assertEqual(snapshot_a.logical_context_tokens, 40)
-        recompute = manager.prepare_history("a", 1, 40, 30, "a1", required_context_tokens=41)
-        self.assertEqual(recompute.action, "RECOMPUTE")
-        self.assertEqual(recompute.recompute_tokens, 40)
+        # 41 token 增量 4B/rank <= 余 8B/rank:同实例原地放行(LOCAL_HIT,
+        # 零重算——被动形态下完成边界保留 KV)。
+        recompute = manager.prepare_history("a", 0, 40, 30, "a1", required_context_tokens=41)
+        self.assertEqual(recompute.action, "LOCAL_HIT")
+        self.assertEqual(recompute.recompute_tokens, 0)
 
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_checked_in_config()
@@ -603,29 +637,6 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(allocation2.pieces[0].instance_index, 2)
 
-    def test_64_gib_fails_fast_for_the_exact_one_million_reserve(self) -> None:
-        config = load_checked_in_config()
-        hardware = FaceHardware(
-            mesh_rows=1,
-            mesh_cols=6,
-            local_hbm_capacity_bytes=64 * 1024**3,
-            local_hbm_bandwidth_gbps=1.0,
-            d2d_bandwidth_gbps=1.0,
-            peak_perf_tflops=1.0,
-            d2d_latency_ns=0,
-            local_hbm_latency_ns=0,
-        )
-        topology = build_instances(
-            hardware,
-            (FaceInstanceSpec("tp6", "1", tuple(range(6))),),
-        )
-        with self.assertRaisesRegex(ValueError, r"relative_tp_rank=0"):
-            SessionKVCacheManager(
-                topology,
-                config.model,
-                reserve_context_tokens=1_000_000,
-            )
-
     def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = FaceHardware(1, 2, 200, 1.0, 1.0, 1.0, 0, 0)
@@ -633,7 +644,7 @@ class FaceSchedulerTests(unittest.TestCase):
             hardware,
             (FaceInstanceSpec("tp2", "1", (0, 1)),),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        manager = SessionKVCacheManager(topology, model)
         for session_id, completion_ns in (("a", 10), ("b", 20)):
             decision = manager.prepare_history(
                 session_id,
@@ -651,21 +662,393 @@ class FaceSchedulerTests(unittest.TestCase):
             )
             manager.mark_complete(session_id, completion_ns, f"{session_id}0")
 
-        c_decision = manager.prepare_history(
-            "c", 0, 0, 30, "c0", required_context_tokens=30
-        )
+        candidate_calls = 0
+        original_candidate_sessions = manager._candidate_sessions
+
+        def snapshot_candidates(*args, **kwargs):
+            nonlocal candidate_calls
+            candidate_calls += 1
+            return original_candidate_sessions(*args, **kwargs)
+
+        manager._candidate_sessions = snapshot_candidates
+        try:
+            c_decision = manager.prepare_history(
+                "c", 0, 0, 30, "c0", required_context_tokens=30
+            )
+        finally:
+            manager._candidate_sessions = original_candidate_sessions
+
+        # The admission needs two deletions, but one stage-local LRU snapshot.
+        self.assertEqual(candidate_calls, 1)
         self.assertEqual(
             tuple(record.victim_session_id for record in c_decision.evictions),
             ("a", "b"),
         )
+        self.assertEqual(
+            [
+                (event.event_type, event.session_id, event.phase,
+                 event.reason, event.trigger_request_id)
+                for event in manager.events
+            ],
+            [
+                ("no_history", "a", "history", "window_first_request", "a0"),
+                ("retain_complete", "a", "completion", "request_completed_keep_kv", "a0"),
+                ("no_history", "b", "history", "window_first_request", "b0"),
+                ("retain_complete", "b", "completion", "request_completed_keep_kv", "b0"),
+                ("evict_delete", "a", "history", "history_and_prefill_admission", "c0"),
+                ("evict_delete", "b", "history", "history_and_prefill_admission", "c0"),
+                ("no_history", "c", "history", "window_first_request", "c0"),
+            ],
+        )
+        self.assertEqual(
+            tuple(snapshot.remaining_bytes for snapshot in manager.hbm_snapshots(0)),
+            (128, 128),
+        )
         self.assertEqual(manager.session_snapshot("a").logical_context_tokens, 10)
         self.assertEqual(manager.session_snapshot("a").state, "EVICTED")
         self.assertTrue(manager.grow_prefill("c", 30, 30, "c0").admitted)
-        deferred = manager.enforce_watermark(0, 30, "c0", ("c",))
-        self.assertTrue(deferred.deferred)
         self.assertEqual(manager.session_snapshot("c").state, "RESIDENT")
         self.assertTrue(manager.session_snapshot("c").active)
         manager.mark_complete("c", 31, "c0")
+        manager.assert_final_state()
+
+    def test_terminal_retirement_releases_local_kv_and_fails_closed(self) -> None:
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = FaceHardware(1, 2, 200, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (FaceInstanceSpec("tp2", "1", (0, 1)),),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        self.assertFalse(
+            manager.prepare_history(
+                "terminal", 0, 0, 10, "terminal_r0",
+                required_context_tokens=10,
+            ).admission_blocked
+        )
+        self.assertTrue(manager.grow_prefill("terminal", 10, 10, "terminal_r0").admitted)
+        with self.assertRaisesRegex(RuntimeError, "inactive completed"):
+            manager.retire_terminal_session("terminal", 10, "terminal_r0")
+
+        manager.mark_complete("terminal", 10, "terminal_r0")
+        completion_actions = manager.events
+        self.assertEqual(
+            manager.retire_terminal_session("terminal", 10, "terminal_r0"),
+            0,
+        )
+        self.assertEqual(manager.events, completion_actions)
+        self.assertEqual(manager.session_ids, ())
+        self.assertIsNone(manager.session_snapshot("terminal"))
+        self.assertTrue(
+            all(snapshot.resident_kv_bytes == 0
+                for snapshot in manager.hbm_snapshots())
+        )
+        with self.assertRaises(KeyError):
+            manager.retire_terminal_session("terminal", 10, "terminal_r0")
+
+    def test_terminal_retirement_bounds_many_single_turn_sessions(self) -> None:
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = FaceHardware(1, 2, 200, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (FaceInstanceSpec("tp2", "1", (0, 1)),),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        for index in range(32):
+            session_id = f"single_{index}"
+            request_id = f"{session_id}_r0"
+            self.assertFalse(
+                manager.prepare_history(
+                    session_id, 0, 0, index, request_id,
+                    required_context_tokens=10,
+                ).admission_blocked
+            )
+            self.assertTrue(manager.grow_prefill(session_id, 10, index, request_id).admitted)
+            manager._pressure_event(
+                now_ns=index,
+                phase="admission",
+                event_type="admission_blocked",
+                reason="test_pressure_ownership",
+                trigger_request_id=request_id,
+                target_instance_index=0,
+                before=(),
+                after=(),
+                insufficient_ranks=(),
+            )
+            self.assertIn(request_id, manager._pressure_event_keys_by_request)
+            manager.mark_complete(session_id, index, request_id)
+            self.assertNotIn(request_id, manager._pressure_event_keys_by_request)
+            self.assertFalse(manager._pressure_event_keys)
+            manager.retire_terminal_session(session_id, index, request_id)
+            self.assertEqual(manager.session_ids, ())
+
+    def test_pressure_event_dedup_is_request_scoped_and_retired(self) -> None:
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = FaceHardware(1, 2, 1_000, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (FaceInstanceSpec("tp2", "1", (0, 1)),),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        requests = (("first", "first_r0"), ("second", "second_r0"))
+        for index, (session_id, request_id) in enumerate(requests):
+            self.assertFalse(
+                manager.prepare_history(
+                    session_id,
+                    0,
+                    0,
+                    index,
+                    request_id,
+                    required_context_tokens=10,
+                ).admission_blocked
+            )
+            self.assertTrue(
+                manager.grow_prefill(session_id, 10, index, request_id).admitted
+            )
+
+        def record_pressure(request_id: str, now_ns: int) -> None:
+            manager._pressure_event(
+                now_ns=now_ns,
+                phase="admission",
+                event_type="admission_blocked",
+                reason="test_request_scoped_pressure",
+                trigger_request_id=request_id,
+                target_instance_index=0,
+                before=(),
+                after=(),
+                insufficient_ranks=(),
+            )
+
+        for now_ns in range(3):
+            record_pressure("first_r0", now_ns)
+        for now_ns in range(3, 6):
+            record_pressure("second_r0", now_ns)
+
+        pressure_events = [
+            event
+            for event in manager.events
+            if event.reason in {
+                "test_request_scoped_pressure",
+                "retry_after_previous_capacity_block",
+            }
+        ]
+        self.assertEqual(
+            [(event.event_type, event.trigger_request_id) for event in pressure_events],
+            [
+                ("admission_blocked", "first_r0"),
+                ("admission_retry", "first_r0"),
+                ("admission_blocked", "second_r0"),
+                ("admission_retry", "second_r0"),
+            ],
+        )
+        self.assertEqual(
+            set(manager._pressure_event_keys_by_request),
+            {"first_r0", "second_r0"},
+        )
+        self.assertEqual(
+            manager._pressure_event_keys,
+            {
+                ("admission_blocked", "admission", "first_r0", 0),
+                ("admission_retry", "admission", "first_r0", 0),
+                ("admission_blocked", "admission", "second_r0", 0),
+                ("admission_retry", "admission", "second_r0", 0),
+            },
+        )
+
+        manager.mark_complete("first", 10, "first_r0")
+        manager.retire_terminal_session("first", 10, "first_r0")
+        self.assertEqual(set(manager._pressure_event_keys_by_request), {"second_r0"})
+        self.assertEqual(
+            manager._pressure_event_keys,
+            {
+                ("admission_blocked", "admission", "second_r0", 0),
+                ("admission_retry", "admission", "second_r0", 0),
+            },
+        )
+
+        manager.mark_complete("second", 11, "second_r0")
+        manager.retire_terminal_session("second", 11, "second_r0")
+        self.assertFalse(manager._pressure_event_keys)
+        self.assertFalse(manager._pressure_event_keys_by_request)
+        manager.assert_final_state()
+
+
+class KvEvictionModeConfigTests(unittest.TestCase):
+    """R3 (2026-09-05): kv_eviction_mode 门控随 reserve 档一并物理清除——
+    loader 对该键恢复"未知键 fail-closed 拒绝"(回归钉子,防口子重开)。"""
+
+    def test_kv_eviction_mode_key_rejected(self) -> None:
+        def edit(line: str):
+            if line.startswith("config,kv_reserve_context_tokens,"):
+                return (
+                    line
+                    + "config,kv_eviction_mode,passive_only,,,,synthetic fixture\n"
+                )
+            return line
+
+        with self.assertRaisesRegex(
+            ValueError, "unsupported config key.*kv_eviction_mode"
+        ):
+            _load_edited_config("eviction_mode_row", edit)
+
+
+class PassiveEvictionModeTests(unittest.TestCase):
+    """R7 (2026-09-05): 被动逐出语义回归——完成边界零逐出、准入按需逐到
+    刚好够、深缺口两出口台账(主动水位逐出已物理清除)。
+
+    算术口径(FaceModel(1,4,4,2,4,1,"gelu") + tp2 + 容量 200):每 rank
+    模型权重 72 字节 -> 空 rank 每 token KV 4 字节、初始余 128 字节/rank。
+    """
+
+    @staticmethod
+    def _manager():
+        model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = FaceHardware(1, 2, 200, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (FaceInstanceSpec("tp2", "1", (0, 1)),),
+        )
+        return SessionKVCacheManager(topology, model)
+
+    def _admit_and_complete(self, manager, session_id, request_id, now_ns,
+                            tokens=10):
+        decision = manager.prepare_history(
+            session_id, 0, 0, now_ns, request_id, required_context_tokens=tokens
+        )
+        self.assertFalse(decision.admission_blocked)
+        self.assertTrue(
+            manager.grow_prefill(session_id, tokens, now_ns, request_id).admitted
+        )
+        return manager.mark_complete(session_id, now_ns, request_id)
+
+    def test_passive_completion_retains_kv_and_final_state_passes(self) -> None:
+        manager = self._manager()  # 两会话各 10 token -> 40B/rank,余 48B/rank
+        self.assertEqual(self._admit_and_complete(manager, "a", "a0", 10), ())
+        self.assertEqual(self._admit_and_complete(manager, "b", "b0", 20), ())
+
+        # 完成边界零逐出——retain_complete 事件在场,会话 RESIDENT。
+        event_types = [
+            (event.event_type, event.session_id) for event in manager.events
+        ]
+        self.assertIn(("retain_complete", "a"), event_types)
+        self.assertIn(("retain_complete", "b"), event_types)
+        self.assertFalse(
+            [event for event in manager.events if event.event_type == "evict_delete"]
+        )
+        for session_id, completion_ns in (("a", 10), ("b", 20)):
+            snapshot = manager.session_snapshot(session_id)
+            self.assertEqual(snapshot.state, "RESIDENT")
+            self.assertFalse(snapshot.active)
+            self.assertEqual(snapshot.last_completion_ns, completion_ns)
+        # 两会话各 40 字节/rank -> 余 48:低余量终态合法(完成期不存在
+        # 逐出路径,mark_complete 恒返回空元组)。
+        self.assertEqual(
+            tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
+            (48, 48),
+        )
+        manager.assert_final_state()
+
+        manager.retire_terminal_session("a", 10, "a0")
+        manager.retire_terminal_session("b", 20, "b0")
+        manager.assert_final_state()
+
+    def test_passive_admission_evicts_exactly_enough(self) -> None:
+        manager = self._manager()  # a/b 各 10 token;a+b 完成后余 48B/rank
+        self.assertEqual(self._admit_and_complete(manager, "a", "a0", 10), ())
+        self.assertEqual(self._admit_and_complete(manager, "b", "b0", 20), ())
+
+        # c 需 80B/rank(20 token):仅逐最老 a(+40 -> 88)即够,b 不动。
+        decision = manager.prepare_history(
+            "c", 0, 0, 30, "c0", required_context_tokens=20
+        )
+        self.assertFalse(decision.admission_blocked)
+        self.assertEqual(
+            tuple(record.victim_session_id for record in decision.evictions),
+            ("a",),
+        )
+        # 逐出来自按需 fit 路径(reason 钉死来源)。
+        self.assertEqual(
+            decision.evictions[0].reason, "history_and_prefill_admission"
+        )
+        self.assertEqual(manager.session_snapshot("b").state, "RESIDENT")
+        self.assertTrue(manager.grow_prefill("c", 20, 30, "c0").admitted)
+        # 逐到刚好够即停:不追加额外逐出(b 保留,余 8B/rank)。
+        self.assertEqual(
+            tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
+            (8, 8),
+        )
+        self.assertEqual(manager.mark_complete("c", 40, "c0"), ())
+        manager.assert_final_state()
+
+    def test_deep_gap_records_structural_infeasibility_before_failing(self) -> None:
+        manager = self._manager()
+        with self.assertRaisesRegex(ValueError, "request cannot fit an empty instance"):
+            manager.ensure_physical_fit(0, (280, 280), 5, "r9")
+        self.assertEqual(manager.deep_gap_events, 1)
+        deep_gaps = [
+            event for event in manager.events if event.event_type == "deep_gap"
+        ]
+        self.assertEqual(len(deep_gaps), 1)
+        self.assertEqual(
+            deep_gaps[0].reason, "request_exceeds_empty_instance"
+        )
+        self.assertEqual(deep_gaps[0].insufficient_ranks, (0, 1))
+        # fail-closed raise 不留部分变异。
+        self.assertEqual(manager.session_ids, ())
+        self.assertEqual(
+            tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
+            (128, 128),
+        )
+
+    def test_deep_gap_records_exhausted_candidates_on_admission_block(self) -> None:
+        manager = self._manager()
+        # z 保持 ACTIVE(不可逐,占 40B/rank);a/b 完成后共占 80B/rank -> 余 8。
+        self.assertFalse(
+            manager.prepare_history(
+                "z", 0, 0, 5, "z0", required_context_tokens=10
+            ).admission_blocked
+        )
+        self.assertTrue(manager.grow_prefill("z", 10, 5, "z0").admitted)
+        self.assertEqual(self._admit_and_complete(manager, "a", "a0", 10), ())
+        self.assertEqual(self._admit_and_complete(manager, "b", "b0", 20), ())
+
+        # c 需 120B/rank(30 token):逐光 a,b(->88)仍不够 -> 优雅推迟。
+        decision = manager.prepare_history(
+            "c", 0, 0, 30, "c0", required_context_tokens=30
+        )
+        self.assertTrue(decision.admission_blocked)
+        self.assertEqual(
+            tuple(record.victim_session_id for record in decision.evictions),
+            ("a", "b"),
+        )
+        self.assertEqual(decision.insufficient_ranks, (0, 1))
+        self.assertEqual(manager.deep_gap_events, 1)
+        deep_gaps = [
+            event for event in manager.events if event.event_type == "deep_gap"
+        ]
+        self.assertEqual(len(deep_gaps), 1)
+        self.assertEqual(
+            deep_gaps[0].reason, "exhausted_completed_candidates"
+        )
+        self.assertEqual(manager.session_snapshot("a").state, "EVICTED")
+        self.assertEqual(manager.session_snapshot("b").state, "EVICTED")
+        self.assertEqual(manager.session_snapshot("z").state, "RESIDENT")
+        self.assertTrue(manager.session_snapshot("z").active)
+        # 台账守恒:仅剩 z 的 40/rank -> 余 88。
+        self.assertEqual(
+            tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
+            (88, 88),
+        )
+        # 收尾:清掉被阻塞请求的去重键后终态检查通过。
+        manager._forget_pressure_event_keys("c0")
+        self.assertEqual(manager.mark_complete("z", 40, "z0"), ())
+        for session_id, now_ns, request_id in (
+            ("a", 10, "a0"),
+            ("b", 20, "b0"),
+            ("z", 40, "z0"),
+        ):
+            manager.retire_terminal_session(session_id, now_ns, request_id)
+        self.assertEqual(manager.session_ids, ())
         manager.assert_final_state()
 
 

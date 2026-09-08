@@ -65,7 +65,13 @@ void NodeStore::add_dependency(uint64_t parent, uint64_t child,
 }
 
 std::vector<uint64_t> NodeStore::resolve_free_nodes() const {
-    return std::vector<uint64_t>(free_ids_.begin(), free_ids_.end());
+    std::vector<uint64_t> result;
+    fill_free_node_snapshot(result);
+    return result;
+}
+
+void NodeStore::fill_free_node_snapshot(std::vector<uint64_t>& out) const {
+    out.assign(free_ids_.begin(), free_ids_.end());
 }
 
 void NodeStore::mark_issued(uint64_t node_id) {
@@ -133,6 +139,35 @@ const OnlineNode* NodeStore::node_ptr(uint64_t node_id) const {
     return it == nodes_.end() ? nullptr : &it->second.node;
 }
 
+OnlineStatisticsState* NodeStore::mutable_online_statistics(uint64_t node_id) {
+    const auto it = nodes_.find(node_id);
+    return it == nodes_.end() ? nullptr : &it->second.node.online_statistics;
+}
+
+void NodeStore::set_metric_anchor_flags(uint64_t node_id, bool issue,
+                                        bool complete) {
+    // R2 anchor fast path: same write-into-stored-record pattern as
+    // mutable_online_statistics. OR, not assign: e.g. a watch end anchor and
+    // a transfer anchor can both register the same node (each on its own
+    // edge), and a re-registration across batches must never clear a flag.
+    const auto it = nodes_.find(node_id);
+    if (it == nodes_.end()) {
+        return;  // unknown node: the anchor itself can never fire either
+    }
+    it->second.node.metric_issue_anchor |= issue;
+    it->second.node.metric_complete_anchor |= complete;
+}
+
+bool NodeStore::mark_terminal_observed(uint64_t node_id) {
+    const auto it = nodes_.find(node_id);
+    if (it == nodes_.end() || !it->second.issued || it->second.finished ||
+        it->second.terminal_observed) {
+        return false;
+    }
+    it->second.terminal_observed = true;
+    return true;
+}
+
 std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
     const auto it = nodes_.find(node_id);
     if (it == nodes_.end()) {
@@ -153,8 +188,10 @@ bool NodeStore::empty() const { return nodes_.empty(); }
 
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
-    // its Context (--online-node-gc on the official path; fixtures leave it
-    // off and keep the pre-M2 behavior, memory profile included).
+    // its Context (the official path always enables it -- the
+    // --online-node-gc CLI arm was removed by the B.3 cleanup (2026-09-05);
+    // fixtures leave it off and keep the pre-M2 behavior, memory profile
+    // included).
     gc_enabled_ = enabled;
 }
 
@@ -183,10 +220,31 @@ void NodeStore::collect_garbage() {
         nodes_.erase(it);
         ++gc_erased_count_;
     }
-    // All entries consumed (each node enqueues at most once): drop the
-    // storage, keep the (bounded, in-flight-window sized) capacity.
+    // All entries consumed (each node enqueues at most once). Keep only a
+    // modest reusable FIFO allocation; a single giant completion burst must
+    // not pin its historical vector capacity for the rest of the run.
+    constexpr size_t kMaxRetainedGcFifoCapacity = 8192;
     gc_fifo_.clear();
     gc_fifo_head_ = 0;
+    if (gc_fifo_.capacity() > kMaxRetainedGcFifoCapacity) {
+        std::vector<uint64_t>().swap(gc_fifo_);
+    }
+
+    // unordered_map::erase never shrinks the bucket array. Rebuild only after
+    // a material high-water collapse, at this quiescent point, so RSS follows
+    // the live NodeStore window instead of an early historical peak without
+    // adding rehash churn to ordinary 4096-node GC cycles.
+    constexpr size_t kMinBucketsBeforeCompaction = 4096;
+    if (nodes_.bucket_count() > kMinBucketsBeforeCompaction &&
+        nodes_.size() < nodes_.bucket_count() / 4) {
+        decltype(nodes_) compact;
+        compact.max_load_factor(nodes_.max_load_factor());
+        compact.reserve(nodes_.size());
+        for (auto& entry : nodes_) {
+            compact.emplace(entry.first, std::move(entry.second));
+        }
+        nodes_.swap(compact);
+    }
 }
 
 bool NodeStore::erased(uint64_t node_id) const {
@@ -296,9 +354,11 @@ std::vector<NodeView> NodeStoreGraphSource::dep_free_nodes() {
 
 void NodeStoreGraphSource::for_each_dep_free(
     const std::function<void(const NodeView&)>& consume) {
-    // resolve_free_nodes() returns a snapshot (vector by value), so
-    // consume() may safely mutate the free set / release dependencies.
-    for (const auto node_id : store_.resolve_free_nodes()) {
+    // The reusable vector is still a snapshot, so consume() may safely mutate
+    // the free set / release dependencies. Newly released children are not
+    // visited until the next issue pass.
+    store_.fill_free_node_snapshot(dep_free_scratch_ids_);
+    for (const auto node_id : dep_free_scratch_ids_) {
         const OnlineNode* node = store_.node_ptr(node_id);
         if (node != nullptr) {
             consume(*node);
@@ -316,6 +376,15 @@ std::optional<NodeView> NodeStoreGraphSource::lookup(uint64_t node_id) {
 
 const NodeView* NodeStoreGraphSource::lookup_ptr(uint64_t node_id) {
     return store_.node_ptr(node_id);
+}
+
+OnlineStatisticsState* NodeStoreGraphSource::mutable_online_statistics(
+    uint64_t node_id) {
+    return store_.mutable_online_statistics(node_id);
+}
+
+bool NodeStoreGraphSource::mark_terminal_observed(uint64_t node_id) {
+    return store_.mark_terminal_observed(node_id);
 }
 
 void NodeStoreGraphSource::take_node(uint64_t node_id) {
@@ -367,7 +436,8 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             break;
         case NodeKind::MemLoad:
         case NodeKind::MemStore:
-            // issue_remote_mem consumes tensor_size (strict in the baseline).
+            // tensor_size is consumed by the (removed) remote-memory issue
+            // path; the attribute stays parsed so dispatch can fail closed.
             if (node->has_attr("tensor_size")) {
                 nv.compute.tensor_size = node->tensor_size<uint64_t>();
             }

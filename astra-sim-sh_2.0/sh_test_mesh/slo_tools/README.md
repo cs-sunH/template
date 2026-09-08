@@ -1,18 +1,63 @@
 # slo_tools —— SLO 离线后处理工具集（WP3/WP4/WP5/WP7 + Hop-Bytes）
 
-五仓同名同构（本目录五个仓逐字节相同；逐仓语义差异全部收在脚本内的
+四仓同名同构（本目录四个仓逐字节相同；逐仓语义差异全部收在脚本内的
 REPO_VARIANTS / REPO_HOP_SOURCES 表，按 run_dir 自动识别 repo_variant）。
+唯一 sanctioned 例外：tests/run_golden_live.py（见"测试运行法"节的
+仓族适配边界声明，2026-08-28 主控裁决）。
 纯离线、纯标准库、只读输入；不注册仿真事件、不反向参与调度。
+
+## cpp.log 回退顺序（归档兼容，P1/2026-08-28）
+
+所有读 cpp.log 的入口（`slo_common.read_init_record`——各工具的
+repo_variant 识别与 manifest 定位都经它；以及 `restore_decomposition.py`）
+统一经 `resolve_cpp_metric_log(run_dir)` 取路径，按序探测：
+
+1. `cpp.log`（未归档 / `SH_ARCHIVE_RUN=0` 的 run_dir）；
+2. `metrics.log`（归档后常驻——`archive_run_outputs.sh` 对 cpp.log
+   `[METRIC]` 行的无损抽取）；
+3. `cpp.log.gz`（归档后全量原文，gzip 文本模式读）。
+
+三条路径读到的 `[METRIC]` 记录集合同一——同一 run_dir 归档前后跑
+slo_tools 输出逐字节一致（2s 冒烟全量对拍验证）。runner（P2）还会把
+per-request manifest（`metrics_manifest.json`/`manifest.json`）拷入
+run_dir 根：`load_request_manifest` 现有优先级 `--request-manifest` >
+`run_dir/metrics_manifest.json` > cpp.log init 行指向的仓内 generated/
+副本，故拷入后 run_dir 自包含、与仓还原（裸仓删 generated/）状态解耦。
+`run_scripts/run_slo_postprocess.sh`（P3）在 runner 尾部自动调用本目录
+工具产 9 步最细粒度产物（清单/失败语义见其头注；不传任何分桶/聚合参数；
+hbm_watermark 一步产三件：intervals/plot_series/instances，P1/2026-08-30）。
+
+## 单遍合并 driver（A4，2026-08-29）
+
+`slo_postprocess_driver.py` 把上述 9 步合并为**单进程单遍**执行：
+RunContext 一次装载共享输入（request_metrics.csv/decision log/
+manifest 族/[METRIC] 流各恰读一次，解释器启动 9→1），decision log 单遍
+流按固定次序（kv → load → hop → watermark）喂给四个消费者；各步 stderr
+整块捕获后按步序回放，`slo_postprocess.log` 与逐工具串行**逐字节一致**
+（含 run:/ok:/FAIL: 行与 `slo_postprocess.FAIL` 条目语义、G1-G5 门控与
+跳过说明行——门控在 shell 探测后经 `SH_SLO_HAVE_RM`/`SH_SLO_HAVE_TL`/
+`SH_SLO_SKIP_HBM` 传入，裸调用 driver 时自探测并复刻同款说明行）。
+工具 CLI 零破坏：七个脚本仍可独立调用，driver 只 import 复用其
+prepare/consume/emit 拆分面。需排序分位/事件的排序经
+`slo_common.BoundedSorter` 有界外部排序（内存合同：chunk 容量 =
+env `SH_SLO_SORT_CHUNK`，缺省 65536 元素；满则排序后 pickle spill 临时
+文件 + heapq.merge 多路归并；只用于整数/整数元组全序，输出序列 ≡
+sorted()；需稳定序的调用方自带单调序号列），nearest-rank 公式不动。
+等价性验证：`tests/test_driver_parity.py`（BoundedSorter 单测 + 合成
+run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 G3/失败
+路径变体）。
 
 ## 与 slo_params_manifest.json 的关系
 
-`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，五仓
+`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，四仓
 逐字节相同）。当前所有 `value=null`（B4 批次按 derivation_program 引用的
 主规格条款推导后填充）。**所有依赖参数的命令 fail-closed**：遇 null/缺失
 即退出码 2 并指明参数名与推导条款，绝不内置示例值。`bucket_percentiles`
 填充后 value 结构为 `{"percentiles":[...], "prefill_edges_tokens":[...],
-"decode_edges_tokens":[...]}`（含首尾哨兵；桶 i 覆盖
-`edges[i] <= x < edges[i+1]`，末桶闭合）。
+"decode_edges_tokens":[...]}`（含首尾哨兵；interior edges 为各左桶
+闭上界——如 decode=91 归 d1、prefill=415 归 p1，末桶无上限、
+吸收 x > edges[-1]；2026-09-05 口径裁决，与 campaign_common.BucketGrid
+语义统一，edges 数组值未变）。
 
 ## 各脚本用途 / 输入 / 输出
 
@@ -49,14 +94,20 @@ REPO_VARIANTS / REPO_HOP_SOURCES 表，按 run_dir 自动识别 repo_variant）�
   属预期）；旧产物（字段缺失）回退 not_supported。
 * **sh_3.0**：prefill_affinity_reason 五值（sh30_online_scheduler.py:
   1150-1221）；resident_prefix_layers（PARTIAL_HBM_REMOTE）→ partial。
-* **hopbytes 覆盖**：sh_1.0=shard 级 noc_path；sh_2.0=决策级
-  transfer_hop_bytes（B2wp9py 起，coverage=1）；wscllm=实例级
-  static_route.hop_count（仅 PD 迁移）；face/sh_3.0 产物无 hops
-  字段 → coverage=0（TODO_FACE/TODO_S3，不臆造）。
+* **hopbytes 覆盖**（四仓同步收口后，各变体采集器已合并进同一
+  REPO_HOP_SOURCES 表）：sh_1.0=shard 级 noc_path/noc_hops；
+  wscllm=实例级 static_route.hop_count + history 迁移 noc_hops
+  （B2wp9py 起）；face=per-TP-shard hops 列表（B2wp9py 起）；
+  sh_2.0=决策级 transfer_hop_bytes（WP9-线5 起）；sh_3.0=completion_
+  evictions shards[].noc_hops（B4 起）。四仓新产物均可覆盖；旧产物按
+  字段缺席回退 bytes_without_hops/coverage=0（不臆造 hop 数）。
 
 ## fail-closed 纪律
 
-* 退出码：0=成功；2=FAIL-CLOSED（输入缺列/格式错/参数 null/对账不一致）。
+* 退出码：0=成功；2=FAIL-CLOSED（输入缺列/格式错/参数 null/对账不一致/
+  journal 损坏）；3=容量违规——仅 hbm_watermark 的 per_rank_total_hbm_
+  certified 层（journal+checksum 权威重放的逐 rank physical 认证；
+  upper_bound_only 上界层超限只诊断、exit 0）。
 * request_metrics.csv 列序与 EXECUTION_PLAN §2 冻结值逐一相等，否则报错。
 * T_isolated 表缺桶、分桶边界越界、terminal_status 非法等一律非零退出。
 * kv 对账（--reconcile）与 Σshards==total_bytes 不变量以 native 为准。
@@ -64,39 +115,102 @@ REPO_VARIANTS / REPO_HOP_SOURCES 表，按 run_dir 自动识别 repo_variant）�
 ## 测试运行法
 
 ```bash
-# 仓根目录执行（两法等价，57 例当前全过；仅标准库）
+# 仓根目录执行（两法等价，114 例当前全过；仅标准库）
 python3 sh_test_mesh/slo_tools/tests/test_slo_contract.py      # T0 契约
 python3 sh_test_mesh/slo_tools/tests/test_golden_g1g4.py       # T2 golden 骨架
 python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -v
+python3 sh_test_mesh/slo_tools/tests/test_hbm_watermark.py     # WP8 手算
+python3 sh_test_mesh/slo_tools/tests/test_driver_parity.py     # A4 driver 对拍
 ```
 
 T2 golden（G1 单请求无竞争 / G2 双请求排队 / G3 session 两轮 / G4 restore
-三段）目前用合成 request_metrics/manifest/anchor 样本断言手算值；**仿真侧
-fixture 留待 B3 批次**接入真实 2s full 档产物后以同一断言口径复跑。
+三段）用合成 request_metrics/manifest/anchor 样本断言手算值；仿真侧 live
+版为 `tests/run_golden_live.py`，手动触发跑真仿真断言。
 
-## hbm_watermark.py —— WP8 补充主数据源：离线 HBM KV 水位线重建（B2 线5）
+**run_golden_live.py 仓族适配边界（sanctioned 例外，2026-08-28 主控裁决；
+不删除——T2 是《各指标测试建议.md》验收清单必备层；暂不合并——脚手架层
+差异，合并的假绿/假红风险不抵收益）**。三版各自适配的队列格式：
+face+wscllm = 8 列 recompute 队列 + canonical sidecar；sh_1.0+sh_2.0 =
+仓自适应（sh_1.0 8 列 + 15 列 sidecar / sh_2.0 9 列 + 10 列 digest）；
+sh_3.0 = 原生 9 列（含 next_trigger_type）。边界：
+
+* **允许仓族差异**：队列格式构造、sidecar 命名/join、场景驱动脚手架
+  （build/run/CLI 形态）；
+* **必须四仓一致**：G1-G4 各场景的断言语义与期望值推导口径——如 G1 的
+  e2e=queue+prefill+gap+decode 整数恒等、G2 的 queue_ns≈占位者 prefill、
+  G3 的外生等待（human/tool interval）扣除方式与 request_type 透传、
+  G4 的 restore 三段和=总时长与锚点 min/max 归属。改这些断言时四仓
+  必须同步评审，防止某仓的期望值推导悄然漂移。
+
+## hbm_watermark.py —— WP8 补充主数据源：离线 HBM KV 水位线重建（B2 线5；P1 四层可信度改造 2026-08-30）
 
 在线模式 C++ 内存账本为空属既有现状（C++ hbm_watermark 全零为预期），真实
 KV 占用时序在 python 侧产物。经五仓 B0 基线实测核对：`bridge/ledger.jsonl`
-仅 sensing 档落盘且逐 request 记层、**不含 bytes**，不是占用数据源；本脚本
-重放 **results/online_decision_log.jsonl**（KV 动作：恢复/迁移 bytes、逐出
-条目 bytes+victim、P→D 迁移）+ **物化 plan manifest**（manifest.json，含
-prefill_context_tokens/final_context_tokens/history_tokens_before）重建每
-实例占用时间序列。逐仓字段差异收在脚本内 REPO_VARIANTS（先实测登记，不猜测）。
+仅 sensing 档落盘且逐 request 记层、**不含 bytes**，不是占用数据源；占用重放
+的输入 = **results/online_decision_log.jsonl**（KV 动作：恢复/迁移 bytes、
+逐出条目 bytes+victim、P→D 迁移）+ **物化 plan manifest**（manifest.json，含
+prefill_context_tokens/final_context_tokens/history_tokens_before），以及
+（阶段2 起）**results/kv_delta_journal.jsonl** 权威逐 rank delta 账本。
+逐仓字段差异收在脚本内 REPO_VARIANTS（先实测登记，不猜测）。
 
-* **算法**：按文件顺序（=seq）重放，记录内固定次序「逐出 → 恢复/迁移 →
-  增长」；会话所在实例与本地 bytes 由脚本跟踪，恢复方向由跟踪态判定
-  （本地跨实例=搬移、远端/同实例=只增）；已落盘 bytes 与
-  f(tokens)=2·layers·hidden_size·bytes_per_elem·tokens 逐条对账（五仓
-  基线 restore 比值全 1.0，S3 另有 0.5 半层）。增长按 manager 语义
-  "长到 f(目标 tokens)"。
-* **输出**：① `slo_hbm_watermark_series.csv`（逐实例每活动桶：桶末占用/
-  桶内峰值/逐出事件数/逐出 bytes——appendix 时序图数据）；②
-  `slo_hbm_watermark_instances.csv`（逐实例 coverage/容量/时长/峰值/均值/
-  残留/逐出/违规）；③ `--json` 汇总（动作计数、对账直方图、异常计数、
-  容量链证据）。桶长 = manifest `watermark_sample_period_ns`，**null →
-  5,000,000 ns 临时锚点**，全输出（JSON 字段/CSV 列/stderr）标
-  `bucket_ns_provisional=true`（B4 填充后自动生效）。
+* **四层可信度**（tier 由 run_dir 内容自动判定，log 一行说明依据，无新
+  CLI 参数）：
+  * `per_rank_total_hbm_certified`——journal + checksum json 都在场且四道
+    门全过（sha256 相符/行级链自洽/重放终态==证书终态/守恒四项 checks 全
+    true）：流式重放 journal 得逐 rank physical=weight+resident+reserved
+    时序，对行内 capacity_bytes 逐 rank 认证——**正式容量判决只在本层给
+    出**，违规 → stderr 标红 + 退出码 3（fail-loud）。
+  * `resident_kv_exact`——journal 在场、链自洽，checksum 缺失：逐 rank
+    时序精确但无 run 末守恒证书，容量检查如实报告、不作正式判决。
+  * `lifecycle_replay_exact`——journal+checksum 在场、链与终态一致，但守
+    恒 checks 有 false（run 末守恒未过）：生命周期精确、无证书，仅报告。
+  * `upper_bound_only`——journal 缺失（阶段2 前全部旧 run）：decision-log
+    重放对真实占用是**上界**（terminal 退休/decode 准入逐出两缺口不落盘
+    → 17.24TB 级幻影）。**不得输出物理违规认证**：occupancy_valid 恒
+    false、退出码 3 废除（超限只作诊断计数并标注 tier、退出码 0）——旧
+    run 重跑得本层+诊断是预期语义，不是回归。
+  * journal sha256 不符/行级链断裂/终态与证书矛盾 → fail-closed 退出码 2
+    （账本损坏不得静默降级）。journal 在场时 decision-log 重放照常执行，
+    instances CSV 的 `upper_bound_peak_occupancy_bytes` 列与 summary 的
+    `decision_log_upper_bound_comparison` 块输出对照值（差异 = 账本缺口
+    的直接可视化）。
+* **算法**：decision-log 按（文件顺序=seq）重放、journal 按 sequence 流式
+  重放；记录内固定次序「逐出 → 恢复/迁移 → 增长」；会话所在实例与本地
+  bytes 由脚本跟踪，恢复方向由跟踪态判定（本地跨实例=搬移、远端/同实例
+  =只增）；已落盘 bytes 与 f(tokens)=2·layers·hidden_size·bytes_per_elem
+  ·tokens 逐条对账（五仓基线 restore 比值全 1.0，S3 另有 0.5 半层）。
+  增长按 manager 语义"长到 f(目标 tokens)"。
+* **事件流 stats（P1-②）**：peak/mean/residual/violation 在变点（RLE）
+  归并时 O(动作数) 内存计算，与 span/桶长彻底解耦——同事件流换任意桶长
+  stats 逐字段不变（单测断言）。
+* **输出**：① `slo_hbm_intervals.csv`（权威 RLE 变点区间：per instance
+  区间起止 tick、起止占用、区间内峰值、逐出叠加；无损、O(动作数) 行，
+  可从它恢复任意桶长序列——单测断言无损恢复）；②
+  `slo_hbm_plot_series.csv`（绘图产物，**取代旧 slo_hbm_watermark_
+  series.csv**）：全局行预算 R=manifest `watermark_series_row_budget`
+  （5,000,000）约束，B_eff = max(B_requested, ceil(S·N/(R−N)))（S=全局
+  span=末 KV 事件−首 KV 事件、N=有事件实例数）；R≤N 拒绝稠密输出只给
+  RLE（正常完成+log 说明）；流式边算边写（桶行随游标推进逐行落盘，内存
+  O(实例数+活跃游标)，series 行字典全量物化已消灭）；③
+  `slo_hbm_watermark_instances.csv`（逐实例 tier/coverage/容量/桶长元
+  数据/时长/峰值/均值/残留/逐出/违规 + 上界对照列）；④ `--json` 汇总。
+  桶长 = manifest `watermark_sample_period_ns`，null → 5,000,000 ns 临时
+  锚点并全输出标 `bucket_ns_provisional=true`（该字段语义=缺正式锚点，
+  与行预算调整元数据 resolution_adjusted/adjustment_reason/row_budget/
+  span_ns/bucket_origin_ns 分立，不得混用）。
+* **容量三口径（P1-③，summary `capacity_calibers` 分列；逐 rank 剖面函数
+  逐字拷贝自 workload/llama2_7b_inference/session_kv_manager.py 的
+  model_weight_shard_bytes_by_tp_rank(:185)/kv_cache_shard_bytes_for_
+  tokens(:220)，同步义务见脚本内注记）**：
+  1. 正式认证：逐 rank physical=weight+resident+reserved ≤ capacity_bytes
+     （数据源=journal 行；仅 certified 层构成判决）；
+  2. resident 硬上限：reservation=0 时任意时刻成立 =
+     min_r ⌊(capacity−weight_r)/kv_r⌋ token × Σkv_r（llama2_7b/swiglu/
+     TP6/160GiB 锚定 1,723,864 token = **903,801,208,832 B**；journal 模式
+     下逐 rank 超限计数为诊断口径）；
+  3. 水位目标：kv_reserve_context_tokens(1M/rank) 扣减后同式（锚定
+     723,864 token = **379,513,208,832 B**）——非任意时刻上限，**仅报告
+     不作判决**。
 * **容量链**（逐仓登记，不编造）：trace_config.csv config 行
   `local_hbm_capacity_profile` → 仓内 `sh_test_mesh/hardware/*.json` 的
   `local-hbm.capacity-profiles[<profile>].bytes`（每 NPU）×
@@ -104,36 +218,37 @@ prefill_context_tokens/final_context_tokens/history_tokens_before）重建每
   五仓 B0 均为 validation-160gib=171,798,691,840 B/NPU × 6 =
   1,030,792,151,040 B/实例。任一环缺失 → capacity=NA，违规检查降级为
   "峰值记录"并注明。
-* **违规判定**：coverage=full/full_reconciled 且容量已知时，
-  occupancy>capacity 的事件点计数**必须为 0**；>0 → stderr 标红 + 退出码
-  3（与 fail-closed 的 2 区分）——可能是重建口径错误，也可能是真实超卖，
-  宁可报错不可静默。
-* **逐仓覆盖度**（B0 基线 60s_summary 实测）：
+* **退出码**：0 正常（含上界/无证书层的超限诊断）；2 fail-closed（缺文
+  件/缺列/结构错/重放不一致/journal 损坏）；3 容量违规——**仅
+  per_rank_total_hbm_certified 层**的逐 rank physical > capacity_bytes。
+* **逐仓覆盖度**（decision-log 重放路径的口径；B0 基线 60s_summary 实测）：
   * FACE/S1：`full`——逐出条目全量落盘（bytes+victim+实例），重放闭合，
     0 异常 0 违规（FACE 另有 9 例 decode 准入静默逐出经 RECOMPUTE 断言对账）。
   * W：`full_reconciled`——账本缺口：decode 准入期逐出
     （decode_target_evictions 在 prefill 记录落盘后才累积，decode 记录不含
-    逐出列表）不落盘；重放在 `history_cache_state_before=EVICTED` 的恢复点
-    按账本断言对账扣减（silent_evictions_reconciled；静默逐出真实时刻不可
-    见，该窗口内占用为上界）。
+    逐出列表）不落盘，full_tracelab 本 run 实测 7,923 例
+    RECOMPUTE(state_before=EVICTED) 隐含静默逐出（802 为 FACE 基线旧数）；
+    重放在 `history_cache_state_before=EVICTED` 的恢复点按账本断言对账扣减
+    （silent_evictions_reconciled；静默逐出真实时刻不可见，该窗口内占用
+    为上界）。evict_bytes 列在 full/full_reconciled 均输出真实值（P1-⑤；
+    NA 仅保留 count_only 档）。
   * S3：`full_reconciled`——账本缺口：completion
     `kv_location_after_completion=partial_hbm_remote` 的 suffix 半层释放不
     落盘；重放在下次恢复点按「恢复前本地 = f(h) − 恢复 bytes」对账
     （restore_prefix_reconciled）。
   * S2：B3-6（2026-08-27）起新产物逐条序列化 *_evictions（victim/bytes，
     字段名同 S1）+ history_transfers（partial 两段式恢复逐段对象）→
-    字段在场即 `full`（逐出可归因、恢复逐段对账、completion 自身释放已含
-    于 completion_evictions 故关闭 kv_location_after_completion 归因）；
-    旧产物（B3 前基线）回退 `count_only`——只有 *_eviction_count，他人
-    逐出不可归因：occupancy 为上界（未归因逐出不扣减），violation 检查
-    降级，occupancy_valid=false，自身会话去向经
-    kv_location_after_completion 归因（remote=全量扣减；partial=比例
-    未知，保留+计数，不臆造）。
+    字段在场即 `full`；旧产物（B3 前基线）回退 `count_only`——只有
+    *_eviction_count，他人逐出不可归因：occupancy 为上界（未归因逐出不
+    扣减），自身会话去向经 kv_location_after_completion 归因（remote=全量
+    扣减；partial=比例未知，保留+计数，不臆造）。
 * **fail-closed**：缺 token manifest/trace_config、tick 回退、请求集两源
   不一致、重复决策、负占用、逐出对象不在跟踪态、逐出 bytes 超跟踪值、
   增长为负 → 退出码 2。软异常（source/kind/bytes 对账不符）计数入 JSON 不
   中断。
-* **测试**：`tests/test_hbm_watermark.py`（16 例：手算桶时序/峰值/均值/
-  逐出/违规计数、五仓语义各一例、fail-closed 六例、列序冻结）；运行法同上
+* **测试**：`tests/test_hbm_watermark.py`（34 例：手算桶时序/峰值/均值/
+  逐出/违规计数、四仓语义各一例、fail-closed 六例、列序冻结、四层 tier
+  判定（含"聚合过单 rank 超"锚定用例）、三口径锚定数值、stats 多桶长
+  不变、RLE 无损恢复、行预算/B_eff、真 journal 对拍）；运行法同上
   （`python3 sh_test_mesh/slo_tools/tests/test_hbm_watermark.py`）。
 

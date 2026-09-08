@@ -59,7 +59,6 @@ class Workload : public Callable {
     void issue(const ExecutionDriven::NodeView& node);
     void issue_metadata(const ExecutionDriven::NodeView& node);
     void issue_replay(const ExecutionDriven::NodeView& node);
-    void issue_remote_mem(const ExecutionDriven::NodeView& node);
     void issue_comp(const ExecutionDriven::NodeView& node);
     void issue_comm(const ExecutionDriven::NodeView& node);
     void issue_coll_comm(const ExecutionDriven::NodeView& node);
@@ -73,7 +72,7 @@ class Workload : public Callable {
     void report();
 
     Chakra::ETFeeder* et_feeder;
-    std::unordered_map<int, CommunicatorGroup*> comm_groups;
+    std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;
     Sys* sys;
     Statistics* stats;
@@ -109,9 +108,24 @@ class Workload : public Callable {
     std::shared_ptr<spdlog::logger> workload_logger_;
 
     // From the node view, find out the corresponding communicator group, and
-    // return the pointer. If no communicator group is specified for this
-    // node, return nullptr.
-    CommunicatorGroup* extract_comm_group(const ExecutionDriven::NodeView& node);
+    // return its shared owner. If no communicator group is specified for this
+    // node, return nullptr. A collective DataSet retains this owner so an
+    // in-flight definition survives later metadata replacement.
+    std::shared_ptr<CommunicatorGroup> extract_comm_group(
+        const ExecutionDriven::NodeView& node);
+
+    // Compact online Statistics keeps its per-node transient data in the
+    // NodeStore record.  These helpers centralize the no-operator-map service
+    // path and the terminal single-fire guard; static ET callers never enter
+    // them.
+    ExecutionDriven::OnlineStatisticsState&
+    online_statistics_state_or_fail(uint64_t node_id);
+    void start_online_statistics(const ExecutionDriven::NodeView& node,
+                                 Tick start_time);
+    void complete_online_statistics(const ExecutionDriven::NodeView& node,
+                                    Tick end_time);
+    void mark_online_terminal_or_fail(uint64_t node_id);
+    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
 
     // Body shared by every generic (wlhd) node completion: node release /
     // stats / metrics / terminal record / dependency release / static-mode

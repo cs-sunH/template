@@ -24,7 +24,8 @@ test -- no network simulation, no baseline artifacts touched:
           service / resource state; per (request_id, stage, generation)
           grouping; finished nodes excluded; mark_issued moves the resource
           state from free to in-flight).
-  Part E  M2 node GC (2026-08-23, --online-node-gc): quiescent-point
+  Part E  M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed
+          by the B.3 cleanup (2026-09-05) -- collection always on): quiescent-point
           collection of finished childless nodes, parent retention while a
           child is unfinished, dead-parent no-op onto erased ids, and the
           gc-off (default) pre-M2 never-erase behavior.
@@ -186,7 +187,8 @@ void test_node_store() {
 }
 
 // ---------------------------------------------------------------- Part E --
-// M2 node GC (2026-08-23, --online-node-gc): finished childless nodes are
+// M2 node GC (2026-08-23; B.3 cleanup 2026-09-05 removed the --online-node-gc
+// CLI arm -- collection always on): finished childless nodes are
 // erased at the quiescent collect_garbage() point (never inside
 // finish_node); a parent is retained while any child is unfinished and is
 // collected by the last child's finish; edges onto an erased (i.e. already

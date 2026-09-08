@@ -10,8 +10,6 @@ consumed by AstraSim_Analytical_Congestion_Aware_LocalHbmTest
   system.json                   roofline on, local-mem-bw 6 GB/s (=6 B/ns),
                                 local-mem-latency 100 ns, peak-perf 1 TFLOPS,
                                 hbm-bandwidth-contention on
-  remote_memory.json            NO_MEMORY_EXPANSION (this repository has no
-                                off-chip memory pool)
   fast/network.yml              link 100 GB/s, latency 20 ns
   slow/network.yml              link 0.5 GB/s, latency 20 ns
   legacy/system.json            same as system.json with
@@ -90,7 +88,6 @@ SYSTEM_JSON_LEGACY = """{
 }
 """
 
-REMOTE_MEMORY_JSON = '{\n    "memory-type": "NO_MEMORY_EXPANSION"\n}\n'
 
 FAST_NETWORK_YML = (
     "topology: [ FullyConnected ]\n"
@@ -159,8 +156,6 @@ def main() -> None:
     (OUTPUT_DIR / "system.json").write_text(SYSTEM_JSON, encoding="utf-8")
     (OUTPUT_DIR / "legacy" / "system.json").write_text(
         SYSTEM_JSON_LEGACY, encoding="utf-8")
-    (OUTPUT_DIR / "remote_memory.json").write_text(
-        REMOTE_MEMORY_JSON, encoding="utf-8")
     (OUTPUT_DIR / "fast" / "network.yml").write_text(
         FAST_NETWORK_YML, encoding="utf-8")
     (OUTPUT_DIR / "slow" / "network.yml").write_text(

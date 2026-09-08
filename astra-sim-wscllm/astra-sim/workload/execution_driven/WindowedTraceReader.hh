@@ -66,13 +66,7 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      comparison anchors on this). What changes is only that a
      NON-monotonic input (the full TraceLab queue) now submits every turn-0
      BEFORE its declared arrival instead of 491 times after.
-  5. `--request-window-rows` is demoted to ADVISORY (design ruling
-     2026-08-30, REPORT item). The old window semantics -- bounding how far
-     ahead rows may be READ -- is exactly the defect: it made turn-0
-     discovery depend on file position. The knob is still parsed, stored,
-     checkpointed and reported ("calendar reader: advisory"), including 0,
-     but it no longer constrains discovery or submission in any way.
-  6. PROVENANCE GATE (fail-closed). The index pass computes over the raw
+  5. PROVENANCE GATE (fail-closed). The index pass computes over the raw
      file: FNV-1a 64 (offset basis 14695981039346656037, prime 1099511628211,
      per byte: h ^= b; h *= prime, all mod 2^64 -- byte-for-byte the same
      algorithm as the Python materializer's sidecar writer), csv byte count,
@@ -83,7 +77,7 @@ NEW DESIGN (frozen 2026-08-30, 2问题分析与解决方案kimi.md §4.3):
      fails the run with [Error] + exit BEFORE any Submit. An absent sidecar
      logs one "[online] provenance sidecar: absent (no gate)" line and
      continues (smoke fixtures materialized by older scripts).
-  7. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
+  6. ARRIVAL TIME AUDIT + RUN-END GATE. Every turn-0 entry records its
      declared arrival and the simulation tick at which its Submit was
      enqueued (discovered; via RequestIngress::current_time()). The ingress
      records the effective alarm tick per static Submit. At run end the
@@ -134,18 +128,12 @@ class WindowedTraceReader {
     /// @param csv_path     8-column request queue CSV (same schema as the
     ///                     phase-1 loader).
     /// @param ingress      shared RequestIngress (合同: 共用同一 ingress).
-    /// @param high_water   ADVISORY ONLY since the P0 fix (2026-08-30): the
-    ///                     turn-0 calendar is always complete and submissions
-    ///                     always follow arrival order; this value no longer
-    ///                     bounds discovery. Parsed/reported/checkpointed for
-    ///                     compatibility (0 included).
     /// @param max_arrival_ns simulation input window upper bound; turn-0
     ///                     rows with arrival > this are rejected (counted,
     ///                     never submitted). Default 0 = UNBOUNDED; a nonzero
     ///                     value is an explicit experiment knob whose drops
     ///                     fail-close the run-end completion audit.
     WindowedTraceReader(const std::string& csv_path, RequestIngress& ingress,
-                        size_t high_water = 128,
                         uint64_t max_arrival_ns = 0);
 
     /// Simulation thread only. First call: run the streaming index pass,
@@ -191,8 +179,6 @@ class WindowedTraceReader {
     /// Exact current count of submitted turn-0 rows whose alarm has not
     /// fired yet.
     size_t current_window_occupancy() const { return outstanding_rows_.size(); }
-    /// Advisory window knob (see constructor).
-    size_t high_water() const { return high_water_; }
 
     /// Index-pass provenance statistics (all computed over the raw file
     /// bytes; identical definitions on the Python materializer side).
@@ -208,8 +194,7 @@ class WindowedTraceReader {
         bool session_blocks_contiguous = true;
     };
     const ProvenanceStats& provenance() const { return prov_; }
-    /// Sidecar comparison outcome for the checkpoint JSON.
-    /// "matched" / "absent-no-gate".
+    /// Sidecar comparison outcome ("matched" / "absent-no-gate").
     const std::string& provenance_sidecar_status() const {
         return provenance_status_;
     }
@@ -256,22 +241,6 @@ class WindowedTraceReader {
     /// stats, io ns, throughput, late split, rejected).
     void report(std::ostream& os) const;
 
-    /// Phase 7 §10.5 / P0 fix: run-end audit snapshot (now also carrying
-    /// the provenance block and the full arrival audit). JSON, atomically
-    /// written (tmp + rename). It deliberately is NOT a restart checkpoint:
-    /// the reader alone cannot serialize EventQueue alarms, RequestIngress
-    /// commands/one-shot indices, ServiceCoordinator counters, or
-    /// MetricCollector parent state. Returns false if the audit snapshot
-    /// could not be written; failure never changes simulation state.
-    bool write_checkpoint(const std::string& path) const;
-
-    /// Compatibility API retained fail-closed. Run-end snapshots are audit
-    /// evidence only, so every call returns false and leaves both the reader
-    /// and ingress untouched. A future restart feature must checkpoint the
-    /// complete event/ingress/service/metrics state atomically instead of
-    /// partially rewinding this reader.
-    bool read_checkpoint(const std::string& path);
-
   private:
     struct CalendarEntry {
         uint64_t arrival_ns = 0;
@@ -284,7 +253,6 @@ class WindowedTraceReader {
 
     std::string csv_path_;
     RequestIngress& ingress_;
-    size_t high_water_;  // advisory (P0 fix)
     uint64_t max_arrival_ns_;
     bool header_seen_ = false;
     bool indexed_ = false;  // index pass completed (sidecar gate included)

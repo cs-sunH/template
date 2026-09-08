@@ -27,7 +27,8 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
     : sys(sys),
       workload(workload),
       last_update_tick(Sys::boostedTick()),
-      event_generation(0) {
+      event_generation(0),
+      scheduled_transition_event() {
     if (sys == nullptr || workload == nullptr) {
         throw std::invalid_argument("local HBM model requires Sys and Workload");
     }
@@ -35,6 +36,10 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
         throw std::invalid_argument(
             "local HBM sharing requires positive bandwidth and peak compute");
     }
+}
+
+LocalHbmBandwidthModel::~LocalHbmBandwidthModel() {
+    cancel_scheduled_transition();
 }
 
 bool LocalHbmBandwidthModel::has_active_jobs() const {
@@ -162,7 +167,21 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
     last_update_tick = now;
 }
 
+void LocalHbmBandwidthModel::cancel_scheduled_transition() {
+    if (scheduled_transition_event.valid()) {
+        static_cast<void>(sys->cancel_event(scheduled_transition_event));
+    }
+    scheduled_transition_event.reset();
+}
+
+void LocalHbmBandwidthModel::destroy_transition_data(CallData* data) {
+    delete static_cast<TransitionData*>(data);
+}
+
 void LocalHbmBandwidthModel::schedule_next_transition() {
+    // Every reallocation replaces the old prediction. The old callback would
+    // only hit its generation guard, so delete its payload/list node now.
+    cancel_scheduled_transition();
     ++event_generation;
     if (!has_active_jobs()) {
         return;
@@ -205,11 +224,12 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     }
     Tick delay = static_cast<Tick>(std::ceil(next_ns));
     delay = std::max<Tick>(1, delay);
-    sys->register_event(
+    scheduled_transition_event = sys->register_event_cancellable(
         this,
         EventType::General,
         new TransitionData(event_generation),
-        delay);
+        delay,
+        destroy_transition_data);
 }
 
 void LocalHbmBandwidthModel::issue_job(
@@ -289,6 +309,11 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     if (generation != event_generation) {
         return;
     }
+    // Sys popped this callback before invoking us, so it is no longer
+    // cancellable. Forget the consumed handle before a completion callback can
+    // install the next prediction. A defensive stale-generation callback must
+    // leave a newer handle untouched.
+    scheduled_transition_event.reset();
 
     const Tick now = Sys::boostedTick();
     advance_to(now);

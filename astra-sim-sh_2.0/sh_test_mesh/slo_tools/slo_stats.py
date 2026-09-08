@@ -37,9 +37,9 @@ from slo_common import (  # noqa: E402
     assert_no_proxy_columns, bucket_index, default_manifest_path,
     detect_repo_variant, emit_json, fail, fmt_ratio, load_request_manifest,
     load_slo_manifest, manifest_requests, nearest_rank_percentile,
-    open_output, parse_int, parse_ns, read_request_metrics,
-    require_bucket_edges, require_param_number, run_main,
-    validated_request_rows, write_csv,
+    nearest_rank_percentile_many, open_output, parse_int, parse_ns,
+    read_request_metrics, require_bucket_edges, require_param_number,
+    run_main, validated_request_rows, write_csv, BoundedSorter,
 )
 
 MAIN_PCTS = (50, 99)
@@ -79,8 +79,8 @@ def add_output_arg(parser: argparse.ArgumentParser, name: str) -> None:
 # e2e-stats
 # ---------------------------------------------------------------------------
 
-def cmd_e2e_stats(args: argparse.Namespace) -> int:
-    rows = load_rows(args.run_dir)
+def cmd_e2e_stats(args: argparse.Namespace, ctx=None) -> int:
+    rows = ctx.rows if ctx is not None else load_rows(args.run_dir)
     values = completed_e2e(rows)
     pcts = list(MAIN_PCTS)
     if args.extra_pct:
@@ -92,10 +92,13 @@ def cmd_e2e_stats(args: argparse.Namespace) -> int:
             if not 0 < pct <= 100:
                 fail(f"--extra-pct 百分位非法：{pct}")
         pcts.extend(extras)
+    # 先分位后转单位：分位在整数纳秒样本上取值，ms 只作展示换算。
+    # 多分位共享一次有界排序（A4；公式与逐次 nearest_rank_percentile
+    # 完全一致——同一 sorted 序列上的同一 index 公式）。
+    pct_values = nearest_rank_percentile_many(
+        values, [pct / 100.0 for pct in pcts])
     rows_out = []
-    for pct in pcts:
-        # 先分位后转单位：分位在整数纳秒样本上取值，ms 只作展示换算。
-        value = nearest_rank_percentile(values, pct / 100.0)
+    for pct, value in zip(pcts, pct_values):
         rows_out.append((f"e2e_p{pct}", "ns", len(values), value,
                          f"{value / 1e6:.3f}"))
     rows_out.append(("n_completed", "requests", len(values), len(values), NA))
@@ -277,10 +280,14 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
         t_iso = t_isolated[(pb, db)]
         out_rows.append((
             pb, db,
-            f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g}"
-            f"{' inclusive' if pb == len(prefill_edges) - 2 else ''}]",
-            f"[{decode_edges[db]:g},{decode_edges[db + 1]:g}"
-            f"{' inclusive' if db == len(decode_edges) - 2 else ''}]",
+            # 2026-09-05 口径裁决：interior edges 为左桶闭上界（右闭），
+            # 末桶无上限（吸收 x > edges[-1]）——与 campaign BucketGrid 对齐
+            (f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g} inclusive]"
+             if pb < len(prefill_edges) - 2
+             else f"[{prefill_edges[pb]:g},+inf)"),
+            (f"[{decode_edges[db]:g},{decode_edges[db + 1]:g} inclusive]"
+             if db < len(decode_edges) - 2
+             else f"[{decode_edges[db]:g},+inf)"),
             n, t_iso,
             nearest_rank_percentile(entry["e2e"], 0.50),
             nearest_rank_percentile(entry["e2e"], 0.99),
@@ -310,9 +317,13 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
 # session
 # ---------------------------------------------------------------------------
 
-def cmd_session(args: argparse.Namespace) -> int:
-    rows = load_rows(args.run_dir)
-    manifest = load_request_manifest(args.run_dir, args.request_manifest)
+def cmd_session(args: argparse.Namespace, ctx=None) -> int:
+    if ctx is not None:
+        rows = ctx.rows
+        manifest = ctx.request_manifest
+    else:
+        rows = load_rows(args.run_dir)
+        manifest = load_request_manifest(args.run_dir, args.request_manifest)
     per_request = {str(r.get("request_id")): r
                    for r in manifest_requests(manifest) if r.get("request_id")}
     sessions: dict[str, list[dict]] = {}
@@ -347,10 +358,18 @@ def cmd_session(args: argparse.Namespace) -> int:
             entry = per_request.get(str(turn.get("request_id")), {})
             human = entry.get("human_time_ns")
             tool = entry.get("tool_time_ns")
-            if human is None and tool is None:
-                # human/tool 均未透传（WP2 之前）→ 无法计算 T_session。
+            if "human_time_ns" not in entry and "tool_time_ns" not in entry:
+                # 透传字段整体缺席（WP2 之前的 manifest）→ 无法计算 T_session。
                 missing.append(f"{turn.get('request_id')}:human_time_ns")
                 missing.append(f"{turn.get('request_id')}:tool_time_ns")
+                continue
+            if human is None and tool is None:
+                # B4 语义修正（2026-08-26，S3 异常③）：字段已在场而双侧
+                # null = turn-0（会话首行，窗口内无前向 gap）或 0-gap 无
+                # 类型延续——对本会话 Σ(human+tool) 的贡献为 0，不是缺数据
+                # （缺数据=键缺席，上一分支）。计入 soft_missing 留痕。
+                soft_missing.append(
+                    f"{turn.get('request_id')}:human/tool=0(turn0/0-gap)")
                 continue
             # trace 中 human_time/tool_time 逐行互斥：缺侧按 0 计。
             if human is None:
@@ -407,8 +426,8 @@ def cmd_session(args: argparse.Namespace) -> int:
 # backlog
 # ---------------------------------------------------------------------------
 
-def cmd_backlog(args: argparse.Namespace) -> int:
-    rows = load_rows(args.run_dir)
+def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
+    rows = ctx.rows if ctx is not None else load_rows(args.run_dir)
     events: list[tuple[int, int]] = []  # (time, delta)
     missing = 0
     for row in rows:
@@ -423,7 +442,12 @@ def cmd_backlog(args: argparse.Namespace) -> int:
     if not events:
         fail("backlog：没有任何 arrival/completion 事件（arrival_ns 全 NA？）")
     # 同刻先减后加：完成事件先落地，再到达（确定性约定）。
-    events.sort(key=lambda e: (e[0], e[1]))
+    # A4：排序走 BoundedSorter（比较键 (time, delta) 原样——整数元组
+    # 全序，外部归并输出 ≡ list.sort(key=(e[0], e[1]))）。
+    sorter = BoundedSorter()
+    for event in events:
+        sorter.add(event)
+    events = list(sorter.sorted_iter())
     series: list[tuple[int, int]] = []
     current = 0
     last_time = None
@@ -466,13 +490,17 @@ def cmd_backlog(args: argparse.Namespace) -> int:
 # warmup
 # ---------------------------------------------------------------------------
 
-def cmd_warmup(args: argparse.Namespace) -> int:
-    manifest = load_slo_manifest(args.manifest or default_manifest_path())
+def cmd_warmup(args: argparse.Namespace, ctx=None) -> int:
+    if ctx is not None:
+        manifest = ctx.slo_manifest
+        rows = ctx.rows
+    else:
+        manifest = load_slo_manifest(args.manifest or default_manifest_path())
+        rows = load_rows(args.run_dir)
     window_ns = require_param_number(manifest, "warmup_window")
     threshold = require_param_number(manifest, "warmup_change_threshold")
     if window_ns <= 0 or threshold < 0:
         fail("warmup_window/warmup_change_threshold 必须为正/非负")
-    rows = load_rows(args.run_dir)
     completed = [row for row in rows
                  if row["terminal_status"] == "completed"
                  and row["e2e_ns"] is not None]
@@ -487,8 +515,9 @@ def cmd_warmup(args: argparse.Namespace) -> int:
                and row["arrival_ns"] >= t0 + window_ns]
     if not trimmed:
         fail(f"warmup：剔除窗口 {window_ns:.0f}ns 后无剩余样本")
-    p99_full = nearest_rank_percentile(full_values, 0.99)
-    p99_trimmed = nearest_rank_percentile(trimmed, 0.99)
+    # A4：两组 P99 各走一次有界排序（公式不变）。
+    p99_full = nearest_rank_percentile_many(full_values, [0.99])[0]
+    p99_trimmed = nearest_rank_percentile_many(trimmed, [0.99])[0]
     relative = abs(p99_full - p99_trimmed) / p99_full if p99_full else 0.0
     payload = {
         "command": "warmup",

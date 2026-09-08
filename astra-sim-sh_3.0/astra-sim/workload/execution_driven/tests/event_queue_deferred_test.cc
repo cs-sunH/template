@@ -18,6 +18,8 @@ Cases:
      (deferred flush mode) does not trip the EventQueue strict-increase assert
      and the flow completes; the legacy (non-deferred) start_flow path still
      works from within a physical event handler.
+  F. Same-time physical FIFO remains exact with the inline-first EventList:
+     callback-appended events run after already queued events in the same pass.
 
 Build (from template/astra-sim-wscllm):
   g++ -std=c++17 -I extern/network_backend/analytical/include \
@@ -428,6 +430,47 @@ void test_case_e() {
                 "current_time) trips :31 on next proceed; future event OK\n");
 }
 
+// ---------------------------------------------------------------------------
+// case F: inline-first EventList preserves callback-appended same-time FIFO
+// ---------------------------------------------------------------------------
+
+struct CaseFCtx {
+    EventQueue* eq = nullptr;
+    std::vector<int> log;
+};
+
+void case_f_nested(void* v) {
+    static_cast<CaseFCtx*>(v)->log.push_back(3);
+}
+
+void case_f_tail_nested(void* v) {
+    static_cast<CaseFCtx*>(v)->log.push_back(4);
+}
+
+void case_f_first(void* v) {
+    auto* const c = static_cast<CaseFCtx*>(v);
+    c->log.push_back(1);
+    c->eq->schedule_event(c->eq->get_current_time(), case_f_nested, c);
+}
+
+void case_f_tail(void* v) {
+    auto* const c = static_cast<CaseFCtx*>(v);
+    c->log.push_back(2);
+    c->eq->schedule_event(c->eq->get_current_time(), case_f_tail_nested, c);
+}
+
+void test_case_f() {
+    EventQueue eq;
+    CaseFCtx ctx;
+    ctx.eq = &eq;
+    eq.schedule_event(10, case_f_first, &ctx);
+    eq.schedule_event(10, case_f_tail, &ctx);
+    eq.proceed();
+    assert(ctx.log == std::vector<int>({1, 2, 3, 4}));
+    assert(eq.finished());
+    std::printf("[case F] PASS: inline-first same-time FIFO / nested append\n");
+}
+
 }  // namespace
 
 int main() {
@@ -437,6 +480,7 @@ int main() {
     run_fs_scenario(/*deferred_mode=*/true);
     run_fs_scenario(/*deferred_mode=*/false);
     test_case_e();
+    test_case_f();
     std::printf("ALL TESTS PASSED\n");
     return 0;
 }

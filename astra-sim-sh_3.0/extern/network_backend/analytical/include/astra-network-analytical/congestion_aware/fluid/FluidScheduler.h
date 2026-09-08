@@ -10,9 +10,13 @@ LICENSE file in the root directory of this source tree.
 #include "congestion_aware/fluid/FluidFlow.h"
 #include "congestion_aware/fluid/FluidLinkState.h"
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <optional>
 #include <queue>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace NetworkAnalyticalCongestionAware {
 
@@ -44,6 +48,8 @@ class FluidScheduler {
                    uint64_t max_active_flows,
                    uint64_t max_route_memberships,
                    uint64_t progress_report_event_interval) noexcept;
+
+    ~FluidScheduler() noexcept;
 
     void start_flow(NetworkAnalytical::ChunkSize bytes,
                     std::shared_ptr<const FluidRoute> route,
@@ -130,6 +136,22 @@ class FluidScheduler {
         uint64_t active_ns;    ///< time with at least one active flow
     };
 
+    /// Finalization callback for one non-empty (bucket, link) contribution.
+    /// Calls arrive in strictly increasing bucket order and ascending LinkId
+    /// order within each bucket. Returning false is treated as a fail-closed
+    /// output failure.
+    using LinkObserverBucketVisitor = bool (*)(void*, uint64_t, LinkId, uint64_t);
+
+    /// Bounded-residency accounting exposed for the focused observer test.
+    /// spool_record_count is on-disk logical history, never resident rows.
+    struct LinkObserverStorage {
+        size_t resident_bucket_entries;
+        size_t resident_bucket_capacity;
+        size_t active_link_count;
+        uint64_t spool_record_count;
+        bool spool_open;
+    };
+
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
 
     [[nodiscard]] bool link_observer_enabled() const noexcept;
@@ -141,14 +163,15 @@ class FluidScheduler {
     /// scheduler event are not attributed).
     [[nodiscard]] NetworkAnalytical::EventTime link_observer_window_ns() const noexcept;
 
-    /// Per-link sparse bucket rows: link_observer_bucket_bytes()[link][b]
-    /// is the whole bytes link carried during bucket b (trailing zero
-    /// buckets omitted).
-    [[nodiscard]] const std::vector<std::vector<uint64_t>>&
-    link_observer_bucket_bytes() const noexcept;
+    /// Close the last partial bucket, then replay each non-empty contribution
+    /// from the anonymous spool. No all-run bucket array is materialized.
+    void link_observer_visit_buckets(LinkObserverBucketVisitor visitor,
+                                     void* context) noexcept;
 
     [[nodiscard]] const std::vector<LinkObserverTotals>&
     link_observer_totals() const noexcept;
+
+    [[nodiscard]] LinkObserverStorage link_observer_storage() const noexcept;
 
     /// Free the integration arrays after the records were emitted (RSS
     /// discipline; the observer stays disabled afterwards).
@@ -178,13 +201,9 @@ class FluidScheduler {
         uint64_t generation;
     };
 
-    struct TailContext {
-        FluidScheduler* scheduler;
-        FlowId flow_id;
-    };
-
     static void flush_callback(void* context) noexcept;
     static void service_wakeup_callback(void* context) noexcept;
+    static void cancel_wakeup_callback(void* context) noexcept;
     static void tail_arrival_callback(void* context) noexcept;
 
     /// WP6 link observer: integrate [last_tick, now) with the CURRENT
@@ -193,6 +212,16 @@ class FluidScheduler {
     /// (flush_pending_starts / handle_service_wakeup) pass through before
     /// touching any rate or membership.
     void link_observer_integrate(NetworkAnalytical::EventTime now) noexcept;
+    void link_observer_adjust_flow_rate(const FluidFlow& flow,
+                                        NetworkAnalytical::Bandwidth old_rate,
+                                        NetworkAnalytical::Bandwidth new_rate) noexcept;
+    void link_observer_activate_link(LinkId link_id) noexcept;
+    void link_observer_deactivate_link(LinkId link_id) noexcept;
+    void link_observer_flush_current_bucket() noexcept;
+    void link_observer_finish() noexcept;
+    void link_observer_write_u64(uint64_t value) noexcept;
+    [[noreturn]] void link_observer_fail(const char* reason) const noexcept;
+    [[noreturn]] void link_observer_fail_io(const char* operation) const noexcept;
 
     void begin_dirty_batch() noexcept;
     void mark_dirty(FlowId flow_id) noexcept;
@@ -201,6 +230,7 @@ class FluidScheduler {
     void remove_memberships(FluidFlow& flow) noexcept;
     void clean_completion_heap() noexcept;
     void maybe_rebuild_completion_heap() noexcept;
+    void cancel_scheduled_wakeup() noexcept;
     void schedule_next_wakeup() noexcept;
     void schedule_tail_arrival(FluidFlow& flow, NetworkAnalytical::EventTime now) noexcept;
     void check_resource_limits(uint64_t new_flows, uint64_t new_memberships) const noexcept;
@@ -219,6 +249,7 @@ class FluidScheduler {
     std::priority_queue<CompletionEntry, std::vector<CompletionEntry>, CompletionLater> completion_heap;
     uint64_t wakeup_generation;
     std::optional<NetworkAnalytical::EventTime> scheduled_wakeup_time;
+    NetworkAnalytical::EventHandle scheduled_wakeup_event;
     bool flush_scheduled;
     bool event_loop_started;
     bool deferred_flush_mode;
@@ -244,17 +275,25 @@ class FluidScheduler {
     std::chrono::steady_clock::time_point wall_start_time;
 
     /// WP6 link observer state (empty/disabled until enabled by the online
-    /// main; see the public block above). rate_sum_scratch and
-    /// totals_scratch avoid per-event/per-query allocations.
+    /// main; see the public block above). Only per-link state and the current
+    /// bucket remain resident; closed bucket records live in an anonymous
+    /// tmpfile() until the ordered end-of-run replay.
     struct LinkObserverState {
         bool enabled = false;
         uint64_t bucket_ns = 0;
         EventTime last_tick = 0;
         std::vector<long double> carry;                // per-link fractional bytes
-        std::vector<long double> rate_sum_scratch;     // per-link Bpns sum
+        std::vector<long double> rate_sum;             // maintained per-link Bpns sum
         std::vector<uint64_t> total_bytes;             // per-link whole bytes
         std::vector<uint64_t> active_ns;               // per-link active time
-        std::vector<std::vector<uint64_t>> bucket_bytes;  // per-link sparse rows
+        std::vector<LinkId> active_links;              // sorted links with memberships
+        std::vector<uint64_t> current_bucket_bytes;    // one bucket, indexed by link
+        std::vector<LinkId> current_bucket_links;      // non-zero rows in that bucket
+        uint64_t current_bucket = 0;
+        bool current_bucket_open = false;
+        std::FILE* spool = nullptr;                    // tmpfile(), unlinked on open
+        uint64_t spool_record_count = 0;
+        bool finalized = false;
         mutable std::vector<LinkObserverTotals> totals_scratch;  // query result
     };
     LinkObserverState link_observer_;

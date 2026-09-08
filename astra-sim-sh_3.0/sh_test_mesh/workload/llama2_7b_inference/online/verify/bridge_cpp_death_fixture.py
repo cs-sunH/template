@@ -61,7 +61,6 @@ def _request(seq):
         }],
         "completed_groups": [],
         "completed_nodes": [],
-        "retry_items": [],
         "affected_ranks": [],
         "snapshot_handle": {"epoch": seq, "tick": 1000 + seq, "kind": ""},
         "snapshot": {},

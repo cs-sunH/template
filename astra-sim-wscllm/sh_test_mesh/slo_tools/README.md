@@ -1,13 +1,14 @@
 # slo_tools —— SLO 离线后处理工具集（WP3/WP4/WP5/WP7 + Hop-Bytes）
 
-五仓同名同构（本目录五个仓逐字节相同；逐仓语义差异全部收在脚本内的
+四仓同名同构（本目录各仓逐字节相同，本仓自 2026-09-05 A.5 起存在预期差异，见下；逐仓语义差异全部收在脚本内的
 REPO_VARIANTS / REPO_HOP_SOURCES 表，按 run_dir 自动识别 repo_variant）。
 唯一 sanctioned 例外：tests/run_golden_live.py（见"测试运行法"节的
 仓族适配边界声明，2026-08-28 主控裁决）。
-wscllm 工作树附加说明（2026-09-02，relevant_distributed 改造）：
-hopbytes.py（B4a 起）与 kv_cache_adapter.py、relevant_observations.py
-（T3 起）在本仓携带变体专属分支/新脚本，暂未同步其余四仓（分支按
-字段在场分发，同步=逐字节拷贝，对其他仓行为零变化；待主控统一收口）。
+A.5（2026-09-05）wscllm 工作树附加说明：relevant_distributed 变体已随
+《A.5-legacy变体调度器清除修改方案.md》清除——本仓 hopbytes.py 与
+kv_cache_adapter.py 的 relevant 专属分支已删（其余三仓的同名副本不带这些
+分支，同步回各仓 = 各仓删自身副本中的对应段；本仓不再逐字节相同，属本
+方案预期差异）。
 纯离线、纯标准库、只读输入；不注册仿真事件、不反向参与调度。
 
 ## cpp.log 回退顺序（归档兼容，P1/2026-08-28）
@@ -53,13 +54,15 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 
 ## 与 slo_params_manifest.json 的关系
 
-`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，五仓
+`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，四仓
 逐字节相同）。当前所有 `value=null`（B4 批次按 derivation_program 引用的
 主规格条款推导后填充）。**所有依赖参数的命令 fail-closed**：遇 null/缺失
 即退出码 2 并指明参数名与推导条款，绝不内置示例值。`bucket_percentiles`
 填充后 value 结构为 `{"percentiles":[...], "prefill_edges_tokens":[...],
-"decode_edges_tokens":[...]}`（含首尾哨兵；桶 i 覆盖
-`edges[i] <= x < edges[i+1]`，末桶闭合）。
+"decode_edges_tokens":[...]}`（含首尾哨兵；interior edges 为各左桶
+闭上界——如 decode=91 归 d1、prefill=415 归 p1，末桶无上限、
+吸收 x > edges[-1]；2026-09-05 口径裁决，与 campaign_common.BucketGrid
+语义统一，edges 数组值未变）。
 
 ## 各脚本用途 / 输入 / 输出
 
@@ -75,9 +78,8 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 | `slo_stats.py scan-export` | WP3 | `--point RUN_DIR=λ`（可重复）+ 可选 `--t-isolated` | slo_scan_export.csv：λ、violation_rate、tput、goodput=tput×(1−violation_rate)；**drain 完备断言 input==completed 不过则拒绝出表** |
 | `load_imbalance.py` | WP7 | results/online_decision_log.jsonl + results/train_ledger.jsonl + manifest(imbalance_bucket_ns) | slo_load_imbalance.csv + stderr JSON：逐请求 (instance, admission→drain) → 各 instance 积压时序 → 时间平均 CV（总体标准差）与 Max/Mean；不做账本 dump |
 | `restore_decomposition.py` | WP5 | cpp.log（**full 档**：type=memory_anchor + type=request） | slo_restore_decomposition.csv：restore_start=min(锚点)/restore_complete=max(锚点)（按 subject_id=queue_index 逐请求归属）→ §3.2 固定公式三段+hidden_ratio；无锚点请求四推导字段全 NA+计数 |
-| `kv_cache_adapter.py` | WP4 | results/online_decision_log.jsonl + per-request manifest | cache_events.csv（action_id,request_id,start_ns,end_ns,bytes,source,target,cause）+ kv_hit_states.csv（full/partial/miss/no_history/not_supported + 证据列）+ 命中率双分母；`--reconcile` 与 native 逐项对账（以 native 为准，不一致 exit≠0）；wscllm 仓内 relevant_distributed 变体（2026-09-02）prefill 行 history_canonical_hit_state → full/partial/no_history（无 miss 路径），1000 拉回/kv_scatter 3100 路由行逐实例聚合成事件 |
+| `kv_cache_adapter.py` | WP4 | results/online_decision_log.jsonl + per-request manifest | cache_events.csv（action_id,request_id,start_ns,end_ns,bytes,source,target,cause）+ kv_hit_states.csv（full/partial/miss/no_history/not_supported + 证据列）+ 命中率双分母；`--reconcile` 与 native 逐项对账（以 native 为准，不一致 exit≠0） |
 | `hopbytes.py` | — | results/online_decision_log.jsonl | slo_hopbytes_total.csv + slo_hopbytes_per_request.csv：Hop-Bytes=Σ bytes×noc_hops（只聚合产物中真实携带 hops 字段的记录；无覆盖仓输出 coverage=0 并标注 TODO_*） |
-| `relevant_observations.py` | —（观测，非契约） | results/online_decision_log.jsonl + results/kv_delta_journal.jsonl（可选） | relevant_kv_occupancy.csv（每实例 resident local/remote + staging 占用时序；journal 缺失时跳段）+ relevant_read_edges.csv（3300 读边字节分布）+ relevant_backpressure.csv（背压持续时长）+ stderr 汇总 JSON（run_header 姿态回显、分布统计、终态守恒报告位）。**不进契约工具链**：不接 slo_postprocess_driver sink、不参与 SLO 判定（总文档裁决 #24 观测后处理，只读不改决策）；`--selftest` 合成 fixture 手算断言。仅 wscllm relevant_distributed 变体（非 relevant run 的 run_header fail-closed） |
 
 `slo_common.py` 为共享框架（manifest 装载、request_metrics.csv 冻结列序
 校验、NA 语义、nearest-rank 分位、repo_variant 自动识别），不含逐仓语义。
@@ -86,13 +88,7 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 
 * **face/wscllm**：prefill.decision.history_action 四值 → full/miss/
   no_history（LOCAL_HIT/NOC_MIGRATE→full，RECOMPUTE→miss；基线核对
-  RECOMPUTE 全量重算，无 partial 语义）。wscllm 第三变体
-  relevant_distributed（2026-09-02 B3 起）：prefill 行带
-  history_canonical_hit_state → full（拉回源全 P）/partial（否则）/
-  no_history（turn-0），无 miss 枚举路径（历史必经 1000 拉回复用）；
-  1000 拉回按源实例、kv_scatter 3100 按 owner 实例聚合成 canonical
-  事件（local-hit 零边部分不产事件）；3300 读边不产 cache 事件
-  （归 relevant_observations.py 观测）。
+  RECOMPUTE 全量重算，无 partial 语义）。
 * **sh_1.0**：history_transfer.kind ∈ {local_hit, noc_migrate,
   remote_load} → full；null 且 turn=0 → no_history。shards 带 noc_path
   （hopbytes 唯一 shard 级数据源）。
@@ -103,12 +99,12 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
   属预期）；旧产物（字段缺失）回退 not_supported。
 * **sh_3.0**：prefill_affinity_reason 五值（sh30_online_scheduler.py:
   1150-1221）；resident_prefix_layers（PARTIAL_HBM_REMOTE）→ partial。
-* **hopbytes 覆盖**（五仓同步收口后，各变体采集器已合并进同一
+* **hopbytes 覆盖**（四仓同步收口后，各变体采集器已合并进同一
   REPO_HOP_SOURCES 表）：sh_1.0=shard 级 noc_path/noc_hops；
   wscllm=实例级 static_route.hop_count + history 迁移 noc_hops
   （B2wp9py 起）；face=per-TP-shard hops 列表（B2wp9py 起）；
   sh_2.0=决策级 transfer_hop_bytes（WP9-线5 起）；sh_3.0=completion_
-  evictions shards[].noc_hops（B4 起）。五仓新产物均可覆盖；旧产物按
+  evictions shards[].noc_hops（B4 起）。四仓新产物均可覆盖；旧产物按
   字段缺席回退 bytes_without_hops/coverage=0（不臆造 hop 数）。
 
 ## fail-closed 纪律
@@ -124,14 +120,13 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 ## 测试运行法
 
 ```bash
-# 仓根目录执行（两法等价，114 例当前全过；仅标准库）
+# 仓根目录执行（两法等价，2026-09-05 实测 118 例：114 过 + 2 失败 + 1 错误
+# + 1 跳过；失败/错误/跳过均为既知同族项，见被动驱逐机制修改方案基线；仅标准库）
 python3 sh_test_mesh/slo_tools/tests/test_slo_contract.py      # T0 契约
 python3 sh_test_mesh/slo_tools/tests/test_golden_g1g4.py       # T2 golden 骨架
 python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -v
 python3 sh_test_mesh/slo_tools/tests/test_hbm_watermark.py     # WP8 手算
 python3 sh_test_mesh/slo_tools/tests/test_driver_parity.py     # A4 driver 对拍
-python3 sh_test_mesh/slo_tools/tests/test_kv_adapter_relevant.py  # relevant 分支
-python3 sh_test_mesh/slo_tools/relevant_observations.py --selftest  # 观测后处理手算
 ```
 
 T2 golden（G1 单请求无竞争 / G2 双请求排队 / G3 session 两轮 / G4 restore
@@ -147,10 +142,10 @@ sh_3.0 = 原生 9 列（含 next_trigger_type）。边界：
 
 * **允许仓族差异**：队列格式构造、sidecar 命名/join、场景驱动脚手架
   （build/run/CLI 形态）；
-* **必须五仓一致**：G1-G4 各场景的断言语义与期望值推导口径——如 G1 的
+* **必须四仓一致**：G1-G4 各场景的断言语义与期望值推导口径——如 G1 的
   e2e=queue+prefill+gap+decode 整数恒等、G2 的 queue_ns≈占位者 prefill、
   G3 的外生等待（human/tool interval）扣除方式与 request_type 透传、
-  G4 的 restore 三段和=总时长与锚点 min/max 归属。改这些断言时五仓
+  G4 的 restore 三段和=总时长与锚点 min/max 归属。改这些断言时四仓
   必须同步评审，防止某仓的期望值推导悄然漂移。
 
 ## hbm_watermark.py —— WP8 补充主数据源：离线 HBM KV 水位线重建（B2 线5；P1 四层可信度改造 2026-08-30）
@@ -258,7 +253,7 @@ prefill_context_tokens/final_context_tokens/history_tokens_before），以及
   增长为负 → 退出码 2。软异常（source/kind/bytes 对账不符）计数入 JSON 不
   中断。
 * **测试**：`tests/test_hbm_watermark.py`（34 例：手算桶时序/峰值/均值/
-  逐出/违规计数、五仓语义各一例、fail-closed 六例、列序冻结、四层 tier
+  逐出/违规计数、四仓语义各一例、fail-closed 六例、列序冻结、四层 tier
   判定（含"聚合过单 rank 超"锚定用例）、三口径锚定数值、stats 多桶长
   不变、RLE 无损恢复、行预算/B_eff、真 journal 对拍）；运行法同上
   （`python3 sh_test_mesh/slo_tools/tests/test_hbm_watermark.py`）。

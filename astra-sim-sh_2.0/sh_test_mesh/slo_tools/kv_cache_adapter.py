@@ -446,55 +446,102 @@ def family_of(cause: str) -> str:
     return cause.split(":", 1)[0]
 
 
+class AdapterState:
+    """单遍累积态（A4：driver 单遍 decision log 复用；CLI 路径同构）。
+
+    events 为紧凑 6 元组列表（2026-08-30 阶段2加固 §3.4a），元素下标：
+    0=request_id / 1=start_ns / 2=bytes / 3=source / 4=target / 5=cause
+    （end_ns 恒 NA 不缓存，CSV 写出层补 NA；None bytes 由 write_csv 统一
+    转 NA）。原每事件 ~350B dict 降为 ~120B 元组。仅两处消费：emit 的
+    len()（n_events）与 canonical CSV 写出（按下标取值）。注意：不得改成
+    "边消费边写最终 CSV"——driver 是单遍 sink 扇出架构，kv sink 可能中途
+    死亡且不调 emit，边写会在死 sink 场景留下半截产物，改变失败语义。
+    """
+
+    __slots__ = ("events", "hit_states", "shard_sum_violations")
+
+    def __init__(self) -> None:
+        self.events: list[tuple] = []
+        self.hit_states: dict[str, tuple[str, str]] = {}
+        self.shard_sum_violations = 0
+
+
+def adapter_prepare(repo_variant: str, manifest: dict
+                    ) -> tuple[dict, dict[str, int], AdapterState]:
+    variant = REPO_VARIANTS.get(repo_variant)
+    if variant is None:
+        fail(f"未登记的 repo_variant：{repo_variant}（REPO_VARIANTS 需扩表，"
+             f"禁止猜测映射）")
+    turns = _turn_index_map(manifest)
+    return variant, turns, AdapterState()
+
+
+def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
+                    state: AdapterState) -> None:
+    """单条决策记录的适配器处理（与独立 CLI 的循环体逐语句等价）。"""
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id")
+    if record.get("kind") == "prefill" and isinstance(request_id, str):
+        hit_state, evidence = variant["hit_state"](
+            decision, turns.get(request_id), request_id)
+        state.hit_states[request_id] = (hit_state, evidence)
+    extracted = variant["extract_events"](record)
+    # extract_events 返回逐事件 dict（各仓映射代码零改动），此处统一转
+    # 紧凑元组缓存（下标含义见 AdapterState；end_ns 恒 NA 不入缓存）。
+    state.events.extend(
+        (event["request_id"], event["start_ns"], event["bytes"],
+         event["source"], event["target"], event["cause"])
+        for event in extracted)
+    if variant["shard_sum_check"]:
+        # native 不变量复检：Σshards == total_bytes（以 native 为准）。
+        for holder in (decision.get("prefill_decode_transfer"),
+                       decision.get("history_transfer")):
+            if isinstance(holder, dict):
+                total = holder.get("total_bytes")
+                shards = holder.get("shards")
+                if (isinstance(total, int) and isinstance(shards, list)
+                        and shards):
+                    shard_total = sum(int(s.get("bytes", 0))
+                                      for s in shards
+                                      if isinstance(s, dict))
+                    if shard_total != total:
+                        state.shard_sum_violations += 1
+        for field in ("completion_evictions", "history_evictions",
+                      "prefill_evictions", "decode_evictions"):
+            for holder in decision.get(field) or []:
+                if isinstance(holder, dict):
+                    total = holder.get("total_bytes")
+                    shards = holder.get("shards")
+                    if isinstance(total, int) and isinstance(shards, list):
+                        shard_total = sum(int(s.get("bytes", 0))
+                                          for s in shards
+                                          if isinstance(s, dict))
+                        if shard_total != total:
+                            state.shard_sum_violations += 1
+
+
 def cmd_adapter(args: argparse.Namespace) -> int:
+    # CLI 入口（独立运行行为不变）。A4 driver 经 adapter_prepare /
+    # adapter_consume / adapter_emit 组合复用同一逻辑（单遍 decision log）。
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
     variant = REPO_VARIANTS.get(repo_variant)
     if variant is None:
         fail(f"未登记的 repo_variant：{repo_variant}（REPO_VARIANTS 需扩表，"
              f"禁止猜测映射）")
     manifest = load_request_manifest(args.run_dir, args.request_manifest)
-    turns = _turn_index_map(manifest)
-
-    events: list[dict] = []
-    hit_states: dict[str, tuple[str, str]] = {}
-    shard_sum_violations = 0
+    variant, turns, state = adapter_prepare(repo_variant, manifest)
     log_path = args.run_dir / DECISION_LOG_RELPATH
     for record in iter_jsonl(log_path):
-        decision = record.get("decision") or {}
-        request_id = record.get("request_id")
-        if record.get("kind") == "prefill" and isinstance(request_id, str):
-            state, evidence = variant["hit_state"](
-                decision, turns.get(request_id), request_id)
-            hit_states[request_id] = (state, evidence)
-        extracted = variant["extract_events"](record)
-        events.extend(extracted)
-        if variant["shard_sum_check"]:
-            # native 不变量复检：Σshards == total_bytes（以 native 为准）。
-            for holder in (decision.get("prefill_decode_transfer"),
-                           decision.get("history_transfer")):
-                if isinstance(holder, dict):
-                    total = holder.get("total_bytes")
-                    shards = holder.get("shards")
-                    if (isinstance(total, int) and isinstance(shards, list)
-                            and shards):
-                        shard_total = sum(int(s.get("bytes", 0))
-                                          for s in shards
-                                          if isinstance(s, dict))
-                        if shard_total != total:
-                            shard_sum_violations += 1
-            for field in ("completion_evictions", "history_evictions",
-                          "prefill_evictions", "decode_evictions"):
-                for holder in decision.get(field) or []:
-                    if isinstance(holder, dict):
-                        total = holder.get("total_bytes")
-                        shards = holder.get("shards")
-                        if isinstance(total, int) and isinstance(shards, list):
-                            shard_total = sum(int(s.get("bytes", 0))
-                                              for s in shards
-                                              if isinstance(s, dict))
-                            if shard_total != total:
-                                shard_sum_violations += 1
+        adapter_consume(record, variant, turns, state)
+    return adapter_emit(args, repo_variant, variant, manifest, turns, state)
 
+
+def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
+                 manifest: dict, turns: dict[str, int],
+                 adapter_state: AdapterState) -> int:
+    events = adapter_state.events
+    hit_states = adapter_state.hit_states
+    shard_sum_violations = adapter_state.shard_sum_violations
     manifest_ids = [str(e.get("request_id")) for e in
                     manifest_requests(manifest) if e.get("request_id")]
     state_rows = []
@@ -543,9 +590,8 @@ def cmd_adapter(args: argparse.Namespace) -> int:
     try:
         write_csv(
             stream, CACHE_EVENT_COLUMNS,
-            ((f"a{index:06d}", event["request_id"], event["start_ns"],
-              NA, event["bytes"], event["source"], event["target"],
-              event["cause"])
+            ((f"a{index:06d}", event[0], event[1], NA, event[2], event[3],
+              event[4], event[5])
              for index, event in enumerate(events, start=1)))
     finally:
         if close:
@@ -569,18 +615,20 @@ def cmd_adapter(args: argparse.Namespace) -> int:
 
     if args.reconcile:
         return reconcile(run_dir=args.run_dir, repo_variant=repo_variant,
-                         variant=variant, events=events, out_path=out_path,
+                         variant=variant, out_path=out_path,
                          summary=summary)
     return 0
 
 
 def reconcile(run_dir: Path, repo_variant: str, variant: dict,
-              events: list[dict], out_path: Optional[Path],
+              out_path: Optional[Path],
               summary: dict) -> int:
     """canonical bytes/count vs native 逐项对账（以 native 为准）。
 
     native 侧：独立从 decision log 重放聚合（按 family）；canonical 侧：
-    重新解析已写出的 cache_events.csv 聚合。
+    重新解析已写出的 cache_events.csv 聚合。（原形参 events 在函数体内
+    零使用——对账始终重读 CSV + 独立重放 native，2026-08-30 阶段2加固
+    §3.4a 删除该死参数。）
     """
     import csv as _csv
 

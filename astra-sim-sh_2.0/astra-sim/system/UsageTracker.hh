@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 #define __USAGE_TRACKER_HH__
 
 #include <cstdint>
+#include <list>
+#include <utility>
 
 #include "astra-sim/system/CSVWriter.hh"
 #include "astra-sim/system/Callable.hh"
@@ -17,7 +19,9 @@ namespace AstraSim {
 
 class UsageTracker {
   public:
-    UsageTracker(int levels);
+    // History is a diagnostic feature.  Online schedulers only need the
+    // current level, while static/reporting paths retain the legacy default.
+    UsageTracker(int levels, bool retain_history = true);
     void increase_usage();
     void decrease_usage();
     void set_usage(int level);
@@ -28,6 +32,9 @@ class UsageTracker {
     int current_level;
     Tick last_tick;
     std::list<Usage> usage;
+
+  private:
+    bool retain_history_;
 };
 
 }  // namespace AstraSim

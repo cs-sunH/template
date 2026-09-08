@@ -168,6 +168,35 @@ def load_checked_in_config() -> object:
     return load_wsc_llm_trace_config(config_path)
 
 
+def load_config_variant(tag: str, rewrite) -> object:
+    """按行改写 checked-in trace_config 后加载(loader fail-closed 回归
+    钉子用例)。
+
+    rewrite(line) 返回改写后的行,或 None 表示删除该行;queue 行固定替换
+    为合成 fixture 队列(与 load_checked_in_config 同款)。
+    """
+    queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
+    if not queue_path.exists():
+        _write_synthetic_queue(queue_path)
+    lines = []
+    for raw_line in (MODULE_DIR / "trace_config.csv").read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if raw_line.startswith("config,request_queue_csv,"):
+            lines.append(
+                "config,request_queue_csv,"
+                + str(queue_path)
+                + ",,,,,request-neutral synthetic fixture queue (unit test)"
+            )
+            continue
+        rewritten = rewrite(raw_line)
+        if rewritten is not None:
+            lines.append(rewritten)
+    config_path = Path(_FIXTURE_DIR.name) / f"trace_config_{tag}.csv"
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return load_wsc_llm_trace_config(config_path)
+
+
 def checked_in_topology() -> tuple[object, object]:
     config = load_checked_in_config()
     specs = tuple(
@@ -355,6 +384,159 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(exit_context.exception.code, 1)
         self.assertIn("missing request queue", stderr.getvalue())
 
+    def test_kv_eviction_mode_key_rejected(self) -> None:
+        """主动驱逐已物理清除(2026-09-05):loader 对 kv_eviction_mode 键
+        恢复"未知键 fail-closed 拒绝"——残留该行的旧配置不得静默忽略,
+        更不可能借此复活水位逐出路径。"""
+        with self.assertRaisesRegex(ValueError, "unsupported config key"):
+            load_config_variant(
+                "eviction_mode_key_rejected",
+                lambda line: (
+                    line
+                    + "\nconfig,kv_eviction_mode,passive_only,,,,,stale v2 key must fail closed"
+                    if line.startswith("config,kv_reserve_context_tokens,")
+                    else line
+                ),
+            )
+
+    def test_completion_retains_kv_without_watermark(self) -> None:
+        """完成路径零逐出(主动驱逐已物理清除):mark_complete 返回空元组、
+        retain_complete 事件保留(D3),会话保持 RESIDENT——逐出唯一路径 =
+        准入期 ensure_physical_fit 按需逐出。"""
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 300, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        # 手算:gelu 权重 144 B/rank;KV 8 B/token。a 完成(10 token=80 B)后
+        # remaining = 300-144-80 = 76 B——完成边界不触发任何逐出,KV 原样
+        # 驻留(准入期已按需 fit,完成期没有第二个逐出阶段)。
+        manager = SessionKVCacheManager(topology, model)
+        self.assertFalse(
+            manager.prepare_history(
+                "a", 0, 0, 10, "a0", required_context_tokens=10
+            ).admission_blocked
+        )
+        self.assertTrue(manager.grow_prefill("a", 10, 10, "a0").admitted)
+        self.assertEqual(manager.mark_complete("a", 10, "a0"), ())
+        snapshot = manager.session_snapshot("a")
+        self.assertEqual(snapshot.state, "RESIDENT")
+        self.assertFalse(snapshot.active)
+        self.assertEqual(snapshot.last_completion_ns, 10)
+        self.assertEqual(
+            [event.event_type for event in manager.events],
+            ["no_history", "retain_complete"],
+        )
+
+    def test_passive_only_admission_pressure_evicts_exactly_enough(self) -> None:
+        """被动逐出唯一路径 = 准入期 ensure_physical_fit:恰好够即停
+        (I3 语义),victim = (last_completion_ns, session_id) LRU 最老
+        前缀,最年轻已完成会话不动;完成期零逐出,终态驻留全量保留
+        (retire 后亦过)。"""
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 500, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        # 手算:权重 144;每会话 10 token = 80 B。p/q/r 完成后驻留 240 B,
+        # remaining = 500-144-240 = 116;s 需 30 token = 240 B → 逐 p(→196)
+        # 仍不足 → 逐 q(→276)≥240 即停;r(最年轻)保留 RESIDENT。
+        for session_id, completion_ns in (("p", 10), ("q", 20), ("r", 30)):
+            self.assertFalse(
+                manager.prepare_history(
+                    session_id, 0, 0, completion_ns, f"{session_id}0",
+                    required_context_tokens=10,
+                ).admission_blocked
+            )
+            self.assertTrue(
+                manager.grow_prefill(
+                    session_id, 10, completion_ns, f"{session_id}0"
+                ).admitted
+            )
+            self.assertEqual(
+                manager.mark_complete(session_id, completion_ns,
+                                      f"{session_id}0"), ())
+        decision = manager.prepare_history(
+            "s", 0, 0, 40, "s0", required_context_tokens=30)
+        self.assertFalse(decision.admission_blocked)
+        self.assertEqual(
+            tuple(record.victim_session_id for record in decision.evictions),
+            ("p", "q"),
+        )
+        self.assertEqual(manager.session_snapshot("r").state, "RESIDENT")
+        self.assertEqual(manager.session_snapshot("p").state, "EVICTED")
+        self.assertEqual(
+            tuple(
+                snapshot.remaining_bytes
+                for snapshot in manager.hbm_snapshots(0)
+            ),
+            (276,),
+        )
+        self.assertEqual(manager.deep_gap_events, 0)
+        self.assertTrue(manager.grow_prefill("s", 30, 40, "s0").admitted)
+        self.assertEqual(
+            tuple(
+                snapshot.remaining_bytes
+                for snapshot in manager.hbm_snapshots(0)
+            ),
+            (36,),
+        )
+        self.assertEqual(manager.mark_complete("s", 41, "s0"), ())
+        # 剩余 36 B 的驻留终态合法(完成期零逐出,无第二个逐出阶段)。
+        manager.assert_final_state()
+        manager.retire_terminal_session("r", 42, "r0")
+        manager.retire_terminal_session("s", 43, "s0")
+        manager.assert_final_state()
+
+    def test_passive_only_exhausted_candidates_increment_deep_gap_events(self) -> None:
+        """D4(2026-09-05):活跃会话占满容量、无可逐冷会话 →
+        admission_blocked 优雅推迟 + deep_gap_events 逐次递增(压力事件
+        本身按 request 去重,计数不去重);活跃会话不被驱逐。"""
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 400, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        # act 长到 30 token = 240 B → remaining = 400-144-240 = 16。
+        self.assertFalse(
+            manager.prepare_history(
+                "act", 0, 0, 40, "act0", required_context_tokens=30
+            ).admission_blocked
+        )
+        self.assertTrue(manager.grow_prefill("act", 30, 40, "act0").admitted)
+        blocked = manager.prepare_history(
+            "new", 0, 0, 50, "new0", required_context_tokens=10)
+        self.assertTrue(blocked.admission_blocked)
+        self.assertEqual(blocked.insufficient_ranks, (0,))
+        self.assertEqual(blocked.evictions, ())
+        self.assertEqual(manager.deep_gap_events, 1)
+        self.assertTrue(manager.session_snapshot("act").active)
+        self.assertEqual(manager.session_snapshot("act").state, "RESIDENT")
+        blocked_event_types = [
+            event.event_type
+            for event in manager.events
+            if event.trigger_request_id == "new0"
+        ]
+        self.assertEqual(blocked_event_types, ["admission_blocked"])
+        # 同请求重试:压力事件去重,深缺口计数仍递增。
+        retried = manager.prepare_history(
+            "new", 0, 0, 60, "new0", required_context_tokens=10)
+        self.assertTrue(retried.admission_blocked)
+        self.assertEqual(manager.deep_gap_events, 2)
 
     def test_decode_instances_are_center_prioritized_and_validation_rejects_inverse(self) -> None:
         _, topology = checked_in_topology()
@@ -563,23 +745,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         ):
             allocator2.allocate(request_id="too_large", route=route, total_bytes=501)
 
-    def test_64_gib_fails_fast_for_the_exact_one_million_reserve(self) -> None:
-        config = load_checked_in_config()
-        hardware = WscLlmHardware(2, 6, 64 * 1024**3, 1.0, 1.0, 1.0, 0, 0)
-        topology = build_instances(
-            hardware,
-            (
-                WscLlmInstanceSpec("d_tp6", "1", tuple(range(6)), DECODE_ROLE),
-                WscLlmInstanceSpec("p_tp6", "2", tuple(range(6, 12)), PREFILL_ROLE),
-            ),
-        )
-        with self.assertRaisesRegex(ValueError, r"relative_tp_rank=0"):
-            SessionKVCacheManager(
-                topology,
-                config.model,
-                reserve_context_tokens=1_000_000,
-            )
-
     def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = WscLlmHardware(1, 2, 400, 1.0, 1.0, 1.0, 0, 0)
@@ -590,7 +755,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
                 WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
             ),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        manager = SessionKVCacheManager(topology, model)
         for session_id, completion_ns in (("a", 10), ("b", 20)):
             decision = manager.prepare_history(
                 session_id,
@@ -653,11 +818,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(manager.session_snapshot("a").logical_context_tokens, 10)
         self.assertEqual(manager.session_snapshot("a").state, "EVICTED")
         self.assertTrue(manager.grow_prefill("c", 30, 30, "c0").admitted)
-        deferred = manager.enforce_watermark(0, 30, "c0", ("c",))
-        self.assertTrue(deferred.deferred)
-        self.assertTrue(manager.session_snapshot("c").active)
-        manager.mark_complete("c", 31, "c0")
-        manager.assert_final_state()
 
     def test_terminal_retirement_releases_local_kv_and_fails_closed(self) -> None:
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -669,7 +829,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
                 WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
             ),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        manager = SessionKVCacheManager(topology, model)
         self.assertFalse(
             manager.prepare_history(
                 "terminal", 0, 0, 10, "terminal_r0",
@@ -706,7 +866,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
                 WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
             ),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        manager = SessionKVCacheManager(topology, model)
         for index in range(32):
             session_id = f"single_{index}"
             request_id = f"{session_id}_r0"
@@ -745,7 +905,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
                 WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
             ),
         )
-        manager = SessionKVCacheManager(topology, model, reserve_context_tokens=10)
+        manager = SessionKVCacheManager(topology, model)
         requests = (("first", "first_r0"), ("second", "second_r0"))
         for index, (session_id, request_id) in enumerate(requests):
             self.assertFalse(

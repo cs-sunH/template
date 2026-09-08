@@ -10,6 +10,11 @@ the root directory of this source tree.
 #include <limits>
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+// R3 (方案 §3.6): self-contained observation layer -- the ONLY astra-sim
+// workload header this backend translation unit needs (kept minimal so the
+// backend pair plus this ledger hh/cc stay trivially syncable across the
+// five repositories; the blueprint repos never enable the ledger).
+#include "astra-sim/workload/RemoteFifoLedger.hh"
 
 using namespace std;
 using namespace AstraSim;
@@ -178,6 +183,15 @@ void AnalyticalRemoteMemory::issue(
     return;
   }
 
+  // R3 (方案 §3.6 / 阶段 E): issue accounting at the point where the REAL
+  // port_index has been resolved, before the busy/enqueue decision -- both
+  // the immediate-start and the queued path count exactly once per request.
+  // Pure observation (counters only); the ledger is sensing-gated and
+  // fail-closed (default off), so ordinary runs and the blueprint repos
+  // (which compile this but never enable it) see zero behavior change.
+  AstraSim::ExecutionDriven::RemoteFifoLedger::instance().record_issue(
+      port_index, sys_id, tensor_size);
+
   if (ongoing_transaction[port_index]) {
     pending_requests[port_index].emplace_back(tensor_size, wlhd);
   } else {
@@ -196,7 +210,7 @@ void AnalyticalRemoteMemory::start_request(
   sys->register_event(
       this,
       EventType::General,
-      new RemoteMemoryCompletionData(port_index),
+      new RemoteMemoryCompletionData(port_index, tensor_size),
       runtime);
 
   ongoing_transaction[port_index] = true;
@@ -206,7 +220,17 @@ void AnalyticalRemoteMemory::call(EventType type, CallData* data) {
   RemoteMemoryCompletionData* completion_data =
       static_cast<RemoteMemoryCompletionData*>(data);
   size_t port_index = completion_data->port_index;
+  // R3 (方案 §3.6): the payload carries THIS transaction's bytes; the
+  // dequeued pmr.tensor_size below belongs to the NEXT request.
+  uint64_t completed_bytes = completion_data->tensor_size;
   delete completion_data;
+
+  // R3 (方案 §3.6 / 阶段 E): completion accounting right after the payload
+  // extraction and BEFORE the next pending request starts -- the exact
+  // moment the port transaction really finished (no HBM-join deferral).
+  // Sensing-gated pure observation; zero behavior change when disabled.
+  AstraSim::ExecutionDriven::RemoteFifoLedger::instance().record_completion(
+      port_index, completed_bytes);
 
   if (!pending_requests[port_index].empty()) {
     PendingMemoryRequest pmr = pending_requests[port_index].front();
@@ -215,6 +239,35 @@ void AnalyticalRemoteMemory::call(EventType type, CallData* data) {
   } else {
     ongoing_transaction[port_index] = false;
   }
+}
+
+const char* AnalyticalRemoteMemory::architecture_name() const {
+  switch (mem_type) {
+    case NO_MEMORY_EXPANSION:
+      return "NO_MEMORY_EXPANSION";
+    case PER_NODE_MEMORY_EXPANSION:
+      return "PER_NODE_MEMORY_EXPANSION";
+    case PER_NPU_MEMORY_EXPANSION:
+      return "PER_NPU_MEMORY_EXPANSION";
+    case MEMORY_POOL:
+      return "MEMORY_POOL";
+  }
+  return "UNKNOWN";
+}
+
+std::string AnalyticalRemoteMemory::port_mapping_rule() const {
+  switch (mem_type) {
+    case NO_MEMORY_EXPANSION:
+      return "none";
+    case PER_NODE_MEMORY_EXPANSION:
+      return "sys-id/num-npus-per-node";
+    case PER_NPU_MEMORY_EXPANSION:
+      return per_npu_ids_configured ? "npu-ids-array-index"
+                                    : "set-sys-registration-order(=rank)";
+    case MEMORY_POOL:
+      return "single-shared-port-0";
+  }
+  return "unknown";
 }
 
 uint64_t AnalyticalRemoteMemory::get_remote_mem_runtime(uint64_t tensor_size) {

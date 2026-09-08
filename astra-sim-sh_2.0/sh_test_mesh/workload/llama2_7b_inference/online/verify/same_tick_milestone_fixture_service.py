@@ -77,8 +77,11 @@ class SameTickMilestoneHandler:
             "is_timer_op": False,
             "inputs_values": "",
             "compute": {"num_ops": 0, "tensor_size": 0, "runtime_ns": 0},
-            "comm": {},
-            "coll": {},
+            # C1(2026-08-29): C++ 响应侧单次结构化解析对 comm/coll
+            # 子对象必含键 fail-closed(N13/N14),空对象补为满形缺省
+            # (与 graph_batch_builder 的非通信节点缺省逐字段一致)。
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "coll": {"comm_type": 0, "bytes": 0, "priority": 0, "pg_name": "", "involved_dim": []},
         }
 
     @staticmethod
@@ -95,8 +98,11 @@ class SameTickMilestoneHandler:
             "is_timer_op": False,
             "inputs_values": "",
             "compute": {"num_ops": 1, "tensor_size": 1, "runtime_ns": 1},
-            "comm": {},
-            "coll": {},
+            # C1(2026-08-29): C++ 响应侧单次结构化解析对 comm/coll
+            # 子对象必含键 fail-closed(N13/N14),空对象补为满形缺省
+            # (与 graph_batch_builder 的非通信节点缺省逐字段一致)。
+            "comm": {"bytes": 0, "src": 0, "dst": 0, "tag": 0},
+            "coll": {"comm_type": 0, "bytes": 0, "priority": 0, "pg_name": "", "involved_dim": []},
         }
 
     def __call__(self, request):

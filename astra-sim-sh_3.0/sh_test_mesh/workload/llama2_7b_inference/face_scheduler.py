@@ -14,7 +14,7 @@ import heapq
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 
 PREFILL_CHUNK_SIZE = 512
@@ -28,6 +28,17 @@ PREFILL_CHUNK_SIZE = 512
 # observation bookkeeping runs at all, so behavior and performance are
 # unchanged.
 _METRICS_RECORDER: Any = None
+
+
+def _strict_kv_invariants_from_environment() -> bool:
+    """Return whether every KV mutation must also run the complete audit."""
+
+    return os.environ.get("SH_STRICT_KV_INVARIANTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def set_metrics_observer(recorder: Any) -> None:
@@ -45,7 +56,6 @@ def _metrics_anchor_for_phase(phase: str) -> str:
         "history": "prefill_start",
         "prefill": "prefill_start",
         "admission": "prefill_start",
-        "watermark": "prefill_start",
         "decode": "decode_start",
         "prefill_decode": "decode_start",
         "completion": "completion",
@@ -1223,14 +1233,10 @@ class KVCacheManager:
         model: FaceModel,
         *,
         edge_ranks: Optional[Sequence[int]] = None,
-        reserve_context_tokens: int = 1_000_000,
+        strict_invariants: Optional[bool] = None,
     ) -> None:
-        if (
-            isinstance(reserve_context_tokens, bool)
-            or not isinstance(reserve_context_tokens, int)
-            or reserve_context_tokens < 0
-        ):
-            raise ValueError("reserve_context_tokens must be a non-negative integer")
+        if strict_invariants is not None and not isinstance(strict_invariants, bool):
+            raise ValueError("strict_invariants must be a bool or None")
         instance_sizes = {instance.size for instance in topology.instances}
         if len(instance_sizes) != 1:
             raise ValueError("KVCacheManager requires equal-size TP instances")
@@ -1238,7 +1244,6 @@ class KVCacheManager:
         self.topology = topology
         self.model = model
         self.tp_degree = topology.instances[0].size
-        self.reserve_context_tokens = reserve_context_tokens
         # Keep the larger half resident for odd-layer models, so exactly
         # floor(L/2) trailing layers are selected for the first-stage offload.
         self.partial_resident_prefix_layers = (
@@ -1247,15 +1252,6 @@ class KVCacheManager:
         self.model_weight_bytes_by_tp_rank = model_weight_shard_bytes_by_tp_rank(
             model,
             self.tp_degree,
-        )
-        self.reserve_bytes_by_tp_rank = kv_cache_shard_bytes_for_tokens(
-            model, reserve_context_tokens, self.tp_degree
-        )
-        # TaskA ablation (SH30_ABLATION=no_tiered_eviction, 2026-08-26):
-        # read once; skips the stage-1 suffix-half offload inside
-        # _ensure_capacity so LOCAL sessions go straight to full eviction.
-        self.disable_tiered_eviction = (
-            os.environ.get("SH30_ABLATION") == "no_tiered_eviction"
         )
 
         if edge_ranks is None:
@@ -1298,7 +1294,13 @@ class KVCacheManager:
                 self._rank_relative_index[rank] = relative_index
         self._sessions: dict[str, SessionKVState] = {}
         self._reservations: dict[str, KVCapacityReservation] = {}
+        self._strict_kv_invariants = (
+            _strict_kv_invariants_from_environment()
+            if strict_invariants is None
+            else strict_invariants
+        )
         self._check_invariants()
+        self._initialize_incremental_invariants()
         # Metrics observation state (doc sec.7.4): resident KV is tracked as
         # per-session parts that carry their own token counts and layer
         # ranges, so suffix-half evictions, restores, and truncations always
@@ -1307,6 +1309,9 @@ class KVCacheManager:
         self._metrics_recorder = _METRICS_RECORDER
         self._metrics_parts: dict[str, list[dict[str, Any]]] = {}
         self._metrics_segment_counters: dict[str, int] = {}
+        # D4 (2026-09-05): fail-closed 深缺口台账——_ensure_capacity 尾部
+        # raise 前逐 rank 记录；实证负载预期恒空。
+        self.deep_gap_events: list[dict[str, object]] = []
         if self._metrics_recorder is not None:
             for rank in sorted(self._rank_states):
                 self._metrics_recorder.initialize_rank(
@@ -1332,6 +1337,10 @@ class KVCacheManager:
     @property
     def session_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._sessions))
+
+    def has_session(self, session_id: str) -> bool:
+        """Return session membership without materializing the sorted view."""
+        return session_id in self._sessions
 
     def hbm_snapshots(
         self,
@@ -1640,7 +1649,7 @@ class KVCacheManager:
             final_context_tokens=final_context_tokens,
             final_shard_bytes=final_shards,
         )
-        self._check_invariants()
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
             # Admission reservation (doc sec.7.3): the committed-but-not-yet-
             # resident final-KV delta, anchored to the request Prefill start.
@@ -1709,7 +1718,7 @@ class KVCacheManager:
             final_context_tokens=reservation.final_context_tokens,
             final_shard_bytes=reservation.final_shard_bytes,
         )
-        self._check_invariants()
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
             # Reservation move (doc sec.7.3): release the committed delta on
             # the source instance ranks, then commit it on the target ranks.
@@ -1764,7 +1773,7 @@ class KVCacheManager:
                 f"request {request_id} released HBM reservation before final KV allocation"
             )
         del self._reservations[request_id]
-        self._check_invariants()
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
 
     def decode_hbm_feasible_instances(
         self,
@@ -1844,6 +1853,244 @@ class KVCacheManager:
             self.edge_ranks,
         )
 
+    # ------------------------------------------------------------------
+    # Incremental invariant ledger.  The complete checker below remains the
+    # source of truth for construction, strict mode, and terminal audits.
+    # Normal mutation paths refresh only the changed session(s), reservation(s)
+    # and their TP ranks instead of rebuilding every session's layer-range
+    # shard vector after every generated token.
+    # ------------------------------------------------------------------
+
+    def _initialize_incremental_invariants(self) -> None:
+        self._invariant_expected_kv_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._invariant_expected_reserved_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._invariant_session_contributions: dict[
+            str, Optional[tuple[int, tuple[int, ...]]]
+        ] = {}
+        self._invariant_reservation_contributions: dict[
+            str, Optional[tuple[int, tuple[int, ...]]]
+        ] = {}
+        self._invariant_reservation_sessions: dict[str, str] = {}
+        self._invariant_reservations_by_session: dict[str, set[str]] = {}
+        self._refresh_incremental_sessions(self._sessions)
+        self._refresh_incremental_reservations(self._reservations)
+
+    def _incremental_session_contribution(
+        self, session: SessionKVState
+    ) -> Optional[tuple[int, tuple[int, ...]]]:
+        if (
+            session.location not in {self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE}
+            or session.instance_index is None
+            or len(session.shard_bytes) != self.tp_degree
+        ):
+            return None
+        if session.location == self.LOCAL_HBM:
+            if session.resident_prefix_layers != self.model.layers:
+                return None
+        elif not 0 < session.resident_prefix_layers < self.model.layers:
+            return None
+        local_shards = kv_cache_shard_bytes_for_layer_range(
+            self.model,
+            session.context_tokens,
+            self.tp_degree,
+            layer_start=0,
+            layer_end=session.resident_prefix_layers,
+        )
+        return session.instance_index, tuple(int(value) for value in local_shards)
+
+    def _incremental_reservation_contribution(
+        self, reservation: KVCapacityReservation
+    ) -> Optional[tuple[int, tuple[int, ...]]]:
+        if len(reservation.final_shard_bytes) != self.tp_degree:
+            return None
+        extra = self._reservation_extra_shards(reservation)
+        if len(extra) != self.tp_degree:
+            return None
+        return reservation.instance_index, tuple(int(value) for value in extra)
+
+    def _apply_incremental_contribution(
+        self,
+        expected_by_rank: dict[int, int],
+        contribution: Optional[tuple[int, tuple[int, ...]]],
+        multiplier: int,
+    ) -> set[int]:
+        if contribution is None:
+            return set()
+        instance_index, shards = contribution
+        instance = self.topology.instance(instance_index)
+        affected_ranks = set(instance.ranks)
+        for rank, value in zip(instance.ranks, shards):
+            expected_by_rank[rank] += multiplier * value
+        return affected_ranks
+
+    def _refresh_incremental_sessions(self, session_ids: Iterable[str]) -> set[int]:
+        affected_ranks: set[int] = set()
+        for session_id in dict.fromkeys(session_ids):
+            old = self._invariant_session_contributions.pop(session_id, None)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_kv_by_rank, old, -1
+                )
+            )
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            new = self._incremental_session_contribution(session)
+            self._invariant_session_contributions[session_id] = new
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_kv_by_rank, new, 1
+                )
+            )
+        return affected_ranks
+
+    def _refresh_incremental_reservations(
+        self, reservation_ids: Iterable[str]
+    ) -> set[int]:
+        affected_ranks: set[int] = set()
+        for request_id in dict.fromkeys(reservation_ids):
+            old = self._invariant_reservation_contributions.pop(request_id, None)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_reserved_by_rank, old, -1
+                )
+            )
+            old_session_id = self._invariant_reservation_sessions.pop(
+                request_id, None
+            )
+            if old_session_id is not None:
+                indexed = self._invariant_reservations_by_session.get(old_session_id)
+                if indexed is not None:
+                    indexed.discard(request_id)
+                    if not indexed:
+                        del self._invariant_reservations_by_session[old_session_id]
+
+            reservation = self._reservations.get(request_id)
+            if reservation is None:
+                continue
+            new = self._incremental_reservation_contribution(reservation)
+            self._invariant_reservation_contributions[request_id] = new
+            self._invariant_reservation_sessions[request_id] = reservation.session_id
+            self._invariant_reservations_by_session.setdefault(
+                reservation.session_id, set()
+            ).add(request_id)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_reserved_by_rank, new, 1
+                )
+            )
+        return affected_ranks
+
+    def _check_incremental_session_invariants(self, session: SessionKVState) -> None:
+        if session.location not in {
+            self.LOCAL_HBM,
+            self.PARTIAL_HBM_REMOTE,
+            self.REMOTE_MEMORY,
+        }:
+            raise RuntimeError(f"invalid KV location for {session.session_id}")
+        if sum(session.shard_bytes) != session.total_bytes:
+            raise RuntimeError(
+                f"KV shards do not preserve total for {session.session_id}"
+            )
+        if session.location == self.REMOTE_MEMORY:
+            if session.instance_index is not None:
+                raise RuntimeError("remote KV session retained a local instance")
+            if session.resident_prefix_layers != 0:
+                raise RuntimeError("remote KV session retained resident layers")
+            return
+        if session.location == self.LOCAL_HBM:
+            if session.resident_prefix_layers != self.model.layers:
+                raise RuntimeError("fully local KV session is missing layers")
+        elif not 0 < session.resident_prefix_layers < self.model.layers:
+            raise RuntimeError("partial KV session has an invalid prefix length")
+        if session.instance_index is None:
+            raise RuntimeError("local KV session has no instance")
+        instance = self.topology.instance(session.instance_index)
+        if len(session.shard_bytes) != instance.size:
+            raise RuntimeError("KV shard count does not match TP instance")
+
+    def _check_incremental_reservation_invariants(
+        self, request_id: str, reservation: KVCapacityReservation
+    ) -> None:
+        if reservation.request_id != request_id:
+            raise RuntimeError("HBM reservation key does not match request ID")
+        if len(reservation.final_shard_bytes) != self.tp_degree:
+            raise RuntimeError("HBM reservation shard count does not match TP")
+        expected_final = kv_cache_shard_bytes_for_tokens(
+            self.model,
+            reservation.final_context_tokens,
+            self.tp_degree,
+        )
+        if reservation.final_shard_bytes != expected_final:
+            raise RuntimeError("HBM reservation final KV metadata is inconsistent")
+
+    def _check_invariants_after_mutation(
+        self,
+        *,
+        session_ids: Iterable[str] = (),
+        reservation_ids: Iterable[str] = (),
+    ) -> None:
+        """Validate the ledger entries touched by a completed KV mutation."""
+
+        changed_sessions = tuple(dict.fromkeys(session_ids))
+        changed_reservation_ids = set(reservation_ids)
+        for session_id in changed_sessions:
+            changed_reservation_ids.update(
+                self._invariant_reservations_by_session.get(session_id, ())
+            )
+        changed_reservations = tuple(sorted(changed_reservation_ids))
+        affected_ranks = self._refresh_incremental_sessions(changed_sessions)
+        affected_ranks.update(
+            self._refresh_incremental_reservations(changed_reservations)
+        )
+
+        for rank in sorted(affected_ranks):
+            state = self._rank_states[rank]
+            if state.used_bytes != state.model_weight_bytes + state.kv_cache_bytes:
+                raise RuntimeError(f"rank {rank} HBM used-byte invariant failed")
+            if state.remaining_bytes != state.capacity_bytes - state.used_bytes:
+                raise RuntimeError(f"rank {rank} HBM remaining-byte invariant failed")
+            if state.kv_cache_bytes < 0 or state.remaining_bytes < 0:
+                raise RuntimeError(f"rank {rank} HBM capacity was exceeded")
+        for session_id in changed_sessions:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                self._check_incremental_session_invariants(session)
+        for request_id in changed_reservations:
+            reservation = self._reservations.get(request_id)
+            if reservation is not None:
+                self._check_incremental_reservation_invariants(request_id, reservation)
+
+        affected_instances = {
+            self._rank_states[rank].instance_index for rank in affected_ranks
+        }
+        for instance_index in sorted(affected_instances):
+            instance = self.topology.instance(instance_index)
+            for rank in instance.ranks:
+                state = self._rank_states[rank]
+                expected_kv = self._invariant_expected_kv_by_rank[rank]
+                if state.kv_cache_bytes != expected_kv:
+                    raise RuntimeError(
+                        f"rank {rank} KV accounting mismatch: "
+                        f"state={state.kv_cache_bytes}, expected={expected_kv}"
+                    )
+            effective = tuple(
+                self._rank_states[rank].remaining_bytes
+                - self._invariant_expected_reserved_by_rank[rank]
+                for rank in instance.ranks
+            )
+            if any(value < 0 for value in effective):
+                raise RuntimeError(
+                    f"instance {instance.index} HBM reservations exceed free capacity"
+                )
+
+        if self._strict_kv_invariants:
+            self._check_invariants()
+
     def _check_invariants(self) -> None:
         expected_kv = dict.fromkeys(self._rank_states, 0)
         for session in self._sessions.values():
@@ -1916,6 +2163,11 @@ class KVCacheManager:
                 raise RuntimeError(
                     f"instance {instance.index} HBM reservations exceed free capacity"
                 )
+
+    def assert_final_state(self) -> None:
+        """Run the complete invariant audit at the planner's terminal boundary."""
+
+        self._check_invariants()
 
     def _add_local_shards(
         self,
@@ -2500,7 +2752,7 @@ class KVCacheManager:
         )
         session.location = self.PARTIAL_HBM_REMOTE
         session.resident_prefix_layers = suffix_start
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session.session_id,))
         self._metrics_suffix_evict_parts(
             session.session_id,
             suffix_start,
@@ -2551,7 +2803,7 @@ class KVCacheManager:
         session.location = self.REMOTE_MEMORY
         session.instance_index = None
         session.resident_prefix_layers = 0
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session.session_id,))
         self._metrics_remove_session_parts(
             session.session_id,
             anchor_kind=_metrics_anchor_for_phase(phase),
@@ -2600,36 +2852,38 @@ class KVCacheManager:
         # the fixed order ("human", "tool"); within each class the original
         # two stages run -- stage 1 halves each inactive full-local session
         # (suffix offload), stage 2 evicts complete resident sessions. The
-        # watermark is rechecked after every single eviction, so the loops
-        # stop as soon as the requirement is satisfied.
+        # requirement is rechecked after every single eviction, so the loops
+        # stop as soon as it is satisfied.
         for trigger_type in ("human", "tool"):
             # Stage 1: oldest-first within the class, move only each
-            # eligible session's latter half.  TaskA ablation
-            # (SH30_ABLATION=no_tiered_eviction): the suffix-half stage is
-            # skipped entirely; LOCAL sessions fall straight through to the
-            # full-session eviction in stage 2 below.
-            while (
-                not self.disable_tiered_eviction
-                and self._insufficient_ranks(
-                    instance_index,
-                    required_bytes_by_tp_rank,
-                    reservation_request_id=reservation_request_id,
-                )
+            # eligible session's latter half.
+            suffix_candidates: Optional[list[SessionKVState]] = None
+            suffix_candidate_index = 0
+            while self._insufficient_ranks(
+                instance_index,
+                required_bytes_by_tp_rank,
+                reservation_request_id=reservation_request_id,
             ):
-                candidates = self._completed_full_candidates(
-                    instance_index, trigger_type
-                )
-                if protected_session_id is not None:
-                    candidates = [
-                        session
-                        for session in candidates
-                        if session.session_id != protected_session_id
-                    ]
-                if not candidates:
+                if suffix_candidates is None:
+                    # A suffix eviction affects only its selected full-local
+                    # session.  The remaining stage candidates retain both
+                    # eligibility and deterministic FIFO order.
+                    suffix_candidates = self._completed_full_candidates(
+                        instance_index, trigger_type
+                    )
+                    if protected_session_id is not None:
+                        suffix_candidates = [
+                            session
+                            for session in suffix_candidates
+                            if session.session_id != protected_session_id
+                        ]
+                if suffix_candidate_index >= len(suffix_candidates):
                     break
+                victim = suffix_candidates[suffix_candidate_index]
+                suffix_candidate_index += 1
                 evictions.append(
                     self._evict_suffix(
-                        candidates[0],
+                        victim,
                         phase=phase,
                         reason=reason,
                         trigger_request_id=trigger_request_id,
@@ -2639,32 +2893,40 @@ class KVCacheManager:
             # Stage 2: only after every inactive full session of this class
             # has been halved, evict complete sessions (the remaining prefix
             # for partial sessions) in the same deterministic FIFO order.
+            resident_candidates: Optional[list[SessionKVState]] = None
+            resident_candidate_index = 0
             while self._insufficient_ranks(
                 instance_index,
                 required_bytes_by_tp_rank,
                 reservation_request_id=reservation_request_id,
             ):
-                candidates = self._completed_resident_candidates(
-                    instance_index, trigger_type
-                )
-                if protected_session_id is not None:
-                    candidates = [
-                        session
-                        for session in candidates
-                        if session.session_id != protected_session_id
-                    ]
-                if not candidates:
+                if resident_candidates is None:
+                    # Rebuild after stage 1: its newly partial sessions are
+                    # eligible here.  Within stage 2 only the selected victim
+                    # changes, so this FIFO snapshot stays valid.
+                    resident_candidates = self._completed_resident_candidates(
+                        instance_index, trigger_type
+                    )
+                    if protected_session_id is not None:
+                        resident_candidates = [
+                            session
+                            for session in resident_candidates
+                            if session.session_id != protected_session_id
+                        ]
+                if resident_candidate_index >= len(resident_candidates):
                     break
+                victim = resident_candidates[resident_candidate_index]
+                resident_candidate_index += 1
                 evictions.append(
                     self._evict_session(
-                        candidates[0],
+                        victim,
                         phase=phase,
                         reason=reason,
                         trigger_request_id=trigger_request_id,
                     )
                 )
 
-        # Every class and stage is exhausted while the watermark is still
+        # Every class and stage is exhausted while the requirement is still
         # unmet: report the failing ranks.
         insufficient = self._insufficient_ranks(
             instance_index,
@@ -2676,6 +2938,22 @@ class KVCacheManager:
                 instance_index,
                 exclude_request_id=reservation_request_id,
             )
+            # D4 (2026-09-05): deep-gap ledger——逐无可逐仍不满足时按 rank
+            # 记账后 fail-closed（触发即 run 终止，python.log 落盘）。
+            for rank in insufficient:
+                relative = self._rank_relative_index[rank]
+                self.deep_gap_events.append({
+                    "instance_index": instance_index,
+                    "rank": rank,
+                    "phase": phase,
+                    "reason": reason,
+                    "trigger_request_id": trigger_request_id,
+                    "remaining_bytes": effective_remaining[relative],
+                    "required_bytes": required_bytes_by_tp_rank[relative],
+                    "gap_bytes": (
+                        required_bytes_by_tp_rank[relative]
+                        - effective_remaining[relative]),
+                })
             details = ", ".join(
                 f"rank {rank}: remaining="
                 f"{effective_remaining[self._rank_relative_index[rank]]}, "
@@ -2684,7 +2962,48 @@ class KVCacheManager:
             )
             raise ValueError(
                 f"insufficient target HBM in instance {instance_index}; {details}"
+                f"; deep_gap_events={len(self.deep_gap_events)}"
             )
+        # D4-I1 (2026-09-05): 返回前复核每个被逐会话均已完成且 inactive
+        # （_evict_suffix/_evict_session 入口已有同款守卫，此处捕获两阶段
+        # 循环间的状态漂移）。
+        for transfer in evictions:
+            evicted = self._sessions[transfer.session_id]
+            if evicted.active or evicted.last_completion_ns is None:
+                raise RuntimeError(
+                    "passive eviction victim is active or uncompleted: "
+                    f"{transfer.session_id}")
+        # D4-I3 (2026-09-05): 撤销最后一笔逐出必须至少让一个受影响 rank
+        # 回到不满足（否则该笔逐出并非恰好所需，属过度逐出）。
+        if evictions:
+            freed_by_rank: dict[int, int] = {}
+            for transfer in evictions:
+                for shard in transfer.shards:
+                    if shard.source_rank is None:
+                        continue
+                    freed_by_rank[shard.source_rank] = (
+                        freed_by_rank.get(shard.source_rank, 0) + shard.bytes
+                    )
+            last_affected_ranks = {
+                shard.source_rank
+                for shard in evictions[-1].shards
+                if shard.source_rank is not None
+            }
+            effective_now = self._effective_remaining_by_tp_rank(
+                instance_index,
+                exclude_request_id=reservation_request_id,
+            )
+            for rank in last_affected_ranks:
+                relative = self._rank_relative_index[rank]
+                freed = freed_by_rank.get(rank, 0)
+                if effective_now[relative] - freed < required_bytes_by_tp_rank[relative]:
+                    break
+            else:
+                raise RuntimeError(
+                    "passive eviction over-evicted: undoing the last "
+                    f"eviction ({evictions[-1].session_id}) still leaves "
+                    f"every affected rank satisfied in instance "
+                    f"{instance_index}")
         return tuple(evictions)
 
     def prepare_prefill(
@@ -2719,7 +3038,7 @@ class KVCacheManager:
                 resident_prefix_layers=self.model.layers,
                 active=True,
             )
-            self._check_invariants()
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             return None, None, ()
 
         session = self._sessions[session_id]
@@ -2745,7 +3064,7 @@ class KVCacheManager:
                     session=session,
                     trigger_request_id=trigger_request_id,
                 )
-                self._check_invariants()
+                self._check_invariants_after_mutation(session_ids=(session_id,))
                 return before, transfer, ()
 
             # The arriving request owns this session before any capacity
@@ -2770,7 +3089,7 @@ class KVCacheManager:
             self._remove_local_shards(source_instance_index, session.shard_bytes)
             self._add_local_shards(target_instance_index, session.shard_bytes)
             session.instance_index = target_instance_index
-            self._check_invariants()
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             self._metrics_move_session_parts(
                 session_id,
                 target_instance_index,
@@ -2817,7 +3136,7 @@ class KVCacheManager:
             self._add_local_shards(target_instance_index, suffix_shards)
             session.location = self.LOCAL_HBM
             session.resident_prefix_layers = self.model.layers
-            self._check_invariants()
+            self._check_invariants_after_mutation(session_ids=(session_id,))
             # Suffix restore gets its own segment id / allocation key (doc
             # sec.7.4/9.4): a later suffix eviction removes exactly this
             # distribution again.
@@ -2858,7 +3177,7 @@ class KVCacheManager:
         session.location = self.LOCAL_HBM
         session.instance_index = target_instance_index
         session.resident_prefix_layers = self.model.layers
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_add_segment(
             session_id,
             target_instance_index,
@@ -2913,7 +3232,7 @@ class KVCacheManager:
         session.context_tokens = context_tokens
         session.total_bytes = sum(new_shards)
         session.shard_bytes = new_shards
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_add_segment(
             session_id,
             instance_index,
@@ -2987,7 +3306,7 @@ class KVCacheManager:
         self._remove_local_shards(source_instance_index, session.shard_bytes)
         self._add_local_shards(target_instance_index, session.shard_bytes)
         session.instance_index = target_instance_index
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
         self._metrics_move_session_parts(
             session_id,
             target_instance_index,
@@ -3060,81 +3379,97 @@ class KVCacheManager:
             raise RuntimeError("completed request KV must be local")
         session.active = False
         session.last_completion_ns = completion_ns
-        # Record the idle session's trigger class before any follow-up
-        # enforce_reserve pass so the typed eviction order sees it (the
-        # event loop batches mark_complete before enforce_reserve).
+        # Record the idle session's trigger class so the typed eviction
+        # order sees it (the event loop batches mark_complete before later
+        # admissions).
         session.next_request_type = next_request_type
-        self._check_invariants()
+        self._check_invariants_after_mutation(session_ids=(session_id,))
 
-    def enforce_reserve(
+    def retire_terminal_session(
         self,
-        *,
-        instance_index: int,
-        trigger_request_id: str,
-    ) -> tuple[tuple[KVTransfer, ...], tuple[int, ...]]:
-        instance = self.topology.instance(instance_index)
-
-        def unmet() -> tuple[int, ...]:
-            return tuple(
-                rank
-                for relative_index, rank in enumerate(instance.ranks)
-                if self._rank_states[rank].remaining_bytes
-                < self.reserve_bytes_by_tp_rank[relative_index]
-            )
-
-        evictions: list[KVTransfer] = []
-        # Same typed two-stage order as _ensure_capacity: ("human", "tool")
-        # classes, half-suffix stage before full-session stage inside each
-        # class, watermark rechecked after every eviction.
-        for trigger_type in ("human", "tool"):
-            while unmet():
-                candidates = self._completed_full_candidates(
-                    instance_index, trigger_type
-                )
-                if not candidates:
-                    break
-                evictions.append(
-                    self._evict_suffix(
-                        candidates[0],
-                        phase="completion",
-                        reason="reserve_threshold",
-                        trigger_request_id=trigger_request_id,
-                    )
-                )
-
-            while unmet():
-                candidates = self._completed_resident_candidates(
-                    instance_index, trigger_type
-                )
-                if not candidates:
-                    break
-                evictions.append(
-                    self._evict_session(
-                        candidates[0],
-                        phase="completion",
-                        reason="reserve_threshold",
-                        trigger_request_id=trigger_request_id,
-                    )
-                )
-        reserve_unmet_ranks = unmet()
-        self._check_invariants()
-        return tuple(evictions), reserve_unmet_ranks
-
-    def complete_request(
-        self,
-        *,
         session_id: str,
         completion_ns: int,
-        trigger_request_id: str,
-        next_request_type: Optional[str] = None,
-    ) -> tuple[tuple[KVTransfer, ...], tuple[int, ...]]:
-        self.mark_complete(session_id, completion_ns, next_request_type)
-        instance_index = self._sessions[session_id].instance_index
-        if instance_index is None:
-            raise RuntimeError("completed session lost its local instance")
-        return self.enforce_reserve(
-            instance_index=instance_index,
-            trigger_request_id=trigger_request_id,
+        request_id: Optional[str] = None,
+    ) -> Optional[int]:
+        """Forget terminal KV while preserving the partial/remote state model.
+
+        No eviction transfer is emitted here.  Only the prefix that is still
+        physically resident in local HBM is decremented; remote-only bytes are
+        discarded with their terminal session metadata.
+        """
+
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise KeyError(f"unknown KV session: {session_id}")
+        if session.active or session.last_completion_ns is None:
+            raise RuntimeError(
+                "only inactive completed sessions may be terminally retired"
+            )
+        if request_id is not None:
+            requested_reservation = self._reservations.get(request_id)
+            if (
+                requested_reservation is not None
+                and requested_reservation.session_id != session_id
+            ):
+                raise RuntimeError(
+                    "terminal retirement request owns another session reservation"
+                )
+        terminal_request_id = request_id or session_id
+
+        reservation_ids = sorted(
+            reservation_id
+            for reservation_id, reservation in self._reservations.items()
+            if reservation.session_id == session_id
         )
+        for reservation_id in reservation_ids:
+            reservation = self._reservations[reservation_id]
+            reservation_extra = self._reservation_extra_shards(reservation)
+            if self._metrics_recorder is not None:
+                for rank, value in zip(
+                    self.topology.instance(reservation.instance_index).ranks,
+                    reservation_extra,
+                ):
+                    if not value:
+                        continue
+                    self._metrics_recorder.record(
+                        anchor_kind="completion",
+                        request_id=reservation_id,
+                        session_id=session_id,
+                        rank=rank,
+                        allocation_key=f"reservation:{reservation_id}",
+                        reserved_kv_delta_bytes=-int(value),
+                        cause="terminal_session_retire_reservation",
+                    )
+            del self._reservations[reservation_id]
 
+        released_instance_index: Optional[int] = None
+        if session.location in {self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE}:
+            if session.instance_index is None:
+                raise RuntimeError("local completed session has no instance")
+            released_instance_index = session.instance_index
+            local_shards = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                session.context_tokens,
+                self.tp_degree,
+                layer_start=0,
+                layer_end=session.resident_prefix_layers,
+            )
+            self._remove_local_shards(released_instance_index, local_shards)
+        elif session.location != self.REMOTE_MEMORY:
+            raise RuntimeError(f"invalid KV location for {session_id}")
 
+        self._metrics_remove_session_parts(
+            session_id,
+            anchor_kind="completion",
+            request_id=terminal_request_id,
+            cause="terminal_session_retire",
+        )
+        # Helpers intentionally no-op without a recorder; remove the outer
+        # ownership maps regardless so one-shot sessions cannot accumulate.
+        self._metrics_parts.pop(session_id, None)
+        self._metrics_segment_counters.pop(session_id, None)
+        del self._sessions[session_id]
+        self._check_invariants_after_mutation(
+            session_ids=(session_id,), reservation_ids=reservation_ids
+        )
+        return released_instance_index

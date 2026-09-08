@@ -27,9 +27,106 @@
 import copy
 import hashlib
 import json
+import os
+import tempfile
 import time
 
-SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(online_contracts/state_delta_v1.md 为唯一权威)
+# ---------------------------------------------------------------- B4 在途尾部
+# 方案 §4-B4 "PropagatingTail"(真实在途尾部):基类中三个"已产生、等待
+# 下游核销/确认"的在途容器属于真实在途工作,禁止截断(红线 §2.1)。本
+# 观测器为它们提供当前长度、历史峰值、按来源(增长点)计数与可配置
+# fail-closed 上限;超限只 raise(桥层转 error response + 非 0 退出),
+# 在途条目原样保留,绝不静默丢弃。
+_PROPAGATING_TAIL_SOURCE_ARRIVALS = "arrivals"        # in_flight(到达未完成)
+_PROPAGATING_TAIL_SOURCE_DELIVERY = "delivery_start"  # _emitted_by_delivery(未 ack)
+_PROPAGATING_TAIL_SOURCE_KV = "kv_provisional"        # _provisional_kv_actions(未确认)
+
+# delivery 类来源(delivery_start / kv_provisional)默认上限推导:
+# FileDecisionBridge v0 背压 = 一轮至多 1 个在途 request(C++ 不收到
+# response 不发下一个;见 decision_bridge.py 协议头),ack 序列严格 +1
+# 单调(_BoundedSequenceTracker),故最大合法未确认交付数 = 1。默认上限
+# 取 8 = 8x 合法窗口,余量覆盖:响应文件原子发布与 ack 文件写入之间的
+# 时序窗口、ack 与下一 request 同轮到达的排序差,以及未来受控多在途
+# 扩展(届时应显式配置)。SH_PROPAGATING_TAIL_LIMIT=<正整数> 覆盖。
+_PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT = 8
+_PROPAGATING_TAIL_LIMIT_ENV = "SH_PROPAGATING_TAIL_LIMIT"
+
+
+class PropagatingTailTracker:
+    """真实在途尾部观测 + fail-closed 上限(方案 §4-B4;纯记账,零决策影响)。
+
+    每个来源 = (标签, 在途容器 getter, 上限)。observe_growth() 由增长点在
+    登记完成后调用:重读容器真实长度(不自行加减,与容器永不漂移),更新
+    历史峰值与累计增长计数,再做上限检查。超限 raise RuntimeError —— 异常
+    经 on_decision_batch 向上传播,由 BridgeServer 写 error response 并以
+    非 0 退出(整轮失败重来);超限时刻容器内容完整保留,本类不提供任何
+    截断/丢弃手段(红线:真实在途工作禁止截断)。
+    """
+
+    def __init__(self):
+        self._sources = {}
+
+    def register(self, name, container_getter, limit) -> None:
+        if name in self._sources:
+            raise ValueError(
+                "propagating tail source {!r} registered twice".format(name))
+        if int(limit) <= 0:
+            raise ValueError(
+                "propagating tail limit for {!r} must be positive, got {!r}"
+                .format(name, limit))
+        self._sources[name] = {
+            "getter": container_getter,
+            "limit": int(limit),
+            "peak": 0,
+            "grow_count": 0,
+        }
+
+    def configure_limit(self, name, limit) -> None:
+        """显式覆盖某来源上限(测试/运维;必须为正整数)。"""
+        self._require(name)["limit"] = int(limit)
+
+    def limit(self, name) -> int:
+        return self._require(name)["limit"]
+
+    def _require(self, name) -> dict:
+        source = self._sources.get(name)
+        if source is None:
+            raise KeyError(
+                "unknown propagating tail source {!r} (registered: {!r})"
+                .format(name, sorted(self._sources)))
+        return source
+
+    def observe_growth(self, name) -> None:
+        """增长点记账:当前长度经 getter 重读真实容器;峰值单调不减;
+        累计增长计数 +1;超限 fail-closed(检查在登记之后——报错里的
+        current 即真实长度,且包含刚登记的条目:不回滚、不截断)。"""
+        source = self._require(name)
+        current = len(source["getter"]())
+        source["grow_count"] += 1
+        if current > source["peak"]:
+            source["peak"] = current
+        if current > source["limit"]:
+            raise RuntimeError(
+                "propagating tail {!r} exceeded its fail-closed limit: "
+                "current={} peak={} grow_count={} limit={} (real in-flight "
+                "work is never truncated; the run fails closed)".format(
+                    name, current, source["peak"], source["grow_count"],
+                    source["limit"]))
+
+    def snapshot(self) -> dict:
+        """随时可读的观测快照:{来源: {current, peak, grow_count, limit}}。
+        current 动态重读容器(缩减点不挂钩,快照仍准确)。"""
+        return {
+            name: {
+                "current": len(source["getter"]()),
+                "peak": source["peak"],
+                "grow_count": source["grow_count"],
+                "limit": source["limit"],
+            }
+            for name, source in self._sources.items()
+        }
+
+SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除,本校验器与 C++ 序列化为权威)
 
 # 拼 batch 改造(2026-08-22):列车哨兵 watch 的批命名空间前缀。哨兵事件
 # (T_max 截断列车 / 逐迭代 oracle 的完成信号)不属于任何请求,不经
@@ -57,14 +154,22 @@ class OnlineSchedulerBase:
         decision_log_sink=None,
         profile_sink=None,
         defensive_reply_cache: bool = False,
+        sensing_query_sink=None,
+        online_stats_sink=None,
+        ledger_sink=None,
     ):
         self.mode = mode
-        self.manifest = manifest
         self.config = config
-        self.request_by_id = {
-            record["request_id"]: record
-            for record in manifest["requests"]
+        # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
+        # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
+        # arrival 后立即删除，故它单调缩小，不会随完成请求永久增长。
+        requests = manifest["requests"]
+        self.expected_request_count = len(requests)
+        self.unseen_request_ids = {
+            record["request_id"] for record in requests
         }
+        if len(self.unseen_request_ids) != self.expected_request_count:
+            raise ValueError("manifest request_id values must be unique")
         self.replay = replay
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23):decision_log_sink / profile_sink 提供
@@ -73,12 +178,20 @@ class OnlineSchedulerBase:
         # 下列 rows 列表,供测试/夹具直读)。
         self.decision_log_sink = decision_log_sink
         self.profile_sink = profile_sink
+        # B3 流式落盘(2026-08-28):sensing_query_log / online_stats 行在
+        # 产出时即完整,提供 sink 时逐行流式写出(缺省 None = 兼容旧路径,
+        # 行仍缓冲在下列 rows 列表,供测试/夹具直读)。online_stats
+        # 的 sink 写出的是未合并桥接层 processing_ns 的基础行,由
+        # online_service 结束期两遍合并成终文件(字节与改前一致)。
+        self.sensing_query_sink = sensing_query_sink
+        self.online_stats_sink = online_stats_sink
         # request-neutral 簿记。
         # pending fence 索引(阶段 4 §7.3):request_id -> set[str] 待办
         # stage(已完成 stage 从集合移除;REQUEST_COMPLETE 整体核销)。
         # 完成事件经该索引直接定位受影响 request/stage(O(1),非全量扫描)。
         self.in_flight = {}
-        self.completed_request_ids = set()
+        self.arrived_request_count = 0
+        self.completed_request_count = 0
         self.delivery_count = 0   # 已应用决策批次数(幂等重放不计)
         self.ack_count = 0        # 已收到 commit ack 数(结束时应 == delivery_count)
         # 阶段 4 §7.2:delivery sequence/ack/幂等。
@@ -94,8 +207,11 @@ class OnlineSchedulerBase:
         # True,显式开关)保留改前的双深拷防御姿态。
         self.defensive_reply_cache = bool(defensive_reply_cache)
         self._delivery_reply_cache = None
-        # 已处理的 ack delivery_sequence(去重;与协议层文件去重一致,防御性)。
-        self._seen_ack_delivery_seqs = set()
+        # Ack 去重采用连续水位 + 少量乱序洞，而不是已见 seq 的永久集合。
+        # _acked_out_of_order 至多覆盖仍在 _emitted_by_delivery 中等待确认的
+        # delivery；当洞补齐时立即折叠入水位。
+        self._acked_through = -1
+        self._acked_out_of_order = set()
         self._batch = None        # 本批次累加器(每次 on_decision_batch 重建)
         # online_decision_log.jsonl 行(replay 模式)。M3 流式落盘起,
         # 生产路径(decision_log_sink 提供)行即写即弃,不驻留本列表;
@@ -125,18 +241,24 @@ class OnlineSchedulerBase:
         #             所在实例就绪(非忙)可服务的排队成员
         #   network pending/active: C++ 侧 injected-unfinished 摘要
         #             (ledger_summary,审计输入;Python 不建第二套账本)
-        #   completed-unreconciled: REQUEST_COMPLETE 边界核销写入,request_id ->
-        #             {completed_tick, admitted_tick, first_commit_tick, stages}
+        #   completed-unreconciled: REQUEST_COMPLETE 边界即流式写出；内存只
+        #             保留计数，避免随完成请求数永久增长。
         self.ledger_admitted = {}
         self.ledger_committed = {}
         self.ledger_issued = {}
-        self.ledger_completed_unreconciled = {}
+        self.ledger_completed_unreconciled_count = 0
+        self.ledger_sink = ledger_sink
+        # 测试/嵌入调用未提供 sink 时仍可在 dump_ledger() 导出完整审计
+        # 产物，但记录写入临时文件而不驻留 Python 堆。
+        self._ledger_spool = (
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+            if self.sensing_enabled and ledger_sink is None else None)
         # 最近一次交付批次的 C++ injected-unfinished 摘要(ledger_summary;
         # 空列表 = 该批次无未完成注入节点或感知关闭)。
         self.last_injected_unfinished = []
-        # 逐批次历史(供结束总账核对与差异报告):{delivery_sequence, tick,
-        # injected_unfinished}。
-        self.injected_unfinished_history = []
+        # injected-unfinished 仅保留最近一笔供边界查询；历史只需要一个
+        # 记录数来证明至少收到过交付，不能按 delivery 累积完整快照。
+        self.injected_unfinished_record_count = 0
         # 本批次发射记录:delivery_seq -> {"tick": tick, "requests":
         # [(request_id, stage), ...]};commit ack 到达时做层转移的凭据。
         self._emitted_by_delivery = {}
@@ -157,7 +279,10 @@ class OnlineSchedulerBase:
         # 是"动作先入暂存、ack 后确认"的记账凭据,结束审计断言暂存区为空
         # (每笔已确认)。
         self._provisional_kv_actions = {}   # delivery_seq -> kv_actions 深副本
-        self._committed_kv_actions = {}     # delivery_seq -> 同(ack 后)
+        # B2(2026-08-28):committed 层从驻留 dict 改为计数器——原 dict 在
+        # ack 后只增不删且全仓唯一读者是幂等 fixture 的 len(),纯死重;
+        # 计数器语义等价(每笔确认 +1,幂等 ack 在去重门返回不重复计)。
+        self.committed_kv_action_batches = 0
         # ---------------------------------------------------------------- 阶段 6
         # §9.1 分项计数器统一采集(Python 侧;写 online_stats.jsonl)。
         #   python_callback_count_by_reason: 按 reason 统计已应用交付所携带
@@ -171,7 +296,38 @@ class OnlineSchedulerBase:
         #     合并桥接层 processing_ns,保留缓冲(online_service 落盘)。
         self.python_callback_count_by_reason = {}
         self.scheduler_self_ns_total = 0
+        # B3(2026-08-28):提供 online_stats_sink 时行即写即弃(online_service
+        # 落盘),本列表不再驻留;缺省缓冲(测试/夹具路径)。
         self.online_stats_rows = []
+        # ---------------------------------------------------------------- B4
+        # 真实在途尾部(方案 §4-B4 "PropagatingTail")观测注册。上限推导:
+        #   arrivals = expected_request_count —— manifest request_id 唯一
+        #     (构造期校验)+ 重复到达 fail-closed ⇒ in_flight 条目数 ≤ 全部
+        #     请求同时到达且无一完成,即最大合法并发的精确上界;超限只可能
+        #     是 unseen/arrival 校验逻辑漂移,属结构性断言;
+        #   delivery 类 = _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT(8x 桥
+        #     背压窗口,推导见模块头),SH_PROPAGATING_TAIL_LIMIT 覆盖。
+        self.propagating_tail = PropagatingTailTracker()
+        _delivery_tail_limit = os.environ.get(
+            _PROPAGATING_TAIL_LIMIT_ENV, "")
+        if not _delivery_tail_limit:
+            _delivery_tail_limit = _PROPAGATING_TAIL_DELIVERY_LIMIT_DEFAULT
+        else:
+            _delivery_tail_limit = int(_delivery_tail_limit)
+            if _delivery_tail_limit <= 0:
+                raise ValueError(
+                    "{} must be a positive integer, got {!r}".format(
+                        _PROPAGATING_TAIL_LIMIT_ENV,
+                        os.environ[_PROPAGATING_TAIL_LIMIT_ENV]))
+        self.propagating_tail.register(
+            _PROPAGATING_TAIL_SOURCE_ARRIVALS,
+            lambda: self.in_flight, self.expected_request_count)
+        self.propagating_tail.register(
+            _PROPAGATING_TAIL_SOURCE_DELIVERY,
+            lambda: self._emitted_by_delivery, _delivery_tail_limit)
+        self.propagating_tail.register(
+            _PROPAGATING_TAIL_SOURCE_KV,
+            lambda: self._provisional_kv_actions, _delivery_tail_limit)
 
     # ------------------------------------------------------------- 固定阶段 --
 
@@ -232,16 +388,36 @@ class OnlineSchedulerBase:
         for reason in delta["reasons"]:
             self.python_callback_count_by_reason[reason] = (
                 self.python_callback_count_by_reason.get(reason, 0) + 1)
-        self.online_stats_rows.append({
+        row = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
             "reasons": list(delta["reasons"]),
             "scheduler_self_ns": scheduler_self_ns,
             "node_count": len(batch["nodes"]),
-        })
+        }
+        # B3:流式落盘(基础行,online_service 结束期合并 processing_ns)。
+        if self.online_stats_sink is not None:
+            self.online_stats_sink(row)
+        else:
+            self.online_stats_rows.append(row)
 
     def run_variant_policy(self, delta) -> None:  # noqa: D401 -- 变体挂钩
         raise NotImplementedError
+
+    @staticmethod
+    def _sorted_touched_ranks(graph_batch: dict) -> list[int]:
+        """Return the exact batch rank set without rescanning node payloads.
+
+        GraphBatchBuilder records this private ledger at the same append point
+        as every node.  The fallback keeps custom/legacy graph adapters
+        byte-for-byte compatible until they adopt the ledger.
+        """
+        rank_ledger = graph_batch.get("_touched_ranks")
+        if rank_ledger is not None:
+            return sorted({int(rank) for rank in rank_ledger})
+        return sorted({
+            int(node["rank"]) for node in graph_batch["nodes"]
+        })
 
     def build_graph_batch(self) -> dict:
         """组装本批次 GraphBatch dict(节点/边/watch/未来 alarm 来自累加器),
@@ -253,6 +429,7 @@ class OnlineSchedulerBase:
         """
         delivery_sequence = self._batch["delivery_sequence"]
         graph_batch = self._graph_batch()
+        touched_ranks = self._sorted_touched_ranks(graph_batch)
         batch = {
             "schema_version": SCHEMA_VERSION,
             "batch_id": delivery_sequence,
@@ -264,10 +441,8 @@ class OnlineSchedulerBase:
             "kv_actions": self._batch["kv_actions"],
             "future_alarms": self._batch["future_alarms"],
             # 阶段 5 §8.2:touched ranks 集合(本批节点 rank 升序去重;零节点
-            # 批 = []);C++ GraphBatchCommitter 校验与自身计算结果一致。
-            "touched_ranks": sorted({
-                int(node["rank"]) for node in graph_batch["nodes"]
-            }),
+            # 批 = []);由构图收集时的精确 rank 账本给出，C++ 仍会校验。
+            "touched_ranks": touched_ranks,
         }
         # 阶段 5 §8.2:本批 kv_actions 先入 provisional 暂存区(非空才记账),
         # commit ack 到达后 finalize(见 on_commit_ack);幂等重放不经过这里
@@ -275,6 +450,9 @@ class OnlineSchedulerBase:
         if self._batch["kv_actions"]:
             self._provisional_kv_actions[delivery_sequence] = copy.deepcopy(
                 self._batch["kv_actions"])
+            # B4 在途尾部观测:provisional KV 动作增长点(build_graph_batch)。
+            self.propagating_tail.observe_growth(
+                _PROPAGATING_TAIL_SOURCE_KV)
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
         # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
@@ -345,8 +523,8 @@ class OnlineSchedulerBase:
                 out.write(json.dumps(row, sort_keys=True) + "\n")
 
     def _validate_schema(self, delta: dict) -> None:
-        """schema v1 校验器(阶段 4 §7.1;online_contracts/state_delta_v1.md
-        §6 的 7 条强制)。任何不满足即抛异常 -> BridgeServer 写 error
+        """schema v1 校验器(阶段 4 §7.1;原契约 §6 各条强制,契约文档已
+        删除)。任何不满足即抛异常 -> BridgeServer 写 error
         response 并以非 0 退出(fail-closed,绝不静默降级)。"""
         if not isinstance(delta, dict):
             raise ValueError("delta must be a dict, got {!r}".format(type(delta)))
@@ -356,7 +534,7 @@ class OnlineSchedulerBase:
                     delta.get("schema_version"), SCHEMA_VERSION))
         for field in ("delivery_sequence", "delivery_epoch", "tick",
                       "deferred_from_tick", "reasons", "arrivals",
-                      "completed_groups", "completed_nodes", "retry_items",
+                      "completed_groups", "completed_nodes",
                       "affected_ranks", "snapshot_handle"):
             if field not in delta:
                 raise ValueError("delta missing field {!r}".format(field))
@@ -366,13 +544,9 @@ class OnlineSchedulerBase:
             raise ValueError("delta arrivals must be a list")
         if not isinstance(delta["completed_groups"], list):
             raise ValueError("delta completed_groups must be a list")
-        # v1 新增字段类型 + 语义检查(§6 第 1/4/5/6/7 条)。
+        # v1 新增字段类型 + 语义检查(原 §6 各条)。
         if not isinstance(delta["completed_nodes"], list):
             raise ValueError("delta completed_nodes must be a list")
-        if not isinstance(delta["retry_items"], list) or delta["retry_items"]:
-            raise ValueError(
-                "delta retry_items must be an empty list in v1, got {!r}"
-                .format(delta["retry_items"]))
         if not isinstance(delta["affected_ranks"], list):
             raise ValueError("delta affected_ranks must be a list")
         affected = delta["affected_ranks"]
@@ -443,11 +617,7 @@ class OnlineSchedulerBase:
             raise ValueError(
                 "delta ledger_summary.injected_unfinished must be a list")
         self.last_injected_unfinished = injected
-        self.injected_unfinished_history.append({
-            "delivery_sequence": delta["delivery_sequence"],
-            "tick": delta["tick"],
-            "injected_unfinished": injected,
-        })
+        self.injected_unfinished_record_count += 1
 
     # ------------------------------------------------------- 感知账本(阶段 3) --
 
@@ -486,13 +656,10 @@ class OnlineSchedulerBase:
             })
 
     def _ledger_complete(self, request_id: str, tick: int) -> None:
-        """REQUEST_COMPLETE 边界:核销进入 completed-unreconciled,移出
-        admitted / committed。"""
-        if request_id in self.ledger_completed_unreconciled:
-            return  # 幂等(协议层已完成去重,防御性)
+        """REQUEST_COMPLETE 边界:移出活动层并流式输出 completed 层。"""
         admitted = self.ledger_admitted.get(request_id, {})
         committed = self.ledger_committed.get(request_id, {})
-        self.ledger_completed_unreconciled[request_id] = {
+        completed = {
             "completed_tick": tick,
             "admitted_tick": admitted.get("admitted_tick"),
             "first_commit_tick": committed.get("first_commit_tick"),
@@ -500,6 +667,20 @@ class OnlineSchedulerBase:
         }
         self.ledger_admitted.pop(request_id, None)
         self.ledger_committed.pop(request_id, None)
+        if not self.sensing_enabled:
+            return
+        row = {
+            "request_id": request_id,
+            "layers": {"completed_unreconciled": completed},
+        }
+        self.ledger_completed_unreconciled_count += 1
+        if self.ledger_sink is not None:
+            self.ledger_sink(row)
+            return
+        if self._ledger_spool is None:
+            raise RuntimeError("sensing ledger has neither sink nor spool")
+        self._ledger_spool.write(json.dumps(row, sort_keys=True) + "\n")
+        self._ledger_spool.flush()
 
     def _ledger_issue(self, request_id: str, tick: int, stage: str,
                       instance_index=None) -> None:
@@ -590,7 +771,7 @@ class OnlineSchedulerBase:
         """决策边界分层剩余负载查询快照(策略运行前 = 边界视图;§10.1 后
         为四层视图:admitted / issued / ready + C++ injected-unfinished
         摘要)。"""
-        self.sensing_query_rows.append({
+        row = {
             "delivery_sequence": delta["delivery_sequence"],
             "tick": delta["tick"],
             "injected_unfinished": self.last_injected_unfinished,
@@ -599,30 +780,30 @@ class OnlineSchedulerBase:
             # 边界视图(与 C++ 摘要同一 delivery 同 tick,逐层对账输入)。
             "issued": self._sensing_issued_view(),
             "ready": self._sensing_ready_view(),
-        })
+        }
+        # B3:流式落盘(行在产出时即完整;缺省缓冲,供夹具直读)。
+        if self.sensing_query_sink is not None:
+            self.sensing_query_sink(row)
+        else:
+            self.sensing_query_rows.append(row)
 
     def dump_ledger(self, path: str) -> None:
-        """分层账本导出(阶段 3 + 阶段 7 §10.1,感知开启时):逐 request 一行,
-        含 admitted / committed / issued / completed-unreconciled 常驻层信息
-        (已核销请求的各层齐备;运行结束 admitted / committed / issued 应已
-        清空,由对账脚本复核;ready 层为边界视图不常驻,在
-        sensing_query_log.jsonl 逐边界导出)。remote FIFO / local HBM 为
-        显式"不适用"占位(contract ⑥,本仓无远端内存 / HBM 执行模型)。"""
-        requests = {}
-        for request_id, info in self.ledger_admitted.items():
-            requests.setdefault(request_id, {})["admitted"] = info
-        for request_id, info in self.ledger_committed.items():
-            requests.setdefault(request_id, {})["committed"] = info
-        for request_id, info in self.ledger_issued.items():
-            requests.setdefault(request_id, {})["issued"] = info
-        for request_id, info in self.ledger_completed_unreconciled.items():
-            requests.setdefault(request_id, {})["completed_unreconciled"] = info
+        """完成账本导出。
+
+        生产服务提供 ``ledger_sink`` 时，完成行已按 completion 顺序写入
+        ``path``，此方法只校验无活动层；无 sink 的嵌入/测试路径从临时
+        spool 复制，仍不重建全量 request 映射。
+        """
+        if self.ledger_admitted or self.ledger_committed or self.ledger_issued:
+            raise RuntimeError("cannot dump ledger with active ledger layers")
+        if self.ledger_sink is not None:
+            return
         with open(path, "w", encoding="utf-8") as out:
-            for request_id in sorted(requests):
-                out.write(json.dumps(
-                    {"request_id": request_id,
-                     "layers": requests[request_id]},
-                    sort_keys=True) + "\n")
+            if self._ledger_spool is None:
+                return
+            self._ledger_spool.seek(0)
+            for line in self._ledger_spool:
+                out.write(line)
 
     def _start_batch(self, delta: dict) -> None:
         self._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
@@ -642,6 +823,10 @@ class OnlineSchedulerBase:
             "tick": delta["tick"],
             "requests": [],
         }
+        # B4 在途尾部观测:未 ack 交付增长点(_start_batch;正常背压窗口
+        # 内 current 恒 1,ack 丢失/协议违例才会累积并在此 fail-closed)。
+        self.propagating_tail.observe_growth(
+            _PROPAGATING_TAIL_SOURCE_DELIVERY)
         # 重建构图器(GraphBatchBuilder)的批次累加器:begin_batch() 之前
         # graph.batch 为 None,发射会在 _collect 处崩溃(步骤 1-8 闭环首跑
         # 暴露)。基类对 graph 的存在与否无感知(getattr),strategy 变体
@@ -689,10 +874,8 @@ class OnlineSchedulerBase:
                     "completion for unknown request {!r} (stage {!r})".format(
                         request_id, stage))
             if stage == STAGE_REQUEST:
-                if request_id in self.completed_request_ids:
-                    raise ValueError("request {!r} completed twice".format(request_id))
-                self.completed_request_ids.add(request_id)
                 del self.in_flight[request_id]
+                self.completed_request_count += 1
                 # 阶段 3 感知:REQUSET_COMPLETE 边界核销 -> completed-unreconciled。
                 self._ledger_complete(request_id, delta["tick"])
             else:
@@ -714,9 +897,18 @@ class OnlineSchedulerBase:
         for arrival in delta["arrivals"]:
             self._profile_scan()  # §7.3:受影响条目(直接定位,非扫描)
             request_id = arrival["request_id"]
+            if request_id not in self.unseen_request_ids:
+                raise ValueError(
+                    "arrival for unknown or already-arrived request {!r}"
+                    .format(request_id))
             if request_id in self.in_flight:
                 raise ValueError("request {!r} arrived twice".format(request_id))
+            self.unseen_request_ids.remove(request_id)
+            self.arrived_request_count += 1
             self.in_flight[request_id] = {STAGE_PREFILL, STAGE_DECODE}
+            # B4 在途尾部观测:在途请求增长点(_process_arrivals)。
+            self.propagating_tail.observe_growth(
+                _PROPAGATING_TAIL_SOURCE_ARRIVALS)
 
     # ------------------------------------------------------------- 决策日志 --
 
@@ -756,10 +948,11 @@ class OnlineSchedulerBase:
             sort_keys=True,
             separators=(",", ":"),
         )
-        ranks = sorted({
-            int(node["rank"])
-            for node in batch["nodes"]
-        })
+        # build_graph_batch 已把构图器的精确 rank 账本冻结到公开字段；
+        # digest 复用它，避免对同一批 nodes 再做一遍全量 rank 扫描。
+        ranks = (list(batch["touched_ranks"])
+                 if "touched_ranks" in batch
+                 else self._sorted_touched_ranks(batch))
         return {
             "delivery_sequence": batch["batch_id"],
             "tick": self._batch["tick"],
@@ -807,26 +1000,37 @@ class OnlineSchedulerBase:
             raise ValueError(
                 "ack for delivery {} not yet applied (last_applied={})"
                 .format(seq, self.last_applied_sequence))
-        if seq in self._seen_ack_delivery_seqs:
-            return  # 幂等:重复 ack 不重复层转移
-        self._seen_ack_delivery_seqs.add(seq)
+        if seq <= self._acked_through or seq in self._acked_out_of_order:
+            return  # 幂等:已被水位或乱序洞记录的 ack 不重复层转移
+        # 每个已应用 delivery 都在 _start_batch 创建一条未确认记录。缺失
+        # 说明 ack 已被消费或协议状态损坏；不能像旧实现那样静默加计数。
+        emitted = self._emitted_by_delivery.get(seq)
+        if emitted is None:
+            raise ValueError(
+                "ack for delivery {} has no pending emitted record".format(seq))
         self.ack_count += 1
         # 阶段 5 §8.2:provisional KV 账本 finalize -- C++ 端已把本批
         # kv_actions 随 GraphBatch 原子提交(validate 通过才 commit),ack
         # 即确认凭据;暂存条目转入 committed 层。幂等 ack 在上面的去重门
         # 直接返回,不会重复转移。
         if seq in self._provisional_kv_actions:
-            self._committed_kv_actions[seq] = self._provisional_kv_actions.pop(
-                seq)
+            self._provisional_kv_actions.pop(seq)
+            self.committed_kv_action_batches += 1
         # M4 核销即删(2026-08-23):_emitted_by_delivery 条目在 ack 层转移
         # 后即死重——get 改 pop 当场弹出(重复 ack 已被上方去重门拦截,
         # 每 seq 至多弹出一次;条目创建于 _start_batch,消费于此,无其他
         # 读者)。
-        emitted = self._emitted_by_delivery.pop(seq, None)
-        if emitted is None:
-            return
+        emitted = self._emitted_by_delivery.pop(seq)
         for request_id, stage in emitted["requests"]:
             self._ledger_commit(request_id, emitted["tick"], seq, stage)
+        if seq == self._acked_through + 1:
+            self._acked_through = seq
+            while self._acked_through + 1 in self._acked_out_of_order:
+                self._acked_out_of_order.remove(self._acked_through + 1)
+                self._acked_through += 1
+        else:
+            self._acked_out_of_order.add(seq)
+        self._release_acknowledged_reply(seq)
 
     def verify_run_end(self) -> None:
         """serve_forever 返回(EOF)后的协议一致性校验;失败抛异常(fail-closed)。"""
@@ -840,17 +1044,37 @@ class OnlineSchedulerBase:
                 "protocol mismatch at run end: last_applied_sequence={} != "
                 "delivery_count-1={}".format(
                     self.last_applied_sequence, self.delivery_count - 1))
-        cached_seq = -1 if self._delivery_reply_cache is None else (
-            self._delivery_reply_cache["seq"])
-        if cached_seq != self.last_applied_sequence:
+        if (self._delivery_reply_cache is not None
+                and self._delivery_reply_cache["seq"]
+                != self.last_applied_sequence):
             raise RuntimeError(
                 "protocol mismatch at run end: reply cache covers delivery "
                 "{} but last applied is {}".format(
-                    cached_seq, self.last_applied_sequence))
+                    self._delivery_reply_cache["seq"],
+                    self.last_applied_sequence))
         if self.in_flight:
             raise RuntimeError(
                 "run ended with un-settled in-flight requests: {!r}"
                 .format(sorted(self.in_flight)))
+        if (self.arrived_request_count != self.expected_request_count
+                or self.completed_request_count != self.expected_request_count
+                or self.unseen_request_ids):
+            raise RuntimeError(
+                "request lifecycle mismatch at run end: expected={} arrived={} "
+                "completed={} unseen={}".format(
+                    self.expected_request_count, self.arrived_request_count,
+                    self.completed_request_count, len(self.unseen_request_ids)))
+        if self._emitted_by_delivery:
+            raise RuntimeError(
+                "run ended with unacknowledged emitted deliveries: {}"
+                .format(sorted(self._emitted_by_delivery)[:5]))
+        if (self._acked_through != self.last_applied_sequence
+                or self._acked_out_of_order):
+            raise RuntimeError(
+                "ack watermark mismatch at run end: through={} last_applied={} "
+                "out_of_order={}".format(
+                    self._acked_through, self.last_applied_sequence,
+                    sorted(self._acked_out_of_order)[:5]))
         # 阶段 5 §8.2:provisional KV 账本结束审计 -- 每笔已入暂存的
         # kv_actions 都必须等到 commit ack 确认;非空 = 有 delivery 未确认
         # (C++ 端 GraphBatch 提交失败才会出现;fail-closed)。
@@ -862,8 +1086,8 @@ class OnlineSchedulerBase:
                     sorted(self._provisional_kv_actions)))
         if self.sensing_enabled:
             # 阶段 3 + 阶段 7 §10.1:分层账本结束态——所有请求已核销,排队
-            # 账本 / committed / issued 层清空,completed-unreconciled 覆盖
-            # 全部完成请求。
+            # 账本 / committed / issued 层清空,流式 completed-unreconciled
+            # 行数覆盖全部完成请求。
             if self.ledger_admitted or self.ledger_committed or \
                     self.ledger_issued:
                 raise RuntimeError(
@@ -872,13 +1096,38 @@ class OnlineSchedulerBase:
                         sorted(self.ledger_admitted),
                         sorted(self.ledger_committed),
                         sorted(self.ledger_issued)))
-            if set(self.completed_request_ids) != set(
-                    self.ledger_completed_unreconciled):
+            if self.completed_request_count != \
+                    self.ledger_completed_unreconciled_count:
                 raise RuntimeError(
-                    "sensing ledger: completed/unreconciled mismatch "
-                    "(completed={} unreconciled={})".format(
-                        len(self.completed_request_ids),
-                        len(self.ledger_completed_unreconciled)))
-            if not self.injected_unfinished_history:
+                "sensing ledger: completed/unreconciled mismatch "
+                "(completed={} unreconciled={})".format(
+                        self.completed_request_count,
+                        self.ledger_completed_unreconciled_count))
+            if self.injected_unfinished_record_count == 0:
                 raise RuntimeError(
                     "sensing ledger: no injected-unfinished history recorded")
+
+    def _release_acknowledged_reply(self, seq: int) -> None:
+        """Drop the last response as soon as C++ confirms receipt.
+
+        The reply cache is intentionally retained only until the corresponding
+        commit ack so that a transport retry before acknowledgement remains
+        idempotent.  Once the ack arrives, the protocol forbids replaying that
+        delivery and retaining its delta/batch would pin every graph node and
+        edge in the Python heap for an entire long-running service.
+        """
+        cached = self._delivery_reply_cache
+        if cached is None or cached["seq"] != seq:
+            return
+        current_batch = (
+            self._batch is not None
+            and self._batch["delivery_sequence"] == seq)
+        self._delivery_reply_cache = None
+        if not current_batch:
+            return
+        self._batch = None
+        graph = getattr(self, "graph", None)
+        if graph is not None and hasattr(graph, "batch"):
+            graph.batch = None
+            if hasattr(graph, "batch_first_step"):
+                graph.batch_first_step = False

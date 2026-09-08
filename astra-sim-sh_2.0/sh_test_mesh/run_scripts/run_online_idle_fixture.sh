@@ -57,6 +57,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# uutils date 0.8.0 treats %3N as an untruncated nanosecond field, which makes
+# elapsed-millisecond arithmetic overflow or report absurd values.  Use a
+# monotonic clock with explicit integer conversion on every supported host.
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+
 # cpp.log 的 "[online] lifecycle:" 行 -> 状态序列("IDLE ACTIVE ...")
 # 注:C++ 的 "command-fifo: EOF" 消息不带结尾换行,后续 lifecycle 行会拼接在
 # 同一物理行上,故用 grep -o 做行内提取(不以 ^ 锚定行首)。
@@ -73,9 +80,13 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   mkdir -p "${run_dir}/bridge"
   mkfifo "${run_dir}/cmd.fifo"
   cd "${PROJECT}"
+  # --idle-watchdog-s 0 (2026-09-05): 看门狗默认已武装为 1s；本 fixture 的契约是刻意
+  # IDLE 停车（request-neutral 无输入必须保持 IDLE 不退出），显式 0 恢复无界停车契约。
   "${BIN}" \
     --online-mode strategy \
     --bridge-dir "${run_dir}/bridge" \
+    --online-validate 1 \
+    --idle-watchdog-s 0 \
     --command-fifo "${run_dir}/cmd.fifo" \
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
@@ -139,9 +150,9 @@ scenario1_idle_hold_close_only() {
   echo "[fixture] scenario 1: 无请求启动(无 --request-queue-csv)-> IDLE 保持 2s -> 注入关闭 -> DRAINING -> FINISHED"
   start_online "${run_dir}" || exit 1
   local t_before t_after
-  t_before=$(date +%s%3N)
+  t_before=$(monotonic_ms)
   sleep 2
-  t_after=$(date +%s%3N)
+  t_after=$(monotonic_ms)
   assert_processes_alive "${run_dir}" scenario1
   local states
   states=$(lifecycle_states "${run_dir}/cpp.log")
@@ -180,7 +191,7 @@ scenario2_inject_two() {
   echo "[fixture] scenario 2: IDLE held 2s (processes alive, state=IDLE); injecting 2 requests"
 
   local inject_ms
-  inject_ms=$(date +%s%3N)
+  inject_ms=$(monotonic_ms)
   exec 3>"${run_dir}/cmd.fifo"
   echo '{"kind":"Submit","session_id":"fixture_s0","turn_index":0,"request_id":"fixture_s0_r0","prefill_length":4096,"decode_length":128,"arrival_world_ns":'"${T1_NS}"',"inter_request_interval_ns":0}' >&3
   echo '{"kind":"Submit","session_id":"fixture_s1","turn_index":0,"request_id":"fixture_s1_r0","prefill_length":2048,"decode_length":256,"arrival_world_ns":'"${T2_NS}"',"inter_request_interval_ns":0}' >&3
@@ -204,7 +215,7 @@ scenario2_inject_two() {
     fi
   done
   local complete_ms
-  complete_ms=$(date +%s%3N)
+  complete_ms=$(monotonic_ms)
   echo "[fixture] scenario 2: both requests completed at +$((complete_ms - inject_ms))ms; injecting CloseInput"
 
   echo '{"kind":"CloseInput"}' >&3

@@ -280,10 +280,14 @@ def cmd_bucket_stats(args: argparse.Namespace) -> int:
         t_iso = t_isolated[(pb, db)]
         out_rows.append((
             pb, db,
-            f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g}"
-            f"{' inclusive' if pb == len(prefill_edges) - 2 else ''}]",
-            f"[{decode_edges[db]:g},{decode_edges[db + 1]:g}"
-            f"{' inclusive' if db == len(decode_edges) - 2 else ''}]",
+            # 2026-09-05 口径裁决：interior edges 为左桶闭上界（右闭），
+            # 末桶无上限（吸收 x > edges[-1]）——与 campaign BucketGrid 对齐
+            (f"[{prefill_edges[pb]:g},{prefill_edges[pb + 1]:g} inclusive]"
+             if pb < len(prefill_edges) - 2
+             else f"[{prefill_edges[pb]:g},+inf)"),
+            (f"[{decode_edges[db]:g},{decode_edges[db + 1]:g} inclusive]"
+             if db < len(decode_edges) - 2
+             else f"[{decode_edges[db]:g},+inf)"),
             n, t_iso,
             nearest_rank_percentile(entry["e2e"], 0.50),
             nearest_rank_percentile(entry["e2e"], 0.99),

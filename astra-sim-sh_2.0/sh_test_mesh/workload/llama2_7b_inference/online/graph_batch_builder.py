@@ -83,13 +83,6 @@ from generate_trace import (  # noqa: E402
     transformer_pass_aggregated,
 )
 
-# M1 收集即释放的摊销压缩水位（2026-08-23）：_collect 把已发射节点切片
-# 进当批后，per-rank 已收集前缀达到该水位即整段删除（节点 id 来自
-# next_id 计数器，与 list 位置无关）。8192 保证工作集有界且删除频度
-# 足够低——每节点均摊 O(1)，禁止逐批前缀删除（O(n²) 反例）。
-_COLLECT_COMPACT_THRESHOLD = 8192
-
-
 def first_token_split_enabled() -> bool:
     """WP9 首步批拆分总开关（SH_FIRST_TOKEN_SPLIT，B4 起缺省 "0" 关）。
 
@@ -135,12 +128,12 @@ class OnlineTraceBuilder:
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
-        # M1 收集即释放（2026-08-23）：本 list 只保留"已发射未收集"的
-        # 尾部——_collect 切片进批后按水位摊销压缩前缀（见 _collect），
-        # 全量历史节点不再常驻。禁止按 list 位置回读节点（id 来自
+        # M1 收集即释放（2026-08-29）：这两个 list 只保存自上次 _collect
+        # 以来尚未交付的记录；交付后立即 clear，跨批状态只由 next_id、
+        # previous_id 与账本保存。禁止按 list 位置回读节点（id 来自
         # next_id 计数器，与位置无关）。
-        self.nodes = []   # 本 rank 已发射节点 dict（发射序，可被压缩）
-        self.edges = []   # 本 rank parent edges（随节点水位一并压缩）
+        self.nodes = []   # 本 rank 尚未交付的节点 dict（发射序）
+        self.edges = []   # 本 rank 尚未交付的 parent edges
         self.node_count = 0
         # 当前 request-stage 反向索引上下文（每次 per-request 段发射前设置）。
         self.request_id = ""
@@ -172,18 +165,48 @@ class OnlineTraceBuilder:
             "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
                      "pg_name": "", "involved_dim": []},
         }
-        dependency_ids = []
-        if self.previous_id is not None:
-            dependency_ids.append(self.previous_id)
-        dependency_ids.extend(self.pending_extra_dependencies)
-        for dependency_id in dict.fromkeys(dependency_ids):
-            self.edges.append({
-                "rank": self.rank,
-                "from": dependency_id,
-                "to": self.next_id,
-                "kind": "data",
-            })
-        self.pending_extra_dependencies.clear()
+        previous_id = self.previous_id
+        pending_dependencies = self.pending_extra_dependencies
+        # The common serial chain has no extra dependency: avoid allocating a
+        # temporary list and deduplication dict.  The multi-dependency fallback
+        # deliberately keeps dict.fromkeys() for its stable first-seen order.
+        if not pending_dependencies:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        elif len(pending_dependencies) == 1:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+            dependency_id = pending_dependencies[0]
+            if previous_id is None or dependency_id != previous_id:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        else:
+            dependency_ids = []
+            if previous_id is not None:
+                dependency_ids.append(previous_id)
+            dependency_ids.extend(pending_dependencies)
+            for dependency_id in dict.fromkeys(dependency_ids):
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        pending_dependencies.clear()
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
@@ -443,6 +466,10 @@ class GraphBatchBuilder:
         self.batch = {
             "nodes": [],
             "parent_edges": [],
+            # Private exact ledger: _collect already knows the source rank of
+            # every appended node, so downstream GraphBatch metadata need not
+            # rescan the complete node payload.
+            "_touched_ranks": set(),
             "watches": [],
             "assignments": [],
             "kv_actions": [],
@@ -452,20 +479,20 @@ class GraphBatchBuilder:
     def _collect(self, marker: dict) -> None:
         for rank, builder in self.builders.items():
             node_mark, edge_mark = marker[rank]
-            self.batch["nodes"].extend(builder.nodes[node_mark:])
-            self.batch["parent_edges"].extend(builder.edges[edge_mark:])
-            # M1 收集即释放（摊销压缩，2026-08-23）：已切片进本批的节点/
-            # 边不再驻留 builder——已收集水位 ≥ 8192 且不小于现存总量一半
-            # 时才删前缀（每次删除搬运的尾部 ≤ 现存一半，均摊 O(1)/节点）。
-            # 安全前提（全仓 grep 证实）：节点 id 来自 next_id 计数器，无
-            # 任何按 list 位置回读节点的代码；每个 _mark() 都在同一次发射
-            # 调用内被紧随的单次 _collect() 消费（无跨发射延迟消费），水位
-            # 即本次切片在当前 list 中的绝对长度，压缩后下一次 _mark 重新
-            # 取 len，自洽。
-            if (node_mark >= _COLLECT_COMPACT_THRESHOLD
-                    and node_mark * 2 >= len(builder.nodes)):
-                del builder.nodes[:node_mark]
-                del builder.edges[:edge_mark]
+            nodes = builder.nodes
+            edges = builder.edges
+            # 正常路径的 marker 为 0，直接 extend 避免临时 slice；非零
+            # marker 仅保留本次新增尾部。所有 _mark() 都在同一发射调用内
+            # 被单次 _collect() 消费，故旧前缀已在先前批次交付，可立即
+            # clear 释放对节点/边 dict 的最后一层 builder 引用。
+            if len(nodes) > node_mark:
+                self.batch["_touched_ranks"].add(int(rank))
+            self.batch["nodes"].extend(
+                nodes if node_mark == 0 else nodes[node_mark:])
+            self.batch["parent_edges"].extend(
+                edges if edge_mark == 0 else edges[edge_mark:])
+            nodes.clear()
+            edges.clear()
 
     def _mark(self) -> dict:
         return {

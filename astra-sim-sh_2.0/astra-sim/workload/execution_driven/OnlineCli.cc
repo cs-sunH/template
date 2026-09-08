@@ -81,14 +81,14 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     std::string bridge_dir;
     int bridge_timeout_ms = 0;
     // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock parking watchdog
-    // seconds; 0 = off (frozen default, original wait_for_work contract).
-    double idle_watchdog_s = 0.0;
+    // seconds. Default 1.0 since 2026-09-05 (ships armed; explicit 0 = off
+    // restores the unbounded wait_for_work contract for fixtures/IDLE
+    // runs). Must stay in sync with OnlineCliOptions::idle_watchdog_s --
+    // this local is written back to `out` unconditionally, so it IS the
+    // binary's behavioral default.
+    double idle_watchdog_s = 1.0;
     std::string request_queue_csv;
     std::string command_fifo;
-    // P0 fix (2026-08-30): advisory-only calendar-reader compatibility knob
-    // (the turn-0 submission order is driven by the arrival calendar, not by
-    // a row window -- see OnlineCli.hh).
-    size_t request_window_rows = 128;
     // Backport fix (2026-08-16, sh_2.0测试 §5.1): default UNBOUNDED (0 = no
     // arrival-window cap). The previous 30e9 default burned the 30s
     // acceptance-input window into the code and silently dropped over-window
@@ -96,12 +96,9 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     // (--request-max-arrival-ns), and any drop it causes is fail-closed at
     // the run-end completion audit (see main_online.cc).
     uint64_t request_max_arrival_ns = 0;
-    // M2 node GC (2026-08-23; A1 amortization 2026-08-28): default 1 (on --
-    // the 2026-08-23 light-load-regulation default-off ruling is superseded
-    // by the amortized collection; see OnlineCli.hh).
-    int online_node_gc = 1;
-    // C1 validate switch (2026-08-28): 1 full / 0 off / N >= 2 sample every
-    // Nth batch. Frozen CLI default 1 (fail-closed, matches the pre-C1
+    // C1 validate switch (2026-08-28), B.2 cleanup (2026-09-05): strict
+    // <0|1> enum -- 1 full / 0 off; the N >= 2 sample-every-Nth tier is
+    // removed. Frozen CLI default 1 (fail-closed, matches the pre-C1
     // behavior for bare invocations); the official runner overrides with
     // "${SH_ONLINE_VALIDATE:-0}".
     int online_validate = 1;
@@ -136,35 +133,19 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 return false;
             }
             mode = value;
-        } else if (name == "--online-node-gc") {
-            // M2 node GC (2026-08-23; A1 amortization 2026-08-28): <0|1>,
-            // frozen default 1 (on -- amortized collection; see
-            // OnlineCli.hh).
-            if (!has_inline_value) {
-                if (i + 1 >= argc) {
-                    error = "option --online-node-gc requires a value";
-                    return false;
-                }
-                value = argv[++i];
-            }
-            if (value == "0") {
-                online_node_gc = 0;
-            } else if (value == "1") {
-                online_node_gc = 1;
-            } else {
-                error = "unknown --online-node-gc value: " + value +
-                        " (expected \"0\" or \"1\")";
-                return false;
-            }
         } else if (name == "--online-validate") {
-            // C1 validate switch (2026-08-28): <0|1|N>. Non-negative
-            // integer (FP1/E32 hardened lexicon: pure ASCII digits ->
-            // errno/ERANGE -> endptr -> <= INT_MAX, only then the
-            // static_cast<int>; 4294967296 would otherwise wrap to 0 and
-            // silently DISABLE validation -- fail-open, the opposite of
-            // this parser's contract); 1 = full validation (pre-C1
-            // behavior), 0 = production skip, N >= 2 = sample every Nth
-            // batch.
+            // C1 validate switch (2026-08-28), B.2 cleanup (2026-09-05):
+            // strict <0|1> enum (same shape as the former --online-node-gc
+            // enum, whose CLI arm the B.3 cleanup (2026-09-05) removed);
+            // the N >= 2
+            // sample-every-Nth-batch tier is removed. 1 = full validation
+            // (pre-C1 behavior), 0 = production skip (commit() keeps its
+            // mandatory liveness preflight). Any other token -- including
+            // the former sampling N >= 2 and the wrap-around shapes the old
+            // numeric lexicon guarded against (4294967296 would have
+            // silently DISABLED validation, fail-open) -- is a hard parse
+            // error, so a stale script can never silently change validation
+            // frequency.
             if (!has_inline_value) {
                 if (i + 1 >= argc) {
                     error = "option --online-validate requires a value";
@@ -172,25 +153,16 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 value = argv[++i];
             }
-            if (!is_ascii_digits(value)) {
-                error = "option --online-validate requires a non-negative "
-                        "integer (ASCII digits only), got: " + value;
+            if (value == "0") {
+                online_validate = 0;
+            } else if (value == "1") {
+                online_validate = 1;
+            } else {
+                error = "unknown --online-validate value: " + value +
+                        " (expected \"0\" or \"1\"; the N >= 2 sampled "
+                        "tier was removed on 2026-09-05)";
                 return false;
             }
-            char* end = nullptr;
-            errno = 0;
-            const unsigned long long parsed = std::strtoull(
-                value.c_str(), &end, 10);
-            if (errno == ERANGE || end == value.c_str() || *end != '\0' ||
-                parsed > static_cast<unsigned long long>(
-                             std::numeric_limits<int>::max())) {
-                error = "option --online-validate exceeds the accepted "
-                        "integer range (max " +
-                        std::to_string(std::numeric_limits<int>::max()) +
-                        "), got: " + value;
-                return false;
-            }
-            online_validate = static_cast<int>(parsed);
         } else if (name == "--close-input") {
             if (has_inline_value) {
                 error = "flag --close-input takes no value";
@@ -220,11 +192,10 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
             } else {
                 command_fifo = value;
             }
-        } else if (name == "--request-window-rows" ||
-                   name == "--request-max-arrival-ns" ||
+        } else if (name == "--request-max-arrival-ns" ||
                    name == "--bridge-timeout-ms") {
-            // WindowedTraceReader knobs (advisory row window / turn-0
-            // arrival upper bound) + the bridge poll watchdog.
+            // WindowedTraceReader knob (turn-0 arrival upper bound) + the
+            // bridge poll watchdog.
             // Non-negative integers. FP1 (2026-09-01, sync-A16 batch P;
             // E25): frozen lexicon -- pure ASCII digits (rejects " -1",
             // "\t-1", "+1" before strtoull can wrap them), errno=0 +
@@ -251,15 +222,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                         "range, got: " + value;
                 return false;
             }
-            if (name == "--request-window-rows") {
-                if (parsed > static_cast<unsigned long long>(
-                                 std::numeric_limits<size_t>::max())) {
-                    error = "option --request-window-rows exceeds size_t "
-                            "range, got: " + value;
-                    return false;
-                }
-                request_window_rows = static_cast<size_t>(parsed);
-            } else if (name == "--bridge-timeout-ms") {
+            if (name == "--bridge-timeout-ms") {
                 if (parsed > 2147483647ULL) {
                     error = "option --bridge-timeout-ms exceeds int range, "
                             "got: " + value;
@@ -375,9 +338,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     out.request_queue_csv = request_queue_csv;
     out.command_fifo = command_fifo;
     out.sensing_enabled = sensing_enabled;
-    out.request_window_rows = request_window_rows;
     out.request_max_arrival_ns = request_max_arrival_ns;
-    out.online_node_gc = online_node_gc;
     out.online_validate = online_validate;
     return true;
 }

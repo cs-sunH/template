@@ -7,7 +7,9 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/Event.h"
 #include "common/Type.h"
+#include <cstddef>
 #include <list>
+#include <optional>
 
 namespace NetworkAnalytical {
 
@@ -38,6 +40,21 @@ class EventList {
      */
     void add_event(Callback callback, CallbackArg callback_arg) noexcept;
 
+    /// Add an event whose argument is reclaimed by cancellation_callback if
+    /// this list removes it before invocation.
+    [[nodiscard]] EventHandle add_cancellable_event(
+        Callback callback,
+        CallbackArg callback_arg,
+        EventCancellationCallback cancellation_callback) noexcept;
+
+    /// Remove a pending event by handle.  The current event is popped before
+    /// callback invocation, so attempting to cancel it while re-entrant is a
+    /// safe false return rather than a use-after-free.
+    [[nodiscard]] bool cancel_event(const EventHandle& handle) noexcept;
+
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] size_t size() const noexcept;
+
     /**
      * Invoke all events in the event list.
      */
@@ -47,8 +64,11 @@ class EventList {
     /// event time of the event list
     EventTime event_time;
 
-    /// list of registered events
-    std::list<Event> events;
+    /// The overwhelmingly common case is one event per timestamp. Keep that
+    /// first event inline so it needs no list-node allocation; only same-time
+    /// collisions spill into the FIFO below.
+    std::optional<QueuedEvent> first_event;
+    std::list<QueuedEvent> overflow_events;
 };
 
 }  // namespace NetworkAnalytical

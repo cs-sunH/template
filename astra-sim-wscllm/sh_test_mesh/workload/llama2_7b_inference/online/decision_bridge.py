@@ -32,7 +32,7 @@ import time
 
 from bridge_request_journal import REQUEST_JOURNAL_NAME
 
-SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(online_contracts/state_delta_v1.md)
+SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
 
 _REQUEST_PREFIX = "request_"
 _RESPONSE_PREFIX = "response_"

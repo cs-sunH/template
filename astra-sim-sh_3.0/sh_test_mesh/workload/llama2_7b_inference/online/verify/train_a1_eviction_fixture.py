@@ -9,7 +9,8 @@ trace 小窗不保证触发 KV 压力(5s 窗实测零逐出)——本装置用�
 
   1. §7.3 不变量:decode 成员-迭代总数 == Σ decode_length(3,588);
      chunk 总数 == Σ ceil(prefill/512)(61);
-  2. 逐出实际发生(completion/decode evictions 非空)且运行 PASS;
+  2. 逐出实际发生(准入族 history/prefill/decode evictions 非空;主动
+     驱逐退役后完成边界恒零逐出)且运行 PASS;
   3. 全部 12 请求完成(交付 reasons 四类各 12)。
 
 编排:合成输入落 /tmp → 备份 trace_config.csv → 临时指向合成队列/
@@ -97,9 +98,8 @@ def main() -> int:
     config = config.replace(
         "config,local_hbm_capacity_profile,validation-160gib",
         "config,local_hbm_capacity_profile,a1-eviction-4gib")
-    config = config.replace(
-        "config,kv_reserve_context_tokens,1000000",
-        "config,kv_reserve_context_tokens,10000")
+    # D-clear (2026-09-05)：kv_reserve_context_tokens 配置链保留（审计
+    # 口径）但运行期零消费者，按 CSV 原值使用即可，无需替换（R8）。
     lines = [line for line in config.splitlines()
              if line.startswith("config,request_queue_csv,")]
     if len(lines) != 1:
@@ -136,6 +136,8 @@ def main() -> int:
         for line in open(os.path.join(
                 run_dir, "results/online_decision_log.jsonl")):
             decision = json.loads(line).get("decision", {})
+            # 主动驱逐退役后 completion_evictions 恒空；此处断言的是
+            # 准入族逐出（history/prefill/decode）。
             for key in ("history_evictions", "prefill_evictions",
                         "decode_evictions", "completion_evictions"):
                 evictions += len(decision.get(key) or ())

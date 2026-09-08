@@ -46,9 +46,6 @@ class ResolvedHardware:
     d2d_latency_ns: int
     remote_memory_type: str
     remote_memory_bandwidth_gbps: float
-    remote_memory_latency_ns: int | None
-    remote_memory_npu_selection: str | None
-    remote_memory_logical_pool: str | None
     peak_perf_tflops: float
     metadata: dict[str, object]
 
@@ -62,18 +59,16 @@ class ResolvedHardware:
 
     @property
     def remote_memory_runtime_label(self) -> str:
-        if self.remote_memory_type == "NO_MEMORY_EXPANSION":
-            return "no_memory_expansion"
-        if self.remote_memory_npu_selection == "mesh-boundary":
-            return "edge_remote_memory_pool"
-        return "remote_memory_expansion"
+        # A.2 (2026-09-05): the remote memory backend was removed; the parse
+        # layer fails closed unless the hardware declares NO_MEMORY_EXPANSION,
+        # so this label is constant and only keeps runtime dir naming stable.
+        return "no_memory_expansion"
 
 
 @dataclass(frozen=True)
 class RuntimeConfigPaths:
     system: Path
     network: Path
-    remote_memory: Path
     comm_group: Path
 
 
@@ -223,51 +218,20 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         "memory-type",
         "Hardware configuration.remote-memory",
     )
-    if remote_memory_type == "NO_MEMORY_EXPANSION":
-        _require_exact_keys(
-            remote_memory,
-            {"memory-type", "bandwidth-gbps"},
-            "Hardware configuration.remote-memory",
-        )
-        remote_memory_latency = None
-        remote_memory_npu_selection = None
-        remote_memory_logical_pool = None
-    elif remote_memory_type == "PER_NPU_MEMORY_EXPANSION":
-        _require_exact_keys(
-            remote_memory,
-            {
-                "memory-type",
-                "bandwidth-gbps",
-                "latency-ns",
-                "npu-selection",
-                "logical-pool",
-            },
-            "Hardware configuration.remote-memory",
-        )
-        remote_memory_latency = _require_int(
-            remote_memory["latency-ns"],
-            "Hardware configuration.remote-memory.latency-ns",
-            nonnegative=True,
-        )
-        remote_memory_npu_selection = _require_string(
-            remote_memory,
-            "npu-selection",
-            "Hardware configuration.remote-memory",
-        )
-        if remote_memory_npu_selection != "mesh-boundary":
-            raise ValueError(
-                "Hardware configuration.remote-memory.npu-selection must be "
-                "'mesh-boundary'"
-            )
-        remote_memory_logical_pool = _require_string(
-            remote_memory,
-            "logical-pool",
-            "Hardware configuration.remote-memory",
-        )
-    else:
+    # A.2 (2026-09-05): the remote memory backend was removed from this
+    # repository; the guard moved here from the materialization validator so
+    # a hardware config declaring any expansion fails closed at parse time.
+    if remote_memory_type != "NO_MEMORY_EXPANSION":
         raise ValueError(
-            "Hardware configuration.remote-memory.memory-type is unsupported"
+            "Hardware configuration.remote-memory.memory-type must be "
+            "'NO_MEMORY_EXPANSION' (the remote memory backend was removed "
+            f"from this repository), got {remote_memory_type!r}"
         )
+    _require_exact_keys(
+        remote_memory,
+        {"memory-type", "bandwidth-gbps"},
+        "Hardware configuration.remote-memory",
+    )
     remote_memory_bandwidth = _require_number(
         remote_memory["bandwidth-gbps"],
         "Hardware configuration.remote-memory.bandwidth-gbps",
@@ -300,9 +264,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         d2d_latency_ns=d2d_latency,
         remote_memory_type=remote_memory_type,
         remote_memory_bandwidth_gbps=remote_memory_bandwidth,
-        remote_memory_latency_ns=remote_memory_latency,
-        remote_memory_npu_selection=remote_memory_npu_selection,
-        remote_memory_logical_pool=remote_memory_logical_pool,
         peak_perf_tflops=peak_perf,
         metadata=metadata,
     )
@@ -322,35 +283,6 @@ def _write_text_atomically(path: Path, contents: str) -> None:
 
 def _serialize_json(value: object) -> str:
     return json.dumps(value, indent=2) + "\n"
-
-
-def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
-    remote: dict[str, Any] = {
-        "memory-type": hardware.remote_memory_type,
-        "remote-mem-bw": hardware.remote_memory_bandwidth_gbps,
-    }
-    if hardware.remote_memory_type == "NO_MEMORY_EXPANSION":
-        return remote
-
-    if hardware.remote_memory_latency_ns is None:
-        raise ValueError("Remote-memory expansion requires a configured latency")
-    if hardware.remote_memory_npu_selection != "mesh-boundary":
-        raise ValueError("Remote-memory expansion requires mesh-boundary selection")
-    if hardware.remote_memory_logical_pool is None:
-        raise ValueError("Remote-memory expansion requires a logical pool")
-
-    boundary_ranks = []
-    for row in range(hardware.mesh_rows):
-        for column in range(hardware.mesh_cols):
-            if row in {0, hardware.mesh_rows - 1} or column in {
-                0,
-                hardware.mesh_cols - 1,
-            }:
-                boundary_ranks.append(row * hardware.mesh_cols + column)
-    remote["remote-mem-latency"] = hardware.remote_memory_latency_ns
-    remote["logical-pool"] = hardware.remote_memory_logical_pool
-    remote["npu-ids"] = boundary_ranks
-    return remote
 
 
 def _prepare_comm_groups(
@@ -425,7 +357,6 @@ def materialize_runtime_configs(
     managed_fields = sorted(_MANAGED_SYSTEM_FIELDS.intersection(system_template))
     if managed_fields:
         raise ValueError(f"System template contains managed hardware field(s): {', '.join(managed_fields)}")
-    remote_memory = _prepare_remote_memory(hardware)
     comm_groups = _prepare_comm_groups(inference_groups, hardware)
 
     system = dict(system_template)
@@ -433,19 +364,15 @@ def materialize_runtime_configs(
     system["local-mem-latency"] = hardware.local_hbm_latency_ns
     system["local-mem-capacity-bytes"] = hardware.local_hbm_capacity_bytes
     system["remote-mem-bw"] = hardware.remote_memory_bandwidth_gbps
-    if "remote-mem-latency" in remote_memory:
-        system["remote-mem-latency"] = remote_memory["remote-mem-latency"]
     system["peak-perf"] = hardware.peak_perf_tflops
 
     destination = Path(output_dir)
     paths = RuntimeConfigPaths(
         system=destination / "system.json",
         network=destination / "network.yml",
-        remote_memory=destination / "remote_memory.json",
         comm_group=destination / "comm_group.json",
     )
     _write_text_atomically(paths.system, _serialize_json(system))
     _write_text_atomically(paths.network, _network_yaml(hardware))
-    _write_text_atomically(paths.remote_memory, _serialize_json(remote_memory))
     _write_text_atomically(paths.comm_group, _serialize_json(comm_groups))
     return paths

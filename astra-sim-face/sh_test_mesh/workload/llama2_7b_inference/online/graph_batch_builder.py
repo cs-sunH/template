@@ -33,9 +33,7 @@ sh_1.0 定型版为母本,face 发射原语适配):层次 B 从"请求级大段�
   - watch 锚点(拼 batch 改造起由列车标记承载):PREFILL_DRAIN = drain 标记
     节点(列车体后、end barrier 前),DECODE_COMPLETION/REQUEST_COMPLETE =
     exit 标记节点(同位置);C++ watch fire 自动同时推 DECODE_COMPLETION +
-    REQUEST_COMPLETE(共享机制不变);
-  - legacy 变体(10.6)不经列车:emit_prefill_batch_legacy / emit_decode_batch
-    保留旧 request-aggregated 结构(legacy 语义保留对象,不得抹平)。
+    REQUEST_COMPLETE(共享机制不变)。
 """
 
 import os
@@ -67,13 +65,6 @@ from generate_face_trace import (  # noqa: E402
     sanitize_node_prefix,
 )
 from generate_face_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
-
-# M1 收集即释放的摊销压缩水位(2026-08-23):_collect 把已发射节点切片
-# 进当批后,per-rank 已收集前缀达到该水位即整段删除(节点 id 来自
-# next_id 计数器,与 list 位置无关)。8192 保证工作集有界且删除频度
-# 足够低——每节点均摊 O(1),禁止逐批前缀删除(O(n²) 反例)。
-_COLLECT_COMPACT_THRESHOLD = 8192
-
 
 def first_token_split_enabled() -> bool:
     """WP9 首步批拆分总开关（SH_FIRST_TOKEN_SPLIT，B4 起缺省 "0" 关）。
@@ -117,12 +108,12 @@ class OnlineTraceBuilder:
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
-        # M1 收集即释放(2026-08-23):本 list 只保留"已发射未收集"的
-        # 尾部——_collect 切片进批后按水位摊销压缩前缀(见 _collect),
-        # 全量历史节点不再常驻。禁止按 list 位置回读节点(id 来自
+        # M1 收集即释放(2026-08-29):这两个 list 只保存自上次 _collect
+        # 以来尚未交付的记录；交付后立即 clear，跨批状态只由 next_id、
+        # previous_id 与账本保存。禁止按 list 位置回读节点(id 来自
         # next_id 计数器,与位置无关)。
-        self.nodes = []   # 本 rank 已发射节点 dict(发射序,可被压缩)
-        self.edges = []   # 本 rank parent edges(随节点水位一并压缩)
+        self.nodes = []   # 本 rank 尚未交付的节点 dict(发射序)
+        self.edges = []   # 本 rank 尚未交付的 parent edges
         self.node_count = 0
         # 当前 request-stage 反向索引上下文(每次 per-request 发射前设置)。
         self.request_id = ""
@@ -154,18 +145,48 @@ class OnlineTraceBuilder:
             "coll": {"comm_type": 0, "bytes": 0, "priority": 0,
                      "pg_name": "", "involved_dim": []},
         }
-        dependency_ids = []
-        if self.previous_id is not None:
-            dependency_ids.append(self.previous_id)
-        dependency_ids.extend(self.pending_extra_dependencies)
-        for dependency_id in dict.fromkeys(dependency_ids):
-            self.edges.append({
-                "rank": self.rank,
-                "from": dependency_id,
-                "to": self.next_id,
-                "kind": "data",
-            })
-        self.pending_extra_dependencies.clear()
+        previous_id = self.previous_id
+        pending_dependencies = self.pending_extra_dependencies
+        # The common serial chain has no extra dependency: avoid allocating a
+        # temporary list and deduplication dict.  The multi-dependency fallback
+        # deliberately keeps dict.fromkeys() for its stable first-seen order.
+        if not pending_dependencies:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        elif len(pending_dependencies) == 1:
+            if previous_id is not None:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": previous_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+            dependency_id = pending_dependencies[0]
+            if previous_id is None or dependency_id != previous_id:
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        else:
+            dependency_ids = []
+            if previous_id is not None:
+                dependency_ids.append(previous_id)
+            dependency_ids.extend(pending_dependencies)
+            for dependency_id in dict.fromkeys(dependency_ids):
+                self.edges.append({
+                    "rank": self.rank,
+                    "from": dependency_id,
+                    "to": self.next_id,
+                    "kind": "data",
+                })
+        pending_dependencies.clear()
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
@@ -282,7 +303,8 @@ class GraphBatchBuilder:
         }
         self.group_by_index = dict(enumerate(config.inference_groups))
         # session_id -> (decode_instance_index, {rank: end_barrier_id});
-        # completion_gates 保存动态跨 turn interval gate 的 after_node_id 来源。
+        # completion_gates 只保存下一同 session turn 尚未消费的 interval
+        # gate 来源；turn>0 admission 或 terminal completion 后即释放。
         self.completion_gates = {}
         self.batch = None  # 当前批次累加器(由 begin_batch 建立)
 
@@ -292,6 +314,10 @@ class GraphBatchBuilder:
         self.batch = {
             "nodes": [],
             "parent_edges": [],
+            # Private exact ledger: _collect already knows the source rank of
+            # every appended node, so downstream GraphBatch metadata need not
+            # rescan the complete node payload.
+            "_touched_ranks": set(),
             "watches": [],
             "assignments": [],
             "kv_actions": [],
@@ -302,21 +328,20 @@ class GraphBatchBuilder:
         """把各 builder 自 marker 起新增的节点/边并入本批次。"""
         for rank, builder in self.builders.items():
             node_mark, edge_mark = marker[rank]
-            self.batch["nodes"].extend(builder.nodes[node_mark:])
-            self.batch["parent_edges"].extend(builder.edges[edge_mark:])
-            # M1 收集即释放(摊销压缩,2026-08-23):已切片进本批的节点/
-            # 边不再驻留 builder——已收集水位 ≥ 8192 且不小于现存总量一半
-            # 时才删前缀(每次删除搬运的尾部 ≤ 现存一半,均摊 O(1)/节点)。
-            # 安全前提(全仓 grep 证实):节点 id 来自 next_id 计数器,无
-            # 任何按 list 位置回读节点的代码;每个 _mark() 都在同一次发射
-            # 调用内被紧随的单次 _collect() 消费(admission :298→:300 /
-            # 迭代列车 :352→:477 / legacy decode :502→:504 / legacy
-            # prefill :677→:752,无跨发射延迟消费),水位即本次切片在
-            # 当前 list 中的绝对长度,压缩后下一次 _mark 重新取 len,自洽。
-            if (node_mark >= _COLLECT_COMPACT_THRESHOLD
-                    and node_mark * 2 >= len(builder.nodes)):
-                del builder.nodes[:node_mark]
-                del builder.edges[:edge_mark]
+            nodes = builder.nodes
+            edges = builder.edges
+            # 正常路径的 marker 为 0，直接 extend 避免临时 slice；非零
+            # marker 仅保留本次新增尾部。所有 _mark() 都在同一发射调用内
+            # 被单次 _collect() 消费，故旧前缀已在先前批次交付，可立即
+            # clear 释放对节点/边 dict 的最后一层 builder 引用。
+            if len(nodes) > node_mark:
+                self.batch["_touched_ranks"].add(int(rank))
+            self.batch["nodes"].extend(
+                nodes if node_mark == 0 else nodes[node_mark:])
+            self.batch["parent_edges"].extend(
+                edges if edge_mark == 0 else edges[edge_mark:])
+            nodes.clear()
+            edges.clear()
 
     def _mark(self) -> dict:
         return {
@@ -694,28 +719,15 @@ class GraphBatchBuilder:
         self.builders[rank].comp(name, 1, 1)
         return self.builders[rank].previous_id
 
-    def emit_decode_batch(self, request_plan: dict) -> dict:
-        """发射 request 的 decode 整段(含 prefill_to_decode transfer 3000 /
-        decode 整段 / decode_request_end_barrier)。
-
-        拼 batch 改造(2026-08-22)起 strategy 路径不经此方法(decode 移入
-        迭代列车,见 emit_iteration_train);保留供 legacy 变体(10.6,
-        request-aggregated 旧结构,legacy 语义保留对象)。
-
-        返回 DECODE_COMPLETION watch 成员:{rank: end barrier 前的 decode
-        末节点 id}(共享 DECODE_COMPLETION 锚点口径)。
-        """
-        self._set_context(request_plan, "decode", 1)
-        marker = self._mark()
-        members = self._emit_decode(request_plan)
-        self._collect(marker)
-        return members
-
     def _set_context(self, request_plan: dict, stage: str,
                      generation: int) -> None:
         request_id = request_plan["request_id"]
         for builder in self.builders.values():
             builder.set_context(request_id, stage, generation)
+
+    def retire_completion_gate(self, session_id: str) -> None:
+        """释放 terminal session 不会再被下一 turn 消费的完成门。"""
+        self.completion_gates.pop(session_id, None)
 
     # ------------------------------------------------- per-request 发射主体 --
 
@@ -747,7 +759,10 @@ class GraphBatchBuilder:
             for rank in prefill_group.ranks:
                 builders[rank].arm_timer_gate(timers[rank])
         else:
-            previous = self.completion_gates.get(request_plan["session_id"])
+            # interval gate 是该 session completion gate 的唯一正常消费者；
+            # 取用即删，后续只保留已在图边中编码的 after_node_id。
+            previous = self.completion_gates.pop(
+                request_plan["session_id"], None)
             if previous is None or request.inter_request_interval_ns is None:
                 raise RuntimeError(
                     "later request has no completion interval gate")
@@ -799,165 +814,6 @@ class GraphBatchBuilder:
         # prefill 主体(recompute 段 + 当前段 chunk spans)自拼 batch 改造
         # (2026-08-22)起移入 emit_iteration_train 的折叠体与 drain 标记;
         # 此处止于准入动作(到达 gates/历史迁移/屏障)。
-
-    def _emit_decode(self, request_plan: dict) -> dict:
-        """发射动态 GraphBatch 的 transfer-3000、decode 和 end-barrier 块。"""
-        builders = self.builders
-        prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
-        decode_group = self.group_by_index[request_plan["decode_instance_index"]]
-        prefix = _prefix_of(request_plan)
-        # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,对齐 sh_1.0/
-        # sh_2.0)] strategy **不做任何块末恢复/段内清链**:per-rank
-        # previous_id 无条件接续当前 frontier，per-rank 发行序 = 全局发射序——
-        # 任意两个发射段在
-        # 所有共享 rank 上的相对次序一致,跨请求 P2P(send/recv tag 匹配)
-        # 与 collective 参与序不可能反转成环。transfer3000 的 comm_send
-        # (prefill rank)链当前 frontier(经 per-rank 全序传递性仍包含本
-        # request 的 prefill 块末);comm_recv(decode rank)链当前 frontier
-        # (跨 request 边,含上一 request 的 decode end barrier)。(2026-08-15 的
-        # own-prefill-end 恢复 / None-restore 裁决自此废止。)
-        _paired_transfer(
-            config=self.config, builders=builders,
-            queue_index=request_plan["queue_index"], category=3000,
-            name="{}_prefill_to_decode_kv".format(prefix),
-            source_group=prefill_group, target_group=decode_group,
-            total_bytes=kv_cache_bytes_for_tokens(
-                self.config.model, request_plan["prefill_context_tokens"]),
-        )
-        tp = len(decode_group.ranks)
-        spans = tuple(
-            (1, request_plan["prefill_context_tokens"] + step + 1)
-            for step in range(request_plan["decode_length"])
-        )
-        members = {}
-        for relative_rank, rank in enumerate(decode_group.ranks):
-            transformer_pass_aggregated(
-                builders[rank],
-                phase="{}_decode_request_aggregated".format(prefix),
-                pass_spans=spans, layers=self.config.layers,
-                hidden_size=self.config.hidden_size,
-                ffn_size=self.config.ffn_size, tensor_parallel=tp,
-                pg_name=decode_group.pg_name, vocab_size=self.config.vocab_size,
-                bytes_per_elem=self.config.bytes_per_elem,
-                num_heads=self.config.num_heads,
-                tensor_parallel_rank=relative_rank,
-                mlp_variant=self.config.mlp_variant,
-            )
-            # completion candidate = end barrier 前每 rank 的 decode 末节点
-            # (DECODE_COMPLETION watch 成员)。
-            members[rank] = builders[rank].previous_id
-            builders[rank].all_reduce(
-                "{}_decode_request_end_barrier".format(prefix), 1,
-                decode_group.pg_name)
-        # completion gate 账本: end barrier 后的 previous_id 是 barrier 自身
-        # (下一 turn 的 interval gate after_node_id 指向它)。
-        self.completion_gates[request_plan["session_id"]] = (
-            request_plan["decode_instance_index"],
-            {rank: builders[rank].previous_id for rank in decode_group.ranks},
-        )
-        return members
-
-
-    # ------------------------------------------------- legacy 变体发射(10.6) --
-
-    def emit_prefill_batch_legacy(self, request_plan: dict) -> dict:
-        """legacy 变体的动态 GraphBatch prefill 整段。
-
-        与 session_lru 路径的结构差异(legacy 语义,不得抹平):
-          - turn-0:global_arrival_timer_gate(同构);
-          - turn>0:history = kv_allocation.pieces 的逐 piece 迁移
-            (KVAllocator 跨实例分片;无 recompute/control 触发链);
-          - prefill:aggregated pass(chunks 折叠为 spans)+
-            prefill_chunks_aggregated_end_barrier(bytes=pass_count)。
-        返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点}。
-        """
-        if self.config.trace_granularity != "request_aggregated":
-            raise RuntimeError(
-                "online emission supports request_aggregated granularity only "
-                f"(got {self.config.trace_granularity!r})")
-        self._set_context(request_plan, "prefill", 0)
-        builders = self.builders
-        prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
-        prefix = _prefix_of(request_plan)
-        request = _request_spec(self.config, request_plan)
-        # strategy 保持物理跨 request 链。
-        marker = self._mark()
-        if request_plan["turn_index"] == 0:
-            if request.session_arrival_time_ns is None:
-                raise RuntimeError("first request lost its session arrival")
-            timers = {
-                rank: builders[rank].timer_gate(
-                    "{}_global_arrival_timer_gate".format(prefix),
-                    request.session_arrival_time_ns)
-                for rank in prefill_group.ranks
-            }
-            for rank in prefill_group.ranks:
-                builders[rank].arm_timer_gate(timers[rank])
-        else:
-            # history pieces:cross-instance 分片逐 piece 迁移
-            # (offline: HistoryPieceGate 列表,kv_allocation.pieces)。
-            gates = {rank: None for rank in prefill_group.ranks}
-            for piece_number, piece in enumerate(
-                    request_plan.get("kv_allocation_pieces", ())):
-                source_group = self.group_by_index[piece["instance_index"]]
-                if piece["bytes"] == 0 and \
-                        source_group.name == prefill_group.name:
-                    continue
-                _emit_control_trigger(
-                    builders=builders,
-                    queue_index=request_plan["queue_index"],
-                    name="{}_history_piece{}_control".format(
-                        prefix, piece_number),
-                    source_group=prefill_group,
-                    target_group=source_group,
-                    timer_gates=gates,
-                )
-                gates = {rank: None for rank in source_group.ranks}
-                _paired_transfer(
-                    config=self.config, builders=builders,
-                    queue_index=request_plan["queue_index"], category=1000,
-                    name="{}_history_piece{}".format(prefix, piece_number),
-                    source_group=source_group, target_group=prefill_group,
-                    total_bytes=piece["bytes"],
-                    timer_gates=gates,
-                )
-                gates = {rank: None for rank in prefill_group.ranks}
-        # prefill aggregated(chunks -> spans)+ end barrier。p_chunk 取
-        # legacy 标定常数(plan dict 携带;session_lru 路径不经此方法,
-        # config.prefill_chunk_size=512 不是 legacy 的分块粒度)。
-        p_chunk = int(request_plan.get("p_chunk") or self.config.prefill_chunk_size)
-        spans = []
-        processed = 0
-        prefill_length = request_plan["prefill_length"]
-        while processed < prefill_length:
-            chunk_tokens = min(p_chunk, prefill_length - processed)
-            spans.append((chunk_tokens,
-                          request_plan["history_tokens_before"]
-                          + processed + chunk_tokens))
-            processed += chunk_tokens
-        members = {}
-        tp = len(prefill_group.ranks)
-        from generate_trace import transformer_pass_aggregated  # noqa: E402
-        for relative_rank, rank in enumerate(prefill_group.ranks):
-            transformer_pass_aggregated(
-                builders[rank],
-                phase="{}_prefill_request_aggregated".format(prefix),
-                pass_spans=tuple(spans), layers=self.config.layers,
-                hidden_size=self.config.hidden_size,
-                ffn_size=self.config.ffn_size, tensor_parallel=tp,
-                pg_name=prefill_group.pg_name,
-                vocab_size=self.config.vocab_size,
-                bytes_per_elem=self.config.bytes_per_elem,
-                num_heads=self.config.num_heads,
-                tensor_parallel_rank=relative_rank,
-                mlp_variant=self.config.mlp_variant,
-            )
-            members[rank] = builders[rank].previous_id
-            builders[rank].all_reduce(
-                "{}_prefill_chunks_aggregated_end_barrier".format(prefix),
-                len(spans), prefill_group.pg_name)
-        self._collect(marker)
-        return members
 
 def _prefix_of(request_plan: dict) -> str:
     return (

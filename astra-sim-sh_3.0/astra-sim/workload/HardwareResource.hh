@@ -12,13 +12,17 @@ LICENSE file in the root directory of this source tree.
 #include <cstdint>
 
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+#include "astra-sim/workload/execution_driven/ExecutionMode.hh"
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 
 namespace AstraSim {
 
 class HardwareResource {
   public:
-    HardwareResource(uint32_t num_npus, int sys_id = -1);
+    HardwareResource(
+        uint32_t num_npus, int sys_id = -1,
+        ExecutionDriven::ExecutionMode execution_mode =
+            ExecutionDriven::ExecutionMode::Static);
     ~HardwareResource() {
         auto logger = LoggerFactory::get_logger("HardwareResource");
         if (this->num_in_flight_cpu_ops != 0 ||
@@ -54,6 +58,9 @@ class HardwareResource {
     void occupy(const ExecutionDriven::NodeView& node);
     void release(const ExecutionDriven::NodeView& node);
     bool is_available(const ExecutionDriven::NodeView& node) const;
+    [[nodiscard]] bool tracks_node_ids() const {
+        return retain_node_ids_;
+    }
     void report();
 
     std::unordered_set<uint64_t> cpu_ops_node;
@@ -64,6 +71,10 @@ class HardwareResource {
     const int sys_id;
 
     const uint32_t num_npus;
+    // Static mode retains exact IDs for legacy destructor diagnostics. Online
+    // mode relies on NodeStore's fail-closed lifecycle and keeps only exact
+    // per-resource counters here, including sh_3.0's HBM-DMA class.
+    const bool retain_node_ids_;
     uint32_t num_in_flight_cpu_ops;
     uint32_t num_in_flight_gpu_comp_ops;
     uint32_t num_in_flight_gpu_comm_ops;

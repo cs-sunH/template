@@ -102,6 +102,11 @@ class NodeStore {
     /// Nodes with no dependencies yet are free immediately.
     uint64_t add_node(OnlineNode node);
 
+    /// Read-only diagnostic: the id a subsequent add_node() with global_id 0
+    /// must receive. GraphBatchCommitter uses this to fail closed on external
+    /// NodeStore id-stream drift before it mutates a batch.
+    uint64_t next_auto_id() const { return next_id_; }
+
     /// Precedence edge: parent must finish before child becomes free.
     /// Safe when the parent was added after the child (child is removed from
     /// the free set when the edge is recorded).
@@ -110,6 +115,12 @@ class NodeStore {
     /// Free (all parents finished) and not yet issued nodes, ascending id.
     /// Non-consuming; mark_issued consumes.
     std::vector<uint64_t> resolve_free_nodes() const;
+
+    /// Fill a caller-owned snapshot of the current free ids, ascending.
+    /// Reusing the caller's vector avoids allocating a fresh snapshot during
+    /// every issue pass. The snapshot is non-consuming and remains stable if
+    /// a callback mutates the store's free set while it is being traversed.
+    void fill_free_node_snapshot(std::vector<uint64_t>& out) const;
 
     /// Mark a node as issued (removes it from the free set). No-op on
     /// unknown / already issued nodes.
@@ -134,6 +145,27 @@ class NodeStore {
     /// commit boundary.
     const OnlineNode* node_ptr(uint64_t node_id) const;
 
+    // Mutable, short-lived online statistics payload for an issued node.
+    // It belongs to the NodeStore record and disappears with the record at
+    // the normal GC quiescent point; Statistics never owns a second per-node
+    // map in compact service mode.
+    OnlineStatisticsState* mutable_online_statistics(uint64_t node_id);
+
+    // R2 (2026-08-29) MetricCollector anchor fast path: OR the sparse
+    // routing flags into the stored record. Called ONLY from the dynamic
+    // anchor registration hook (GraphBatchCommitter Phase B-1.5, AFTER
+    // add_node assigned the store id and BEFORE the issue pass), because
+    // add_node itself cannot know yet whether the node will be anchored.
+    // OR semantics: separate registrations each know only their own edge.
+    // Unknown node_id: no-op (that anchor can never fire either; matches
+    // online_register_ranks silently ignoring unknown requests).
+    void set_metric_anchor_flags(uint64_t node_id, bool issue, bool complete);
+
+    // Claim the sole terminal-observer transition.  Unknown, unissued,
+    // already-finished, or duplicate terminal callbacks return false so
+    // Workload can fail closed before recording statistics or observer facts.
+    bool mark_terminal_observed(uint64_t node_id);
+
     /// Reverse index (watch/fence).
     std::optional<NodeStoreMeta> meta_for(uint64_t node_id) const;
 
@@ -141,16 +173,20 @@ class NodeStore {
     bool empty() const;
 
     // -------------------------------------------------------------------------
-    // M2 node GC (2026-08-23, --online-node-gc). Finished nodes with no
+    // M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed by
+    // the B.3 cleanup (2026-09-05) -- collection is always on on the
+    // official path). Finished nodes with no
     // unfinished children are erased at the committer's end-of-commit
     // quiescent point, keeping the store at the in-flight window instead of
     // the whole-run cumulative graph. Amortized O(1) per node (candidate
     // FIFO: every node enters at most once -- see finish_node).
     // -------------------------------------------------------------------------
 
-    /// Enable/disable collection (default OFF: fixtures and --online-node-gc
-    /// 0 keep the pre-M2 no-collection behavior, including the memory
-    /// profile). With GC off, finish_node does not even enqueue.
+    /// Enable/disable collection (default OFF: fixtures keep the pre-M2
+    /// no-collection behavior, including the memory profile; the
+    /// --online-node-gc CLI arm was removed by the B.3 cleanup (2026-09-05),
+    /// so the official path always enables collection). With GC off,
+    /// finish_node does not even enqueue.
     void set_gc_enabled(bool enabled);
 
     /// Drain the candidate FIFO and erase every eligible node. MUST only be
@@ -160,8 +196,16 @@ class NodeStore {
 
     /// True when the node id is not in the store. For a committed store id
     /// this means "collected" (finished + all children finished); used by
-    /// the committer's store_ids_ prune pass.
+    /// the committer to recognize an affine-resolved finished parent.
     bool erased(uint64_t node_id) const;
+
+    /// A1 amortization (2026-08-28): finished candidates currently waiting
+    /// in the FIFO (drained by the next collect_garbage). The committer's
+    /// commit tail sums this across stores to decide whether the amortized
+    /// collection threshold has been reached.
+    size_t pending_gc_count() const {
+        return gc_fifo_.size() - gc_fifo_head_;
+    }
 
     /// Diagnostics: nodes erased by collect_garbage so far.
     size_t gc_erased_count() const { return gc_erased_count_; }
@@ -190,6 +234,7 @@ class NodeStore {
         uint32_t unfinished_children = 0;
         bool issued = false;
         bool finished = false;
+        bool terminal_observed = false;
     };
 
     uint64_t next_id_ = 1;
@@ -220,6 +265,9 @@ class NodeStoreGraphSource : public GraphSource {
     void finish_node(uint64_t node_id) override;
     std::optional<NodeView> lookup(uint64_t node_id) override;
     const NodeView* lookup_ptr(uint64_t node_id) override;
+    OnlineStatisticsState* mutable_online_statistics(
+        uint64_t node_id) override;
+    bool mark_terminal_observed(uint64_t node_id) override;
     void take_node(uint64_t node_id) override;
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
         uint64_t) override {
@@ -229,6 +277,10 @@ class NodeStoreGraphSource : public GraphSource {
 
   private:
     NodeStore store_;
+    // Reused by for_each_dep_free(): it must remain a snapshot because a
+    // callback can finish a node and release further children. Those children
+    // become visible on the next issue pass, never the current one.
+    std::vector<uint64_t> dep_free_scratch_ids_;
 };
 
 /// Static-mode GraphSource over the ETFeeder + DependancyResolver. NodeViews

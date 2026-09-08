@@ -14,13 +14,10 @@ high_water un-consumed rows per pump instead of one full pass.
 
 #include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <vector>
-
-#include <json/json.hpp>
 
 #include "astra-sim/workload/MetricCollector.hh"
 
@@ -238,7 +235,7 @@ bool LegacyOracleWindowedTraceReader::pump() {
 void LegacyOracleWindowedTraceReader::notify_consumed(const int64_t queue_index) {
     // Duplicate notifications for an already-consumed row are harmless; an
     // unknown future index is fail-closed because it would corrupt the window
-    // bound. Older checkpoint/fixture notifications may repeat a retired row.
+    // bound. Older fixture notifications may repeat a retired row.
     if (queue_index >= static_cast<int64_t>(rows_read_)) {
         std::cerr << "[Error] (execution_driven/windowed_reader) consumed "
                      "queue index was never read: "
@@ -249,67 +246,6 @@ void LegacyOracleWindowedTraceReader::notify_consumed(const int64_t queue_index)
     if (queue_index > consumed_idx_) {
         consumed_idx_ = queue_index;
     }
-}
-
-bool LegacyOracleWindowedTraceReader::write_checkpoint(const std::string& path) const {
-    nlohmann::json cp;
-    cp["schema"] = 1;
-    cp["kind"] = "windowed_reader_checkpoint";
-    cp["restorable"] = false;
-    cp["purpose"] = "run_end_audit_only";
-    cp["high_water"] = high_water_;
-    cp["max_arrival_ns"] = max_arrival_ns_;
-    cp["header_seen"] = header_seen_;
-    cp["eof"] = eof_;
-    cp["data_rows"] = data_rows_;
-    cp["consumed_idx"] = consumed_idx_;
-    // Deterministic checkpoint encoding despite unordered runtime lookup.
-    std::vector<int64_t> outstanding(outstanding_rows_.begin(),
-                                     outstanding_rows_.end());
-    std::sort(outstanding.begin(), outstanding.end());
-    cp["outstanding_rows"] = std::move(outstanding);
-    cp["rows_read"] = rows_read_;
-    cp["rejected_out_of_range"] = rejected_out_of_range_;
-    cp["read_pumps"] = read_pumps_;
-    cp["peak_occupancy"] = peak_occupancy_;
-    // Raw byte position of the next un-read line (sampled by read_one_row;
-    // the stream tellg is not const-usable from a const method). This is audit
-    // evidence only. It cannot be used to restore the surrounding event,
-    // ingress, service, and metrics state.
-    if (file_.is_open() && last_file_pos_ >= 0) {
-        cp["file_pos"] = last_file_pos_;
-    }
-    cp["written_at_wall_ns"] = now_ns();
-    const std::string tmp = path + ".tmp";
-    std::ofstream out(tmp, std::ios::trunc);
-    if (!out.is_open()) {
-        std::cerr << "[Error] (execution_driven/windowed_reader) cannot "
-                     "write checkpoint "
-                  << tmp << std::endl;
-        return false;
-    }
-    out << cp.dump() << "\n";
-    out.flush();
-    out.close();
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-        std::cerr << "[Error] (execution_driven/windowed_reader) atomic "
-                     "rename of checkpoint failed: "
-                  << path << std::endl;
-        std::remove(tmp.c_str());
-        return false;
-    }
-    return true;
-}
-
-bool LegacyOracleWindowedTraceReader::read_checkpoint(const std::string& path) {
-    std::cerr
-        << "[Error] (execution_driven/windowed_reader) restore is unsupported "
-           "for audit-only window snapshot: "
-        << path
-        << " (EventQueue/RequestIngress/ServiceCoordinator/MetricCollector "
-           "state is not checkpointed)"
-        << std::endl;
-    return false;
 }
 
 void LegacyOracleWindowedTraceReader::report(std::ostream& os) const {

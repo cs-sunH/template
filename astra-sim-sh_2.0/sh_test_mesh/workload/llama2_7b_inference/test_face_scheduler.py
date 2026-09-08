@@ -130,7 +130,6 @@ class FaceSchedulerTests(unittest.TestCase):
     def _tiny_kv_manager(
         *,
         capacity_bytes: int = 200,
-        reserve_context_tokens: int = 40,
         layers: int = 1,
     ) -> tuple[FaceHardware, FaceModel, object, KVCacheManager]:
         hardware = FaceHardware(
@@ -163,11 +162,7 @@ class FaceSchedulerTests(unittest.TestCase):
             hardware,
             model,
             topology,
-            KVCacheManager(
-                topology,
-                model,
-                reserve_context_tokens=reserve_context_tokens,
-            ),
+            KVCacheManager(topology, model),
         )
 
     def test_trace_builder_can_stream_without_retaining_nodes(self) -> None:
@@ -431,7 +426,6 @@ class FaceSchedulerTests(unittest.TestCase):
             topology,
             config.model,
             edge_ranks=config.remote_memory.edge_npus,
-            reserve_context_tokens=config.kv_reserve_context_tokens,
         )
         for instance in topology.instances:
             self.assertEqual(
@@ -501,10 +495,15 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(session.rank_bytes, ((0, 20), (1, 20)))
         self.assertEqual(sum(bytes_count for _, bytes_count in session.rank_bytes), 40)
 
-    def test_reserve_threshold_and_fifo_can_evict_multiple_sessions(self) -> None:
+    def test_passive_only_completion_short_circuits_but_records_type(self) -> None:
+        # D-clear (2026-09-05): 完成边界零逐出（主动驱逐已物理删除），
+        # mark_complete 的记录面（active=False、last_completion_ns、
+        # next_request_type 类型序输入）无条件保留。
+        # 手算（capacity 200/rank，weights 20/rank，2 B/token/rank）：
+        # 5×10-token 完成 + 1×25-token active → remaining 30，完成路径
+        # 不做任何逐出，全部会话保持 LOCAL_HBM。
         _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=200,
-            reserve_context_tokens=40,
         )
         for session_id, completion_ns in (
             ("session_b", 10),
@@ -520,18 +519,6 @@ class FaceSchedulerTests(unittest.TestCase):
                 context_tokens=10,
                 completion_ns=completion_ns,
             )
-
-        self.assertEqual(
-            tuple(snapshot.remaining_bytes for snapshot in manager.hbm_snapshots(0)),
-            manager.reserve_bytes_by_tp_rank,
-        )
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="equal_threshold",
-        )
-        self.assertEqual(evictions, ())
-        self.assertEqual(reserve_unmet, ())
-
         self._seed_local_session(
             manager,
             session_id="active_trigger",
@@ -539,223 +526,43 @@ class FaceSchedulerTests(unittest.TestCase):
             context_tokens=25,
             completion_ns=None,
         )
-        self.assertTrue(
-            all(
-                snapshot.remaining_bytes < reserve
-                for snapshot, reserve in zip(
-                    manager.hbm_snapshots(0),
-                    manager.reserve_bytes_by_tp_rank,
-                )
-            )
-        )
 
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="below_threshold",
+        manager.mark_complete(
+            "active_trigger", 100, next_request_type="tool"
         )
+        completed = manager.session_snapshot("active_trigger")
+        self.assertEqual(completed.location, KVCacheManager.LOCAL_HBM)
+        self.assertFalse(completed.active)
+        self.assertEqual(completed.last_completion_ns, 100)
+        # The typed-eviction class input is recorded even though the
+        # completion boundary itself never evicts.
         self.assertEqual(
-            tuple(transfer.session_id for transfer in evictions),
-            ("session_a", "session_b", "session_c"),
+            manager._sessions["active_trigger"].next_request_type,
+            "tool",
         )
-        self.assertEqual(reserve_unmet, ())
-        for transfer in evictions:
-            self.assertEqual(transfer.kind, "remote_store")
-            self.assertEqual(
-                sum(shard.bytes for shard in transfer.shards),
-                transfer.total_bytes,
-            )
-            self.assertTrue(
-                all(shard.edge_rank in manager.edge_ranks for shard in transfer.shards)
-            )
-        for session_id in ("session_a", "session_b", "session_c"):
+        for session_id in (
+            "session_a", "session_b", "session_c", "session_d", "session_e",
+        ):
             self.assertEqual(
                 manager.session_snapshot(session_id).location,
-                KVCacheManager.REMOTE_MEMORY,
+                KVCacheManager.LOCAL_HBM,
             )
 
-    def test_unreachable_reserve_returns_reserve_unmet_without_looping(self) -> None:
+    def test_passive_only_admission_pressure_evicts_exactly_enough(self) -> None:
+        # D4-I3（主动驱逐退役后，D-clear 2026-09-05）：逐出仅剩准入期
+        # _ensure_capacity 按需路径，且逐到恰好够即停（FIFO 队头，最年轻者
+        # 不动）。
+        # 手算（capacity 200/rank，weights 20/rank，2 B/token/rank）：
+        # 3×10-token 完成 → remaining 120；准入 final=75 tokens → required
+        # 150/rank > 120。逐出 oldest(+20→140 仍不足) → second(+20→160≥150 停)；
+        # 撤销最后一笔则 140 < 150 回到不足 → 不触发 I3 过度逐出。
         _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=100,
-            reserve_context_tokens=50,
-        )
-        self._seed_local_session(
-            manager,
-            session_id="old",
-            instance_index=0,
-            context_tokens=5,
-            completion_ns=1,
-        )
-
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="unreachable",
-        )
-        self.assertEqual(tuple(transfer.session_id for transfer in evictions), ("old",))
-        self.assertEqual(reserve_unmet, (0, 1))
-        self.assertEqual(
-            manager.session_snapshot("old").location,
-            KVCacheManager.REMOTE_MEMORY,
-        )
-
-        second_evictions, second_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="unreachable_again",
-        )
-        self.assertEqual(second_evictions, ())
-        self.assertEqual(second_unmet, reserve_unmet)
-
-    def test_half_suffix_then_full_fifo_fallback_skips_active_session(self) -> None:
-        _, model, _, manager = self._tiny_kv_manager(
-            capacity_bytes=300,
-            reserve_context_tokens=19,
-            layers=4,
-        )
-        for session_id, completion_ns, context_tokens in (
-            ("oldest", 10, 10),
-            ("second", 20, 10),
-            ("active", None, 5),
-        ):
-            self._seed_local_session(
-                manager,
-                session_id=session_id,
-                instance_index=0,
-                context_tokens=context_tokens,
-                completion_ns=completion_ns,
-            )
-
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="two_stage_pressure",
-        )
-        self.assertEqual(reserve_unmet, ())
-        self.assertEqual(
-            [
-                (
-                    transfer.session_id,
-                    transfer.layer_start,
-                    transfer.layer_end,
-                    transfer.resident_prefix_layers_after,
-                )
-                for transfer in evictions
-            ],
-            [
-                ("oldest", 2, 4, 2),
-                ("second", 2, 4, 2),
-                ("oldest", 0, 2, 0),
-            ],
-        )
-        half_shards = kv_cache_shard_bytes_for_layer_range(
-            model,
-            10,
-            2,
-            layer_start=2,
-            layer_end=4,
-        )
-        self.assertEqual(evictions[0].total_bytes, sum(half_shards))
-        self.assertEqual(
-            manager.session_snapshot("oldest").location,
-            KVCacheManager.REMOTE_MEMORY,
-        )
-        second = manager.session_snapshot("second")
-        self.assertEqual(second.location, KVCacheManager.PARTIAL_HBM_REMOTE)
-        self.assertEqual(second.resident_prefix_layers, 2)
-        self.assertEqual(second.local_bytes, second.remote_bytes)
-        active = manager.session_snapshot("active")
-        self.assertEqual(active.location, KVCacheManager.LOCAL_HBM)
-        self.assertTrue(active.active)
-        self.assertEqual(active.resident_prefix_layers, 4)
-
-        before, prefix_transfer, restore, restore_evictions = manager.prepare_prefill(
-            session_id="second",
-            target_instance_index=0,
-            history_tokens=10,
-            trigger_request_id="restore_suffix",
-        )
-        self.assertEqual(before.location, KVCacheManager.PARTIAL_HBM_REMOTE)
-        self.assertIsNone(prefix_transfer)
-        self.assertEqual(restore_evictions, ())
-        self.assertEqual(restore.kind, "remote_load")
-        self.assertEqual((restore.layer_start, restore.layer_end), (2, 4))
-        self.assertEqual(restore.total_bytes, before.remote_bytes)
-        restored = manager.session_snapshot("second")
-        self.assertEqual(restored.location, KVCacheManager.LOCAL_HBM)
-        self.assertEqual(restored.resident_prefix_layers, 4)
-
-    def test_typed_eviction_prefers_human_class_over_older_tool_session(self) -> None:
-        # Typed eviction (2026-08-18): human-return sessions are reclaimed
-        # before tool-call sessions even when the tool session has waited
-        # longer (completed earlier).
-        _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=300,
-            reserve_context_tokens=19,
-            layers=4,
-        )
-        self._seed_local_session(
-            manager,
-            session_id="tool_old",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=10,
-            next_request_type="tool",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="human_new",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=20,
-            next_request_type="human",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="active",
-            instance_index=0,
-            context_tokens=5,
-            completion_ns=None,
-        )
-
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="typed_order",
-        )
-        self.assertEqual(reserve_unmet, ())
-        # Human class runs to completion (half then full) before the tool
-        # class gets its first half-suffix eviction.
-        self.assertEqual(
-            [
-                (transfer.session_id, transfer.layer_start, transfer.layer_end)
-                for transfer in evictions
-            ],
-            [
-                ("human_new", 2, 4),
-                ("human_new", 0, 2),
-                ("tool_old", 2, 4),
-            ],
-        )
-        self.assertEqual(
-            manager.session_snapshot("human_new").location,
-            KVCacheManager.REMOTE_MEMORY,
-        )
-        tool_snapshot = manager.session_snapshot("tool_old")
-        self.assertEqual(tool_snapshot.location, KVCacheManager.PARTIAL_HBM_REMOTE)
-        self.assertEqual(tool_snapshot.resident_prefix_layers, 2)
-        # The active session stays fully local regardless of class.
-        active = manager.session_snapshot("active")
-        self.assertEqual(active.location, KVCacheManager.LOCAL_HBM)
-        self.assertTrue(active.active)
-
-    def test_typed_eviction_orders_within_class_by_completion_then_id(self) -> None:
-        # Inside one class the original FIFO key applies: oldest completion
-        # first, session_id as the deterministic tie-break.
-        _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=500,
-            reserve_context_tokens=19,
-            layers=4,
+            capacity_bytes=200,
         )
         for session_id, completion_ns in (
-            ("human_b", 30),
-            ("human_a", 30),
-            ("human_c", 20),
+            ("oldest", 10),
+            ("second", 20),
+            ("youngest", 30),
         ):
             self._seed_local_session(
                 manager,
@@ -763,177 +570,94 @@ class FaceSchedulerTests(unittest.TestCase):
                 instance_index=0,
                 context_tokens=10,
                 completion_ns=completion_ns,
-                next_request_type="human",
             )
-        self._seed_local_session(
-            manager,
-            session_id="tool_older",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=10,
-            next_request_type="tool",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="active",
-            instance_index=0,
-            context_tokens=5,
-            completion_ns=None,
+        self.assertEqual(
+            tuple(snapshot.remaining_bytes for snapshot in manager.hbm_snapshots(0)),
+            (120, 120),
         )
 
-        evictions, reserve_unmet = manager.enforce_reserve(
+        evictions = manager.reserve_request_capacity(
+            request_id="admit_r0",
+            session_id="admit",
             instance_index=0,
-            trigger_request_id="in_class_fifo",
+            final_context_tokens=75,
         )
-        self.assertEqual(reserve_unmet, ())
-        # human_c completed first; human_a/human_b tie on completion_ns and
-        # break by session_id. The older tool session is not touched.
         self.assertEqual(
             tuple(transfer.session_id for transfer in evictions),
-            ("human_c", "human_a"),
+            ("oldest", "second"),
         )
         for transfer in evictions:
-            self.assertEqual((transfer.layer_start, transfer.layer_end), (2, 4))
+            self.assertEqual(transfer.kind, "remote_store")
+            self.assertEqual(transfer.phase, "history")
+            self.assertEqual(
+                transfer.reason, "request_admission_capacity_full_fallback")
         self.assertEqual(
-            manager.session_snapshot("tool_older").location,
-            KVCacheManager.LOCAL_HBM,
-        )
-
-    def test_typed_eviction_halves_every_human_before_any_full_or_tool_stage(
-        self,
-    ) -> None:
-        # Stage progression: all human sessions are halved before any human
-        # full eviction, and the human class is exhausted (half + full)
-        # before the tool class begins.
-        _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=380,
-            reserve_context_tokens=19,
-            layers=4,
-        )
-        self._seed_local_session(
-            manager,
-            session_id="human_a",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=10,
-            next_request_type="human",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="human_b",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=20,
-            next_request_type="human",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="tool_new",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=30,
-            next_request_type="tool",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="active",
-            instance_index=0,
-            context_tokens=5,
-            completion_ns=None,
-        )
-
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="stage_progression",
-        )
-        self.assertEqual(reserve_unmet, ())
-        self.assertEqual(
-            [
-                (transfer.session_id, transfer.layer_start, transfer.layer_end)
-                for transfer in evictions
-            ],
-            [
-                ("human_a", 2, 4),
-                ("human_b", 2, 4),
-                ("human_a", 0, 2),
-            ],
-        )
-        # The watermark was met before the tool class was reached.
-        self.assertEqual(
-            manager.session_snapshot("tool_new").location,
-            KVCacheManager.LOCAL_HBM,
-        )
-        self.assertEqual(
-            manager.session_snapshot("human_a").location,
+            manager.session_snapshot("oldest").location,
             KVCacheManager.REMOTE_MEMORY,
         )
         self.assertEqual(
-            manager.session_snapshot("human_b").location,
-            KVCacheManager.PARTIAL_HBM_REMOTE,
+            manager.session_snapshot("second").location,
+            KVCacheManager.REMOTE_MEMORY,
+        )
+        youngest = manager.session_snapshot("youngest")
+        self.assertEqual(youngest.location, KVCacheManager.LOCAL_HBM)
+        self.assertFalse(youngest.active)
+        # Exactly-enough: only the youngest 10-token shard (20 B/rank) stays,
+        # so physical remaining is 200 - 20 (weights) - 20 = 160 per rank.
+        self.assertEqual(
+            tuple(snapshot.remaining_bytes for snapshot in manager.hbm_snapshots(0)),
+            (160, 160),
         )
 
-    def test_typed_eviction_stops_at_watermark_after_single_half(self) -> None:
-        # One half-suffix eviction satisfies the reserve: no other session
-        # (not even the remaining human prefix) is touched.
+    def test_ensure_capacity_records_deep_gap_events_before_failing(self) -> None:
+        # D4 (2026-09-05): 结构不可行（required 超空实例余量）→ fail-closed
+        # raise 前逐 rank 记 deep_gap 台账，raise 消息带计数。
+        # 手算（capacity 200/rank，weights 20/rank）：2×10-token 完成会话
+        # 全逐后 remaining 180 < required 200 → 每 rank 一条缺口事件。
         _, _, _, manager = self._tiny_kv_manager(
-            capacity_bytes=380,
-            reserve_context_tokens=19,
-            layers=4,
+            capacity_bytes=200,
         )
-        self._seed_local_session(
-            manager,
-            session_id="tool_old",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=10,
-            next_request_type="tool",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="human_new",
-            instance_index=0,
-            context_tokens=10,
-            completion_ns=20,
-            next_request_type="human",
-        )
-        self._seed_local_session(
-            manager,
-            session_id="active",
-            instance_index=0,
-            context_tokens=5,
-            completion_ns=None,
-        )
+        for session_id, completion_ns in (
+            ("filler_a", 10),
+            ("filler_b", 20),
+        ):
+            self._seed_local_session(
+                manager,
+                session_id=session_id,
+                instance_index=0,
+                context_tokens=10,
+                completion_ns=completion_ns,
+            )
+        self.assertEqual(manager.deep_gap_events, [])
 
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="early_stop",
-        )
-        self.assertEqual(reserve_unmet, ())
+        with self.assertRaisesRegex(ValueError, "deep_gap_events=2"):
+            manager._ensure_capacity(
+                0,
+                (200, 200),
+                phase="history",
+                reason="structural_probe",
+                trigger_request_id="deep_gap_probe",
+            )
+        self.assertEqual(len(manager.deep_gap_events), 2)
         self.assertEqual(
-            [
-                (transfer.session_id, transfer.layer_start, transfer.layer_end)
-                for transfer in evictions
-            ],
-            [("human_new", 2, 4)],
+            {event["rank"] for event in manager.deep_gap_events}, {0, 1}
         )
-        human_snapshot = manager.session_snapshot("human_new")
-        self.assertEqual(
-            human_snapshot.location,
-            KVCacheManager.PARTIAL_HBM_REMOTE,
-        )
-        self.assertEqual(human_snapshot.resident_prefix_layers, 2)
-        self.assertEqual(
-            manager.session_snapshot("tool_old").location,
-            KVCacheManager.LOCAL_HBM,
-        )
+        for event in manager.deep_gap_events:
+            self.assertEqual(event["instance_index"], 0)
+            self.assertEqual(event["phase"], "history")
+            self.assertEqual(event["reason"], "structural_probe")
+            self.assertEqual(event["trigger_request_id"], "deep_gap_probe")
+            self.assertEqual(event["remaining_bytes"], 180)
+            self.assertEqual(event["required_bytes"], 200)
+            self.assertEqual(event["gap_bytes"], 20)
 
-    def test_mark_complete_records_next_request_type_and_drives_eviction(self) -> None:
-        # The type passed to mark_complete lands on the session state and is
-        # the classification used by the next eviction pass; sessions with no
-        # recorded type default to the human class (user ruling).
+    def test_mark_complete_records_next_request_type(self) -> None:
+        # The type passed to mark_complete lands on the session state; it is
+        # the classification consumed by the typed eviction order at the next
+        # admission boundary. Sessions with no recorded type default to the
+        # human class (user ruling).
         _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=300,
-            reserve_context_tokens=19,
             layers=4,
         )
         self._seed_local_session(
@@ -962,24 +686,6 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(manager._sessions["typed_tool"].next_request_type, "tool")
         self.assertIsNone(manager._sessions["untyped_old"].next_request_type)
 
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
-            trigger_request_id="recorded_type",
-        )
-        self.assertEqual(reserve_unmet, ())
-        # untyped_old (completed even earlier) belongs to the human class and
-        # is evicted before the explicitly tool-typed session.
-        self.assertEqual(
-            [
-                (transfer.session_id, transfer.layer_start, transfer.layer_end)
-                for transfer in evictions
-            ],
-            [
-                ("untyped_old", 2, 4),
-                ("untyped_old", 0, 2),
-                ("typed_tool", 2, 4),
-            ],
-        )
         with self.assertRaises(ValueError):
             manager.mark_complete("active", 99, next_request_type="voice")
         with self.assertRaises(ValueError):
@@ -1015,7 +721,6 @@ class FaceSchedulerTests(unittest.TestCase):
     def test_history_local_remote_and_other_instance_transitions(self) -> None:
         _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=200,
-            reserve_context_tokens=100,
         )
         self._seed_local_session(
             manager,
@@ -1075,15 +780,18 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(tuple(rank for rank, _ in moved.rank_bytes), (2, 3))
 
         manager.mark_complete("session", 30)
-        stores, reserve_unmet = manager.enforce_reserve(
-            instance_index=1,
+        # D-clear (2026-09-05): 完成边界主动驱逐已删除，此处用保留的
+        # _evict_session 守卫（fixture 手法，同 terminal-retirement 用例）
+        # 造出 REMOTE_MEMORY 形态供 remote_load 段消费。
+        store = manager._evict_session(
+            manager._sessions["session"],
+            phase="completion",
+            reason="fixture_remote",
             trigger_request_id="remote_store",
         )
-        self.assertEqual(len(stores), 1)
-        self.assertEqual(stores[0].kind, "remote_store")
-        self.assertEqual(reserve_unmet, (2, 3))
+        self.assertEqual(store.kind, "remote_store")
         self.assertTrue(
-            all(shard.edge_rank in manager.edge_ranks for shard in stores[0].shards)
+            all(shard.edge_rank in manager.edge_ranks for shard in store.shards)
         )
         remote = manager.session_snapshot("session")
         self.assertEqual(remote.location, KVCacheManager.REMOTE_MEMORY)
@@ -1127,7 +835,6 @@ class FaceSchedulerTests(unittest.TestCase):
     def test_partial_history_cross_instance_migrates_prefix_then_loads_suffix(self) -> None:
         _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=116,
-            reserve_context_tokens=4,
             layers=4,
         )
         self._seed_local_session(
@@ -1137,12 +844,15 @@ class FaceSchedulerTests(unittest.TestCase):
             context_tokens=4,
             completion_ns=10,
         )
-        evictions, reserve_unmet = manager.enforce_reserve(
-            instance_index=0,
+        # D-clear (2026-09-05): 完成边界主动驱逐已删除，此处用保留的
+        # _evict_suffix 守卫（fixture 手法，同 terminal-retirement 用例）
+        # 造出 partial_hbm_remote 形态供 prefix 迁移段消费。
+        manager._evict_suffix(
+            manager._sessions["session"],
+            phase="completion",
+            reason="fixture_partial",
             trigger_request_id="force_partial",
         )
-        self.assertEqual(reserve_unmet, ())
-        self.assertEqual(len(evictions), 1)
         partial = manager.session_snapshot("session")
         self.assertEqual(partial.location, KVCacheManager.PARTIAL_HBM_REMOTE)
         self.assertEqual(partial.instance_index, 0)
@@ -1275,6 +985,24 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(system_raw["remote-mem-latency"], 100)
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertEqual(system_raw["hbm-kv-restore-bandwidth-sharing"], 1)
+
+    def test_kv_eviction_mode_key_rejected(self) -> None:
+        # R3 fail-closed 回归钉子（D-clear 2026-09-05）：kv_eviction_mode
+        # 门控整体退役后，残留该键的配置必须被拒绝启动而非静默忽略。
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "trace_config.csv"
+            source.write_text(
+                "\n".join(
+                    (
+                        "kind,key,value,group_name,pg_name,ranks,description",
+                        "config,kv_eviction_mode,passive_only,,,,retired gate",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unsupported config key"):
+                load_face_trace_config(source)
 
     @unittest.skipUnless(
         _MATERIALIZED,
@@ -1567,7 +1295,6 @@ class FaceSchedulerTests(unittest.TestCase):
     def test_graph_batch_cross_instance_partial_history_pipelines_suffix_restore(self) -> None:
         hardware, _, _, _ = self._tiny_kv_manager(
             capacity_bytes=116,
-            reserve_context_tokens=4,
             layers=4,
         )
         groups = (
@@ -1685,8 +1412,8 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(set(partial["suffix_ready_nodes_by_rank"]), {2, 3})
         self.assertFalse(
             any("first_chunk" in node["name"]
-                for rank in groups[1].ranks
-                for node in graph.builders[rank].nodes),
+                for node in graph.batch["nodes"]
+                if node["rank"] in groups[1].ranks),
             "admission must not emit the prefill body (train-owned)")
         result = graph.emit_iteration_train({
             "train_id": "batch_train_i1_1",
@@ -1708,8 +1435,16 @@ class FaceSchedulerTests(unittest.TestCase):
             set(graph._block_ends["turn1"]["seg1"]), {2, 3})
 
         for rank in groups[1].ranks:
-            builder = graph.builders[rank]
-            nodes = builder.nodes
+            # _collect() flushes each per-rank staging buffer after admission
+            # and train emission. The batch is therefore the canonical view
+            # for dependencies that cross those two emission boundaries.
+            nodes = [
+                node for node in graph.batch["nodes"] if node["rank"] == rank
+            ]
+            edges = [
+                edge for edge in graph.batch["parent_edges"]
+                if edge["rank"] == rank
+            ]
 
             def node_ids(fragment: str) -> list[int]:
                 return [
@@ -1727,14 +1462,14 @@ class FaceSchedulerTests(unittest.TestCase):
             suffix_first = min(suffix_nodes)
             pstart = min(node_ids("batch_train_i1_1_pstart_turn1"))
             parents = {
-                edge["from"] for edge in builder.edges
+                edge["from"] for edge in edges
                 if edge["to"] == prefix_first
             }
             # 列车内 pstart 标记在体节点前（prefill_start 锚点）——prefix
             # 层段经 pstart 链回准入 checkpoint 位（= prefix ready 屏障）。
             self.assertEqual(parents, {pstart})
             pstart_parents = {
-                edge["from"] for edge in builder.edges
+                edge["from"] for edge in edges
                 if edge["to"] == pstart
             }
             self.assertIn(prefix_ready, pstart_parents)
@@ -1744,7 +1479,7 @@ class FaceSchedulerTests(unittest.TestCase):
             self.assertNotIn(suffix_ready, pstart_parents)
 
             suffix_parents = {
-                edge["from"] for edge in builder.edges
+                edge["from"] for edge in edges
                 if edge["to"] == suffix_first
             }
             self.assertIn(prefix_last, suffix_parents)
@@ -2046,6 +1781,100 @@ class FaceSchedulerTests(unittest.TestCase):
                 remaining_hbm_capacity_bytes=(100, 500, 300),
                 hbm_feasible_instances=(False, False, False),
             )
+
+    def test_terminal_retirement_releases_local_partial_and_remote_kv(self) -> None:
+        _, _, _, manager = self._tiny_kv_manager(
+            capacity_bytes=200,
+            layers=4,
+        )
+        self._seed_local_session(
+            manager,
+            session_id="active",
+            instance_index=0,
+            context_tokens=10,
+            completion_ns=None,
+        )
+        with self.assertRaisesRegex(RuntimeError, "inactive completed"):
+            manager.retire_terminal_session("active", 10, "active_r0")
+        manager.mark_complete("active", 10)
+        self.assertEqual(
+            manager.retire_terminal_session("active", 10, "active_r0"), 0
+        )
+        self.assertEqual(manager.session_ids, ())
+        with self.assertRaises(KeyError):
+            manager.retire_terminal_session("active", 10, "active_r0")
+
+        _, _, _, partial_manager = self._tiny_kv_manager(
+            capacity_bytes=200,
+            layers=4,
+        )
+        self._seed_local_session(
+            partial_manager,
+            session_id="partial",
+            instance_index=0,
+            context_tokens=10,
+            completion_ns=10,
+        )
+        partial_manager._evict_suffix(
+            partial_manager._sessions["partial"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="partial_r0",
+        )
+        self.assertEqual(
+            partial_manager.session_snapshot("partial").location,
+            KVCacheManager.PARTIAL_HBM_REMOTE,
+        )
+        self.assertEqual(
+            partial_manager.retire_terminal_session("partial", 10, "partial_r0"),
+            0,
+        )
+        self.assertTrue(
+            all(snapshot.kv_cache_bytes == 0
+                for snapshot in partial_manager.hbm_snapshots())
+        )
+
+        _, _, _, remote_manager = self._tiny_kv_manager(
+            capacity_bytes=200,
+            layers=4,
+        )
+        self._seed_local_session(
+            remote_manager,
+            session_id="remote",
+            instance_index=0,
+            context_tokens=10,
+            completion_ns=10,
+        )
+        remote_manager._evict_session(
+            remote_manager._sessions["remote"],
+            phase="completion",
+            reason="fixture_remote",
+            trigger_request_id="remote_r0",
+        )
+        before = remote_manager.hbm_snapshots()
+        self.assertIsNone(
+            remote_manager.retire_terminal_session("remote", 10, "remote_r0")
+        )
+        self.assertEqual(remote_manager.session_ids, ())
+        self.assertEqual(remote_manager.hbm_snapshots(), before)
+
+    def test_terminal_retirement_bounds_many_single_turn_sessions(self) -> None:
+        _, _, _, manager = self._tiny_kv_manager(
+            capacity_bytes=200,
+            layers=4,
+        )
+        for index in range(32):
+            session_id = f"single_{index}"
+            self._seed_local_session(
+                manager,
+                session_id=session_id,
+                instance_index=0,
+                context_tokens=10,
+                completion_ns=None,
+            )
+            manager.mark_complete(session_id, index)
+            manager.retire_terminal_session(session_id, index, f"{session_id}_r0")
+            self.assertEqual(manager.session_ids, ())
 
     def test_kv_local_first_offload_updates_and_release_restores_weight(self) -> None:
         _, topology = line_topology()

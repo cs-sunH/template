@@ -401,15 +401,19 @@ delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开�
 ### 3.1 在线二进制机制旗标（--online-* 家族）
 
 `AstraSim_Analytical_Congestion_Aware_Online` 显式解析 `--online-*` 家族
-（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标两枚：
+（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标一枚：
 
 | 旗标 | 取值 | 缺省 | 语义 |
 |---|---|---|---|
-| `--online-node-gc` | `0\|1` | `1`（开） | M2 节点 GC（2026-08-23）+ **A1 摊销化（2026-08-28，默认翻转）**：GraphBatchCommitter 在批提交静止点（issue pass 完全返回后）回收各 rank NodeStore 中"已 finish 且无未完 children"的节点，并按同水位修剪 (rank, json id) → store id 映射，C++ 侧内存维持在途窗口而非全程累计图（2s 冒烟实测 retained 105300→12）。被回收节点必已 finished，仍指向它的跨批边按 NodeStore 死父规则无阻塞（validate 仅按 per-rank 稠密前缀水位线放行已修剪 id，从未存在的 id 照旧 fail-closed）。`0` = M2 前永不删除行为（应急回退臂）。决策序列与全部工件不受该旗标影响（GC 开/关两臂均字节对拍验收）。**摊销化设计（替代 2026-08-23"默认关"裁决）**：commit 尾只做 O(#ranks) 的候选计数，攒够 4096 个 finished 节点才真正回收一次，run 末强制收尾一次——旧实现"每 commit 全量回收"是当时轻载墙钟回归（30s 档 +35~55%）的来源，摊销后本仓 2s 冒烟墙钟对基线 −3.9%（6.68s→6.42s），回归消除。 |
-| `--online-validate` | `0\|1\|N` | `1`（全量） | **C1（2026-08-28）**：GraphBatch 提交前全量校验开关。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验）；`N≥2` = 每 N 批抽 1 批（按 committer 的 graph_batch_count 取模）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
+| `--online-validate` | `0\|1` | `1`（全量） | **C1（2026-08-28）；B.2 清除（2026-09-05）移除 N 抽检档**：GraphBatch 提交前全量校验开关。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验，commit() 的强制活性预检保留）。取值域为严格 `0\|1` 枚举，`N≥2` 或其它任何值启动即硬错误（杜绝陈旧脚本静默改变校验频率）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
+
+`--online-node-gc` 旗标已由 **B.3 清除（2026-09-05）** 整支移除：M2 节点 GC
+摊销回收恒开（原 `0` 臂 = pre-M2 永不删除应急回退臂已删，现仅 fixtures 内部
+Context 开关可达），任何 `--online-node-gc` 调用按家族未知旗标规则启动即
+硬错误（`unknown online-family option`），陈旧脚本无法静默禁用 GC；决策序列
+与全部工件不受影响（历史生产调用恒为默认 1）。
 
 runner 脚本（strategy/sensing 两变体）显式传
-`--online-node-gc "${SH_ONLINE_NODE_GC:-1}"` 与
 `--online-validate "${SH_ONLINE_VALIDATE:-0}"`；fixture runner（idle/
 wakeup_guard/same_tick_milestone）显式 `--online-validate 1`。运行期证据：
 cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
@@ -427,12 +431,11 @@ OnlineCli 在线家族解析；2026-09-01 sync-A16 自 face 母本批次P 同步
   `late_static_submit=0`，run-end 输出 arrival audit 行并以
   `late_static_submit==0 且逐行 ingress_delay==0（t=0 边界行除外）` 为正式
   门禁（fail 则非零退出）。
-- **window advisory 裁决（四仓对齐 wscllm，2026-08-30 P0 fix 延续；sync-A16
-  批次4，合同 §3.1）**：`--request-window-rows` 在本仓不改变任何行为
-  （calendar reader 按 arrival 序提交，窗口值不约束读取与提交）；runner 的
-  `SH_REQUEST_WINDOW_ROWS` 透传仅为五仓 CLI/checkpoint 兼容口径统一，
-  **本仓不设 C++ 启动 span 预检/拒绝门**，任何取值（含 0/正数）都不构成
-  非法配置（非法 token 词法仍统一 fail-closed）。plan_materializer 的
+- **window advisory 旋钮已删除（2026-09-05 A.3 清除；原四仓对齐 wscllm
+  2026-08-30 P0 fix 延续裁决）**：`--request-window-rows` 死旋钮已从四仓
+  物理删除——calendar reader 按 arrival 序提交，窗口值从不约束读取与提交，
+  删除不改变任何行为；现传入该选项即 `unknown online-family option`
+  硬错误（fail-closed），runner 不再透传 `SH_REQUEST_WINDOW_ROWS`。plan_materializer 的
   manifest.json 仍持久化 `max_same_session_span`/`span_session_id`/
   `span_row_range`/`span_row_range_convention`，仅作 provenance 审计
   （campaign 复核与根因归档），无任何运行期强制拒绝点。
@@ -449,8 +452,11 @@ OnlineCli 在线家族解析；2026-09-01 sync-A16 自 face 母本批次P 同步
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
   （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文保留
   （`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
-- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `0`=关（`wait_for_work()`
-  原契约不动，IDLE fixture 零影响）；开时停泊点墙钟超时即同款诊断 fatal
+- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `1.0`=武装（2026-09-05：
+  静默楔死 ~1s 即 fail-closed abort，不再无声挂死；官方 CSV run 到达全量
+  预排为队列事件、健康运行不停车不受影响。显式 `0`=关恢复 `wait_for_work()`
+  原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
+  墙钟超时即同款诊断 fatal
   （`--idle-` 前缀同受家族未知旗标硬错保护）。
   **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
   空白或符号字符（拒 `" +1"`/`" -1"`）；判界唯一顺序为 `==0` 接受（=关）
@@ -461,23 +467,20 @@ OnlineCli 在线家族解析；2026-09-01 sync-A16 自 face 母本批次P 同步
   判界→转换→加法前判界→单次 deadline）+ `wait_for_work_until`（绝对
   deadline，协调器内不再二次 `now()+timeout`）；主循环单次取 now、单次算
   deadline；`0`=关时必须走原 `wait_for_work()` 阻塞等待。
-- **FP1 整数解析加固（同上批次）**：`--request-window-rows` /
-  `--request-max-arrival-ns` / `--bridge-timeout-ms` / `--online-validate`
+- **FP1 整数解析加固（同上批次）；B.2 清除（2026-09-05）修订**：
+  `--request-max-arrival-ns` / `--bridge-timeout-ms`
   统一"纯 ASCII 数字词法（拒 `" -1"`/`"\t-1"`/`"+1"`）→ `errno=0` +
   ERANGE 拒 → endptr 到串尾 → 目标类型上限（前两者 size_t/uint64_t、
-  bridge-timeout-ms 与 online-validate 另加 `<= INT_MAX`）→ 才转换"合同，
-  失败不部分写入 `out`；`--online-validate=4294967296` 曾会回绕为 0 静默
-  关闭图验证（fail-open），现启动即拒。
+  bridge-timeout-ms 另加 `<= INT_MAX`）→ 才转换"合同，失败不部分写入
+  `out`。`--online-validate` 原同属该整数词法族
+  （`--online-validate=4294967296` 曾会回绕为 0 静默关闭图验证，fail-open）；
+  B.2 清除后改为严格 `0|1` 枚举解析，任何其它值（含抽检 N≥2 与越界大数）
+  启动即硬错误。
 - runner 透传 env：`BRIDGE_TIMEOUT_MS` 三态——未设=缺省 120000（须大于
   负载最慢单决策与 Python 侧 FIFO 开启等待）、显式 `0`=永等逃生口、正值=
   该毫秒值；它只武装 C++ 桥 response poll（Python 单次交换停滞族），管不到
-  停泊族（由上面看门狗兜住）。`SH_REQUEST_WINDOW_ROWS` 缺省不传
-  （=C++ 缺省 128），设 `0` 或正数（均 advisory，见上裁决）时透传
-  `--request-window-rows`。
-  **FP3（同上批次）**：sensing 变体 runner 补齐同款
-  `SH_REQUEST_WINDOW_ROWS` 透传（与主 runner 共享同一 CSV reader，
-  不应缺少该逃生口）；非法 token 原样传给 C++ 统一 fail-closed，
-  runner 不自行吞掉。
+  停泊族（由上面看门狗兜住）。
+  sensing 变体 runner 与主 runner 共享同一 CSV reader，同款参数口径。
 
 ### 3.1.1 运行开销与日志瘦身开关（2026-08-28，A/B/C/D 系列改造）
 
@@ -494,7 +497,7 @@ OnlineCli 在线家族解析；2026-09-01 sync-A16 自 face 母本批次P 同步
   `results/train_ledger.jsonl`、`results/ledger.jsonl`、
   `results/sensing_query_log.jsonl`（仅 sensing 跑产生，对账输入，strategy 跑
   保留集不受影响）、campaign_provenance.json、
-  bridge/checkpoints/、P2 拷入的 `metrics_manifest.json`/`manifest.json`、
+  P2 拷入的 `metrics_manifest.json`/`manifest.json`、
   P3 自动 SLO 提取产物（`slo_*.csv`、`slo_*.json`、`cache_events.csv`、
   `kv_hit_states.csv`、`slo_postprocess.log`、`slo_postprocess.FAIL` 若有）。
   任一阶段失败不归档、

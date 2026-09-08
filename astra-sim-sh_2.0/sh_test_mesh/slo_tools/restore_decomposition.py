@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """WP5 restore 三段分解（五仓逐字节相同，标准库实现）。
 
-输入 = cpp.log（full 档）：``[METRIC]`` 行中的
+输入 = cpp.log（full 档；经 slo_common.resolve_cpp_metric_log 统一回退：
+cpp.log → metrics.log → cpp.log.gz，归档后的 run_dir 同样可用）：``[METRIC]``
+行中的
   * type=memory_anchor 记录（subject_id=queue_index, rank, node_id,
     tick_ns；由 C++ 侧 KV transfer 锚点注册——main_online.cc 的
     last_transfer（名字含 "kv" 的最后节点）→ MetricCollector 事件码 7）；
@@ -35,8 +37,8 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from slo_common import (  # noqa: E402
-    CPP_LOG_NAME, emit_json, fail, fmt_ratio, open_output, parse_ns,
-    read_cpp_metric_records, run_main, write_csv,
+    emit_json, fail, fmt_ratio, open_output, parse_ns,
+    read_cpp_metric_records, resolve_cpp_metric_log, run_main, write_csv,
 )
 
 OUTPUT_COLUMNS = ("queue_index", "request_id", "restore_start_ns",
@@ -67,8 +69,12 @@ def restore_segments(restore_start_ns: Optional[int],
     return pre_prefill, hidden, exposed, ratio
 
 
-def collect(run_dir: Path) -> tuple[list[dict], dict]:
-    cpp_log = run_dir / CPP_LOG_NAME
+def scan_metric_anchors_requests(cpp_log: Path
+                                 ) -> tuple[dict[int, list[int]], dict[int, dict]]:
+    """[METRIC] 单遍扫描 → (anchors, requests)（A4：driver 复用）。
+
+    逐语句与原 collect 内联扫描等价（fail 消息/时点一致）。
+    """
     anchors: dict[int, list[int]] = {}
     requests: dict[int, dict] = {}
     for record in read_cpp_metric_records(cpp_log):
@@ -94,6 +100,16 @@ def collect(run_dir: Path) -> tuple[list[dict], dict]:
                     record.get("prefill_end_ns"), "prefill_end_ns",
                     f"cpp.log:request#{queue_index}"),
             }
+    return anchors, requests
+
+
+def collect(run_dir: Path, precollected: Optional[tuple[dict, dict]] = None
+            ) -> tuple[list[dict], dict]:
+    cpp_log = resolve_cpp_metric_log(run_dir)
+    if precollected is not None:
+        anchors, requests = precollected
+    else:
+        anchors, requests = scan_metric_anchors_requests(cpp_log)
     if not requests:
         fail(f"{cpp_log}: 未找到 type=request 记录——restore 分解需要 full "
              f"档 cpp.log（B1 批次 SH_METRICS_DETAIL=full；summary 档不落"
@@ -164,8 +180,15 @@ def collect(run_dir: Path) -> tuple[list[dict], dict]:
     return rows, summary
 
 
-def cmd_restore(args: argparse.Namespace) -> int:
-    rows, summary = collect(args.run_dir)
+def cmd_restore(args: argparse.Namespace, precollected=None) -> int:
+    # precollected=(anchors, requests)：A4 driver 传入单遍扫描结果（缺省
+    # 自扫，CLI 独立运行行为不变）。
+    rows, summary = collect(args.run_dir, precollected)
+    return restore_emit(args, rows, summary)
+
+
+def restore_emit(args: argparse.Namespace, rows: list[dict],
+                 summary: dict) -> int:
     stream, close = open_output(args.output, "slo_restore_decomposition.csv",
                                 args.run_dir)
     try:

@@ -16,6 +16,7 @@ import sys
 import types
 import unittest
 from dataclasses import make_dataclass
+from unittest import mock
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _WORKLOAD_DIR = os.path.dirname(_ONLINE_DIR)
@@ -31,6 +32,7 @@ from face_scheduler import (  # noqa: E402
     FaceRequest,
     _validate_and_expand_requests,
     build_instances,
+    estimate_decode_remaining_task_load_ns,
     estimate_prefill_task_load_ns,
 )
 from online.sh20_online_scheduler import (  # noqa: E402
@@ -362,6 +364,84 @@ class SnapshotEpochCacheTest(unittest.TestCase):
         self.assertEqual(
             compute.queued_prefill_task_load_ns,
             self.scheduler.runtimes[idx0].queued_chunk_load_ns)
+
+class BoundedTaskLoadMemoTest(unittest.TestCase):
+    """固定容量 memo：命中不重算，FIFO 淘汰只触发同函数精确重算。"""
+
+    def setUp(self) -> None:
+        hardware, model = _make_hardware_model()
+        scheduler = Sh20OnlineScheduler.__new__(Sh20OnlineScheduler)
+        scheduler.config = types.SimpleNamespace(hardware=hardware, model=model)
+        scheduler._prefill_task_cache = {}
+        scheduler._decode_task_load_cache = {}
+        scheduler._task_load_cache_capacity = 2
+        self.scheduler = scheduler
+        self.hardware = hardware
+        self.model = model
+
+    def test_prefill_hit_and_fifo_eviction_preserve_exact_value(self):
+        a = dict(instance_size=2, chunk_tokens=512, context_tokens=512)
+        b = dict(instance_size=2, chunk_tokens=512, context_tokens=768)
+        c = dict(instance_size=2, chunk_tokens=512, context_tokens=1024)
+        expected = {
+            tuple(args.values()): estimate_prefill_task_load_ns(
+                hardware=self.hardware, model=self.model, **args)
+            for args in (a, b, c)
+        }
+        with mock.patch(
+                "online.sh20_online_scheduler.estimate_prefill_task_load_ns",
+                wraps=estimate_prefill_task_load_ns) as estimate:
+            self.assertEqual(self.scheduler._prefill_chunk_task_load_ns(**a),
+                             expected[tuple(a.values())])
+            self.assertEqual(self.scheduler._prefill_chunk_task_load_ns(**a),
+                             expected[tuple(a.values())])  # hit
+            self.assertEqual(self.scheduler._prefill_chunk_task_load_ns(**b),
+                             expected[tuple(b.values())])
+            self.assertEqual(self.scheduler._prefill_chunk_task_load_ns(**c),
+                             expected[tuple(c.values())])  # evicts a
+            self.assertEqual(self.scheduler._prefill_chunk_task_load_ns(**a),
+                             expected[tuple(a.values())])  # exact recompute
+        self.assertEqual(estimate.call_count, 4)
+        self.assertEqual(len(self.scheduler._prefill_task_cache), 2)
+        self.assertEqual(
+            list(self.scheduler._prefill_task_cache),
+            [tuple(c.values()), tuple(a.values())],
+        )
+
+    def test_decode_hit_and_fifo_eviction_preserve_exact_value(self):
+        a = dict(instance_size=2, current_context_tokens=512,
+                 generated_tokens=0, average_decode_length=10.0,
+                 running_step_fraction_remaining=1.0)
+        b = dict(instance_size=2, current_context_tokens=513,
+                 generated_tokens=1, average_decode_length=10.0,
+                 running_step_fraction_remaining=1.0)
+        c = dict(instance_size=2, current_context_tokens=514,
+                 generated_tokens=2, average_decode_length=10.0,
+                 running_step_fraction_remaining=1.0)
+        expected = {
+            tuple(args.values()): estimate_decode_remaining_task_load_ns(
+                self.hardware, self.model, **args)
+            for args in (a, b, c)
+        }
+        with mock.patch(
+                "online.sh20_online_scheduler.estimate_decode_remaining_task_load_ns",
+                wraps=estimate_decode_remaining_task_load_ns) as estimate:
+            self.assertEqual(self.scheduler._decode_task_load_ns_cached(**a),
+                             expected[tuple(a.values())])
+            self.assertEqual(self.scheduler._decode_task_load_ns_cached(**a),
+                             expected[tuple(a.values())])  # hit
+            self.assertEqual(self.scheduler._decode_task_load_ns_cached(**b),
+                             expected[tuple(b.values())])
+            self.assertEqual(self.scheduler._decode_task_load_ns_cached(**c),
+                             expected[tuple(c.values())])  # evicts a
+            self.assertEqual(self.scheduler._decode_task_load_ns_cached(**a),
+                             expected[tuple(a.values())])  # exact recompute
+        self.assertEqual(estimate.call_count, 4)
+        self.assertEqual(len(self.scheduler._decode_task_load_cache), 2)
+        self.assertEqual(
+            list(self.scheduler._decode_task_load_cache),
+            [tuple(c.values()), tuple(a.values())],
+        )
 
 
 if __name__ == "__main__":

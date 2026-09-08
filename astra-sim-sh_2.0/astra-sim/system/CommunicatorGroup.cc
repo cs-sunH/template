@@ -14,6 +14,24 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
+bool AstraSim::same_communicator_definition(
+    const std::vector<int>& lhs_ranks,
+    const std::vector<int>& lhs_dimensions,
+    const std::vector<int>& rhs_ranks,
+    const std::vector<int>& rhs_dimensions) {
+    return lhs_ranks == rhs_ranks && lhs_dimensions == rhs_dimensions;
+}
+
+int AstraSim::communicator_rank_position(
+    const std::vector<int>& ordered_ranks, const int rank) noexcept {
+    for (size_t i = 0; i < ordered_ranks.size(); ++i) {
+        if (ordered_ranks[i] == rank) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 CommunicatorGroup::CommunicatorGroup(int comm_group_id,
                                      std::vector<int> involved_NPUs,
                                      Sys* generator,
@@ -37,17 +55,12 @@ CommunicatorGroup::CommunicatorGroup(int comm_group_id,
                 "Communicator dimension sizes do not match rank-map size");
         }
     }
-    std::sort(involved_NPUs.begin(), involved_NPUs.end());
-
-    // -1 means the rank is not in the comm group.
-    int position = -1;
-    for (int i = 0; i < involved_NPUs.size(); ++i) {
-        if (involved_NPUs[i] == generator->id) {
-            position = i;
-            break;
-        }
-    }
-    pos_in_group = position;
+    // Communicator rank order is semantic: custom-collective ET file suffixes
+    // and algorithm-rank translation both index the preserved input order.
+    // Computing this position from a sorted copy selects a different ET file
+    // for a valid permuted communicator such as [2, 0].
+    pos_in_group =
+        communicator_rank_position(this->involved_NPUs, generator->id);
 }
 
 CommunicatorGroup::~CommunicatorGroup() {
@@ -63,6 +76,13 @@ void CommunicatorGroup::set_id(int id) {
     assert(id > 0);
     this->id = id;
     this->num_streams = id * 1000000;
+}
+
+bool CommunicatorGroup::matches_definition(
+    const std::vector<int>& ranks,
+    const std::vector<int>& dimensions) const {
+    return same_communicator_definition(involved_NPUs, dimension_sizes, ranks,
+                                        dimensions);
 }
 
 CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64_t workload_node_id) {

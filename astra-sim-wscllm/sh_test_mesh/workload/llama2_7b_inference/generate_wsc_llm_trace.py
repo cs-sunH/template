@@ -82,8 +82,7 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
-    "kv_cache_policy": "legacy",
-    "kv_remote_read": "physical",
+    "kv_cache_policy": "session_lru_recompute",
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
@@ -151,8 +150,6 @@ class WscLlmTraceConfig:
     trace_granularity: str
     prefill_chunk_size: int
     kv_cache_policy: str
-    # relevant_distributed 变体专用(缺省 physical,其余变体不消费)。
-    kv_remote_read: str
     kv_reserve_context_tokens: int
     record_planning_iterations: bool
     configuration_digest: str
@@ -269,24 +266,12 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "record_planning_iterations":
         return parse_bool(value, key)
     if key == "kv_cache_policy":
-        # relevant_distributed(第三变体,总文档 §2):值域扩为三值;legacy
-        # 代码 fallback 与 checked-in csv 缺省两处均不动(裁决 #21)。
-        if value not in {"legacy", "session_lru_recompute",
-                         "relevant_distributed"}:
+        # A.5(2026-09-05):legacy 与 relevant 两个历史变体已清除,唯一
+        # 合法取值 session_lru_recompute;其余取值 fail-closed。
+        if value != "session_lru_recompute":
             raise ValueError(
-                "config key kv_cache_policy must be legacy, "
-                "session_lru_recompute, or relevant_distributed"
-            )
-        return value
-    if key == "kv_remote_read":
-        # relevant_distributed 变体的 decode 远程读 A/B 开关(总文档 §3.2
-        # 裁决 #11):physical(缺省)= 发射 3300 读边 + 裁远程 KV 分量;
-        # ideal_masked = 不发 3300、不裁 KV 分量(现状字节口径)。其余
-        # 变体不消费本键,缺省值保持其行为不变。
-        if value not in {"physical", "ideal_masked"}:
-            raise ValueError(
-                "config key kv_remote_read must be physical or "
-                f"ideal_masked, got {value!r}"
+                "config key kv_cache_policy must be "
+                f"session_lru_recompute, got {value!r}"
             )
         return value
     if key == "trace_granularity":
@@ -521,7 +506,6 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         trace_granularity=str(parsed["trace_granularity"]),
         prefill_chunk_size=int(parsed["prefill_chunk_size"]),
         kv_cache_policy=str(parsed["kv_cache_policy"]),
-        kv_remote_read=str(parsed["kv_remote_read"]),
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
         record_planning_iterations=bool(parsed["record_planning_iterations"]),
         configuration_digest=configuration_digest,
@@ -750,11 +734,33 @@ def _eviction_record_dict(eviction) -> dict[str, object]:
     }
 
 
-def _kv_transfer_dict(transfer) -> Optional[dict[str, object]]:
-    """Serialize one session-KV KVTransfer (or None) for the decision log."""
+def _kv_transfer_dict(
+    transfer, hardware: Optional[WscLlmHardware] = None
+) -> Optional[dict[str, object]]:
+    """Serialize one session-KV KVTransfer (or None) for the decision log.
+
+    问题 4b（2026-09-05）：hardware 非 None 时每个 shard 附加
+    noc_path/noc_hops（rank 级 XY 路由，与 _paired_transfer 的 routes
+    行同构同源；生成侧只读派生，供 hopbytes shard 级 mesh 跳口径消费，
+    A/B 对拍剥离清单条目）。缺省 hardware=None 行为与旧版逐字节一致
+    （兼容既有调用与旧产物回退路径）。
+    """
 
     if transfer is None:
         return None
+    shard_rows: list[dict[str, object]] = []
+    for shard in transfer.shards:
+        row: dict[str, object] = {
+            "relative_tp_rank": shard.relative_tp_rank,
+            "source_rank": shard.source_rank,
+            "target_rank": shard.target_rank,
+            "bytes": shard.bytes,
+        }
+        if hardware is not None:
+            path = _xy_route(hardware, shard.source_rank, shard.target_rank)
+            row["noc_path"] = list(path)
+            row["noc_hops"] = max(0, len(path) - 1)
+        shard_rows.append(row)
     return {
         "action": transfer.action,
         "phase": transfer.phase,
@@ -765,15 +771,7 @@ def _kv_transfer_dict(transfer) -> Optional[dict[str, object]]:
         "target_instance_index": transfer.target_instance_index,
         "history_tokens": transfer.history_tokens,
         "total_bytes": transfer.total_bytes,
-        "shards": [
-            {
-                "relative_tp_rank": shard.relative_tp_rank,
-                "source_rank": shard.source_rank,
-                "target_rank": shard.target_rank,
-                "bytes": shard.bytes,
-            }
-            for shard in transfer.shards
-        ],
+        "shards": shard_rows,
     }
 
 

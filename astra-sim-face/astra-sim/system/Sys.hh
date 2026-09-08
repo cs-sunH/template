@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 #include <chrono>
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
-#include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CollectivePhase.hh"
 #include "astra-sim/system/CommunicatorGroup.hh"
@@ -76,7 +75,6 @@ class Sys : public Callable {
         std::string workload_configuration,
         std::string comm_group_configuration,
         std::string system_configuration,
-        AstraRemoteMemoryAPI* remote_mem,
         AstraNetworkAPI* comm_NI,
         std::vector<int> physical_dims,
         std::vector<int> queues_per_dim,
@@ -113,6 +111,18 @@ class Sys : public Callable {
                         EventType event,
                         CallData* callData,
                         Tick delta_cycles);
+    // Cancellable events own neither Callable nor CallData by default.  A
+    // caller that supplies a cancellation callback transfers only the
+    // pending-payload cleanup to Sys; after the event is popped, its normal
+    // Callable::call path keeps the pre-existing ownership contract.
+    using EventDataCancellationCallback = void (*)(CallData*);
+    [[nodiscard]] SystemEventHandle register_event_cancellable(
+        Callable* callable,
+        EventType event,
+        CallData* callData,
+        Tick delta_cycles,
+        EventDataCancellationCallback cancellation_callback);
+    [[nodiscard]] bool cancel_event(SystemEventHandle& handle);
     void try_register_event(Callable* callable,
                             EventType event,
                             CallData* callData,
@@ -294,10 +304,7 @@ class Sys : public Callable {
     // it (a zero-rate fluid model would stall forever); false restores the
     // legacy closed-form roofline + comm-without-HBM behavior.
     bool hbm_bandwidth_contention;
-    double remote_mem_bw;
-    uint64_t remote_mem_latency;
     double pipeline_tile_fraction;
-    AstraRemoteMemoryAPI* remote_mem;
 
     // memory bus
     MemBus* memBus;
@@ -338,8 +345,21 @@ class Sys : public Callable {
     std::map<int, std::list<BaseStream*>> active_Streams;
     std::map<int, std::list<int>> stream_priorities;
 
-    std::map<Tick, std::list<std::tuple<Callable*, EventType, CallData*>>>
-        event_queue;
+    struct ScheduledEvent {
+        Callable* callable;
+        EventType event;
+        CallData* call_data;
+        uint64_t event_id;
+        EventDataCancellationCallback cancellation_callback;
+    };
+    struct ScheduledEventBucket {
+        std::list<ScheduledEvent> events;
+        AstraNetworkAPI::CancellableScheduleHandle outer_alarm;
+    };
+    std::map<Tick, ScheduledEventBucket> event_queue;
+    uint64_t next_cancellable_event_id = 1;
+    bool dispatching_events = false;
+    Tick dispatching_event_time = 0;
     int total_nodes;
     int dim_to_break;
     std::vector<int> logical_broken_dims;

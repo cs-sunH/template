@@ -111,6 +111,30 @@ struct CollAttrs {
                                      // legacy 4x-true default when absent
 };
 
+// Online-only, short-lived statistics state.  It lives in the NodeStore
+// record rather than Statistics::operator_statistics, so service execution
+// can retire terminal nodes without a global per-node statistics hash-table
+// operation.  Static ET adapters leave this POD at its defaults.
+struct OnlineStatisticsState {
+    static constexpr uint64_t kInvalidTick = UINT64_MAX;
+
+    uint64_t start_time = kInvalidTick;
+    uint64_t end_time = kInvalidTick;
+    bool started = false;
+    bool completed = false;
+    bool is_gpu = false;
+
+    // Kept until terminal completion because the online Workload still
+    // calculates p2p/collective bandwidth before the NodeStore record can be
+    // collected.  Only compute/memory utilization is compacted globally.
+    std::optional<double> memory_utilization;
+    std::optional<double> compute_utilization;
+    std::optional<double> operation_intensity;
+    std::optional<bool> is_memory_bound;
+    std::optional<uint64_t> comm_size;
+    std::optional<double> network_bandwidth;
+};
+
 /// The node record / read view. In static mode the ETFeederGraphSource
 /// fills every field from the ETFeederNode; in online mode the NodeStore
 /// fills them from GraphBatch data, including the reverse index
@@ -123,6 +147,18 @@ struct OnlineNode {
     std::string name;
     bool is_cpu_op = false;
     bool is_timer_op = false;
+    // R2 MetricCollector anchor fast-path cache (sparse): set by
+    // NodeStore::set_metric_anchor_flags when the dynamic anchor
+    // registration path (GraphBatchCommitter Phase B-1.5) registers an
+    // anchor for this (rank, node); false = no routing entry exists on
+    // that edge, so Workload skips the two-level MetricCollector hash
+    // lookup entirely. Placed right after is_timer_op to reuse the 6-byte
+    // tail padding of the bool group (is_timer_op ends at offset 57, the
+    // next member is 8-byte aligned), keeping sizeof(OnlineNode) unchanged
+    // (locked by the R2 regression's static_asserts). Static-mode views
+    // built by ETFeederGraphSource leave both flags false.
+    bool metric_issue_anchor = false;
+    bool metric_complete_anchor = false;
     std::string inputs_values;  // metadata pg info (issue_pytorch_pg_metadata)
     // Reverse index (online mode; static mode leaves them empty/0):
     std::string request_id;
@@ -133,6 +169,7 @@ struct OnlineNode {
     MemAttrs mem;
     CommAttrs comm;
     CollAttrs coll;
+    OnlineStatisticsState online_statistics;
 };
 
 /// Read-side view; same POD as OnlineNode (add_node stores it, dep_free_nodes
@@ -188,6 +225,15 @@ class GraphSource {
     /// unsupported (static sources) -- online callers treat that as unknown
     /// node. Default returns nullptr; the NodeStore-backed source overrides.
     virtual const NodeView* lookup_ptr(uint64_t /*node_id*/) { return nullptr; }
+
+    // Online-only mutable short-lived statistics state and terminal
+    // single-fire guard.  Static sources deliberately use the default
+    // unsupported implementations, preserving their ET behavior.
+    virtual OnlineStatisticsState* mutable_online_statistics(
+        uint64_t /*node_id*/) {
+        return nullptr;
+    }
+    virtual bool mark_terminal_observed(uint64_t /*node_id*/) { return false; }
 };
 
 /// Empty source: yields no nodes, finishes nothing. Used as the step-1-2

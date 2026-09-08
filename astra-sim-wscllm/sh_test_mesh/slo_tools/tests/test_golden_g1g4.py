@@ -141,7 +141,7 @@ class G1SingleRequestNoContention(unittest.TestCase):
         synthetic.write_jsonl(
             self.run_dir, "train_ledger.jsonl", [
                 {"train_id": "t", "instance_index": 3, "tick": 8000,
-                 "drains": ["s0_r0"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["s0_r0"], "joiners": []},
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 1000})
@@ -241,9 +241,9 @@ class G2TwoRequestsQueued(unittest.TestCase):
         synthetic.write_jsonl(
             self.run_dir, "train_ledger.jsonl", [
                 {"train_id": "t0", "instance_index": 0, "tick": 500,
-                 "drains": ["r0"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["r0"], "joiners": []},
                 {"train_id": "t1", "instance_index": 0, "tick": 900,
-                 "drains": ["r1"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["r1"], "joiners": []},
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 100})

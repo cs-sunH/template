@@ -783,7 +783,6 @@ def transformer_pass_aggregated(
     tensor_parallel_rank: int = 0,
     mlp_variant: str = "gelu",
     weight_passes: Optional[int] = None,
-    local_kv_bytes: Optional[Iterable[Optional[int]]] = None,
 ) -> int:
     """Fold repeated Transformer passes into 17 aggregate Chakra nodes.
 
@@ -803,16 +802,6 @@ def transformer_pass_aggregated(
     only k times (once per iteration, shared by all batch members; 权重只读
     一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
     exact regardless of ``weight_passes``.
-
-    ``local_kv_bytes`` (relevant_distributed 变体, 2026-09-02;总文档 §3.3
-    KV 归因覆盖): 可选 per-span 覆盖序列, 与 ``pass_spans`` 逐位对齐;每
-    个元素为 ``None``(该 span 用全量 KV 口径 = 现状行为)或非负整数
-    (该 span 的 k/v_cache 字节只计该值——远程成员只计 D 本地 piece 字节,
-    远程 piece 字节改由 3300 读边在源端计费, 防双计)。缺省 ``None`` =
-    全部 span 用全量 KV, 与历史行为逐字节一致(golden 兼容)。覆盖同时
-    作用于 qk/av matmul 的 ``tensor_size`` 与 remote-read 分量中的
-    k/v_cache 项(同一物理读的归因保持一致;本仓 remote_operand_loads
-    缺省 false, 该分量缺省不发射)。逐 span 精确, 无近似。
     """
 
     spans = tuple(pass_spans)
@@ -836,24 +825,6 @@ def transformer_pass_aggregated(
         raise ValueError(
             "weight_passes must not exceed the span count (one weight-reading "
             "pass contributes at least one span)")
-
-    # local_kv_bytes fail-closed 校验:长度与 pass_spans 对齐、元素为 None
-    # 或非负整数(bool 显式拒绝,与仓内数值校验惯例一致)。
-    if local_kv_bytes is not None:
-        local_kv_values = tuple(local_kv_bytes)
-        if len(local_kv_values) != len(spans):
-            raise ValueError(
-                "local_kv_bytes must align with pass_spans "
-                f"({len(local_kv_values)} values for {len(spans)} spans)")
-        for value in local_kv_values:
-            if value is None:
-                continue
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(
-                    "local_kv_bytes entries must be None or non-negative "
-                    "integers")
-    else:
-        local_kv_values = None
 
     if mlp_variant not in {"gelu", "swiglu"}:
         raise ValueError("mlp_variant must be gelu or swiglu")
@@ -920,9 +891,6 @@ def transformer_pass_aggregated(
         category[1] += tensor_size
         category[2] += remote_read
 
-    # 覆盖值迭代器(长度已在上方 fail-closed 校验):与 spans 逐位对齐消费。
-    local_kv_iter = iter(local_kv_values) if local_kv_values is not None else None
-
     for tokens, kv_length in spans:
         activation_elems = tokens * hidden_size
         activation_shard_elems = tokens * attention_hidden_per_rank
@@ -938,14 +906,6 @@ def transformer_pass_aggregated(
         score_bytes = tensor_bytes(score_elems, bytes_per_elem)
         k_cache_bytes = tensor_bytes(kv_cache_elems, bytes_per_elem)
         v_cache_bytes = tensor_bytes(kv_cache_elems, bytes_per_elem)
-        # KV 归因覆盖(总文档 §3.3):该 span 提供显式本地字节时,k/v_cache
-        # 分量只计本地 piece(远程分量由 3300 读边在源端计费);None =
-        # 全量口径(现状)。逐 span 精确,对 score/激活分量零影响。
-        if local_kv_values is not None:
-            span_local_kv = next(local_kv_iter)
-            if span_local_kv is not None:
-                k_cache_bytes = span_local_kv
-                v_cache_bytes = span_local_kv
 
         # 拼批量权重基线拆分(2026-08-22):per-span 累加只含激活/KV/score
         # 分量;权重分量(norm 参数/投影矩阵)每物理前向只读一次,统一在

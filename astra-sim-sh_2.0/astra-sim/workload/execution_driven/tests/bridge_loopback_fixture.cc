@@ -59,6 +59,7 @@ Exit code 0 on ALL PASS (requires python3 on PATH).
 #include <json/json.hpp>
 
 #include "astra-sim/workload/execution_driven/DecisionBridge.hh"
+#include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 
 using namespace AstraSim::ExecutionDriven;
 
@@ -123,6 +124,55 @@ bool file_exists(const std::string& path) {
     return in.good();
 }
 
+// -------------------------------------------------- completed_nodes wire --
+// Production keeps the schema field but transfers no per-node records. Exact
+// audit mode retains the frozen legacy records and is intentionally much larger.
+void completed_node_serialization() {
+    const int success = static_cast<int>(NodeTerminalStatus::Success);
+    const int skipped = static_cast<int>(NodeTerminalStatus::Skipped);
+
+    CompletedFactAccumulator compact;
+    compact.set_exact_mode(false);
+    compact.record(/*rank=*/1, /*node_id=*/11, "compact", "decode",
+                   /*generation=*/1, /*tick=*/101, success);
+    const StateDelta compact_delta = build_state_delta_v1(
+        {}, /*tick=*/700, /*delivery_sequence=*/8, /*deferred_from_tick=*/0,
+        compact.drain(), {});
+    const nlohmann::json compact_request = build_request_json(compact_delta);
+    expect(compact_request["completed_nodes"].is_array() &&
+               compact_request["completed_nodes"].empty(),
+           "completed_nodes: production accumulator serializes []");
+
+    CompletedFactAccumulator exact;
+    exact.set_exact_mode(true);
+    for (uint64_t i = 0; i < 8; ++i) {
+        exact.record(/*rank=*/static_cast<int>(i % 2),
+                     /*node_id=*/9000 + i, "exact-request", "decode",
+                     /*generation=*/30 + i, /*tick=*/10000 + i,
+                     i % 2 == 0 ? success : skipped);
+    }
+    const StateDelta exact_delta = build_state_delta_v1(
+        {}, /*tick=*/700, /*delivery_sequence=*/8, /*deferred_from_tick=*/0,
+        exact.drain(), {});
+    const nlohmann::json exact_request = build_request_json(exact_delta);
+    const nlohmann::json& exact_nodes = exact_request["completed_nodes"];
+    expect(exact_nodes.is_array() && exact_nodes.size() == 8 &&
+               exact_nodes[0]["rank"] == 0 &&
+               exact_nodes[0]["node_id"] == 9000 &&
+               exact_nodes[0]["tick"] == 10000,
+           "completed_nodes: exact mode preserves rank/node_id/tick");
+    expect(exact_nodes[0].contains("request_id") &&
+               exact_nodes[0].contains("stage") &&
+               exact_nodes[0].contains("generation") &&
+               exact_nodes[0].contains("terminal_status") &&
+               !exact_nodes[0].contains("count") &&
+               !exact_nodes[0].contains("ranks"),
+           "completed_nodes: exact mode remains the legacy per-node schema");
+    expect(exact_request.dump().size() >=
+               compact_request.dump().size() + exact_nodes.size() * 70,
+           "completed_nodes: compact production request is materially smaller");
+}
+
 // ---------------------------------------------------------------- Part A --
 // Round-trip + ack idempotency + clean Python exit.
 void round_trip(const std::string& echo_script) {
@@ -155,16 +205,16 @@ void round_trip(const std::string& echo_script) {
         prefill_ev.payload.watch_member_count = 5;
 
         const StateDelta delta1 =
-            build_state_delta({arrival_ev, prefill_ev}, 94835000, 1);
+            build_state_delta({arrival_ev, prefill_ev}, 94835000, 0);
 
         const GraphBatch batch1 = bridge.deliver_and_receive(delta1);
 
         // request JSON on disk must be exactly the protocol serializer's
         // output (atomic publish means the file is complete at notify time)
         const nlohmann::json request1_on_disk =
-            read_json_file_for_test(bridge_dir + "/request_1.json");
+            read_json_file_for_test(bridge_dir + "/request_0.json");
         expect(request1_on_disk == build_request_json(delta1),
-               "A: request_1.json equals build_request_json(delta1)");
+               "A: request_0.json equals build_request_json(delta1)");
         expect(request1_on_disk["reasons"] ==
                    nlohmann::json::parse(R"(["ARRIVAL","PREFILL_DRAIN"])"),
                "A: reasons[] in epoch order");
@@ -174,7 +224,7 @@ void round_trip(const std::string& echo_script) {
                "A: arrivals[] carries the envelope facts");
         // Phase 4 (schema v1): arrivals carry the ingress serial and the
         // frozen queue index; delivery_epoch == delivery_sequence;
-        // completed_nodes/retry_items/affected_ranks empty; snapshot_handle
+        // completed_nodes/affected_ranks empty; snapshot_handle
         // self-consistent {epoch, tick, kind:""} (compat-built delta gets
         // the v1 defaults).
         expect(request1_on_disk["arrivals"][0]["ingress_seq"] == 0 &&
@@ -185,12 +235,10 @@ void round_trip(const std::string& echo_script) {
                "A: delivery_epoch == delivery_sequence (v1)");
         expect(request1_on_disk["completed_nodes"].is_array() &&
                    request1_on_disk["completed_nodes"].empty() &&
-                   request1_on_disk["retry_items"].is_array() &&
-                   request1_on_disk["retry_items"].empty() &&
                    request1_on_disk["affected_ranks"].is_array() &&
                    request1_on_disk["affected_ranks"].empty(),
-               "A: completed_nodes/retry_items/affected_ranks empty (v1)");
-        expect(request1_on_disk["snapshot_handle"]["epoch"] == 1 &&
+               "A: completed_nodes/affected_ranks empty (v1)");
+        expect(request1_on_disk["snapshot_handle"]["epoch"] == 0 &&
                    request1_on_disk["snapshot_handle"]["tick"] == 94835000 &&
                    request1_on_disk["snapshot_handle"]["kind"] == "",
                "A: snapshot_handle self-consistent placeholder (v1)");
@@ -199,19 +247,43 @@ void round_trip(const std::string& echo_script) {
                    request1_on_disk["completed_groups"][0]["node_count"] == 5,
                "A: completed_groups[] carries the watch-fire facts");
 
-        expect(batch1.source_delivery_sequence == 1 && batch1.batch_id == 1,
-               "A: batch echoes seq 1");
+        expect(batch1.source_delivery_sequence == 0 && batch1.batch_id == 0,
+               "A: batch echoes seq 0");
         expect(batch1.error.empty(), "A: no error on the happy path");
-        expect(batch1.nodes == nlohmann::json::parse(R"([{"echo_node":1},{"echo_node":2}])"),
-               "A: nodes[] arrived intact");
-        expect(batch1.parent_edges == nlohmann::json::parse(R"([{"from":0,"to":1}])"),
+        // C1 (2026-08-29): the echo's schema-valid payload arrives as the
+        // TYPED batch (the pre-C1 fixture echoed free-form JSON objects the
+        // DOM batch carried opaquely; the one-shot structural parse now
+        // fail-closes on unknown keys/shapes, so bridge_echo.py emits the
+        // frozen node/edge/assignment/kv shapes).
+        expect(batch1.nodes.size() == 2, "A: nodes[] arrived intact");
+        expect(batch1.nodes[0].json_id == 0 &&
+                   batch1.nodes[0].node.rank == 0 &&
+                   batch1.nodes[0].node.node_type == 4 &&
+                   batch1.nodes[0].node.request_id == "s0_r0" &&
+                   batch1.nodes[0].node.stage == "prefill" &&
+                   batch1.nodes[0].node.compute.num_ops == 1 &&
+                   batch1.nodes[0].node.comm.tag == 0,
+               "A: node[0] typed fields round-trip");
+        expect(batch1.nodes[1].json_id == 1 &&
+                   batch1.nodes[1].node.name == "echo_node_2",
+               "A: node[1] typed fields round-trip");
+        expect(batch1.parent_edges.size() == 1 &&
+                   batch1.parent_edges[0].rank == 0 &&
+                   batch1.parent_edges[0].from_json == 0 &&
+                   batch1.parent_edges[0].to_json == 1,
                "A: parent_edges[] arrived intact");
-        expect(batch1.watches.is_array() && batch1.watches.empty(),
-               "A: watches[] arrived intact");
-        expect(batch1.assignments == nlohmann::json::parse(R"([{"echo":"assignment"}])"),
+        expect(batch1.watches.empty(), "A: watches[] arrived intact");
+        expect(batch1.assignments.size() == 1 &&
+                   batch1.assignments[0].request_id == "s0_r0" &&
+                   batch1.assignments[0].prefill_instance_index == 0 &&
+                   batch1.assignments[0].decode_instance_index == 0,
                "A: assignments[] arrived intact");
-        expect(batch1.kv_actions == nlohmann::json::parse(R"([{"echo":"kv_action"}])"),
+        expect(batch1.kv_actions.size() == 1 &&
+                   batch1.kv_actions[0].event_type == "echo" &&
+                   batch1.kv_actions[0].trigger_request_id == "s0_r0",
                "A: kv_actions[] arrived intact");
+        expect(batch1.future_alarms.empty() && !batch1.has_touched_ranks,
+               "A: future_alarms/touched_ranks defaults intact");
 
         // Phase-7 §10.3 中间产物生命周期: read_response CONSUMES AND DELETES
         // the response file right after parsing (fail-closed path retains
@@ -221,10 +293,10 @@ void round_trip(const std::string& echo_script) {
         // Python decision content is covered by the decision_log byte-gate
         // of the full runs. request_N.json is retained (fixture input +
         // audit evidence) and asserted below.
-        expect(!file_exists(bridge_dir + "/response_1.json"),
-               "A: response_1.json consumed and deleted (phase-7 §10.3)");
-        expect(file_exists(bridge_dir + "/request_1.json"),
-               "A: request_1.json retained (replay input + audit evidence)");
+        expect(!file_exists(bridge_dir + "/response_0.json"),
+               "A: response_0.json consumed and deleted (phase-7 §10.3)");
+        expect(file_exists(bridge_dir + "/request_0.json"),
+               "A: request_0.json retained (replay input + audit evidence)");
 
         // --- delta 2: DECODE_COMPLETION + REQUEST_COMPLETE ---
         DecisionEvent decode_ev;
@@ -240,19 +312,19 @@ void round_trip(const std::string& echo_script) {
         complete_ev.generation = 1;
 
         const StateDelta delta2 =
-            build_state_delta({decode_ev, complete_ev}, 94835010, 2);
+            build_state_delta({decode_ev, complete_ev}, 94835010, 1);
 
         const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
-        expect(batch2.source_delivery_sequence == 2 && batch2.batch_id == 2,
-               "B: batch echoes seq 2");
+        expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
+               "B: batch echoes seq 1");
         // Phase-7 §10.3: response consumed and deleted (see part A).
-        expect(!file_exists(bridge_dir + "/response_2.json"),
-               "B: response_2.json consumed and deleted (phase-7 §10.3)");
+        expect(!file_exists(bridge_dir + "/response_1.json"),
+               "B: response_1.json consumed and deleted (phase-7 §10.3)");
 
-        // --- commit acks: seq 1, seq 2, then a DUPLICATE seq 1 ---
+        // --- commit acks: seq 0, seq 1, then a DUPLICATE seq 0 ---
+        bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
         bridge.send_commit_ack(/*batch_id=*/1, /*delivery_seq=*/1, true);
-        bridge.send_commit_ack(/*batch_id=*/2, /*delivery_seq=*/2, true);
-        bridge.send_commit_ack(/*batch_id=*/1, /*delivery_seq=*/1, true);
+        bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);
     }  // destructor closes req_notify -> Python EOF -> exit 0
 
     int status = 0;
@@ -260,7 +332,7 @@ void round_trip(const std::string& echo_script) {
     expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
            "A: echo Python exited 0 on EOF (clean run end)");
 
-    // ack receipt: exactly two lines (duplicate seq 1 was idempotent)
+    // ack receipt: exactly two lines (duplicate seq 0 was idempotent)
     std::ifstream receipt(ack_receipt);
     std::string line1, line2, line3;
     std::getline(receipt, line1);
@@ -268,12 +340,12 @@ void round_trip(const std::string& echo_script) {
     std::getline(receipt, line3);
     expect(!line1.empty() && !line2.empty() && line3.empty(),
            "A: ack receipt has exactly 2 lines (duplicate ignored)");
-    expect(line1.find("\"delivery_sequence\": 1") != std::string::npos &&
-               line1.find("\"batch_id\": 1") != std::string::npos &&
+    expect(line1.find("\"delivery_sequence\": 0") != std::string::npos &&
+               line1.find("\"batch_id\": 0") != std::string::npos &&
                line1.find("\"success\": true") != std::string::npos,
            "A: ack line 1 carries seq/batch_id/success");
-    expect(line2.find("\"delivery_sequence\": 2") != std::string::npos &&
-               line2.find("\"batch_id\": 2") != std::string::npos,
+    expect(line2.find("\"delivery_sequence\": 1") != std::string::npos &&
+               line2.find("\"batch_id\": 1") != std::string::npos,
            "A: ack line 2 carries seq/batch_id/success");
 
     rm_rf(root);
@@ -302,7 +374,7 @@ void crash_scenario(const std::string& root) {
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
     const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 1);
+        build_state_delta({arrival_ev}, 12345, 0);
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: crash scenario "
                          "did not abort\n");
@@ -335,7 +407,7 @@ void timeout_scenario(const std::string& root) {
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
     const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 1);
+        build_state_delta({arrival_ev}, 12345, 0);
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: timeout scenario "
                          "did not abort\n");
@@ -415,8 +487,8 @@ void run_abort_scenario_with_message(const char* what, const char* needle,
 
 // ---------------------------------------------------------------- Part D --
 // Defect-B fix (2026-08-16): genuine peer death under the LONG-LIVED resp
-// protocol. Python completes exchange 1 normally, then SIGKILLs itself
-// before responding to exchange 2. The C++ lifetime read end must see the
+// protocol. Python completes the first exchange (seq 0) normally, then
+// SIGKILLs itself before responding to seq 1. The C++ lifetime read end must see the
 // write end close (read==0) and abort with the unambiguous
 // "long-lived resp_notify write end closed" diagnostic -- the same
 // signature that, under the OLD per-exchange protocol, also fired for a
@@ -427,15 +499,15 @@ const char* kKillScript =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "resp={'schema_version':1,'batch_id':1,'source_delivery_sequence':1,"
+    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
-    "open(d+'/response_1.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_1.json.tmp', d+'/response_1.json')\n"
+    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
+    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
     "os.write(wfd, b'\\n')\n"
-    "os.read(fd,1)\n"          // commit-ack doorbell (exchange 1)
-    "os.read(fd,1)\n"          // request 2 doorbell
-    "os.kill(os.getpid(), 9)\n";  // hard death: NO response for seq 2
+    "os.read(fd,1)\n"          // commit-ack doorbell (seq 0)
+    "os.read(fd,1)\n"          // request seq 1 doorbell
+    "os.kill(os.getpid(), 9)\n";  // hard death: NO response for seq 1
 
 void kill_scenario(const std::string& root) {
     const std::string bridge_dir = root + "/bridge";
@@ -450,11 +522,11 @@ void kill_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta1 = build_state_delta({arrival_ev}, 12345, 1);
+    const StateDelta delta1 = build_state_delta({arrival_ev}, 12345, 0);
     (void)bridge.deliver_and_receive(delta1);  // exchange 1 completes
-    bridge.send_commit_ack(1, 1, true);
+    bridge.send_commit_ack(0, 0, true);
     arrival_ev.request_id = "s0_r1";
-    const StateDelta delta2 = build_state_delta({arrival_ev}, 12346, 2);
+    const StateDelta delta2 = build_state_delta({arrival_ev}, 12346, 1);
     (void)bridge.deliver_and_receive(delta2);  // must abort inside (peer dead)
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: kill scenario "
                          "did not abort\n");
@@ -472,11 +544,11 @@ const char* kTwoByteScript =
     "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
     "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
     "os.read(fd,1)\n"
-    "resp={'schema_version':1,'batch_id':1,'source_delivery_sequence':1,"
+    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
     "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
     "'kv_actions':[],'future_alarms':[]}\n"
-    "open(d+'/response_1.json.tmp','w').write(json.dumps(resp))\n"
-    "os.replace(d+'/response_1.json.tmp', d+'/response_1.json')\n"
+    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
+    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
     "os.write(wfd, b'\\n\\n')\n"  // protocol violation: 2 bytes, 1 delivery
     "time.sleep(3600)\n";         // stay alive: the invariant must fire
 
@@ -493,11 +565,124 @@ void two_byte_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta = build_state_delta({arrival_ev}, 12345, 1);
+    const StateDelta delta = build_state_delta({arrival_ev}, 12345, 0);
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: two-byte scenario "
                          "did not abort\n");
     _exit(2);
+}
+
+// ---------------------------------------------------------------- Part F --
+// C1 (2026-08-29) malformed-response regressions: the one-shot structural
+// parse must fail closed through the SAME bridge_fatal channel as every
+// other protocol violation -- one "[Error] (execution_driven/bridge)" line
+// on stderr + SIGABRT, and the response file survives for post-mortem
+// (the success path is the only one that unlinks it).
+const char* kBadJsonScript =
+    "import os,sys,time\n"
+    "d=sys.argv[1]\n"
+    "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
+    "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
+    "os.read(fd,1)\n"
+    "open(d+'/response_0.json.tmp','w').write('{not json')\n"
+    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "os.write(wfd, b'\\n')\n"
+    "time.sleep(3600)\n";  // stay alive: read_json_file's throw aborts C++
+
+const char* kMissingSchemaScript =
+    "import os,sys,json,time\n"
+    "d=sys.argv[1]\n"
+    "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
+    "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
+    "os.read(fd,1)\n"
+    "resp={'batch_id':0,'source_delivery_sequence':0,'nodes':[]}\n"
+    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
+    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "os.write(wfd, b'\\n')\n"
+    "time.sleep(3600)\n";  // missing schema_version -> bridge check aborts
+
+const char* kUnknownKeyScript =
+    "import os,sys,json,time\n"
+    "d=sys.argv[1]\n"
+    "fd=os.open(d+'/req_notify.fifo', os.O_RDONLY)\n"
+    "wfd=os.open(d+'/resp_notify.fifo', os.O_WRONLY)\n"
+    "os.read(fd,1)\n"
+    "resp={'schema_version':1,'batch_id':0,'source_delivery_sequence':0,"
+    "'nodes':[],'parent_edges':[],'watches':[],'assignments':[],"
+    "'kv_actions':[],'future_alarms':[],'echo_of_request':{'x':1}}\n"
+    "open(d+'/response_0.json.tmp','w').write(json.dumps(resp))\n"
+    "os.replace(d+'/response_0.json.tmp', d+'/response_0.json')\n"
+    "os.write(wfd, b'\\n')\n"
+    "time.sleep(3600)\n";  // unknown top-level key -> ParseError aborts
+
+void test_malformed_response_abort_messages() {
+    struct Variant {
+        const char* what;
+        const char* script;
+        const char* needle;
+    };
+    const Variant variants[] = {
+        {"F: corrupt response JSON", kBadJsonScript,
+         "response missing or corrupt"},
+        {"F: missing schema_version", kMissingSchemaScript,
+         "response schema_version mismatch"},
+        {"F: unknown top-level key", kUnknownKeyScript,
+         "malformed GraphBatch response"},
+    };
+    for (const auto& variant : variants) {
+        const std::string root = make_temp_root();
+        const pid_t child = ::fork();
+        if (child == 0) {
+            const int errfd =
+                ::open((root + "/child.err").c_str(),
+                       O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (errfd >= 0) {
+                ::dup2(errfd, 2);
+            }
+            const std::string bridge_dir = root + "/bridge";
+            FileDecisionBridge::ensure_bridge_dir(bridge_dir);
+            const pid_t py =
+                spawn_python3({"-c", variant.script, bridge_dir});
+            {
+                std::ofstream pidfile(root + "/malformed.pid");
+                pidfile << py << "\n";
+            }
+            FileDecisionBridge bridge(bridge_dir, /*timeout_ms=*/10000,
+                                      /*num_ranks=*/1);
+            DecisionEvent arrival_ev;
+            arrival_ev.reason = DecisionReason::ARRIVAL;
+            arrival_ev.request_id = "s0_r0";
+            arrival_ev.payload.arrival_world_ns = 1;
+            const StateDelta delta =
+                build_state_delta({arrival_ev}, 12345, 0);
+            (void)bridge.deliver_and_receive(delta);  // aborts inside
+            _exit(2);
+        }
+        int status = 0;
+        ::waitpid(child, &status, 0);
+        const bool aborted =
+            WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+        expect(aborted,
+               (std::string(variant.what) + " aborted with SIGABRT").c_str());
+        std::ifstream err(root + "/child.err");
+        std::stringstream buf;
+        buf << err.rdbuf();
+        const std::string err_text = buf.str();
+        expect(err_text.find("[Error] (execution_driven/bridge)") !=
+                       std::string::npos &&
+                   err_text.find(variant.needle) != std::string::npos,
+               (std::string(variant.what) + " stderr carries the bridge "
+                                            "fatal line")
+                   .c_str());
+        std::ifstream pidfile(root + "/malformed.pid");
+        long leftover = 0;
+        if (pidfile >> leftover && leftover > 0) {
+            ::kill(static_cast<pid_t>(leftover), SIGKILL);
+            ::waitpid(static_cast<pid_t>(leftover), nullptr, 0);
+        }
+        rm_rf(root);
+        std::printf("[bridge_loopback_fixture] %s PASS\n", variant.what);
+    }
 }
 
 }  // namespace
@@ -508,6 +693,7 @@ int main(int argc, char* argv[]) {
                  : "sh_test_mesh/workload/llama2_7b_inference/online/verify/"
                    "bridge_echo.py";
 
+    completed_node_serialization();
     round_trip(echo_script);
     run_abort_scenario("B: crash detection", crash_scenario);
     run_abort_scenario("C: timeout", timeout_scenario);
@@ -520,6 +706,10 @@ int main(int argc, char* argv[]) {
         "E: 1:1 response-byte invariant",
         "more than one response byte in flight", "twobyte.pid",
         two_byte_scenario);
+    // C1 (2026-08-29): malformed responses fail closed through the same
+    // bridge_fatal channel (corrupt JSON / missing schema_version / an
+    // unknown top-level key the parse layer rejects).
+    test_malformed_response_abort_messages();
 
     if (!g_ok) {
         std::fprintf(stderr,

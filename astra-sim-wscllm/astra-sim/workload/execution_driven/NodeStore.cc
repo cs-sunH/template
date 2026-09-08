@@ -188,8 +188,10 @@ bool NodeStore::empty() const { return nodes_.empty(); }
 
 void NodeStore::set_gc_enabled(bool enabled) {
     // M2 node GC: the switch is set once by the committer constructor from
-    // its Context (--online-node-gc on the official path; fixtures leave it
-    // off and keep the pre-M2 behavior, memory profile included).
+    // its Context (the official path always enables it -- the
+    // --online-node-gc CLI arm was removed by the B.3 cleanup (2026-09-05);
+    // fixtures leave it off and keep the pre-M2 behavior, memory profile
+    // included).
     gc_enabled_ = enabled;
 }
 

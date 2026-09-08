@@ -19,8 +19,9 @@ BrokenPipe(C++ 常开读端关闭,运行中途) => BridgePipeError fail-closed
 本模块是决策通道,不是运行期 request 注入通道:Producer -> C++ 的
 submit/close/EOF/error 走步骤 1-2 的 command queue,不经过 req_notify.fifo。
 
-协议规则(冻结,合同②/④): 重复 seq 幂等(Python 侧 request/ack 分别记账,
-重复即忽略);背压(一轮至多一个在途 request,C++ 不回 response 不连续发);
+协议规则(冻结,合同②/④): request/ack 各自严格从 0 起 +1 单调,旧 seq
+重复幂等忽略,未来 seq 在缺少前序时 fail-closed;背压(一轮至多一个在途
+request,C++ 不回 response 不连续发);
 超时与崩溃检测在 C++ 侧(C++ poll 超时/EOF/EPIPE 即 abort)。
 """
 
@@ -29,12 +30,16 @@ import os
 import sys
 import time
 
-SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(online_contracts/state_delta_v1.md)
+from bridge_request_journal import REQUEST_JOURNAL_NAME
+
+SCHEMA_VERSION = 1  # 阶段 4 §7.1:StateDelta schema v1(契约文档已删除)
 
 _REQUEST_PREFIX = "request_"
 _RESPONSE_PREFIX = "response_"
 _ACK_PREFIX = "commit_ack_"
 _JSON_SUFFIX = ".json"
+_PROCESSING_STATS_PARTIAL_NAME = ".bridge_processing_stats.partial.jsonl"
+_JOURNAL_FLUSH_BATCH = 256
 
 _RESPONSE_FIELDS = (
     "nodes",
@@ -63,7 +68,14 @@ def _write_json_atomic(path, payload):
     """
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as target:
-        json.dump(payload, target)
+        # C3(2026-08-28):紧凑分隔符(separators=(",", ":"))——JSON 语义
+        # 不变(C++ 侧 nlohmann 解析空白不敏感),通道字节显著缩小
+        # (大仓档响应数组占大头;省 I/O 与 C++ 读侧拷贝)。
+        # A1(2026-08-29): dumps 化——json.dump 走纯 Python iterencode 生成器
+        # (json.dump 传 _one_shot=False),dumps 走 C one-shot 编码器,实测同
+        # payload 快 ~6x;单次 write 后 flush,字节序列与 dump 逐字节相同
+        # (同一编码器参数 separators=(",",":")/ensure_ascii 默认)。
+        target.write(json.dumps(payload, separators=(",", ":")))
         target.flush()
     os.replace(tmp, path)
 
@@ -81,6 +93,33 @@ class BridgePipeError(Exception):
     """
 
 
+class _BoundedSequenceTracker:
+    """O(1) duplicate filter for the bridge's strict monotonic protocol."""
+
+    def __init__(self, label):
+        self.label = label
+        self.next_seq = 0
+
+    def contains(self, seq):
+        return seq < self.next_seq
+
+    def validate_new(self, seq):
+        if self.contains(seq):
+            return False
+        if seq != self.next_seq:
+            raise BridgeError(
+                "{} sequence {} arrived before required sequence {} "
+                "(strict monotonic bridge protocol)".format(
+                    self.label, seq, self.next_seq))
+        return True
+
+    def mark(self, seq):
+        if not self.validate_new(seq):
+            return False
+        self.next_seq += 1
+        return True
+
+
 class BridgeServer:
     """协议 v0 的 Python 端;用法:
 
@@ -93,15 +132,17 @@ class BridgeServer:
     时被调用(provisional 账本 finalize 的挂接点,阶段 3/4 使用)。
     """
 
-    def __init__(self, bridge_dir):
+    def __init__(self, bridge_dir, *, canonical_request_producer=False):
         self.bridge_dir = bridge_dir
+        # The official C++ producer writes payload.dump() with neither
+        # surrounding whitespace nor a trailing newline.  Only that trusted
+        # path may bypass the fallback's whole-body normalization scan.
+        self._canonical_request_producer = canonical_request_producer
         self.req_notify = os.path.join(bridge_dir, "req_notify.fifo")
         self.resp_notify = os.path.join(bridge_dir, "resp_notify.fifo")
-        self._seen_requests = set()
-        self._seen_acks = set()
-        # 单调快路径探针(2026-08-22):下一个期望的 request/ack seq。
-        self._next_req_probe = 0
-        self._next_ack_probe = 0
+        # 协议严格单调,每条流只保留下一个序号,不保留全历史 seq 集。
+        self._request_sequences = _BoundedSequenceTracker("request")
+        self._ack_sequences = _BoundedSequenceTracker("commit_ack")
         # 缺陷 B 修复(2026-08-16):resp_notify 写端长连接 fd。serve_forever
         # 启动时一次打开(与 C++ open_notify 持有的常开读端配对),run 生命
         # 期持有,退出时关闭;_notify_response 只写不开。None = 尚未打开。
@@ -120,10 +161,18 @@ class BridgeServer:
             "forced_flush_count": 0,
             "handler_calls": 0,
         }
-        # 每 request(seq)一条: {seq, processing_ns}(读 request 文件 ->
-        # 写 response 文件的 Python 侧单次服务时间;与 C++ bridge_ns 覆盖
-        # 同一区间,供分时间段每决策成本对比)。
-        self._per_request_stats = {}
+        # 两条全程顺序流均不驻留 per-delivery 容器。request journal 复用
+        # C++ 已写出的紧凑 JSON 字节;每 256 行 flush 后批量删除散装 request,
+        # 因而成功 run 只有单一 journal,异常 run 的未 flush 尾部也有界。
+        self._request_journal = open(
+            os.path.join(bridge_dir, REQUEST_JOURNAL_NAME),
+            "w", encoding="utf-8", buffering=1024 * 1024)
+        self._pending_request_paths = []
+        self._processing_stats_path = os.path.join(
+            bridge_dir, _PROCESSING_STATS_PARTIAL_NAME)
+        self._processing_stats_stream = open(
+            self._processing_stats_path,
+            "w", encoding="utf-8", buffering=1024 * 1024)
 
     # ------------------------------------------------------------- helpers --
 
@@ -133,9 +182,44 @@ class BridgeServer:
         return dict(self._stats)
 
     def per_request_stats(self):
-        """每 request(seq)一行: {seq, processing_ns}(升序)。"""
-        return [self._per_request_stats[seq]
-                for seq in sorted(self._per_request_stats)]
+        """流式读取每 request 的 ``{seq, processing_ns}`` 暂存行。"""
+        if not self._processing_stats_stream.closed:
+            self._processing_stats_stream.flush()
+        with open(self._processing_stats_path, "r", encoding="utf-8") as source:
+            for line in source:
+                if line.strip():
+                    yield json.loads(line)
+
+    def discard_per_request_stats(self):
+        """online_stats 合并完成后删除内部暂存流。"""
+        if not self._processing_stats_stream.closed:
+            self._processing_stats_stream.close()
+        try:
+            os.unlink(self._processing_stats_path)
+        except FileNotFoundError:
+            pass
+
+    def _flush_request_journal(self):
+        if not self._pending_request_paths:
+            return
+        self._request_journal.flush()
+        pending, self._pending_request_paths = self._pending_request_paths, []
+        for path in pending:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise BridgeError(
+                    "cannot retire journaled request {}: {}".format(
+                        path, exc)) from exc
+
+    def _close_audit_streams(self):
+        if not self._request_journal.closed:
+            self._flush_request_journal()
+            self._request_journal.close()
+        if not self._processing_stats_stream.closed:
+            self._processing_stats_stream.close()
 
     @staticmethod
     def _seq_of(name, prefix):
@@ -148,41 +232,42 @@ class BridgeServer:
     def _new_files(self):
         """返回 (未处理 request seq 升序, 未处理 ack seq 升序)。
 
-        单调快路径(拼 batch oracle 预备, 2026-08-22):官方协议下 request
-        与 commit_ack 的 seq 都严格 +1 单调(C++ 单在途背压),逐个 stat
-        下一个期望文件即可,O(1) 每轮——全量 listdir 随保留的 request_*
-        审计文件数二次方增长(3531 交付 ~12.5M 项访问;逐迭代 oracle 的
-        ~万级交付不可承受)。快路径未命中(乱序/预置文件,幂等 fixture
-        场景)回退全量 listdir,语义与改前一致。
+        官方协议严格 +1 单调,正常路径只 stat 下一个序号。journal 批量回收
+        将散装 request 尾部限制在 256 个以内;listdir 回退若发现未来序号,
+        handler 前的 monotonic tracker 会 fail-closed,不会乱序交付。
         """
         reqs = []
         acks = []
+        req_probe = self._request_sequences.next_seq
         while True:
             probe = os.path.join(
                 self.bridge_dir,
-                _REQUEST_PREFIX + str(self._next_req_probe) + _JSON_SUFFIX)
+                _REQUEST_PREFIX + str(req_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if self._next_req_probe not in self._seen_requests:
-                reqs.append(self._next_req_probe)
-            self._next_req_probe += 1
+            if not self._request_sequences.contains(req_probe):
+                reqs.append(req_probe)
+            req_probe += 1
+        ack_probe = self._ack_sequences.next_seq
         while True:
             probe = os.path.join(
                 self.bridge_dir,
-                _ACK_PREFIX + str(self._next_ack_probe) + _JSON_SUFFIX)
+                _ACK_PREFIX + str(ack_probe) + _JSON_SUFFIX)
             if not os.path.exists(probe):
                 break
-            if self._next_ack_probe not in self._seen_acks:
-                acks.append(self._next_ack_probe)
-            self._next_ack_probe += 1
+            if not self._ack_sequences.contains(ack_probe):
+                acks.append(ack_probe)
+            ack_probe += 1
         if reqs or acks:
             return sorted(reqs), sorted(acks)
         for name in os.listdir(self.bridge_dir):
             req_seq = self._seq_of(name, _REQUEST_PREFIX)
-            if req_seq is not None and req_seq not in self._seen_requests:
+            if (req_seq is not None
+                    and not self._request_sequences.contains(req_seq)):
                 reqs.append(req_seq)
             ack_seq = self._seq_of(name, _ACK_PREFIX)
-            if ack_seq is not None and ack_seq not in self._seen_acks:
+            if (ack_seq is not None
+                    and not self._ack_sequences.contains(ack_seq)):
                 acks.append(ack_seq)
         return sorted(reqs), sorted(acks)
 
@@ -215,8 +300,11 @@ class BridgeServer:
     def _handle_request(self, seq, handler):
         t0 = time.monotonic_ns()
         path = os.path.join(self.bridge_dir, _REQUEST_PREFIX + str(seq) + _JSON_SUFFIX)
+        self._request_sequences.validate_new(seq)
         try:
-            request = _read_json_atomic(path)
+            with open(path, "r", encoding="utf-8") as source:
+                raw_request = source.read()
+            request = json.loads(raw_request)
         except (OSError, ValueError) as exc:
             raise BridgeError("bad request file {}: {}".format(path, exc)) from exc
         if request.get("schema_version") != SCHEMA_VERSION:
@@ -233,31 +321,44 @@ class BridgeServer:
         response.setdefault("source_delivery_sequence", seq)
         for field in _RESPONSE_FIELDS:
             if field == "touched_ranks":
-                # 阶段 5 §8.2:touched_ranks 缺省不注入。字段缺省 = "C++ 侧
-                # 自算 touched ranks 且不做 declared==computed 一致性校验"
-                # (DecisionBridge.cc 的 has_touched_ranks 语义)——legacy
-                # fixture(same-tick milestone / idle 服务,阶段 1 引入)不知道
-                # 该字段,必须保持字段缺省。真实 scheduler 总是显式给出
-                # (online_scheduler_base.py 阶段 5 改动);若在这里注入 [],
-                # "未知字段"会被伪装成"显式声明空集",触发 C++ 校验误伤
-                # fixture(declared [] != computed [0])。
+                # 字段缺省 = C++ 自算 touched ranks 且不校验声明值。legacy
+                # fixture 不知道该字段,真实 scheduler 则总是显式给出。
                 continue
             response.setdefault(field, [])
         response_path = os.path.join(
             self.bridge_dir, _RESPONSE_PREFIX + str(seq) + _JSON_SUFFIX)
         _write_json_atomic(response_path, response)
-        # 阶段 6 §9.1 + B4(2026-08-23):每次原子写 +1(历史与 os.fsync 1:1,
-        # B4 去 fsync 后计数面保留为原子写次数口径);response 文件字节计入通道。
         self._stats["forced_flush_count"] += 1
         self._stats["channel_bytes"] += os.path.getsize(response_path)
-        self._per_request_stats[seq] = {
+        # processing_ns 保持原口径:读 request 到 response 原子发布;journal
+        # 与内部统计流的审计开销不混入桥服务时间。
+        processing_row = {
             "seq": seq,
             "processing_ns": time.monotonic_ns() - t0,
         }
-        self._seen_requests.add(seq)
+        self._processing_stats_stream.write(json.dumps(
+            processing_row, separators=(",", ":")) + "\n")
+        if self._canonical_request_producer:
+            # Reuse the exact C++ request bytes and append the JSONL delimiter
+            # separately: no O(request-bytes) strip/newline scan and no
+            # raw_record + "\\n" full-size temporary string.
+            self._request_journal.write(raw_request)
+            self._request_journal.write("\n")
+        else:
+            # Fixtures and external producers retain the original tolerant
+            # normalization contract, including pretty/multiline JSON.
+            raw_record = raw_request.strip()
+            if "\n" in raw_record or "\r" in raw_record:
+                raw_record = json.dumps(request, separators=(",", ":"))
+            self._request_journal.write(raw_record + "\n")
+        self._pending_request_paths.append(path)
+        if len(self._pending_request_paths) >= _JOURNAL_FLUSH_BATCH:
+            self._flush_request_journal()
+        self._request_sequences.mark(seq)
 
     def _handle_ack(self, seq, on_commit_ack):
         path = os.path.join(self.bridge_dir, _ACK_PREFIX + str(seq) + _JSON_SUFFIX)
+        self._ack_sequences.validate_new(seq)
         try:
             ack = _read_json_atomic(path)
         except (OSError, ValueError) as exc:
@@ -265,12 +366,12 @@ class BridgeServer:
         if on_commit_ack is not None:
             on_commit_ack(ack)
         self._stats["channel_bytes"] += os.path.getsize(path)
-        self._seen_acks.add(seq)
+        self._ack_sequences.mark(seq)
         # 阶段 7 §10.3:中间产物生命周期——ack 已被完整消费(on_commit_ack
         # 幂等落账完成),立即删除。ack 文件是纯中间产物(C++ 已不再引用,
-        # 幂等 fixture 只重放 request_*),删除后 bridge 目录只剩
-        # request_*(决策序列证据,幂等 fixture 输入,固定 3531 个)+ 在飞
-        # 的 response 文件。实测 20.csv 前30s 输入:ack 累计 ~266KB,
+        # 幂等 fixture 从 request journal 重放),删除后 bridge 仅保留有界
+        # request 批次尾部、单一 journal 与在飞 response。实测 20.csv
+        # 前30s 输入:ack 累计 ~266KB,
         # response 累计 ~202MB,消费后清理把它们压到有界。
         try:
             os.remove(path)
@@ -362,3 +463,4 @@ class BridgeServer:
             if self._resp_fd is not None:
                 os.close(self._resp_fd)
                 self._resp_fd = None
+            self._close_audit_streams()

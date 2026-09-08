@@ -14,15 +14,11 @@ endif ()
 project(AstraSim_Analytical)
 
 # Compilation target
-set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_unaware/congestion_aware)")
+set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 
 # Include src files to compile
 file(GLOB srcs_common
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cc
-)
-
-file(GLOB srcs_congestion_unaware
-        ${CMAKE_CURRENT_SOURCE_DIR}/congestion_unaware/*.cc
 )
 
 file(GLOB srcs_congestion_aware
@@ -40,31 +36,6 @@ target_include_directories(AstraSim_Analytical_ChunkIdGeneratorTest PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/network_backend/analytical/include)
 set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
         PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-
-# Compile Congestion Unaware Backend
-if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_unaware")
-    add_executable(AstraSim_Analytical_Congestion_Unaware ${srcs_congestion_unaware} ${srcs_common})
-    target_sources(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/congestion_unaware/main.cc)
-
-    # Link libraries
-    target_link_libraries(AstraSim_Analytical_Congestion_Unaware LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Unaware LINK_PRIVATE Analytical_Congestion_Unaware)
-
-    # Include directories
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-
-    # Properties
-    # TODO: Switch to OFF after binary_function deprecation has been resolved
-    set_target_properties(AstraSim_Analytical_Congestion_Unaware PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Unaware
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
-endif ()
 
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")

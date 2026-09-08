@@ -14,6 +14,33 @@ class AstraNetworkAPI {
   public:
     enum class BackendType { NotSpecified = 0, Garnet, NS3, Analytical };
 
+    /**
+     * Opaque identity for one opt-in cancellable backend alarm.
+     *
+     * Legacy sim_schedule() intentionally does not create one of these.  The
+     * handle is weak and only meaningful while its owning API instance still
+     * has the corresponding alarm pending.
+     */
+    class CancellableScheduleHandle {
+      public:
+        [[nodiscard]] bool valid() const noexcept {
+            return owner_ != nullptr && token_ != 0;
+        }
+
+        void reset() noexcept {
+            owner_ = nullptr;
+            token_ = 0;
+        }
+
+      private:
+        AstraNetworkAPI* owner_ = nullptr;
+        uint64_t token_ = 0;
+
+        friend class AstraNetworkAPI;
+    };
+
+    using ScheduleCancellationCallback = void (*)(void*);
+
     AstraNetworkAPI(int rank) : rank(rank) {};
     virtual ~AstraNetworkAPI() {};
 
@@ -46,6 +73,31 @@ class AstraNetworkAPI {
                               void (*fun_ptr)(void* fun_arg),
                               void* fun_arg) = 0;
 
+    /**
+     * Schedule an alarm that an opt-in frontend may later remove.
+     *
+     * Non-analytical and fake backends retain their legacy behavior: schedule
+     * normally and report an invalid handle.  The cancellation cleanup cannot
+     * run on that path because the legacy backend still owns the alarm payload
+     * until it invokes fun_ptr.
+     */
+    [[nodiscard]] virtual CancellableScheduleHandle
+    sim_schedule_cancellable(timespec_t delta,
+                             void (*fun_ptr)(void* fun_arg),
+                             void* fun_arg,
+                             ScheduleCancellationCallback cancellation_cleanup) {
+        static_cast<void>(cancellation_cleanup);
+        sim_schedule(delta, fun_ptr, fun_arg);
+        return {};
+    }
+
+    /// Consume an opt-in alarm handle.  Legacy backends have nothing to cancel.
+    [[nodiscard]] virtual bool sim_cancel_event(
+        CancellableScheduleHandle& handle) {
+        handle.reset();
+        return false;
+    }
+
     virtual BackendType get_backend_type() {
         return BackendType::NotSpecified;
     };
@@ -74,6 +126,25 @@ class AstraNetworkAPI {
     }
 
     int rank;
+
+  protected:
+    [[nodiscard]] CancellableScheduleHandle make_cancellable_schedule_handle(
+        const uint64_t token) noexcept {
+        CancellableScheduleHandle handle;
+        handle.owner_ = this;
+        handle.token_ = token;
+        return handle;
+    }
+
+    [[nodiscard]] bool owns_cancellable_schedule_handle(
+        const CancellableScheduleHandle& handle) const noexcept {
+        return handle.owner_ == this && handle.token_ != 0;
+    }
+
+    [[nodiscard]] uint64_t cancellable_schedule_token(
+        const CancellableScheduleHandle& handle) const noexcept {
+        return handle.token_;
+    }
 };
 
 }  // namespace AstraSim

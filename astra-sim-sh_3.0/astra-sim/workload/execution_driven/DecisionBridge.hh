@@ -12,8 +12,7 @@ the scheduler's reply. This bridge is a DECISION channel, NOT a runtime
 request injection channel -- Producer -> C++ submit/close/EOF/error always
 go through the step-1-2 command queue and never touch req_notify.fifo.
 
-Protocol v1 (frozen rules, written into contract ②/④ and
-online_contracts/state_delta_v1.md; phase 4 §7.1):
+Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
   - Wire: <run_dir>/bridge/ with req_notify.fifo / resp_notify.fifo
     (mkfifo). FIFO open order: the bridge directory and both FIFOs are
     created (ensure_bridge_dir) BEFORE either side starts.
@@ -36,17 +35,16 @@ online_contracts/state_delta_v1.md; phase 4 §7.1):
     response / commit_ack file names for one epoch all share the same seq.
   - Request fields:  {schema_version, delivery_sequence, delivery_epoch,
     tick, deferred_from_tick, reasons[], arrivals[], completed_groups[],
-    completed_nodes[], retry_items[], affected_ranks[], snapshot_handle,
+    completed_nodes[], affected_ranks[], snapshot_handle,
     snapshot:{}, ledger_summary}. reasons[] holds one reason name per event
     in epoch order (ARRIVAL/PREFILL_DRAIN/DECODE_COMPLETION/
     REQUEST_COMPLETE); arrivals[] carries the ARRIVAL envelope facts
     (incl. ingress_seq/queue_index, v1); completed_groups[] carries the
     watch-fire facts (request_id/stage/generation/node_count);
     completed_nodes[] the per-node terminal facts (v1);
-    retry_items[] is always empty in v1; affected_ranks[] the epoch's
-    affected rank set (v1); snapshot_handle the placeholder (v1, expiry
-    rule frozen in the contract); snapshot is the v0 reserved field kept
-    empty for backward comprehension.
+    affected_ranks[] the epoch's affected rank set (v1); snapshot_handle
+    the placeholder (v1, expiry rule frozen in the contract); snapshot is
+    the v0 reserved field kept empty for backward comprehension.
   - Response fields: {schema_version, batch_id, source_delivery_sequence,
     nodes[], parent_edges[], watches[], assignments[], kv_actions[],
     future_alarms[], error?}. The inner node/edge/watch/assignment/kv-action
@@ -85,45 +83,39 @@ online_contracts/state_delta_v1.md; phase 4 §7.1):
 #include <json/json.hpp>
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
+#include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 namespace AstraSim {
 namespace ExecutionDriven {
 
-/// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1;
-/// online_contracts/state_delta_v1.md is the authority).
+/// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
+/// header and the Python validator are the authority).
 inline constexpr int kDecisionBridgeSchemaVersion = 1;
 
-/// GraphBatch: the C++<-Python reply of one delivery epoch. nodes[] /
-/// parent_edges[] / watches[] / assignments[] / kv_actions[] are carried
-/// opaquely (nlohmann::json arrays) -- their inner schemas freeze with
-/// step 1-8's graph_batch_builder and are parsed by the step-1-11
-/// committer. A non-empty error means the decision failed (C++ must abort).
-/// Phase 5 (方案 §8.2): touched_ranks is the Python-computed rank set of
-/// the batch's nodes (sorted unique); the phase-5 committer validates it
-/// against its own computation (has_touched_ranks distinguishes an absent
-/// field -- tolerated for pre-phase-5 fixtures -- from an empty one, which
-/// is the legal value of a zero-node batch).
-struct GraphBatch {
-    uint64_t batch_id = 0;
-    uint64_t source_delivery_sequence = 0;  // echoes the request's epoch
-    nlohmann::json nodes = nlohmann::json::array();
-    nlohmann::json parent_edges = nlohmann::json::array();
-    nlohmann::json watches = nlohmann::json::array();
-    nlohmann::json assignments = nlohmann::json::array();
-    nlohmann::json kv_actions = nlohmann::json::array();
-    // Step 1-8: future arrival alarms scheduled inside the commit. Entries
-    // are {arrival_world_ns, envelope{request_id, session_id, turn_index,
-    // prefill_length, decode_length, inter_request_interval_ns}}.
-    nlohmann::json future_alarms = nlohmann::json::array();
-    // Phase 5: Python-computed touched rank set (see the struct comment).
-    nlohmann::json touched_ranks = nlohmann::json::array();
-    bool has_touched_ranks = false;
-    std::string error;  // non-empty => decision failure
-};
+/// GraphBatch: the C++<-Python reply of one delivery epoch.
+/// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
+/// nlohmann::json arrays across the bridge->committer boundary and every
+/// consumer (validate, liveness preflight, commit assembly, anchor
+/// registration) re-extracted the fields from the DOM -- four full walks per
+/// batch. deliver_and_receive now parses the response ONCE via
+/// parse_graph_batch (ParsedGraphBatch.hh; structural fail-closed rules
+/// T/N/E/W/A/S/O) and the DOM dies before the bridge call returns. The
+/// historical name survives as an alias so downstream code and fixtures
+/// keep compiling; ParsedGraphBatch is the canonical type.
+///   - nodes/parent_edges/watches/assignments/kv_actions/future_alarms:
+///     typed vectors in ARRAY ORDER (the emission order; never re-sorted).
+///   - touched_ranks (phase 5): the Python-computed rank set of the batch's
+///     nodes (sorted unique); the committer validates it against its own
+///     computation (has_touched_ranks distinguishes an absent field --
+///     tolerated for pre-phase-5 fixtures -- from an empty one, the legal
+///     value of a zero-node batch).
+///   - error: non-empty means the decision failed; the bridge aborts on it
+///     BEFORE the structural parse (the frozen error skeleton carries
+///     all-empty arrays, so the message must be the decision error).
+using GraphBatch = ParsedGraphBatch;
 
-/// Serialize one StateDelta into the v1 request JSON (protocol contract,
-/// online_contracts/state_delta_v1.md; exposed for fixtures and the
-/// step-1-8 wiring).
+/// Serialize one StateDelta into the v1 request JSON (protocol contract;
+/// exposed for fixtures and the step-1-8 wiring).
 nlohmann::json build_request_json(const StateDelta& delta);
 
 /// Decision channel interface (方案 §4 步骤 1-7 操作 2).
@@ -145,9 +137,13 @@ class DecisionBridge {
 /// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
 /// waits forever (the phase-1 default).
+/// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks
+/// (node/edge/watch-member/touched-rank ranges). -1 (the default) disables
+/// them for legacy fixtures; the official online main passes its NPU count.
 class FileDecisionBridge : public DecisionBridge {
   public:
-    explicit FileDecisionBridge(std::string bridge_dir, int timeout_ms = 0);
+    explicit FileDecisionBridge(std::string bridge_dir, int timeout_ms = 0,
+                                int num_ranks = -1);
     ~FileDecisionBridge() override;
 
     FileDecisionBridge(const FileDecisionBridge&) = delete;
@@ -224,6 +220,7 @@ class FileDecisionBridge : public DecisionBridge {
 
     std::string bridge_dir_;
     int timeout_ms_;
+    int num_ranks_ = -1;  // C1: rank-domain checks in parse_graph_batch
     int req_notify_fd_ = -1;  // write end, held open for the run lifetime
     // Defect-B fix (2026-08-16): resp_notify read end, held open for the
     // run lifetime (see open_notify). -1 until open_notify/lazy open.

@@ -19,51 +19,151 @@ strategy (3531 batches) and replay (3491 batches) with zero violations.
 #include "astra-sim/workload/execution_driven/WatchRegistry.hh"
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace AstraSim {
 namespace ExecutionDriven {
 
 namespace {
 
-NodeKind node_kind_from_type(const uint64_t type) {
-    switch (type) {
-        case 1:
-            return NodeKind::Metadata;
-        case 2:
-            return NodeKind::MemLoad;
-        case 3:
-            return NodeKind::MemStore;
-        case 4:
-            return NodeKind::Compute;
-        case 5:
-            return NodeKind::CommSend;
-        case 6:
-            return NodeKind::CommRecv;
-        case 7:
-            return NodeKind::CommCollective;
-        default:
-            return NodeKind::Invalid;
-    }
-}
+// C1 (2026-08-29): node_kind_from_type moved to ParsedGraphBatch.hh (the
+// parser and the committer must share ONE mapping); stage_generation stays
+// (a validate_impl diagnostic formatter). The S1 shared empty-object
+// stand-ins are gone with the DOM walks -- every consumer reads typed
+// fields now.
 
 std::string stage_generation(const std::string& stage) {
     return stage == "decode" ? "1" : "0";
 }
 
-// S1 (2026-08-23): shared empty-object stand-in. The previous
-// <json>.value(key, nlohmann::json::object()) calls deep-copied the
-// sub-object for every node / watch / alarm of every batch; binding a const
-// reference to the found element (or to this shared empty object when the
-// key is absent) keeps every downstream is_object()/empty()/value() call
-// operating on the exact same value -- identical defaults, identical
-// error paths -- while removing the copies. Read-only after static
-// initialization.
-const nlohmann::json kEmptyObject = nlohmann::json::object();
+constexpr size_t kNoPreflightEdge = std::numeric_limits<size_t>::max();
+
+struct P2pKey {
+    int src = -1;
+    int dst = -1;
+    int64_t tag = -1;
+    uint64_t bytes = 0;
+
+    bool operator==(const P2pKey& other) const {
+        return src == other.src && dst == other.dst && tag == other.tag &&
+               bytes == other.bytes;
+    }
+};
+
+struct P2pKeyHash {
+    size_t operator()(const P2pKey& key) const noexcept {
+        size_t result = std::hash<int>{}(key.src);
+        const auto combine = [&result](const size_t value) {
+            result ^= value + 0x9e3779b9U + (result << 6U) + (result >> 2U);
+        };
+        combine(std::hash<int>{}(key.dst));
+        combine(std::hash<int64_t>{}(key.tag));
+        combine(std::hash<uint64_t>{}(key.bytes));
+        return result;
+    }
+};
+
+struct CollectiveKey {
+    std::string pg_name;
+    std::string name;
+
+    bool operator==(const CollectiveKey& other) const {
+        return pg_name == other.pg_name && name == other.name;
+    }
+};
+
+struct CollectiveKeyHash {
+    size_t operator()(const CollectiveKey& key) const noexcept {
+        size_t result = std::hash<std::string>{}(key.pg_name);
+        result ^= std::hash<std::string>{}(key.name) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
+
+struct WatchIdentity {
+    std::string request_id;
+    std::string stage;
+    uint64_t generation = 0;
+
+    bool operator==(const WatchIdentity& other) const {
+        return request_id == other.request_id && stage == other.stage &&
+               generation == other.generation;
+    }
+};
+
+struct WatchIdentityHash {
+    size_t operator()(const WatchIdentity& key) const noexcept {
+        size_t result = std::hash<std::string>{}(key.request_id);
+        result ^= std::hash<std::string>{}(key.stage) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        result ^= std::hash<uint64_t>{}(key.generation) + 0x9e3779b9U +
+                  (result << 6U) + (result >> 2U);
+        return result;
+    }
+};
+
+struct PreflightEdge {
+    size_t to = 0;
+    size_t next = kNoPreflightEdge;
+};
+
+// C1: the per-rank preflight graph references the parsed nodes instead of
+// the response DOM (which no longer exists past deliver_and_receive).
+struct PreflightRankGraph {
+    std::unordered_map<uint64_t, size_t> node_index_by_json_id;
+    std::vector<const ParsedNode*> nodes;
+    std::vector<size_t> indegree;
+    std::vector<size_t> first_edge;
+    std::vector<PreflightEdge> edges;
+};
+
+struct P2pCounts {
+    uint64_t sends = 0;
+    uint64_t recvs = 0;
+};
+
+struct CollectiveParticipants {
+    std::unordered_map<int, uint32_t> count_by_rank;
+    bool has_signature = false;
+    uint64_t comm_type = 0;
+    uint64_t bytes = 0;
+    uint32_t priority = 0;
+    // issue_coll_comm() passes this vector into every collective generator;
+    // it selects the participating topology dimensions and therefore must be
+    // identical for every rank in one logical collective operation.
+    std::vector<bool> involved_dims;
+};
+
+struct RequestFacts {
+    bool in_flight = false;
+    bool prefill_drained = false;
+};
+
+bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
+    // Workload::issue_coll_comm() implements exactly these Chakra enum values.
+    // Any other value reaches its unsupported-collective throw after the node
+    // has already been taken from a NodeStore, so it is liveness-critical when
+    // full validation is off.
+    switch (comm_type) {
+        case 0:  // ALL_REDUCE
+        case 2:  // ALL_GATHER
+        case 5:  // BROADCAST
+        case 6:  // ALL_TO_ALL
+        case 7:  // REDUCE_SCATTER
+            return true;
+        default:
+            return false;
+    }
+}
 
 }  // namespace
 
@@ -83,22 +183,738 @@ void GraphBatchCommitter::apply_delta_facts(
                 prefill_drained.erase(ev.request_id);
                 break;
             case DecisionReason::DECODE_COMPLETION:
-            case DecisionReason::RESOURCE_READY:
                 // No tracking change (decode completion alone never ends a
-                // request; RESOURCE_READY is a reserved bit never produced).
+                // request).
                 break;
         }
     }
 }
 
+std::optional<std::string> GraphBatchCommitter::validate_affine_drift() const {
+    if (ctx_.num_ranks < 0) {
+        return "negative GraphBatchCommitter rank count";
+    }
+    if (ctx_.graph_sources == nullptr) {
+        return "GraphBatchCommitter has no graph sources";
+    }
+    const size_t rank_count = static_cast<size_t>(ctx_.num_ranks);
+    if (ctx_.graph_sources->size() < rank_count) {
+        return "GraphBatchCommitter graph source count " +
+               std::to_string(ctx_.graph_sources->size()) +
+               " is below num_ranks " + std::to_string(ctx_.num_ranks);
+    }
+    if (rank_affines_.size() != rank_count) {
+        return "GraphBatchCommitter affine metadata has wrong rank count";
+    }
+    for (size_t rank = 0; rank < rank_count; ++rank) {
+        const auto& source = (*ctx_.graph_sources)[rank];
+        if (!source) {
+            return "GraphBatchCommitter has null graph source for rank " +
+                   std::to_string(rank);
+        }
+        const RankAffine& affine = rank_affines_[rank];
+        if (!affine.initialized) {
+            continue;
+        }
+        const uint64_t actual_next = source->store().next_auto_id();
+        if (actual_next != affine.store_next) {
+            return "NodeStore automatic id stream drift (rank=" +
+                   std::to_string(rank) + " expected_next=" +
+                   std::to_string(affine.store_next) + " actual_next=" +
+                   std::to_string(actual_next) + ")";
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
+    const GraphBatch& batch, std::vector<int>* const touched_ranks) const {
+    // The Python OnlineTraceBuilder owns one next_id counter per rank and
+    // emits every id exactly once, in increasing order. Enforcing that
+    // producer contract here turns the exact committed history into one
+    // bounded [first,next) range per rank. This cheap pass also runs when
+    // --online-validate=0, before any delta/store state is touched. It carries
+    // the mandatory zero-byte collective safety rule in the same walk: the
+    // analytical backend has no valid completion path for such a node.
+    if (touched_ranks != nullptr) {
+        touched_ranks->clear();
+    }
+    uint64_t stream_stamp = json_id_stream_stamp_ + 1;
+    if (stream_stamp == 0) {
+        // Zero is the never-seen marker.  On the (practically unreachable)
+        // wrap, clear the fixed scratch once and start a fresh stamp epoch.
+        std::fill(json_id_seen_stamp_by_rank_.begin(),
+                  json_id_seen_stamp_by_rank_.end(), uint64_t{0});
+        stream_stamp = 1;
+    }
+    json_id_stream_stamp_ = stream_stamp;
+    if (touched_ranks != nullptr) {
+        json_id_discovered_touched_ranks_.clear();
+    }
+    uint64_t node_index = 0;
+    try {
+        // C1 (2026-08-29): typed walk -- the structural shape (object,
+        // integer rank/id, coll object) was already guaranteed by
+        // parse_graph_batch; the checks kept here are the plain field reads
+        // this pass actually owns (id stream contiguity + the zero-byte
+        // collective safety rule).
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return "node[" + std::to_string(node_index) +
+                       "] rank out of range: " + std::to_string(rank);
+            }
+            const uint64_t id = parsed.json_id;
+            if (id == std::numeric_limits<uint64_t>::max()) {
+                return "node[" + std::to_string(node_index) +
+                       "] missing/invalid id";
+            }
+
+            const uint64_t type = parsed.node.node_type;
+            if (type == 7 && parsed.node.coll.bytes == 0) {
+                return "node[" + std::to_string(node_index) +
+                       "] collective bytes must be positive";
+            }
+
+            uint64_t expected = id;  // an arbitrary first id is legal
+            if (json_id_seen_stamp_by_rank_[rank] == stream_stamp) {
+                expected = json_id_expected_by_rank_[rank];
+            } else {
+                if (rank < static_cast<int>(rank_affines_.size()) &&
+                    rank_affines_[rank].initialized) {
+                    expected = rank_affines_[rank].json_next;
+                }
+                json_id_seen_stamp_by_rank_[rank] = stream_stamp;
+                if (touched_ranks != nullptr) {
+                    json_id_discovered_touched_ranks_.push_back(rank);
+                }
+            }
+            if (id != expected) {
+                return "node[" + std::to_string(node_index) + "] id " +
+                       std::to_string(id) + " on rank " +
+                       std::to_string(rank) +
+                       " breaks the contiguous json-id stream (expected " +
+                       std::to_string(expected) + ")";
+            }
+            json_id_expected_by_rank_[rank] = id + 1;
+            ++node_index;
+        }
+    } catch (const std::exception& exc) {
+        return std::string("malformed json-id stream: ") + exc.what();
+    }
+    if (touched_ranks != nullptr) {
+        std::sort(json_id_discovered_touched_ranks_.begin(),
+                  json_id_discovered_touched_ranks_.end());
+        touched_ranks->insert(touched_ranks->end(),
+                              json_id_discovered_touched_ranks_.begin(),
+                              json_id_discovered_touched_ranks_.end());
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    // This is deliberately independent of validate(): production can skip
+    // that exhaustive diagnostic pass, but it must never commit a batch
+    // that can strand graph nodes, stage watches, p2p callbacks, collectives,
+    // or request accounting.  Every container below is local; no fact set,
+    // NodeStore, WatchRegistry, ingress queue, counter, or affine record is
+    // changed until this returns success.
+    const auto fail = [](const std::string& reason)
+        -> std::optional<std::string> {
+        return std::string("mandatory liveness preflight: ") + reason;
+    };
+
+    try {
+        // Apply this delta's facts in a compact overlay rather than copying the
+        // whole live-request sets.  The result is exactly apply_delta_facts()
+        // for every request mentioned by the delta, while untouched requests
+        // read straight from the committer's immutable sets.
+        std::unordered_map<std::string, RequestFacts> facts_after_delta;
+        facts_after_delta.reserve(delta.events.size());
+        for (const auto& event : delta.events) {
+            auto facts_it = facts_after_delta.find(event.request_id);
+            if (facts_it == facts_after_delta.end()) {
+                facts_it =
+                    facts_after_delta
+                        .emplace(event.request_id,
+                                 RequestFacts{in_flight_.count(event.request_id) !=
+                                                  0,
+                                              prefill_drained_.count(
+                                                  event.request_id) != 0})
+                        .first;
+            }
+            switch (event.reason) {
+                case DecisionReason::ARRIVAL:
+                    facts_it->second.in_flight = true;
+                    break;
+                case DecisionReason::PREFILL_DRAIN:
+                    facts_it->second.prefill_drained = true;
+                    break;
+                case DecisionReason::REQUEST_COMPLETE:
+                    facts_it->second.in_flight = false;
+                    facts_it->second.prefill_drained = false;
+                    break;
+                case DecisionReason::DECODE_COMPLETION:
+                    break;
+            }
+        }
+        const auto request_facts =
+            [this, &facts_after_delta](const std::string& request_id) {
+                const auto facts_it = facts_after_delta.find(request_id);
+                if (facts_it != facts_after_delta.end()) {
+                    return facts_it->second;
+                }
+                return RequestFacts{in_flight_.count(request_id) != 0,
+                                    prefill_drained_.count(request_id) != 0};
+            };
+
+        // Build one compact id->index graph per rank.  C1 (2026-08-29): the
+        // nodes are the parsed typed entries (referenced, not copied), and
+        // each in-batch edge becomes one flat adjacency-list record; that
+        // keeps the normal path amortized O(nodes + edges + watches) without
+        // one heap allocation per node. The structural shape guarantees the
+        // old JSON-is_object/is_boolean lookups used to provide -- the typed
+        // reads below are the same rules against the parsed fields.
+        std::unordered_map<int, PreflightRankGraph> rank_graphs;
+        rank_graphs.reserve(std::min(
+            batch.nodes.size(), static_cast<size_t>(std::max(ctx_.num_ranks, 0))));
+        std::unordered_map<P2pKey, P2pCounts, P2pKeyHash> p2p_counts;
+        p2p_counts.reserve(batch.nodes.size());
+        std::unordered_map<CollectiveKey, CollectiveParticipants,
+                           CollectiveKeyHash>
+            collective_participants;
+        collective_participants.reserve(batch.nodes.size());
+
+        uint64_t node_index = 0;
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] rank out of range: " + std::to_string(rank));
+            }
+            const uint64_t json_id = parsed.json_id;
+            if (json_id == uint64_t(-1)) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] missing/invalid id");
+            }
+
+            PreflightRankGraph& graph = rank_graphs[rank];
+            const auto inserted = graph.node_index_by_json_id.emplace(
+                json_id, graph.nodes.size());
+            if (!inserted.second) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] duplicate id " + std::to_string(json_id) +
+                            " on rank " + std::to_string(rank));
+            }
+            graph.nodes.push_back(&parsed);
+            graph.indegree.push_back(0);
+            graph.first_edge.push_back(kNoPreflightEdge);
+
+            const OnlineNode& node = parsed.node;
+            const uint64_t type = node.node_type;
+            if (type < 1 || type > 7) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] type out of range: " +
+                            std::to_string(type));
+            }
+            if (node.name.empty()) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] empty name");
+            }
+            const bool is_cpu_op = node.is_cpu_op;
+            const std::string& request_id = node.request_id;
+            if (request_id.empty()) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] empty request_id");
+            }
+            const std::string& stage = node.stage;
+            if (stage != "prefill" && stage != "decode") {
+                return fail("node[" + std::to_string(node_index) +
+                            "] invalid stage: " + stage);
+            }
+            const uint64_t generation = node.generation;
+            const uint64_t expected_generation =
+                stage == "prefill" ? 0 : 1;
+            if (generation != expected_generation) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] generation " + std::to_string(generation) +
+                            " does not match stage " + stage);
+            }
+
+            // C1: the compute/comm/coll sub-object shape, the sh_2.0 HBM
+            // key typings (compute.hbm_access_mode integer, comm.hbm_charge
+            // boolean, node is_local_hbm_kv_restore boolean) and every
+            // field's JSON typing were validated once by parse_graph_batch;
+            // this pass reads the typed attrs directly (the non-negative
+            // hbm_access_mode DOMAIN rule stays here, belt-and-suspenders
+            // against a post-parse mutation).
+            if (node.hbm_access_mode < 0) {
+                return fail("node[" + std::to_string(node_index) +
+                            "] compute.hbm_access_mode must be a non-negative "
+                            "integer");
+            }
+            const uint64_t coll_comm_type = node.coll.comm_type;
+            const uint64_t coll_bytes = node.coll.bytes;
+            const uint32_t coll_priority = node.coll.priority;
+            const std::vector<bool>& coll_involved_dims =
+                node.coll.involved_dim;
+            if (type == 5 || type == 6) {
+                if (is_cpu_op) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] comm node cannot be is_cpu_op");
+                }
+                const int src = node.comm.src;
+                const int dst = node.comm.dst;
+                const uint64_t tag = node.comm.tag;
+                const uint64_t bytes = node.comm.bytes;
+                if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
+                    dst >= ctx_.num_ranks ||
+                    tag > static_cast<uint64_t>(
+                              std::numeric_limits<uint32_t>::max())) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p src/dst/tag out of range");
+                }
+                if ((type == 5 && src != rank) ||
+                    (type == 6 && dst != rank)) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] p2p endpoint rank does not match node rank");
+                }
+                P2pCounts& counts =
+                    p2p_counts[P2pKey{src, dst,
+                                      static_cast<int64_t>(tag), bytes}];
+                if (type == 5) {
+                    ++counts.sends;
+                } else {
+                    ++counts.recvs;
+                }
+            } else if (type == 7) {
+                if (is_cpu_op) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] comm node cannot be is_cpu_op");
+                }
+                const std::string& pg_name = node.coll.pg_name;
+                const std::string& name = node.name;
+                if (pg_name.empty()) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective with empty pg_name");
+                }
+                if (name.empty()) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective with empty operation name");
+                }
+                if (coll_bytes == 0) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] collective bytes must be positive");
+                }
+                if (!collective_comm_type_has_completion_path(coll_comm_type)) {
+                    return fail("node[" + std::to_string(node_index) +
+                                "] unsupported collective comm_type " +
+                                std::to_string(coll_comm_type));
+                }
+                CollectiveParticipants& participants =
+                    collective_participants[CollectiveKey{pg_name, name}];
+                if (!participants.has_signature) {
+                    participants.has_signature = true;
+                    participants.comm_type = coll_comm_type;
+                    participants.bytes = coll_bytes;
+                    participants.priority = coll_priority;
+                    participants.involved_dims = coll_involved_dims;
+                } else if (participants.comm_type != coll_comm_type ||
+                           participants.bytes != coll_bytes ||
+                           participants.priority != coll_priority ||
+                           participants.involved_dims != coll_involved_dims) {
+                    return fail("collective operation " + name +
+                                " of pg_name " + pg_name +
+                                " has inconsistent comm_type/bytes/priority/"
+                                "involved_dim signature on rank " +
+                                std::to_string(rank));
+                }
+                ++participants.count_by_rank[rank];
+            }
+            ++node_index;
+        }
+
+        // Parent edges are structural prerequisites for a meaningful cycle
+        // check.  Keep these checks mandatory as well: otherwise commit()
+        // could add all nodes before discovering an unresolved edge.
+        // C1: typed reads; the shape checks (object/kind/endpoint types)
+        // are parse-layer rules now.
+        uint64_t edge_index = 0;
+        for (const auto& edge_entry : batch.parent_edges) {
+            const int rank = edge_entry.rank;
+            if (rank < 0 || rank >= ctx_.num_ranks) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] rank out of range: " + std::to_string(rank));
+            }
+            const uint64_t from = edge_entry.from_json;
+            const uint64_t to = edge_entry.to_json;
+            if (from == to) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] self-loop on rank " + std::to_string(rank));
+            }
+
+            const auto graph_it = rank_graphs.find(rank);
+            if (graph_it == rank_graphs.end()) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] child (rank=" + std::to_string(rank) +
+                            " to=" + std::to_string(to) +
+                            ") not a node of this batch");
+            }
+            PreflightRankGraph& graph = graph_it->second;
+            const auto child_it = graph.node_index_by_json_id.find(to);
+            if (child_it == graph.node_index_by_json_id.end()) {
+                return fail("parent_edge[" + std::to_string(edge_index) +
+                            "] child (rank=" + std::to_string(rank) +
+                            " to=" + std::to_string(to) +
+                            ") not a node of this batch");
+            }
+            const auto parent_it = graph.node_index_by_json_id.find(from);
+            if (parent_it != graph.node_index_by_json_id.end()) {
+                graph.edges.push_back(
+                    PreflightEdge{child_it->second,
+                                  graph.first_edge[parent_it->second]});
+                graph.first_edge[parent_it->second] = graph.edges.size() - 1;
+                ++graph.indegree[child_it->second];
+            } else {
+                const auto parent_store_id = resolve_store_id(rank, from);
+                if (!parent_store_id.has_value()) {
+                    return fail("parent_edge[" + std::to_string(edge_index) +
+                                "] parent (rank=" + std::to_string(rank) +
+                                " from=" + std::to_string(from) +
+                                ") unresolved");
+                }
+                if ((*ctx_.graph_sources)[rank]->store().erased(
+                        *parent_store_id) &&
+                    !ctx_.node_gc) {
+                    return fail("parent_edge[" + std::to_string(edge_index) +
+                                "] parent (rank=" + std::to_string(rank) +
+                                " from=" + std::to_string(from) +
+                                ") is erased while node GC is disabled");
+                }
+            }
+            ++edge_index;
+        }
+
+        // Kahn's algorithm over the flat per-rank adjacency lists rejects
+        // every in-batch cycle before any new node reaches a NodeStore.
+        for (auto& rank_entry : rank_graphs) {
+            const int rank = rank_entry.first;
+            PreflightRankGraph& graph = rank_entry.second;
+            std::vector<size_t> ready;
+            ready.reserve(graph.nodes.size());
+            for (size_t index = 0; index < graph.indegree.size(); ++index) {
+                if (graph.indegree[index] == 0) {
+                    ready.push_back(index);
+                }
+            }
+            size_t visited = 0;
+            while (!ready.empty()) {
+                const size_t current = ready.back();
+                ready.pop_back();
+                ++visited;
+                for (size_t edge = graph.first_edge[current];
+                     edge != kNoPreflightEdge; edge = graph.edges[edge].next) {
+                    const size_t child = graph.edges[edge].to;
+                    if (--graph.indegree[child] == 0) {
+                        ready.push_back(child);
+                    }
+                }
+            }
+            if (visited != graph.nodes.size()) {
+                return fail("cycle among the in-batch parent edges of rank " +
+                            std::to_string(rank));
+            }
+        }
+
+        for (const auto& entry : p2p_counts) {
+            if (entry.second.sends != entry.second.recvs) {
+                const P2pKey& key = entry.first;
+                return fail("p2p tuple (src=" + std::to_string(key.src) +
+                            " dst=" + std::to_string(key.dst) +
+                            " tag=" + std::to_string(key.tag) +
+                            " bytes=" + std::to_string(key.bytes) +
+                            ") send/recv multiplicity mismatch (send=" +
+                            std::to_string(entry.second.sends) + " recv=" +
+                            std::to_string(entry.second.recvs) + ")");
+            }
+        }
+
+        // A collective can complete only if each participant posts exactly one
+        // matching operation and that participant set is the declared process
+        // group, not merely the batch's self-reported rank union.
+        for (const auto& entry : collective_participants) {
+            const CollectiveKey& key = entry.first;
+            const CollectiveParticipants& participants = entry.second;
+            std::vector<int> participant_ranks;
+            participant_ranks.reserve(participants.count_by_rank.size());
+            for (const auto& participant : participants.count_by_rank) {
+                if (participant.second != 1) {
+                    return fail("collective operation " + key.name +
+                                " of pg_name " + key.pg_name + " has " +
+                                std::to_string(participant.second) +
+                                " participants on rank " +
+                                std::to_string(participant.first) +
+                                " (expected exactly one)");
+                }
+                participant_ranks.push_back(participant.first);
+            }
+            std::sort(participant_ranks.begin(), participant_ranks.end());
+            if (!ctx_.communicator_members_for_pg) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " cannot verify declared membership: resolver "
+                            "is unavailable");
+            }
+            const auto declared_members = ctx_.communicator_members_for_pg(
+                key.pg_name, participant_ranks);
+            if (!declared_members.has_value()) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " has missing or inconsistent declared membership");
+            }
+            std::unordered_set<int> declared_rank_set;
+            declared_rank_set.reserve(declared_members->size());
+            for (const int declared_rank : *declared_members) {
+                if (declared_rank < 0 || declared_rank >= ctx_.num_ranks) {
+                    return fail("collective pg_name " + key.pg_name +
+                                " declares an out-of-range rank " +
+                                std::to_string(declared_rank));
+                }
+                if (!declared_rank_set.insert(declared_rank).second) {
+                    return fail("collective pg_name " + key.pg_name +
+                                " declares rank " +
+                                std::to_string(declared_rank) + " more than once");
+                }
+            }
+            if (declared_rank_set.empty() ||
+                declared_rank_set.size() != participant_ranks.size()) {
+                return fail("collective operation " + key.name +
+                            " of pg_name " + key.pg_name +
+                            " participant ranks do not exactly match declared "
+                            "communicator membership");
+            }
+            for (const int participant_rank : participant_ranks) {
+                if (declared_rank_set.count(participant_rank) == 0) {
+                    return fail("collective operation " + key.name +
+                                " of pg_name " + key.pg_name +
+                                " participant ranks do not exactly match declared "
+                                "communicator membership");
+                }
+            }
+        }
+
+        std::unordered_set<WatchIdentity, WatchIdentityHash> watch_identities;
+        watch_identities.reserve(batch.watches.size());
+        uint64_t watch_index = 0;
+        for (const auto& watch : batch.watches) {
+            const std::string& request_id = watch.request_id;
+            if (request_id.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty request_id");
+            }
+            const std::string& stage = watch.stage;
+            if (stage != "prefill" && stage != "decode") {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] invalid stage: " + stage);
+            }
+            const uint64_t generation = watch.generation;
+            const uint64_t expected_generation =
+                stage == "prefill" ? 0 : 1;
+            if (generation != expected_generation) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] generation " + std::to_string(generation) +
+                            " does not match stage " + stage);
+            }
+            if (!watch_identities
+                     .insert(WatchIdentity{request_id, stage, generation})
+                     .second) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] duplicate identity (request_id, stage, "
+                            "generation) in the batch");
+            }
+
+            if (watch.members.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty/absent members");
+            }
+            // C1: members keep the JSON object key order (rank-string
+            // ascending) -- the same iteration order the DOM walk saw.
+            for (const auto& member : watch.members) {
+                const int rank = member.rank;
+                const uint64_t member_id = member.json_id;
+                if (rank < 0 || rank >= ctx_.num_ranks) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member rank out of range: " +
+                                std::to_string(rank));
+                }
+                const auto graph_it = rank_graphs.find(rank);
+                if (graph_it == rank_graphs.end()) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" +
+                                std::to_string(member_id) +
+                                ") is not a node of this batch");
+                }
+                const auto member_node_it =
+                    graph_it->second.node_index_by_json_id.find(member_id);
+                if (member_node_it ==
+                    graph_it->second.node_index_by_json_id.end()) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" +
+                                std::to_string(member_id) +
+                                ") is not a node of this batch");
+                }
+                const OnlineNode& member_node =
+                    graph_it->second.nodes[member_node_it->second]->node;
+                if (member_node.request_id != request_id ||
+                    member_node.stage != stage ||
+                    member_node.generation != generation) {
+                    return fail("watch[" + std::to_string(watch_index) +
+                                "] member (rank=" + std::to_string(rank) +
+                                " id=" + std::to_string(member_id) +
+                                ") does not match watch request/stage/generation");
+                }
+            }
+            if (watch.statuses.empty()) {
+                return fail("watch[" + std::to_string(watch_index) +
+                            "] empty/absent statuses");
+            }
+            if (request_id.rfind("batch_train_", 0) != 0) {
+                const RequestFacts facts = request_facts(request_id);
+                if (stage == "prefill" && !facts.in_flight) {
+                    return fail("prefill watch[" + std::to_string(watch_index) +
+                                "] for request " + request_id +
+                                " not in-flight at this epoch");
+                }
+                if (stage == "decode" && !facts.prefill_drained) {
+                    return fail("decode watch[" + std::to_string(watch_index) +
+                                "] for request " + request_id +
+                                " whose prefill has not drained at this epoch");
+                }
+            }
+            ++watch_index;
+        }
+
+        std::unordered_set<std::string> alarm_ids;
+        alarm_ids.reserve(batch.future_alarms.size());
+        std::vector<RequestEnvelope> future_arrival_envelopes;
+        future_arrival_envelopes.reserve(batch.future_alarms.size());
+        uint64_t alarm_index = 0;
+        for (const auto& alarm : batch.future_alarms) {
+            const uint64_t arrival = alarm.arrival_world_ns;
+            if (arrival < delta.tick) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] past arrival_world_ns " +
+                            std::to_string(arrival) + " < delta tick " +
+                            std::to_string(delta.tick));
+            }
+            const RequestEnvelope& envelope = alarm.envelope;
+            const std::string& request_id = envelope.request_id;
+            if (request_id.empty()) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] empty envelope request_id");
+            }
+            if (!alarm_ids.insert(request_id).second) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] duplicate request_id " + request_id +
+                            " in the batch");
+            }
+            if (request_facts(request_id).in_flight) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] for already in-flight request " + request_id);
+            }
+            if (envelope.session_id.empty()) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] empty envelope session_id");
+            }
+            if (envelope.turn_index < 0) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] negative envelope turn_index");
+            }
+            if (envelope.queue_index < -1) {
+                return fail("future_alarm[" + std::to_string(alarm_index) +
+                            "] invalid envelope queue_index " +
+                            std::to_string(envelope.queue_index));
+            }
+            RequestEnvelope future_envelope = envelope;
+            future_envelope.arrival_world_ns = arrival;
+            future_arrival_envelopes.push_back(std::move(future_envelope));
+            ++alarm_index;
+        }
+        if (!future_arrival_envelopes.empty()) {
+            if (ctx_.ingress == nullptr) {
+                return fail("future arrivals require a RequestIngress");
+            }
+            if (const auto ingress_error =
+                    ctx_.ingress->validate_future_arrivals(
+                        future_arrival_envelopes)) {
+                return fail("future arrivals cannot be scheduled: " +
+                            *ingress_error);
+            }
+        }
+    } catch (const std::exception& exc) {
+        return fail(std::string("malformed batch entry: ") + exc.what());
+    }
+    return std::nullopt;
+}
+
+bool GraphBatchCommitter::was_json_id_committed(const int rank,
+                                                const uint64_t id) const {
+    return resolve_store_id(rank, id).has_value();
+}
+
+std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
+    const int rank, const uint64_t json_id) const {
+    if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
+        return std::nullopt;
+    }
+    const RankAffine& affine = rank_affines_[rank];
+    if (!affine.initialized || json_id < affine.json_first ||
+        json_id >= affine.json_next) {
+        return std::nullopt;
+    }
+    return affine.store_first + (json_id - affine.json_first);
+}
+
+void GraphBatchCommitter::record_affine_node(const int rank,
+                                             const uint64_t json_id,
+                                             const uint64_t store_id) {
+    if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
+        throw std::runtime_error("commit: rank out of range for affine record");
+    }
+    if (json_id == std::numeric_limits<uint64_t>::max() ||
+        store_id == std::numeric_limits<uint64_t>::max()) {
+        throw std::runtime_error("commit: cannot advance saturated id stream");
+    }
+    RankAffine& affine = rank_affines_[rank];
+    if (!affine.initialized) {
+        affine.initialized = true;
+        affine.json_first = json_id;
+        affine.json_next = json_id + 1;
+        affine.store_first = store_id;
+        affine.store_next = store_id + 1;
+        return;
+    }
+    if (json_id != affine.json_next || store_id != affine.store_next) {
+        throw std::runtime_error(
+            "commit: affine stream mismatch after successful preflight "
+            "(rank=" + std::to_string(rank) + " json_id=" +
+            std::to_string(json_id) + " expected_json=" +
+            std::to_string(affine.json_next) + " store_id=" +
+            std::to_string(store_id) + " expected_store=" +
+            std::to_string(affine.store_next) + ")");
+    }
+    ++affine.json_next;
+    ++affine.store_next;
+}
+
 std::vector<int> GraphBatchCommitter::compute_touched_ranks(
     const GraphBatch& batch, const int num_ranks) {
     std::set<int> ranks;
-    for (const auto& node : batch.nodes) {
-        if (!node.is_object()) {
-            continue;  // malformed entries fail validate(); keep this pure
-        }
-        const int rank = node.value("rank", -1);
+    for (const auto& parsed : batch.nodes) {
+        const int rank = parsed.node.rank;
         if (rank >= 0 && rank < num_ranks) {
             ranks.insert(rank);
         }
@@ -106,9 +922,17 @@ std::vector<int> GraphBatchCommitter::compute_touched_ranks(
     return std::vector<int>(ranks.begin(), ranks.end());
 }
 
-std::optional<std::string> GraphBatchCommitter::validate(
-    const StateDelta& delta, const GraphBatch& batch) const {
+std::optional<std::string> GraphBatchCommitter::validate_impl(
+    const StateDelta& delta, const GraphBatch& batch,
+    std::vector<int>* const json_id_touched_ranks) const {
     try {
+        // A committed rank owns an exact affine mapping onto the NodeStore's
+        // automatic id stream. Check it before every semantic rule; this is a
+        // read-only fail-closed diagnostic and validate() remains pure.
+        if (auto drift_error = validate_affine_drift()) {
+            return drift_error;
+        }
+
         // ---- delta facts first: the batch is validated against the state
         //      AFTER this epoch's arrivals/completions (the commit applies
         //      the same facts before adding anything). Local copies only --
@@ -132,24 +956,26 @@ std::optional<std::string> GraphBatchCommitter::validate(
         if (!batch.error.empty()) {
             return "batch carries an error field: " + batch.error;
         }
+        if (auto id_error =
+                validate_json_id_stream(batch, json_id_touched_ranks)) {
+            return id_error;
+        }
 
-        // ---- [node] structural pass ----
+        // ---- [node] structural pass (C1: typed reads; the JSON-shape half
+        //      of each rule moved to parse_graph_batch, the domain/semantic
+        //      half stays here) ----
         std::unordered_map<int, std::set<uint64_t>> batch_ids;
         std::set<std::pair<std::string, std::string>> node_stages;
         std::set<int> touched;
         uint64_t node_count = 0;
         uint64_t node_index = 0;
-        for (const auto& node : batch.nodes) {
-            if (!node.is_object()) {
-                return "node[" + std::to_string(node_index) +
-                       "] is not an object";
-            }
-            const int rank = node.value("rank", -1);
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
             if (rank < 0 || rank >= ctx_.num_ranks) {
                 return "node[" + std::to_string(node_index) +
                        "] rank out of range: " + std::to_string(rank);
             }
-            const uint64_t id = node.value("id", uint64_t(-1));
+            const uint64_t id = parsed.json_id;
             if (id == uint64_t(-1)) {
                 return "node[" + std::to_string(node_index) +
                        "] missing/invalid id";
@@ -159,33 +985,27 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        "] duplicate id " + std::to_string(id) + " on rank " +
                        std::to_string(rank);
             }
-            const uint64_t type = node.value("type", uint64_t{0});
+            const OnlineNode& node = parsed.node;
+            const uint64_t type = node.node_type;
             if (type < 1 || type > 7) {
                 return "node[" + std::to_string(node_index) +
                        "] type out of range: " + std::to_string(type);
             }
-            if (!node.value("name", std::string()).size()) {
+            if (node.name.empty()) {
                 return "node[" + std::to_string(node_index) +
                        "] empty name";
             }
-            if (!node["is_cpu_op"].is_boolean() ||
-                !node["is_timer_op"].is_boolean() ||
-                !node["inputs_values"].is_string()) {
-                return "node[" + std::to_string(node_index) +
-                       "] is_cpu_op/is_timer_op/inputs_values malformed";
-            }
-            const std::string request_id =
-                node.value("request_id", std::string());
+            const std::string& request_id = node.request_id;
             if (request_id.empty()) {
                 return "node[" + std::to_string(node_index) +
                        "] empty request_id";
             }
-            const std::string stage = node.value("stage", std::string());
+            const std::string& stage = node.stage;
             if (stage != "prefill" && stage != "decode") {
                 return "node[" + std::to_string(node_index) +
                        "] invalid stage: " + stage;
             }
-            const uint64_t generation = node.value("generation", uint64_t{0});
+            const uint64_t generation = node.generation;
             const uint64_t expected_generation =
                 stage == "prefill" ? 0 : 1;
             if (generation != expected_generation) {
@@ -194,64 +1014,27 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        " does not match stage " + stage + " (expected " +
                        stage_generation(stage) + ")";
             }
-            // S1 (2026-08-23): bind the sub-objects by const reference
-            // instead of the previous per-node deep copies
-            // (node.value(key, json::object())); absent keys bind the
-            // shared empty object, so every check below sees the exact same
-            // value the old copy produced.
-            const auto compute_it = node.find("compute");
-            const nlohmann::json& compute =
-                compute_it == node.end() ? kEmptyObject : *compute_it;
-            if (!compute.is_object()) {
-                return "node[" + std::to_string(node_index) +
-                       "] compute not an object";
-            }
-            (void)compute.value("num_ops", uint64_t{0});
-            (void)compute.value("tensor_size", uint64_t{0});
-            (void)compute.value("runtime_ns", uint64_t{0});
-            // sh_2.0 N-way HBM contention pool endpoint charging mode:
-            // online JSON snake key in the compute section, synonymous with
-            // the offline kebab ET attr (optional; fail-closed on malformed).
-            if (compute.contains("hbm_access_mode") &&
-                (!compute["hbm_access_mode"].is_number_integer() ||
-                 compute["hbm_access_mode"].get<int64_t>() < 0)) {
+            // C1 (2026-08-29): the compute/comm/coll sub-object shape and
+            // every field's JSON typing (incl. the sh_2.0 HBM keys) were
+            // validated once by parse_graph_batch; this pass reads the typed
+            // attrs directly (the non-negative hbm_access_mode DOMAIN rule
+            // stays, belt-and-suspenders against a post-parse mutation).
+            if (node.hbm_access_mode < 0) {
                 return "node[" + std::to_string(node_index) +
                        "] compute.hbm_access_mode must be a non-negative "
                        "integer";
             }
-            // S1 (2026-08-23): reference binding, no sub-object copy
-            // (sh_2.0 adaptation: this repo's node schema carries no "mem"
-            // section, so the mother's mem binding has no counterpart here).
-            const auto comm_it = node.find("comm");
-            const nlohmann::json& comm =
-                comm_it == node.end() ? kEmptyObject : *comm_it;
-            if (!comm.is_object()) {
-                return "node[" + std::to_string(node_index) +
-                       "] comm not an object";
-            }
-            // sh_2.0 N-way HBM contention p2p endpoint charging switch:
-            // online JSON snake key in the comm section, synonymous with
-            // the offline kebab ET attr (optional; fail-closed on
-            // malformed). NOT scoped to types 5/6 -- real batches carry the
-            // comm default section on every node.
-            if (comm.contains("hbm_charge") &&
-                !comm["hbm_charge"].is_boolean()) {
-                return "node[" + std::to_string(node_index) +
-                       "] comm.hbm_charge must be a boolean";
-            }
             // The src/dst/tag range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
             // semantically load-bearing. Real batches carry the comm
-            // defaults (src=0/dst=0/tag=0) on every node and pass
-            // trivially; the same-tick milestone fixture emits compute/
-            // metadata nodes with an EMPTY comm {} and must stay legal
+            // defaults (src=0/dst=0/tag=0) on every node and pass trivially
             // (empirical contract: send node comm.src == node.rank, recv
-            // node comm.dst == node.rank -- rank-ownership is already
-            // type-scoped below).
+            // node comm.dst == node.rank -- rank-ownership is type-scoped
+            // below).
             if (type == 5 || type == 6) {
-                const int src = comm.value("src", -1);
-                const int dst = comm.value("dst", -1);
-                const int64_t tag = comm.value("tag", int64_t{-1});
+                const int src = node.comm.src;
+                const int dst = node.comm.dst;
+                const int64_t tag = node.comm.tag;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
                     return "node[" + std::to_string(node_index) +
@@ -275,31 +1058,17 @@ std::optional<std::string> GraphBatchCommitter::validate(
                            " != comm.dst " + std::to_string(dst);
                 }
             }
-            const auto coll_it = node.find("coll");
-            const nlohmann::json& coll =
-                coll_it == node.end() ? kEmptyObject : *coll_it;
-            if (!coll.is_object()) {
+            // A zero-byte collective has no completion path in the
+            // analytical backend: AllGather reaches 0/0 chunking, while
+            // other types may synthesize nonzero work. Reject it before
+            // commit so no GPU resource, DataSet, or wrapper can be pinned.
+            if (type == 7 && node.coll.bytes == 0) {
                 return "node[" + std::to_string(node_index) +
-                       "] coll not an object";
+                       "] collective bytes must be positive";
             }
-            (void)coll.value("comm_type", uint64_t{0});
-            (void)coll.value("bytes", uint64_t{0});
-            (void)coll.value("priority", uint32_t{0});
-            if (!coll.value("pg_name", std::string()).size() && type == 7) {
+            if (node.coll.pg_name.empty() && type == 7) {
                 return "node[" + std::to_string(node_index) +
                        "] collective with empty pg_name";
-            }
-            // S1: single find for involved_dim (was contains + operator[]
-            // re-lookup per access).
-            const auto involved_it = coll.find("involved_dim");
-            if (involved_it != coll.end()) {
-                if (!involved_it->is_array()) {
-                    return "node[" + std::to_string(node_index) +
-                           "] coll.involved_dim not an array";
-                }
-                for (const auto& dim : *involved_it) {
-                    (void)dim.get<bool>();
-                }
             }
             node_stages.insert({request_id, stage});
             touched.insert(rank);
@@ -310,55 +1079,38 @@ std::optional<std::string> GraphBatchCommitter::validate(
         // ---- [edge] structural pass (collect in-batch edges per rank for
         //      the cycle check; the child endpoint must be a node of THIS
         //      batch, the parent endpoint may be a node of an EARLIER batch
-        //      -- the persistent (rank, json id) -> store id map). ----
+        //      -- the persistent per-rank affine json-id translation). ----
         std::unordered_map<int, std::vector<std::pair<uint64_t, uint64_t>>>
             in_batch_edges;
         uint64_t edge_index = 0;
-        for (const auto& edge : batch.parent_edges) {
-            if (!edge.is_object()) {
-                return "parent_edge[" + std::to_string(edge_index) +
-                       "] is not an object";
-            }
-            const int rank = edge.value("rank", -1);
+        for (const auto& edge_entry : batch.parent_edges) {
+            const int rank = edge_entry.rank;
             if (rank < 0 || rank >= ctx_.num_ranks) {
                 return "parent_edge[" + std::to_string(edge_index) +
                        "] rank out of range: " + std::to_string(rank);
             }
-            const std::string kind = edge.value("kind", std::string());
-            if (kind != "data") {
-                return "parent_edge[" + std::to_string(edge_index) +
-                       "] unsupported kind: " + kind +
-                       " (only \"data\" in phase 5)";
-            }
-            const uint64_t from = edge.value("from", uint64_t(-1));
-            const uint64_t to = edge.value("to", uint64_t(-1));
-            if (from == uint64_t(-1) || to == uint64_t(-1)) {
-                return "parent_edge[" + std::to_string(edge_index) +
-                       "] missing endpoint";
-            }
+            const uint64_t from = edge_entry.from_json;
+            const uint64_t to = edge_entry.to_json;
             if (from == to) {
                 return "parent_edge[" + std::to_string(edge_index) +
                        "] self-loop on rank " + std::to_string(rank);
             }
             const bool from_in_batch = batch_ids[rank].count(from) > 0;
-            // M2 node GC (2026-08-23): a from below the per-rank prune
-            // watermark is a committed-then-collected parent (collected =>
-            // finished => non-blocking, the NodeStore dead-parent rule).
-            // Per-rank json ids are dense from 0 (graph_batch_builder's
-            // next_id counter), so below-watermark exactly characterizes
-            // "was committed and has since been pruned"; a never-emitted id
-            // stays unresolved (fail-closed). With GC off the watermark is
-            // always 0 and this reduces to the previous store_ids_ check.
-            const uint64_t pruned_watermark =
-                rank < static_cast<int>(pruned_json_watermark_.size())
-                    ? pruned_json_watermark_[rank]
-                    : 0;
-            if (!from_in_batch &&
-                store_ids_.count(RankNodeKey{rank, from}) == 0 &&
-                from >= pruned_watermark) {
+            const auto from_store_id =
+                from_in_batch ? std::optional<uint64_t>()
+                              : resolve_store_id(rank, from);
+            if (!from_in_batch && !from_store_id.has_value()) {
                 return "parent_edge[" + std::to_string(edge_index) +
                        "] parent (rank=" + std::to_string(rank) + " from=" +
                        std::to_string(from) + ") unresolved";
+            }
+            if (from_store_id.has_value() &&
+                (*ctx_.graph_sources)[rank]->store().erased(*from_store_id) &&
+                !ctx_.node_gc) {
+                return "parent_edge[" + std::to_string(edge_index) +
+                       "] parent (rank=" + std::to_string(rank) + " from=" +
+                       std::to_string(from) +
+                       ") is erased while node GC is disabled";
             }
             if (batch_ids[rank].count(to) == 0) {
                 return "parent_edge[" + std::to_string(edge_index) +
@@ -417,30 +1169,21 @@ std::optional<std::string> GraphBatchCommitter::validate(
         std::map<std::pair<std::string, std::string>, std::set<int>>
             coll_groups;
         std::map<std::string, std::set<int>> pg_ranks;
-        for (const auto& node : batch.nodes) {
-            const int rank = node.value("rank", -1);
-            const uint64_t type = node.value("type", uint64_t{0});
+        for (const auto& parsed : batch.nodes) {
+            const int rank = parsed.node.rank;
+            const uint64_t type = parsed.node.node_type;
             if (type == 5 || type == 6) {
-                // S1 (2026-08-23): reference binding, no sub-object copy.
-                const auto comm_it = node.find("comm");
-                const nlohmann::json& comm =
-                    comm_it == node.end() ? kEmptyObject : *comm_it;
                 const auto key = std::make_tuple(
-                    comm.value("src", -1), comm.value("dst", -1),
-                    comm.value("tag", int64_t{-1}));
+                    parsed.node.comm.src, parsed.node.comm.dst,
+                    static_cast<int64_t>(parsed.node.comm.tag));
                 if (type == 5) {
                     pairs[key].first = true;
                 } else {
                     pairs[key].second = true;
                 }
             } else if (type == 7) {
-                const auto coll_it = node.find("coll");
-                const nlohmann::json& coll =
-                    coll_it == node.end() ? kEmptyObject : *coll_it;
-                const std::string pg =
-                    coll.value("pg_name", std::string());
-                const std::string name =
-                    node.value("name", std::string());
+                const std::string& pg = parsed.node.coll.pg_name;
+                const std::string& name = parsed.node.name;
                 coll_groups[{pg, name}].insert(rank);
                 pg_ranks[pg].insert(rank);
             }
@@ -472,22 +1215,17 @@ std::optional<std::string> GraphBatchCommitter::validate(
             watch_identities;
         uint64_t watch_index = 0;
         for (const auto& watch : batch.watches) {
-            if (!watch.is_object()) {
-                return "watch[" + std::to_string(watch_index) +
-                       "] is not an object";
-            }
-            const std::string request_id =
-                watch.value("request_id", std::string());
+            const std::string& request_id = watch.request_id;
             if (request_id.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty request_id";
             }
-            const std::string stage = watch.value("stage", std::string());
+            const std::string& stage = watch.stage;
             if (stage != "prefill" && stage != "decode") {
                 return "watch[" + std::to_string(watch_index) +
                        "] invalid stage: " + stage;
             }
-            const uint64_t generation = watch.value("generation", uint64_t{0});
+            const uint64_t generation = watch.generation;
             const uint64_t expected_generation =
                 stage == "prefill" ? 0 : 1;
             if (generation != expected_generation) {
@@ -503,51 +1241,29 @@ std::optional<std::string> GraphBatchCommitter::validate(
                        "in the batch";
             }
             watch_stages.insert({request_id, stage});
-            // S1 (2026-08-23): reference binding for members/statuses (was
-            // per-watch sub-object copies); absent members binds the shared
-            // empty object and fails the empty check below exactly like the
-            // old fresh-object default did.
-            const auto members_it = watch.find("members");
-            const nlohmann::json& members_json =
-                members_it == watch.end() ? kEmptyObject : *members_it;
-            if (!members_json.is_object() || members_json.empty()) {
+            // C1: typed members keep the JSON key order (rank ascending).
+            if (watch.members.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty/absent members";
             }
-            for (auto it = members_json.begin(); it != members_json.end();
-                 ++it) {
-                int rank = -1;
-                try {
-                    rank = std::stoi(it.key());
-                } catch (const std::exception&) {
-                    return "watch[" + std::to_string(watch_index) +
-                           "] unparsable member rank: " + it.key();
-                }
+            for (const auto& member : watch.members) {
+                const int rank = member.rank;
                 if (rank < 0 || rank >= ctx_.num_ranks) {
                     return "watch[" + std::to_string(watch_index) +
-                           "] member rank out of range: " + it.key();
+                           "] member rank out of range: " +
+                           std::to_string(rank);
                 }
-                const uint64_t member_id = it.value().get<uint64_t>();
+                const uint64_t member_id = member.json_id;
                 if (batch_ids[rank].count(member_id) == 0) {
                     return "watch[" + std::to_string(watch_index) +
-                           "] member (rank=" + it.key() + " id=" +
+                           "] member (rank=" + std::to_string(rank) + " id=" +
                            std::to_string(member_id) +
                            ") is not a node of this batch";
                 }
             }
-            const auto statuses_it = watch.find("statuses");
-            const nlohmann::json& statuses_json =
-                statuses_it == watch.end() ? kEmptyObject : *statuses_it;
-            if (!statuses_json.is_array() || statuses_json.empty()) {
+            if (watch.statuses.empty()) {
                 return "watch[" + std::to_string(watch_index) +
                        "] empty/absent statuses";
-            }
-            for (const auto& status_json : statuses_json) {
-                const std::string name = status_json.get<std::string>();
-                if (name != "Success" && name != "Skipped") {
-                    return "watch[" + std::to_string(watch_index) +
-                           "] unknown status: " + name;
-                }
             }
             // eligibility (against the delta-facts-first tracking state).
             // 拼 batch 适配(2026-08-22):列车哨兵 watch(request_id =
@@ -626,19 +1342,17 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
         }
 
-        // ---- [assign] (opaque; structural only) ----
+        // ---- [assign] (opaque; structural only -- S1/S2 are parse-layer
+        //      rules now; these typed reads are the same belt-and-suspenders
+        //      domain checks against a post-parse mutation) ----
         uint64_t assign_index = 0;
         for (const auto& assignment : batch.assignments) {
-            if (!assignment.is_object()) {
-                return "assignment[" + std::to_string(assign_index) +
-                       "] is not an object";
-            }
-            if (assignment.value("request_id", std::string()).empty()) {
+            if (assignment.request_id.empty()) {
                 return "assignment[" + std::to_string(assign_index) +
                        "] empty request_id";
             }
-            if (assignment.value("prefill_instance_index", int64_t{-1}) < 0 ||
-                assignment.value("decode_instance_index", int64_t{-1}) < 0) {
+            if (assignment.prefill_instance_index < 0 ||
+                assignment.decode_instance_index < 0) {
                 return "assignment[" + std::to_string(assign_index) +
                        "] negative instance index";
             }
@@ -649,12 +1363,8 @@ std::optional<std::string> GraphBatchCommitter::validate(
         //      authority -- structural only) ----
         uint64_t kv_index = 0;
         for (const auto& action : batch.kv_actions) {
-            if (!action.is_object()) {
-                return "kv_action[" + std::to_string(kv_index) +
-                       "] is not an object";
-            }
-            if (action.value("event_type", std::string()).empty() ||
-                action.value("trigger_request_id", std::string()).empty()) {
+            if (action.event_type.empty() ||
+                action.trigger_request_id.empty()) {
                 return "kv_action[" + std::to_string(kv_index) +
                        "] missing event_type/trigger_request_id";
             }
@@ -665,28 +1375,15 @@ std::optional<std::string> GraphBatchCommitter::validate(
         std::set<std::string> alarm_ids;
         uint64_t alarm_index = 0;
         for (const auto& alarm : batch.future_alarms) {
-            if (!alarm.is_object()) {
-                return "future_alarm[" + std::to_string(alarm_index) +
-                       "] is not an object";
-            }
-            const uint64_t arrival =
-                alarm.value("arrival_world_ns", uint64_t{0});
+            const uint64_t arrival = alarm.arrival_world_ns;
             if (arrival < delta.tick) {
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] past arrival_world_ns " +
                        std::to_string(arrival) + " < delta tick " +
                        std::to_string(delta.tick);
             }
-            // S1 (2026-08-23): reference binding (was a per-alarm copy).
-            const auto envelope_it = alarm.find("envelope");
-            const nlohmann::json& envelope =
-                envelope_it == alarm.end() ? kEmptyObject : *envelope_it;
-            if (!envelope.is_object()) {
-                return "future_alarm[" + std::to_string(alarm_index) +
-                       "] envelope not an object";
-            }
-            const std::string request_id =
-                envelope.value("request_id", std::string());
+            const RequestEnvelope& envelope = alarm.envelope;
+            const std::string& request_id = envelope.request_id;
             if (request_id.empty()) {
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] empty envelope request_id";
@@ -700,37 +1397,26 @@ std::optional<std::string> GraphBatchCommitter::validate(
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] for already in-flight request " + request_id;
             }
-            if (envelope.value("session_id", std::string()).empty()) {
+            if (envelope.session_id.empty()) {
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] empty envelope session_id";
             }
-            if (envelope.value("turn_index", -1) < 0) {
+            if (envelope.turn_index < 0) {
                 return "future_alarm[" + std::to_string(alarm_index) +
                        "] negative envelope turn_index";
             }
-            (void)envelope.value("prefill_length", uint64_t{0});
-            (void)envelope.value("decode_length", uint64_t{0});
-            (void)envelope.value("inter_request_interval_ns", uint64_t{0});
             ++alarm_index;
         }
 
         // ---- [touched] Python-computed touched_ranks must agree with the
         //      batch's node rank set (sorted unique) ----
         if (batch.has_touched_ranks) {
-            if (!batch.touched_ranks.is_array()) {
-                return "touched_ranks is not an array";
-            }
-            std::vector<int> declared;
-            for (const auto& rank_json : batch.touched_ranks) {
-                if (!rank_json.is_number_integer()) {
-                    return "touched_ranks entry is not an integer";
-                }
-                const int rank = rank_json.get<int>();
+            const std::vector<int>& declared = batch.touched_ranks;
+            for (const int rank : declared) {
                 if (rank < 0 || rank >= ctx_.num_ranks) {
                     return "touched_ranks rank out of range: " +
                            std::to_string(rank);
                 }
-                declared.push_back(rank);
             }
             if (!std::is_sorted(declared.begin(), declared.end()) ||
                 std::adjacent_find(declared.begin(), declared.end()) !=
@@ -739,10 +1425,9 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
             // S1 (2026-08-23): reuse this validate pass's own touched set
             // instead of re-walking batch.nodes through
-            // compute_touched_ranks(): by this point every node is an
-            // object with an in-range rank (both conditions fail-closed in
-            // the node pass above), so the sorted-unique rank sets are
-            // identical by construction.
+            // compute_touched_ranks(): by this point every node has an
+            // in-range rank (fail-closed in the node pass above), so the
+            // sorted-unique rank sets are identical by construction.
             const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;
@@ -761,6 +1446,15 @@ std::optional<std::string> GraphBatchCommitter::validate(
             }
         }
 
+        // Keep the full validator's rich diagnostics above, then apply the
+        // production-mandatory liveness subset as well. This extends full
+        // validation with multiplicity-aware p2p matching, per-member watch
+        // generation matching, and declared (not batch-inferred) collective
+        // membership without weakening any established diagnosis.
+        if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+            return liveness_error;
+        }
+
         return std::nullopt;
     } catch (const std::exception& exc) {
         // Malformed entry types surface as nlohmann type errors; convert to
@@ -769,94 +1463,103 @@ std::optional<std::string> GraphBatchCommitter::validate(
     }
 }
 
+std::optional<std::string> GraphBatchCommitter::validate(
+    const StateDelta& delta, const GraphBatch& batch) const {
+    return validate_impl(delta, batch, nullptr);
+}
+
+GraphBatchCommitter::ValidateAndCommitResult
+GraphBatchCommitter::validate_and_commit(const StateDelta& delta,
+                                         const GraphBatch& batch) {
+    ValidateAndCommitResult result;
+    if (validation_commit_in_progress_) {
+        result.error =
+            "validate_and_commit reentered while a validation commit is active";
+        return result;
+    }
+
+    // Phase A and B stay in one call so no mutable gap exists between them.
+    // Reuse the rank-bounded scratch allocated by the constructor; callbacks
+    // reached by validation must not overwrite it with a nested commit.
+    validation_commit_in_progress_ = true;
+    try {
+        commit_touched_ranks_.clear();
+        const auto validation_t0 = std::chrono::steady_clock::now();
+        const auto validation_error =
+            validate_impl(delta, batch, &commit_touched_ranks_);
+        result.validation_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - validation_t0)
+                .count());
+        if (validation_error.has_value()) {
+            result.error = validation_error;
+            validation_commit_in_progress_ = false;
+            return result;
+        }
+        commit_after_preflight(delta, batch, commit_touched_ranks_);
+        validation_commit_in_progress_ = false;
+        return result;
+    } catch (...) {
+        validation_commit_in_progress_ = false;
+        throw;
+    }
+}
+
 void GraphBatchCommitter::commit(const StateDelta& delta,
                                  const GraphBatch& batch) {
+    if (validation_commit_in_progress_) {
+        throw std::runtime_error(
+            "commit reentered while validate_and_commit owns preflight scratch");
+    }
+    // Production may skip the expensive semantic validator. The producer's
+    // bounded contiguous-id contract, the zero-byte collective safety rule,
+    // and the NodeStore affine stream are still mandatory. They are checked
+    // before any delta, NodeStore or affine state change, so a failure has
+    // zero commit side effects.
+    if (auto drift_error = validate_affine_drift()) {
+        throw std::runtime_error("commit preflight: " + *drift_error);
+    }
+    if (auto id_error = validate_json_id_stream(batch, &commit_touched_ranks_)) {
+        throw std::runtime_error("commit preflight: " + *id_error);
+    }
+    if (auto liveness_error = mandatory_liveness_preflight(delta, batch)) {
+        throw std::runtime_error("commit preflight: " + *liveness_error);
+    }
+
+    commit_after_preflight(delta, batch, commit_touched_ranks_);
+}
+
+void GraphBatchCommitter::commit_after_preflight(
+    const StateDelta& delta, const GraphBatch& batch,
+    const std::vector<int>& touched_ranks) {
+
     // ---- delta facts first (the same facts validate() used) ----
     apply_delta_facts(delta, in_flight_, prefill_drained_);
 
-    // ---- Phase B-1: nodes (persistent (rank, json id) -> store id) ----
+    // ---- Phase B-1: nodes (per-rank affine json id -> store id).
+    //      C1 (2026-08-29): the OnlineNode was ALREADY assembled once by
+    //      parse_graph_batch (every field's type/domain was validated there,
+    //      with explicit uint64 extraction -- the old NOTE about value()'s
+    //      int-default truncation is now structurally impossible; the sh_2.0
+    //      top-level HBM fields hbm_access_mode / hbm_charge /
+    //      is_local_hbm_kv_restore are part of that parsed record). This
+    //      loop is a copy + store insert + affine advance; nothing here can
+    //      throw on the JSON shape anymore, so the B-1 half-commit window
+    //      only opens on mechanism bugs, never on data shape. ----
     uint64_t node_count = 0;
-    for (const auto& node_json : batch.nodes) {
-        if (!node_json.is_object()) {
-            throw std::runtime_error(
-                "commit: malformed node entry (validate() must have "
-                "rejected this)");
-        }
-        const int rank = node_json.value("rank", -1);
-        const uint64_t json_id = node_json.value("id", uint64_t(-1));
+    for (const auto& parsed : batch.nodes) {
+        const int rank = parsed.node.rank;
+        const uint64_t json_id = parsed.json_id;
         if (rank < 0 || rank >= static_cast<int>(ctx_.graph_sources->size())) {
             throw std::runtime_error(
                 "commit: node rank out of range: " + std::to_string(rank));
         }
-        OnlineNode node;
-        node.global_id = 0;  // NodeStore assigns a fresh id (ascending, per rank)
-        node.rank = rank;
-        node.kind = node_kind_from_type(node_json.value("type", 0));
-        node.node_type = node_json.value("type", 0);
-        node.name = node_json.value("name", std::string());
-        node.is_cpu_op = node_json.value("is_cpu_op", false);
-        node.is_timer_op = node_json.value("is_timer_op", false);
-        // sh_2.0: MEM_LOAD/MEM_STORE restore-DMA routing bit (§4.3.3)
-        node.is_local_hbm_kv_restore =
-            node_json.value("is_local_hbm_kv_restore", false);
-        node.inputs_values = node_json.value("inputs_values", std::string());
-        node.request_id = node_json.value("request_id", std::string());
-        node.stage = node_json.value("stage", std::string());
-        node.generation = node_json.value("generation", 0);
-        const auto& compute =
-            node_json.value("compute", nlohmann::json::object());
-        // NOTE: value() deduces the conversion type from the default literal.
-        // An int default (0) truncates values >= 2^31 to a signed 32-bit int
-        // (sign-extended into the uint64 field) -- kernel num_ops / tensor
-        // sizes are routinely > 2^31, and issue_comp then computes a garbage
-        // runtime and the node never completes. Always use explicit uint64
-        // defaults for 64-bit fields.
-        node.compute.num_ops = compute.value("num_ops", uint64_t{0});
-        node.compute.tensor_size = compute.value("tensor_size", uint64_t{0});
-        node.compute.runtime_ns = compute.value("runtime_ns", uint64_t{0});
-        if (compute.contains("remote_weight_bytes")) {
-            node.compute.has_remote_weight_bytes = true;
-            node.compute.remote_weight_bytes =
-                compute.value("remote_weight_bytes", uint64_t{0});
-        }
-        // sh_2.0 N-way HBM contention: pool endpoint charging mode (0/absent
-        // = none, 1 = local HBM read, 2 = local HBM write). Online JSON
-        // snake key in the compute section, synonymous with the offline
-        // kebab ET attr "hbm-access-mode"; the struct field stays top-level.
-        node.hbm_access_mode = compute.value("hbm_access_mode", int64_t{0});
-        const auto& comm = node_json.value("comm", nlohmann::json::object());
-        node.comm.bytes = comm.value("bytes", uint64_t{0});
-        node.comm.src = comm.value("src", 0);
-        node.comm.dst = comm.value("dst", 0);
-        node.comm.tag = comm.value("tag", uint32_t{0});
-        // sh_2.0 N-way HBM contention: p2p endpoint charging switch (default
-        // true). Online JSON snake key in the comm section, synonymous with
-        // the offline kebab ET attr "hbm-charge"; the struct field stays
-        // top-level.
-        node.hbm_charge = comm.value("hbm_charge", true);
-        const auto& coll = node_json.value("coll", nlohmann::json::object());
-        node.coll.comm_type = coll.value("comm_type", uint64_t{0});
-        node.coll.bytes = coll.value("bytes", uint64_t{0});
-        node.coll.priority = coll.value("priority", uint32_t{0});
-        node.coll.pg_name = coll.value("pg_name", std::string());
-        if (coll.contains("involved_dim") && coll["involved_dim"].is_array()) {
-            for (const auto& dim : coll["involved_dim"]) {
-                node.coll.involved_dim.push_back(dim.get<bool>());
-            }
-        }
+        OnlineNode node = parsed.node;  // global_id already 0 (store assigns)
         const uint64_t store_id =
             (*ctx_.graph_sources)[rank]->store().add_node(std::move(node));
-        store_ids_[RankNodeKey{rank, json_id}] = store_id;
-        // M2 node GC (2026-08-23): remember the commit order (== per-rank
-        // json-id order: per-rank ids are dense and ascending across
-        // batches) for the store_ids_ prune pass at the commit tail.
-        if (ctx_.node_gc) {
-            if (prune_queues_.empty()) {
-                prune_queues_.resize(ctx_.num_ranks);
-                pruned_json_watermark_.assign(ctx_.num_ranks, 0);
-            }
-            prune_queues_[rank].entries.emplace_back(json_id, store_id);
-        }
+        // The first node captures NodeStore's REAL returned id; later nodes
+        // must advance both strictly contiguous streams in lockstep.
+        record_affine_node(rank, json_id, store_id);
         ++node_count;
     }
 
@@ -865,93 +1568,92 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
     //      on_node_complete observe) -- NodeStore hands out store ids
     //      starting at 1 while the online graph's json ids start at 0, so
     //      registering with the json ids off-by-ones every anchor (the id-0
-    //      start anchors would never fire at all). The caller's hook receives
-    //      the full (rank, json id) -> store id map of this commit and must
-    //      register BEFORE the issue pass below lets any of these nodes run.
+    //      start anchors would never fire at all). The caller's hook resolves
+    //      only the ids it needs through this committer's affine mapping and
+    //      must register BEFORE the issue pass below lets any nodes run.
     if (ctx_.metrics_anchor_hook) {
-        ctx_.metrics_anchor_hook(batch, store_ids_);
+        ctx_.metrics_anchor_hook(batch, *this);
     }
 
-    // ---- Phase B-2: parent_edges -> add_dependency (Data kind) ----
+    // ---- Phase B-2: parent_edges -> add_dependency (Data kind).
+    //      C1: typed edges; kind == "data" is parse-layer-guaranteed. ----
     for (const auto& edge : batch.parent_edges) {
-        if (!edge.is_object()) {
+        const int rank = edge.rank;
+        const uint64_t from = edge.from_json;
+        const uint64_t to = edge.to_json;
+        if (rank < 0 || rank >= ctx_.num_ranks) {
             throw std::runtime_error(
-                "commit: malformed parent_edge entry");
+                "commit: parent edge rank out of range: " +
+                std::to_string(rank));
         }
-        const int rank = edge.value("rank", -1);
-        const uint64_t from = edge.value("from", uint64_t(-1));
-        const uint64_t to = edge.value("to", uint64_t(-1));
-        const auto from_it = store_ids_.find(RankNodeKey{rank, from});
-        const auto to_it = store_ids_.find(RankNodeKey{rank, to});
-        if (to_it == store_ids_.end()) {
+        const auto from_store_id = resolve_store_id(rank, from);
+        const auto to_store_id = resolve_store_id(rank, to);
+        if (!to_store_id.has_value()) {
             throw std::runtime_error(
                 "commit: parent edge references an unknown node id "
                 "(rank=" + std::to_string(rank) +
                 " from=" + std::to_string(from) +
                 " to=" + std::to_string(to) + ")");
         }
-        if (from_it == store_ids_.end()) {
-            // M2 node GC (2026-08-23): a from below the per-rank prune
-            // watermark was committed and has since been collected --
-            // collected => finished, and add_dependency already treats a
-            // finished parent as non-blocking (the NodeStore dead-parent
-            // rule), so skipping the edge here is the hoisted, byte-equal
-            // form of that no-op. Any other miss is unreachable
-            // post-validate (the fail-closed throw is preserved).
-            const uint64_t pruned_watermark =
-                rank < static_cast<int>(pruned_json_watermark_.size())
-                    ? pruned_json_watermark_[rank]
-                    : 0;
-            if (from < pruned_watermark) {
+        NodeStore& store = (*ctx_.graph_sources)[rank]->store();
+        if (!from_store_id.has_value()) {
+            throw std::runtime_error(
+                "commit: parent edge references an unknown node id "
+                "(rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) +
+                " to=" + std::to_string(to) + ")");
+        }
+        if (store.erased(*from_store_id)) {
+            // A translated absent parent is exactly a collected, finished
+            // parent. NodeStore never reuses ids, so the dependency is a
+            // no-op only under the committer-owned GC mode.
+            if (ctx_.node_gc) {
                 continue;
             }
             throw std::runtime_error(
-                "commit: parent edge references an unknown node id "
-                "(rank=" + std::to_string(rank) +
-                " from=" + std::to_string(from) +
-                " to=" + std::to_string(to) + ")");
+                "commit: translated parent is erased while node GC is "
+                "disabled (rank=" + std::to_string(rank) +
+                " from=" + std::to_string(from) + ")");
         }
-        (*ctx_.graph_sources)[rank]->store().add_dependency(
-            from_it->second, to_it->second, DepKind::Data);
+        if (store.erased(*to_store_id)) {
+            throw std::runtime_error(
+                "commit: translated child is erased (rank=" +
+                std::to_string(rank) + " to=" + std::to_string(to) + ")");
+        }
+        store.add_dependency(
+            *from_store_id, *to_store_id, DepKind::Data);
     }
 
-    // ---- Phase B-3: register watches (member ids translated to store ids) ----
+    // ---- Phase B-3: register watches (member ids translated to store
+    //      ids; C1: typed members in JSON key order, statuses from the
+    //      parse-layer enum -- the "unknown status" throw is structurally
+    //      gone). ----
     for (const auto& watch : batch.watches) {
-        if (!watch.is_object()) {
-            throw std::runtime_error("commit: malformed watch entry");
-        }
-        const std::string request_id =
-            watch.value("request_id", std::string());
-        const std::string stage = watch.value("stage", std::string());
-        const uint64_t generation = watch.value("generation", uint64_t{0});
+        const std::string& request_id = watch.request_id;
+        const std::string& stage = watch.stage;
+        const uint64_t generation = watch.generation;
         std::set<CompletionKey> members;
-        const auto& members_json =
-            watch.value("members", nlohmann::json::object());
-        for (auto it = members_json.begin(); it != members_json.end(); ++it) {
-            const int rank = std::stoi(it.key());
-            const uint64_t json_id = it.value().get<uint64_t>();
-            const auto id_it = store_ids_.find(RankNodeKey{rank, json_id});
-            if (id_it == store_ids_.end()) {
+        for (const auto& member : watch.members) {
+            const int rank = member.rank;
+            const uint64_t json_id = member.json_id;
+            const auto store_id = resolve_store_id(rank, json_id);
+            if (!store_id.has_value()) {
                 throw std::runtime_error(
                     "commit: watch member references an unknown node id "
-                    "(rank=" + it.key() +
+                    "(rank=" + std::to_string(rank) +
                     " id=" + std::to_string(json_id) + ")");
             }
-            members.insert(CompletionKey{rank, id_it->second, generation});
+            if ((*ctx_.graph_sources)[rank]->store().erased(*store_id)) {
+                throw std::runtime_error(
+                    "commit: watch member resolves to an erased node "
+                    "(rank=" + std::to_string(rank) +
+                    " id=" + std::to_string(json_id) + ")");
+            }
+            members.insert(CompletionKey{rank, *store_id, generation});
         }
         std::set<NodeTerminalStatus> statuses;
-        const auto& statuses_json =
-            watch.value("statuses", nlohmann::json::array());
-        for (const auto& status_json : statuses_json) {
-            const std::string name = status_json.get<std::string>();
-            if (name == "Success") {
-                statuses.insert(NodeTerminalStatus::Success);
-            } else if (name == "Skipped") {
-                statuses.insert(NodeTerminalStatus::Skipped);
-            } else {
-                throw std::runtime_error(
-                    "commit: unknown watch status: " + name);
-            }
+        for (const auto status : watch.statuses) {
+            statuses.insert(status);
         }
         ctx_.watch_registry->register_stage_watch(
             request_id, stage, generation, std::move(members),
@@ -960,32 +1662,18 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
 
     // ---- Phase B-4: schedule future arrival alarms ----
     for (const auto& alarm : batch.future_alarms) {
-        if (!alarm.is_object()) {
-            throw std::runtime_error("commit: malformed future_alarm entry");
-        }
-        const auto& envelope_json =
-            alarm.value("envelope", nlohmann::json::object());
-        RequestEnvelope envelope;
-        envelope.request_id =
-            envelope_json.value("request_id", std::string());
-        envelope.session_id =
-            envelope_json.value("session_id", std::string());
-        envelope.turn_index = envelope_json.value("turn_index", 0);
-        envelope.prefill_length =
-            envelope_json.value("prefill_length", uint64_t{0});
-        envelope.decode_length =
-            envelope_json.value("decode_length", uint64_t{0});
-        envelope.inter_request_interval_ns =
-            envelope_json.value("inter_request_interval_ns", uint64_t{0});
-        envelope.arrival_world_ns =
-            alarm.value("arrival_world_ns", uint64_t{0});
+        RequestEnvelope envelope = alarm.envelope;
+        envelope.arrival_world_ns = alarm.arrival_world_ns;
         ctx_.ingress->schedule_future_arrival(envelope);
     }
 
     // ---- Phase B-5: issue pass over the TOUCHED ranks only (ranks without
     //      new nodes cannot have new free nodes -- the completion hook's
     //      deferred per-rank passes drain every other rank) ----
-    for (const int rank : compute_touched_ranks(batch, ctx_.num_ranks)) {
+    // Reuse the sorted-unique rank set collected by the mandatory id-stream
+    // preflight.  Re-walking every JSON node here used to add a second
+    // O(nodes) pass plus an allocating std::set on every committed batch.
+    for (const int rank : touched_ranks) {
         ctx_.issue_rank(rank);
     }
 
@@ -1002,58 +1690,46 @@ void GraphBatchCommitter::commit(const StateDelta& delta,
     counters_.total_kv_actions += batch.kv_actions.size();
     counters_.total_future_alarms += batch.future_alarms.size();
 
-    // ---- M2 node GC (2026-08-23): quiescent-point collection. The issue
-    //      pass above has fully returned (no Workload callback holds a
-    //      NodeView pointer), and any deferred issue passes it scheduled run
-    //      later and only ever touch free -- i.e. unfinished -- nodes, so
-    //      erasing finished childless nodes here is invisible to every
-    //      holder (see NodeStore::collect_garbage). No-op (structurally
-    //      absent) when node_gc is off. ----
+    // ---- M2 node GC (2026-08-23; A1 amortization 2026-08-28):
+    //      quiescent-point collection, amortized. The issue pass above has
+    //      fully returned (no Workload callback holds a NodeView pointer),
+    //      and any deferred issue passes it scheduled run later and only
+    //      ever touch free -- i.e. unfinished -- nodes, so erasing finished
+    //      childless nodes here is invisible to every holder (see
+    //      NodeStore::collect_garbage). A1: the tail only counts the
+    //      pending candidates (O(#ranks)) and drains once
+    //      >= kGcAmortizeThreshold have accumulated since the last
+    //      collection -- the pre-A1 drain-every-commit is what caused the
+    //      light-load wall regression. No-op (structurally absent) when
+    //      node_gc is off. ----
+    if (ctx_.node_gc) {
+        size_t pending = 0;
+        for (const auto& source : *ctx_.graph_sources) {
+            pending += source->store().pending_gc_count();
+        }
+        if (pending >= kGcAmortizeThreshold) {
+            collect_node_garbage();
+        }
+    }
+}
+
+void GraphBatchCommitter::finalize_node_garbage() {
+    // A1 (2026-08-28): run-end forced drain -- the amortized commit tails
+    // may leave up to kGcAmortizeThreshold candidates uncollected (plus the
+    // post-final-delivery tail nodes that finish after the last commit);
+    // draining here once makes the run-end retained-count diagnostics report
+    // the true in-flight window. No-op when node_gc is off.
     if (ctx_.node_gc) {
         collect_node_garbage();
     }
 }
 
 void GraphBatchCommitter::collect_node_garbage() {
-    // M2 (2026-08-23): end-of-commit quiescent-point collection (the only
-    // caller is commit()'s tail, gated on ctx_.node_gc). Two steps:
-    //   1. every per-rank store drains its candidate FIFO -- nodes finished
-    //      with no unfinished children are erased;
-    //   2. store_ids_ is pruned behind the same watermark: the per-rank
-    //      commit-order queue (ascending json ids) advances only while its
-    //      head matches the dense prune watermark AND its node was already
-    //      collected, so the pruned set is always a strict dense prefix
-    //      [0, pruned_json_watermark_[rank]) -- validate()'s watermark
-    //      disjunct resolves exactly that prefix and nothing else, and a
-    //      head blocked on a live node bounds the retained prefix by the
-    //      per-rank in-flight window.
+    // M2 (2026-08-23): end-of-commit quiescent-point collection. The affine
+    // metadata deliberately survives: it is one fixed record per rank and
+    // still translates an erased committed parent to its non-reused store id.
     for (auto& source : *ctx_.graph_sources) {
         source->store().collect_garbage();
-    }
-    // Bound the prune pass by the queue vector, not num_ranks: a zero-node
-    // batch (an accounting epoch) can reach here before the first
-    // node-bearing commit lazily sized the queues -- nothing to prune then.
-    for (size_t rank = 0; rank < prune_queues_.size(); ++rank) {
-        RankPruneQueue& queue = prune_queues_[rank];
-        uint64_t& watermark = pruned_json_watermark_[rank];
-        const NodeStore& store = (*ctx_.graph_sources)[rank]->store();
-        while (queue.head < queue.entries.size()) {
-            const auto& entry = queue.entries[queue.head];
-            if (entry.first != watermark) {
-                break;  // keep the pruned set a dense prefix (defensive)
-            }
-            if (!store.erased(entry.second)) {
-                break;  // node still live (unfinished / children pending)
-            }
-            store_ids_.erase(
-                RankNodeKey{static_cast<int>(rank), entry.first});
-            ++watermark;
-            ++queue.head;
-        }
-        if (queue.head == queue.entries.size()) {
-            queue.entries.clear();
-            queue.head = 0;
-        }
     }
 }
 

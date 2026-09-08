@@ -140,16 +140,19 @@ class GraphBatchCommitter {
             const std::string& pg_name,
             const std::vector<int>& participant_ranks)>
             communicator_members_for_pg;
-        // M2 node GC (2026-08-23, --online-node-gc on the official path; A1
-        // amortization 2026-08-28): when set, the constructor enables
-        // collection on every per-rank store and the commit tail counts
+        // M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed
+        // by the B.3 cleanup (2026-09-05), so the official path always sets
+        // this switch; A1 amortization 2026-08-28): when set, the
+        // constructor enables collection on every per-rank store and the
+        // commit tail counts
         // pending GC candidates, draining NodeStore records only once
         // >= kGcAmortizeThreshold have
         // accumulated; finalize_node_garbage() forces one final drain before
         // the run-end diagnostics. Internal default OFF: the phase fixtures
         // construct their Context explicitly and keep the pre-M2 behavior
-        // (including the memory profile) -- main_online passes the CLI value
-        // (frozen default 1 since the A1 amortization flip).
+        // (including the memory profile) -- main_online passes true
+        // unconditionally (the B.3 cleanup (2026-09-05) removed the
+        // --online-node-gc CLI arm).
         bool node_gc = false;
     };
 

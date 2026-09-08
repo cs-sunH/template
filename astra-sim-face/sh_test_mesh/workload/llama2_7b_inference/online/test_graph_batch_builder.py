@@ -20,6 +20,7 @@
 运行:cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_graph_batch_builder.py   （或 pytest 同路径）
 """
+import json
 import os
 import sys
 import unittest
@@ -32,7 +33,11 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
         sys.path.insert(0, _p)
 
 from generate_trace import COMP_NODE  # noqa: E402
-from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
+from online.graph_batch_builder import (  # noqa: E402
+    GraphBatchBuilder,
+    OnlineTraceBuilder,
+)
+from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
 
 SESSION = "session_train_0"
 REQUEST_A = f"{SESSION}_request_0"
@@ -127,13 +132,106 @@ def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
 
 
 def _rank_nodes(builder, rank):
-    """M1 适配(2026-08-23 收集即释放):builder.nodes 不再保证驻留全部
-    历史节点(已收集前缀按水位摊销压缩)——改读当前批次累加器
+    """M1 适配(2026-08-29 收集即释放):_collect 立即清空 builder.nodes，
+    已交付节点只在当前批次累加器中保留——改读当前批次累加器
     batch["nodes"](发射序,自 begin_batch 起含本批全部节点),保持
     "直读已发射节点"的测试意图;测试内单批发射,节点 id 自 0 连续,
     rank 过滤后位置 == 节点 id,与改前等价。"""
     return [node for node in builder.batch["nodes"]
             if node["rank"] == rank]
+
+
+def _node_edge_payload(batch):
+    return json.dumps(
+        {"nodes": batch["nodes"], "parent_edges": batch["parent_edges"]},
+        separators=(",", ":"), sort_keys=True,
+    )
+
+
+class DependencyFastPathTest(unittest.TestCase):
+    """_new_node 的 0/1 fast path 必须与有序去重旧逻辑逐案等价。"""
+
+    def test_dependency_edge_order_and_state_matrix(self):
+        cases = (
+            ("no_previous_or_pending", None, (), ()),
+            ("previous_only", 4, (), (4,)),
+            ("one_pending_only", None, (8,), (8,)),
+            ("one_pending_matches_previous", 4, (4,), (4,)),
+            ("one_pending_differs_from_previous", 4, (8,), (4, 8)),
+            ("many_pending_with_duplicates", 4, (8, 4, 9, 8), (4, 8, 9)),
+            ("many_pending_without_previous", None, (8, 8, 9), (8, 9)),
+        )
+        for label, previous_id, pending, expected_sources in cases:
+            with self.subTest(case=label):
+                trace = OnlineTraceBuilder(7, remote_operand_loads=False)
+                trace.next_id = 17
+                trace.previous_id = previous_id
+                trace.pending_extra_dependencies.extend(pending)
+
+                trace.comp("dependency_matrix", 1, 1)
+
+                self.assertEqual(
+                    trace.edges,
+                    [{"rank": 7, "from": source, "to": 17, "kind": "data"}
+                     for source in expected_sources],
+                )
+                self.assertEqual(trace.nodes[-1]["id"], 17)
+                self.assertEqual(trace.next_id, 18)
+                self.assertEqual(trace.previous_id, 17)
+                self.assertEqual(trace.pending_extra_dependencies, [])
+
+
+class CollectionLifecycleTest(unittest.TestCase):
+    """交付后 builder 缓冲区只应保留尚未收集的节点与边。"""
+
+    def test_collect_releases_buffers_without_changing_payload(self):
+        builder = GraphBatchBuilder(_make_config())
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"first_{rank}_0", 1, 1)
+            trace_builder.comp(f"first_{rank}_1", 1, 1)
+        expected_first_payload = json.dumps(
+            {
+                "nodes": [
+                    node for trace_builder in builder.builders.values()
+                    for node in trace_builder.nodes
+                ],
+                "parent_edges": [
+                    edge for trace_builder in builder.builders.values()
+                    for edge in trace_builder.edges
+                ],
+            },
+            separators=(",", ":"), sort_keys=True,
+        )
+
+        builder._collect(marker)
+        first_batch = builder.batch
+        first_payload = _node_edge_payload(first_batch)
+        self.assertEqual(first_payload, expected_first_payload)
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
+
+        builder.begin_batch()
+        marker = builder._mark()
+        for rank, trace_builder in builder.builders.items():
+            trace_builder.comp(f"second_{rank}", 1, 1)
+        builder._collect(marker)
+
+        self.assertEqual(_node_edge_payload(first_batch), first_payload)
+        self.assertEqual(
+            [(node["rank"], node["id"]) for node in builder.batch["nodes"]],
+            [(rank, 2) for rank in builder.builders],
+        )
+        self.assertEqual(
+            [(edge["rank"], edge["from"], edge["to"])
+             for edge in builder.batch["parent_edges"]],
+            [(rank, 1, 2) for rank in builder.builders],
+        )
+        for trace_builder in builder.builders.values():
+            self.assertEqual(trace_builder.nodes, [])
+            self.assertEqual(trace_builder.edges, [])
 
 
 class TrainEmissionNailTest(unittest.TestCase):
@@ -296,6 +394,117 @@ class TrainEmissionNailTest(unittest.TestCase):
             self.assertEqual(marker["stage"], "prefill")
             self.assertEqual(marker["generation"], 0)
             self.assertEqual(marker["type"], COMP_NODE)
+
+class _GateRecorder:
+    """仅记录 terminal REQUEST_COMPLETE 是否回收构图器完成门。"""
+
+    def __init__(self):
+        self.completion_gates = {SESSION: (1, {2: 7, 3: 7})}
+        self.retired = []
+
+    def retire_completion_gate(self, session_id):
+        self.retired.append(session_id)
+        self.completion_gates.pop(session_id, None)
+
+
+class _TerminalKVRecorder:
+    """Records terminal KV retirement without needing a real topology."""
+
+    def __init__(self, released_instance_index=1):
+        self.released_instance_index = released_instance_index
+        self.calls = []
+
+    def retire_terminal_session(self, session_id, completion_ns, request_id):
+        self.calls.append((session_id, completion_ns, request_id))
+        return self.released_instance_index
+
+
+class CompletionGateLifetimeTest(unittest.TestCase):
+    """跨 turn gate 只在在途期保留；terminal REQUEST_COMPLETE 回收。"""
+
+    @staticmethod
+    def _two_turn_config():
+        config = _make_config()
+        config.request_queue = [
+            SimpleNamespace(session_arrival_time_ns=0,
+                            inter_request_interval_ns=None),
+            SimpleNamespace(session_arrival_time_ns=None,
+                            inter_request_interval_ns=1000),
+        ]
+        return config
+
+    def test_strategy_turn_one_admission_consumes_gate_and_terminal_retires(self):
+        builder = GraphBatchBuilder(self._two_turn_config())
+        # 模拟 turn-0 列车 end barrier；turn-1 admission 消费后，依赖已
+        # 写进图，账本本身必须释放。
+        builder.completion_gates[SESSION] = (0, {0: None, 1: None})
+        plan = _admission_plan(REQUEST_B, turn=1)
+        plan["queue_index"] = 1
+        builder.begin_batch()
+        builder.emit_admission_batch(plan)
+        self.assertNotIn(SESSION, builder.completion_gates)
+
+        # terminal turn 无后继 admission；REQUEST_COMPLETE 的显式回收保证
+        # run-end 不保留最终 barrier。
+        builder.completion_gates[SESSION] = (1, {2: 9, 3: 9})
+        builder.retire_completion_gate(SESSION)
+        self.assertEqual(builder.completion_gates, {})
+
+    def test_terminal_request_complete_retire_gate(self):
+        scheduler = FaceOnlineScheduler.__new__(FaceOnlineScheduler)
+        runtime = SimpleNamespace(
+            request_id=REQUEST_A,
+            session_id=SESSION,
+        )
+        scheduler.graph = _GateRecorder()
+        scheduler.runtime_by_request_id = {REQUEST_A: runtime}
+        scheduler._runtime_index = {REQUEST_A: 0}
+        scheduler.next_request = [None]
+        scheduler.runtimes = [runtime]
+        scheduler._batch = {"future_alarms": []}
+        scheduler.kv_manager = _TerminalKVRecorder()
+        scheduler._note_capacity_change = lambda index: None
+
+        scheduler._on_request_complete(REQUEST_A, 123)
+
+        self.assertEqual(scheduler.graph.retired, [SESSION])
+        self.assertEqual(scheduler.graph.completion_gates, {})
+        self.assertEqual(scheduler.runtime_by_request_id, {})
+        self.assertEqual(scheduler._runtime_index, {})
+        self.assertEqual(scheduler.runtimes, [None])
+        self.assertEqual(
+            scheduler.kv_manager.calls,
+            [(SESSION, 123, REQUEST_A)],
+        )
+
+    def test_main_intermediate_request_keeps_kv_for_following_turn(self):
+        scheduler = FaceOnlineScheduler.__new__(FaceOnlineScheduler)
+        runtime = SimpleNamespace(request_id=REQUEST_A, session_id=SESSION)
+        following = SimpleNamespace(
+            request_id=REQUEST_B,
+            session_id=SESSION,
+            turn_index=1,
+            queue_index=1,
+            prefill_length=128,
+            decode_length=1,
+        )
+        scheduler.graph = _GateRecorder()
+        scheduler.runtime_by_request_id = {REQUEST_A: runtime}
+        scheduler._runtime_index = {REQUEST_A: 0}
+        scheduler.next_request = [following]
+        scheduler.runtimes = [runtime]
+        scheduler._batch = {"future_alarms": []}
+        scheduler.kv_manager = _TerminalKVRecorder()
+        scheduler._note_capacity_change = lambda index: None
+        scheduler.config = SimpleNamespace(
+            request_queue=[None, SimpleNamespace(inter_request_interval_ns=1000)]
+        )
+
+        scheduler._on_request_complete(REQUEST_A, 123)
+
+        self.assertEqual(scheduler.kv_manager.calls, [])
+        self.assertEqual(scheduler.graph.retired, [])
+        self.assertEqual(len(scheduler._batch["future_alarms"]), 1)
 
 
 if __name__ == "__main__":

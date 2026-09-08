@@ -33,21 +33,18 @@ typedef ChakraProtoMsg::CollectiveCommType ChakraCollectiveCommType;
 
 namespace {
 
-// Step 1-5: node-terminal record with the online-mode reverse index.
-// Online mode reads request_id/stage/generation from the GraphSource view
-// (NodeStore-backed); static mode stays nullptr/0 -- byte-for-byte the
-// pre-phase-1 shape (the lookup is gated to online mode, so the static path
-// performs no extra attribute reads). The view (if any) is kept alive for
-// the whole call so the c_str() pointers are valid for the duration of the
-// record (the hook runs inside record_node_terminal).
+// Step 1-5: node-terminal record with the already-resolved online NodeView.
+// Every terminal path that can run online has the view in hand for release /
+// stats, so passing it through avoids a second NodeStore hash lookup for every
+// terminal. Static mode stays nullptr/0 -- byte-for-byte the pre-phase-1
+// shape. The view is alive for the whole call, so its c_str() pointers remain
+// valid for the duration of the observer hook.
 void record_node_terminal(
-    std::shared_ptr<ExecutionDriven::GraphSource> graph_source,
     ExecutionDriven::ExecutionMode mode, int rank, uint64_t node_id,
-    ExecutionDriven::NodeTerminalStatus status) {
-    const ExecutionDriven::NodeView* nv = nullptr;
-    if (mode == ExecutionDriven::ExecutionMode::Online) {
-        nv = graph_source->lookup_ptr(node_id);
-    }
+    ExecutionDriven::NodeTerminalStatus status,
+    const ExecutionDriven::NodeView* online_node) {
+    const ExecutionDriven::NodeView* const nv =
+        mode == ExecutionDriven::ExecutionMode::Online ? online_node : nullptr;
     ExecutionDriven::CompletionObserver::instance().record_node_terminal(
         rank, node_id,
         (nv != nullptr && !nv->request_id.empty()) ? nv->request_id.c_str()
@@ -118,7 +115,7 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
     }
     this->comm_groups.clear();
     // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id);
+    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     this->sys = sys;
@@ -137,13 +134,14 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
     }
     initialize_comm_groups(comm_group_filename);
     this->stats = new Statistics(this);
+    if (this->execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
+        this->stats->configure_online_history_preservation(
+            MetricCollector::instance().preserve_online_operator_history());
+    }
     this->is_finished = false;
 }
 
 Workload::~Workload() {
-    for (auto comm_group : comm_groups) {
-        delete comm_group.second;
-    }
     comm_groups.clear();
 
     if (this->et_feeder != nullptr) {
@@ -154,6 +152,69 @@ Workload::~Workload() {
     }
     if (this->stats != nullptr) {
         delete this->stats;
+    }
+}
+
+ExecutionDriven::OnlineStatisticsState&
+Workload::online_statistics_state_or_fail(uint64_t node_id) {
+    auto* state = graph_source_->mutable_online_statistics(node_id);
+    if (state == nullptr) {
+        workload_logger_->critical(
+            "compact online statistics state missing for node {}", node_id);
+        std::exit(EXIT_FAILURE);
+    }
+    return *state;
+}
+
+void Workload::start_online_statistics(
+    const ExecutionDriven::NodeView& node, Tick start_time) {
+    if (stats->online_history_preserved()) {
+        stats->record_start(node, start_time);
+        return;
+    }
+    stats->record_online_service_start(
+        node, online_statistics_state_or_fail(node.global_id), start_time);
+}
+
+void Workload::complete_online_statistics(
+    const ExecutionDriven::NodeView& node, Tick end_time) {
+    if (stats->online_history_preserved()) {
+        stats->record_end(node, end_time);
+        return;
+    }
+    stats->complete_online_service_operator(
+        node, online_statistics_state_or_fail(node.global_id), end_time);
+}
+
+void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
+    if (execution_mode_ != ExecutionDriven::ExecutionMode::Online) {
+        return;
+    }
+    if (!graph_source_->mark_terminal_observed(node_id)) {
+        workload_logger_->critical(
+            "duplicate, unknown, or unissued online terminal callback for "
+            "node {}",
+            node_id);
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+void Workload::record_network_bandwidth(uint64_t node_id,
+                                        Tick execution_time) {
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        auto& online_stat = online_statistics_state_or_fail(node_id);
+        if (execution_time > 0 && online_stat.comm_size.has_value()) {
+            online_stat.network_bandwidth =
+                static_cast<double>(online_stat.comm_size.value()) /
+                execution_time;
+        }
+        return;
+    }
+    auto& op_stat = stats->get_operator_statistics(node_id);
+    if (execution_time > 0 && op_stat.comm_size.has_value()) {
+        op_stat.network_bandwidth =
+            static_cast<double>(op_stat.comm_size.value()) / execution_time;
     }
 }
 
@@ -191,7 +252,7 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
                 "ranks and dimensions");
         }
 
-        comm_groups[comm_group_id] = new CommunicatorGroup(
+        comm_groups[comm_group_id] = std::make_shared<CommunicatorGroup>(
             comm_group_id, involved_NPUs, sys, dimension_sizes);
     }
 }
@@ -220,9 +281,15 @@ void Workload::issue_pytorch_pg_metadata(
             }
 
             int32_t pgNameInt = std::stoi(pgName);
+            auto existing = this->comm_groups.find(pgNameInt);
+            if (existing != this->comm_groups.end() && existing->second &&
+                existing->second->get_id() == pgNameInt + 1 &&
+                existing->second->matches_definition(involved_NPUs)) {
+                continue;
+            }
             // To ensure pgName > 0
-            CommunicatorGroup* cg =
-                new CommunicatorGroup(pgNameInt + 1, involved_NPUs, sys);
+            auto cg = std::make_shared<CommunicatorGroup>(
+                pgNameInt + 1, involved_NPUs, sys);
             this->comm_groups[pgNameInt] = cg;
         }
     } catch (const std::exception& e) {
@@ -269,19 +336,28 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
     // (HardwareResource / Statistics / local_mem tracker) is fetched through
     // the GraphSource. Step 1-8: the online path (et_node == nullptr) uses
     // the NodeView overloads.
-    auto et_node = graph_source_->et_node(node.global_id);
+    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
         this->hw_resource->occupy(node);
         // stats->record_end will be called in Workload::call
-        stats->record_start(node, Sys::boostedTick());
+        start_online_statistics(node, Sys::boostedTick());
     } else {
+        et_node = graph_source_->et_node(node.global_id);
         this->hw_resource->occupy(et_node);
         // stats->record_end will be called in Workload::call
         stats->record_start(et_node, Sys::boostedTick());
     }
     // Side-band metrics observation only; does not touch the node, the
     // dependency resolver, or the event queue (doc sec.5.5).
-    if (MetricCollector::instance().enabled()) {
+    // R2 (2026-08-29) anchor fast path: online mode consults the sparse
+    // NodeView flag set by the B-1.5 registration hook; unanchored nodes
+    // (the overwhelming majority) skip the two-level hash lookup entirely.
+    // Static/ET mode keeps the unconditional call -- ETFeederGraphSource
+    // views leave the flags false, and the static manifest anchor
+    // semantics are a red line.
+    if (MetricCollector::instance().enabled() &&
+        (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
+         node.metric_issue_anchor)) {
         MetricCollector::instance().on_node_issue(sys->id, node.global_id,
                                                   Sys::boostedTick());
     }
@@ -439,6 +515,7 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     // if tensor_size is 0 during roofline mode, this is an invalid node
     if (tensor_size == 0) {
+        delete wlhd;
         skip_invalid(node);
         return;
     }
@@ -518,21 +595,47 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         sys->register_event(this, EventType::General, wlhd, runtime);
     }
 
-    auto& op_stat = this->stats->get_operator_statistics(node.global_id);
-    op_stat.operation_intensity = operational_intensity;
-    op_stat.compute_utilization = perf / sys->peak_perf;
-    op_stat.memory_utilization =
-        (perf / operational_intensity) / sys->local_mem_bw;
-    op_stat.is_memory_bound = perf < sys->peak_perf;
-    workload_logger_
-        ->debug("operation_intensity={}, perf={}, elapsed_time={} "
-                "local_mem_latency_ns={} "
-                "compute_utilization={} memory_utilization={} tensor_size={} "
-                "num_ops={}",
-                operational_intensity, perf, elapsed_time,
-                sys->local_mem_latency,
-                op_stat.compute_utilization.value(),
-                op_stat.memory_utilization.value(), tensor_size, num_ops);
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        auto& online_stat = online_statistics_state_or_fail(node.global_id);
+        online_stat.operation_intensity = operational_intensity;
+        online_stat.compute_utilization = perf / sys->peak_perf;
+        online_stat.memory_utilization =
+            (perf / operational_intensity) / sys->local_mem_bw;
+        online_stat.is_memory_bound = perf < sys->peak_perf;
+        if (sys->trace_enabled) {
+            workload_logger_
+                ->debug("operation_intensity={}, perf={}, elapsed_time={} "
+                        "local_mem_latency_ns={} "
+                        "compute_utilization={} memory_utilization={} tensor_size={} "
+                        "num_ops={}",
+                        operational_intensity, perf, elapsed_time,
+                        sys->local_mem_latency,
+                        online_stat.compute_utilization.value(),
+                        online_stat.memory_utilization.value(), tensor_size,
+                        num_ops);
+        }
+    } else {
+        // Static ET and history-preserving online microbenchmarks retain the
+        // legacy complete per-node Statistics record.
+        auto& op_stat = this->stats->get_operator_statistics(node.global_id);
+        op_stat.operation_intensity = operational_intensity;
+        op_stat.compute_utilization = perf / sys->peak_perf;
+        op_stat.memory_utilization =
+            (perf / operational_intensity) / sys->local_mem_bw;
+        op_stat.is_memory_bound = perf < sys->peak_perf;
+        if (sys->trace_enabled) {
+            workload_logger_
+                ->debug("operation_intensity={}, perf={}, elapsed_time={} "
+                        "local_mem_latency_ns={} "
+                        "compute_utilization={} memory_utilization={} tensor_size={} "
+                        "num_ops={}",
+                        operational_intensity, perf, elapsed_time,
+                        sys->local_mem_latency,
+                        op_stat.compute_utilization.value(),
+                        op_stat.memory_utilization.value(), tensor_size, num_ops);
+        }
+    }
 }
 
 void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
@@ -560,12 +663,20 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     // 4x-true default when the attribute is absent.
     const std::vector<bool>& involved_dims = node.coll.involved_dim;
 
-    CommunicatorGroup* comm_group = extract_comm_group(node);
+    auto comm_group_owner = extract_comm_group(node);
+    CommunicatorGroup* comm_group = comm_group_owner.get();
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // Record communication size for bandwidth calculation
-    stats->get_operator_statistics(node.global_id).comm_size = comm_size;
+    // Keep comm_size on the live NodeStore record in compact service mode:
+    // terminal bandwidth accounting still consumes it, but no global
+    // Statistics per-node hash-table entry is needed.
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
+    } else {
+        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
+    }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
     const auto comm_priority = node.coll.priority;  // default 0u
@@ -573,24 +684,28 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     if (comm_type == ChakraCollectiveCommType::ALL_REDUCE) {
         DataSet* fp = sys->generate_all_reduce(comm_size, involved_dims,
                                                comm_group, comm_priority, node.global_id);
+        fp->retain_communicator_group(comm_group_owner);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else if (comm_type == ChakraCollectiveCommType::ALL_TO_ALL) {
         DataSet* fp = sys->generate_all_to_all(comm_size, involved_dims,
                                                comm_group, comm_priority, node.global_id);
+        fp->retain_communicator_group(comm_group_owner);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else if (comm_type == ChakraCollectiveCommType::ALL_GATHER) {
         DataSet* fp = sys->generate_all_gather(comm_size, involved_dims,
                                                comm_group, comm_priority, node.global_id);
+        fp->retain_communicator_group(comm_group_owner);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else if (comm_type == ChakraCollectiveCommType::REDUCE_SCATTER) {
         DataSet* fp = sys->generate_reduce_scatter(comm_size, involved_dims,
                                                    comm_group, comm_priority, node.global_id);
+        fp->retain_communicator_group(comm_group_owner);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
@@ -603,6 +718,7 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
             runtime = node.compute.runtime_ns;
         }
         DataSet* fp = new DataSet(1);
+        fp->retain_communicator_group(comm_group_owner);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
@@ -623,8 +739,13 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation
-    stats->get_operator_statistics(node.global_id).comm_size = size;
+    // Record communication size for bandwidth calculation.
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        online_statistics_state_or_fail(node.global_id).comm_size = size;
+    } else {
+        stats->get_operator_statistics(node.global_id).comm_size = size;
+    }
     const auto tag = node.comm.tag;
 
     // sh_2.0 N-way HBM contention: the p2p sender is a data endpoint of its
@@ -670,8 +791,13 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         throw std::runtime_error("Recv node should be issued by the receiver");
     }
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation
-    stats->get_operator_statistics(node.global_id).comm_size = size;
+    // Record communication size for bandwidth calculation.
+    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+        !stats->online_history_preserved()) {
+        online_statistics_state_or_fail(node.global_id).comm_size = size;
+    } else {
+        stats->get_operator_statistics(node.global_id).comm_size = size;
+    }
     const auto tag = node.comm.tag;
 
     // sh_2.0 N-way HBM contention: the p2p receiver is a data endpoint of
@@ -708,42 +834,52 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
 
 void Workload::skip_invalid(const ExecutionDriven::NodeView& node) {
     const auto node_id = node.global_id;
+    // Claim terminal delivery before any observer/statistics side effect.
+    // Static mode is intentionally a no-op; online duplicate callbacks are a
+    // mechanism error rather than an idempotent second aggregate.
+    mark_online_terminal_or_fail(node_id);
     // Step 1-3: unconditional node-terminal record (独立于 metrics 开关).
     // Step 1-5: the online path fills the reverse index from the GraphSource
     // view; static stays nullptr/0. Skipped is explicit: the node never
     // executed (INVALID_NODE / metadata / zero tensor_size); whether Skipped
     // satisfies a watch is the watch's own policy, never a default.
-    record_node_terminal(graph_source_, execution_mode_, sys->id, node_id,
-                         ExecutionDriven::NodeTerminalStatus::Skipped);
+    record_node_terminal(execution_mode_, sys->id, node_id,
+                         ExecutionDriven::NodeTerminalStatus::Skipped, &node);
     // Step 1-4: the GraphSource is the sole dependency-state owner.
     graph_source_->finish_node(node_id);
     auto logger = workload_logger_;
-    logger->debug("callback,sys->id={}, tick={}, node->id={}, "
-                  "node->name={}, node->type={}",
-                  sys->id, Sys::boostedTick(), node.global_id, node.name,
-                  static_cast<uint64_t>(node.node_type));
+    // C4 (2026-08-28): gate the per-node debug format behind trace_enabled
+    // (same pattern as issue()) -- with trace off the format string and
+    // arguments are not even evaluated, and skip_invalid runs once per
+    // invalid node in online mode.
+    if (sys->trace_enabled) {
+        logger->debug("callback,sys->id={}, tick={}, node->id={}, "
+                      "node->name={}, node->type={}",
+                      sys->id, Sys::boostedTick(), node.global_id, node.name,
+                      static_cast<uint64_t>(node.node_type));
+    }
     // Step 1-8: online path (et_node == nullptr) releases through the
     // NodeView overloads. The track_local_mem block below keeps the static
     // et_node handle (unreachable in online mode: the ctor fails closed on
     // track_local_mem + Online).
     std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node = nullptr;
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
-        const ExecutionDriven::NodeView* nv =
-            graph_source_->lookup_ptr(node_id);
-        if (nv == nullptr) {
-            workload_logger_
-                ->critical("skip_invalid for unknown online node id={}",
-                           node_id);
-            exit(EXIT_FAILURE);
-        }
-        hw_resource->release(*nv);
-        stats->record_end(*nv, Sys::boostedTick());
+        // `node` is the GraphSource view just taken by issue(); do not look
+        // it up again on this all-node terminal path.
+        hw_resource->release(node);
+        complete_online_statistics(node, Sys::boostedTick());
     } else {
         et_node = graph_source_->et_node(node_id);
         hw_resource->release(et_node);
         stats->record_end(et_node, Sys::boostedTick());
     }
-    if (MetricCollector::instance().enabled()) {
+    // R2 (2026-08-29) anchor fast path: online mode consults the sparse
+    // NodeView flag (set at B-1.5 registration); static/ET mode keeps the
+    // unconditional call (skip_invalid is shared by both modes, and the
+    // ETFeeder views' flags are always false).
+    if (MetricCollector::instance().enabled() &&
+        (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
+         node.metric_complete_anchor)) {
         MetricCollector::instance().on_node_complete(sys->id, node_id,
                                                      Sys::boostedTick());
     }
@@ -761,8 +897,22 @@ void Workload::call(EventType event, CallData* data) {
         IntData* int_data = (IntData*)data;
         uint64_t coll_comm_id = int_data->data;
 
+        auto node_id_it = collective_comm_node_id_map.find(coll_comm_id);
+        auto wrapper_it = collective_comm_wrapper_map.find(coll_comm_id);
+        if (node_id_it == collective_comm_node_id_map.end() ||
+            wrapper_it == collective_comm_wrapper_map.end() ||
+            wrapper_it->second == nullptr) {
+            workload_logger_
+                ->critical("collective callback for missing or already "
+                           "retired dataset id={}", coll_comm_id);
+            exit(EXIT_FAILURE);
+        }
+        const uint64_t node_id = node_id_it->second;
+        DataSet* collective_wrapper = wrapper_it->second;
+        collective_comm_node_id_map.erase(node_id_it);
+        collective_comm_wrapper_map.erase(wrapper_it);
+
         hw_resource->tics_gpu_comms += int_data->execution_time;
-        uint64_t node_id = collective_comm_node_id_map[coll_comm_id];
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.
@@ -783,9 +933,14 @@ void Workload::call(EventType event, CallData* data) {
                             sys->id, Sys::boostedTick(), node_id,
                             nv->name.c_str(), nv->node_type);
             }
+            mark_online_terminal_or_fail(node_id);
             hw_resource->release(*nv);
-            stats->record_end(*nv, Sys::boostedTick());
-            if (MetricCollector::instance().enabled()) {
+        complete_online_statistics(*nv, Sys::boostedTick());
+            // R2 anchor fast path: online-only branch (the static else below
+            // is untouched and stays unconditional); nv points into the
+            // NodeStore record the registration hook set the flags on.
+            if (MetricCollector::instance().enabled() &&
+                nv->metric_complete_anchor) {
                 MetricCollector::instance().on_node_complete(
                     sys->id, node_id, Sys::boostedTick());
             }
@@ -812,13 +967,7 @@ void Workload::call(EventType event, CallData* data) {
         }
 
         // Calculate network bandwidth
-        auto& op_stat = stats->get_operator_statistics(node_id);
-        Tick execution_time = int_data->execution_time;
-        if (execution_time > 0 && op_stat.comm_size.has_value()) {
-            double bandwidth =
-                static_cast<double>(op_stat.comm_size.value()) / execution_time;
-            op_stat.network_bandwidth = bandwidth;
-        }
+        record_network_bandwidth(node_id, int_data->execution_time);
 
         if (this->sys->track_local_mem) {
             this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());
@@ -826,9 +975,8 @@ void Workload::call(EventType event, CallData* data) {
 
         // Step 1-3: unconditional node-terminal record (collective branch);
         // step 1-5 reverse-index fill in online mode.
-        record_node_terminal(graph_source_, execution_mode_, sys->id,
-                             node_id,
-                             ExecutionDriven::NodeTerminalStatus::Success);
+        record_node_terminal(execution_mode_, sys->id, node_id,
+                             ExecutionDriven::NodeTerminalStatus::Success, nv);
 
         graph_source_->finish_node(node_id);
         // Static auto-advance only: in online mode the post-commit deferred
@@ -837,10 +985,7 @@ void Workload::call(EventType event, CallData* data) {
             issue_dep_free_nodes();
         }
 
-        // The Dataset class provides statistics that should be used later to
-        // dump more statistics in the workload layer
-        delete collective_comm_wrapper_map[coll_comm_id];
-        collective_comm_wrapper_map.erase(coll_comm_id);
+        delete collective_wrapper;
 
     } else {
         if (data == nullptr) {
@@ -932,9 +1077,15 @@ void Workload::call(EventType event, CallData* data) {
                                 sys->id, Sys::boostedTick(), wlhd->node_id,
                                 nv->name.c_str(), nv->node_type);
                 }
+                mark_online_terminal_or_fail(wlhd->node_id);
                 hw_resource->release(*nv);
-                stats->record_end(*nv, Sys::boostedTick());
-                if (MetricCollector::instance().enabled()) {
+        complete_online_statistics(*nv, Sys::boostedTick());
+                // R2 anchor fast path: online-only branch (the static else
+                // below is untouched and stays unconditional); nv points
+                // into the NodeStore record the registration hook set the
+                // flags on.
+                if (MetricCollector::instance().enabled() &&
+                    nv->metric_complete_anchor) {
                     MetricCollector::instance().on_node_complete(
                         sys->id, wlhd->node_id, Sys::boostedTick());
                 }
@@ -967,15 +1118,28 @@ void Workload::call(EventType event, CallData* data) {
                 hbm_joined ? hbm_join_event : event;
             if (effective_event == EventType::PacketSent ||
                 effective_event == EventType::PacketReceived) {
-                auto& op_stat = stats->get_operator_statistics(wlhd->node_id);
-                Tick execution_time =
-                    stats->get_operator_statistics(wlhd->node_id).end_time -
-                    stats->get_operator_statistics(wlhd->node_id).start_time;
-                if (execution_time > 0 && op_stat.comm_size.has_value()) {
-                    double bandwidth =
-                        static_cast<double>(op_stat.comm_size.value()) /
-                        execution_time;
-                    op_stat.network_bandwidth = bandwidth;
+                if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
+                    !stats->online_history_preserved()) {
+                    const auto& online_stat =
+                        online_statistics_state_or_fail(wlhd->node_id);
+                    if (!online_stat.completed ||
+                        online_stat.end_time ==
+                            ExecutionDriven::OnlineStatisticsState::kInvalidTick) {
+                        workload_logger_->critical(
+                            "p2p bandwidth requested before compact online "
+                            "completion for node {}",
+                            wlhd->node_id);
+                        std::exit(EXIT_FAILURE);
+                    }
+                    record_network_bandwidth(
+                        wlhd->node_id,
+                        online_stat.end_time - online_stat.start_time);
+                } else {
+                    const auto& op_stat =
+                        stats->get_operator_statistics(wlhd->node_id);
+                    record_network_bandwidth(
+                        wlhd->node_id,
+                        op_stat.end_time - op_stat.start_time);
                 }
             }
 
@@ -988,10 +1152,9 @@ void Workload::call(EventType event, CallData* data) {
             // branch; also reached by AnalyticalRemoteMemory completions,
             // which register_event back into Workload::call); step 1-5
             // reverse-index fill in online mode.
-            record_node_terminal(graph_source_, execution_mode_, sys->id,
-                                 wlhd->node_id,
-                                 ExecutionDriven::NodeTerminalStatus::
-                                     Success);
+            record_node_terminal(execution_mode_, sys->id, wlhd->node_id,
+                                 ExecutionDriven::NodeTerminalStatus::Success,
+                                 nv);
 
             graph_source_->finish_node(wlhd->node_id);
             // Static auto-advance only (see collective branch above).
@@ -1038,6 +1201,9 @@ void Workload::fire() {
 }
 
 void Workload::report() {
+    // Compact online service has no legacy per-node Statistics history. Check
+    // before emitting any report output so this path cannot report zeros.
+    stats->ensure_legacy_post_processing_supported();
     Tick curr_tick = Sys::boostedTick();
     workload_logger_
         ->info("sys[{}] finished, {} cycles, exposed communication {} cycles.",
@@ -1058,7 +1224,7 @@ void Workload::report() {
     }
 }
 
-CommunicatorGroup* Workload::extract_comm_group(
+std::shared_ptr<CommunicatorGroup> Workload::extract_comm_group(
     const ExecutionDriven::NodeView& node) {
     // pg_name parsed by the GraphSource adapter (legacy "" default).
     std::string comm_group_name = node.coll.pg_name;
@@ -1073,12 +1239,13 @@ CommunicatorGroup* Workload::extract_comm_group(
     }
 
     int comm_group_id = std::stoi(comm_group_name);
-    if (comm_groups.find(comm_group_id) == comm_groups.end()) {
+    const auto comm_group_it = comm_groups.find(comm_group_id);
+    if (comm_group_it == comm_groups.end() || !comm_group_it->second) {
         workload_logger_
             ->critical(
                 "For rank {} ET node {}, communicator group {} not found",
                 sys->id, node.global_id, comm_group_id);
         exit(EXIT_FAILURE);
     }
-    return comm_groups[comm_group_id];
+    return comm_group_it->second;
 }

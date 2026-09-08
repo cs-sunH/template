@@ -56,6 +56,19 @@ class ChunkIdGenerator {
                                            int dest,
                                            ChunkSize chunk_size) noexcept;
 
+    /// Mark one callback-tracker entry as fully consumed. A key is reclaimed
+    /// only after every logical send under it has completed and both id
+    /// streams have caught up, so legacy tag reuse and same-key concurrency
+    /// remain valid.
+    void complete(int tag,
+                  int src,
+                  int dest,
+                  ChunkSize chunk_size,
+                  int chunk_id) noexcept;
+
+    /// Diagnostic/test accessor: keys still needed for outstanding traffic.
+    [[nodiscard]] size_t size() const noexcept;
+
   private:
     /// map from (tag, src, dest, chunk_size) tuple to ChunkIdGeneratorEntry
     std::map<Key, ChunkIdGeneratorEntry> chunk_id_map;

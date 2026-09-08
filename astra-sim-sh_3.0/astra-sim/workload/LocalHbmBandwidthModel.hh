@@ -58,6 +58,7 @@ class LocalHbmBandwidthModel : public Callable {
         static_cast<size_t>(JobKind::KIND_COUNT);
 
     LocalHbmBandwidthModel(Sys* sys, Workload* workload);
+    ~LocalHbmBandwidthModel() override;
 
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
@@ -144,7 +145,9 @@ class LocalHbmBandwidthModel : public Callable {
                    uint64_t tensor_size,
                    WorkloadLayerHandlerData* wlhd);
     void advance_to(Tick now);
+    void cancel_scheduled_transition();
     void schedule_next_transition();
+    static void destroy_transition_data(CallData* data);
     static bool memory_done(const Job& job);
     static bool complete(const Job& job);
 
@@ -158,6 +161,7 @@ class LocalHbmBandwidthModel : public Callable {
     std::vector<Job> jobs;
     Tick last_update_tick;
     uint64_t event_generation;
+    SystemEventHandle scheduled_transition_event;
 
     // Side-band observation counters (see the public getters).  Doubles keep
     // the exact same values advance_to() already computed; nothing reads

@@ -97,6 +97,7 @@ from generate_wsc_llm_trace import (  # noqa: E402
     RECOMPUTE,
     _eviction_record_dict,
     _kv_transfer_dict,
+    _xy_route,
 )
 from online.graph_batch_builder import first_token_split_enabled  # noqa: E402
 from online.online_scheduler_base import (  # noqa: E402
@@ -106,6 +107,7 @@ from online.online_scheduler_base import (  # noqa: E402
     OnlineSchedulerBase,
 )
 from session_kv_manager import (  # noqa: E402
+    RESIDENT,
     SessionKVCacheManager,
     kv_cache_shard_bytes_for_tokens,
 )
@@ -175,8 +177,10 @@ class _OnlineRequestRuntime:
         "admitted_prefill", "prefill_attempt_epoch", "decode_capacity_reserved",
         "history_cache_state_before", "hbm_before_request",
         "history_action", "history_source_instance_index",
-        "history_transfer_bytes", "history_recompute_tokens",
+        "history_transfer_bytes", "history_transfer_shards",
+        "history_recompute_tokens",
         "admission_evictions", "decode_target_evictions",
+        "reservation_credit",
         "decode_queue_depth_before_enqueue",
         "waiting_decode_admission", "prefill_decode_transfer",
         "completion_evictions", "kv_state_after_completion",
@@ -208,9 +212,17 @@ class _OnlineRequestRuntime:
         self.history_action = None
         self.history_source_instance_index = None
         self.history_transfer_bytes = None
+        # 问题 4b(2026-09-05):history 迁移 shard 留存(holder 模式镜像
+        # decode_target_evictions——准入时赋值、prefill 决策序列化、
+        # M4 核销置空;NOC_MIGRATE 之外恒空元组)。
+        self.history_transfer_shards = ()
         self.history_recompute_tokens = None
         self.admission_evictions = ()
         self.decode_target_evictions = ()
+        # 准入预占净额修正(2026-09-06):全量预约失败改净额重试成功时记录
+        # 旧驻留 credit(tuple,供迁移后 extend 回补差值);None = 全量路径
+        # 或已回补/已核销。
+        self.reservation_credit = None
         self.decode_queue_depth_before_enqueue = None
         self.waiting_decode_admission = False
         self.prefill_decode_transfer = None
@@ -250,6 +262,27 @@ def _kv_event_dict(event) -> dict:
             event.instance_remaining_after_bytes),
         "insufficient_ranks": list(event.insufficient_ranks),
     }
+
+
+def _history_transfer_shard_dicts(hardware, shards) -> list:
+    """问题 4b(2026-09-05):prefill 决策 history 迁移的 shard 级路由
+    序列化——逐 shard 附 noc_path/noc_hops(rank 级 XY 路由,与 decode 侧
+    _kv_transfer_dict(hardware=...) 的 shards 同构、与离线 _paired_transfer
+    的 routes 行同源);只读派生观测字段,不触调度/KV 决策(A/B 对拍剥离
+    清单条目)。transfer_shards 仅 NOC_MIGRATE 非空(local_hit/ABSENT/
+    recompute 恒空元组),非空时 source_rank/target_rank 必为具体 rank。"""
+    rows = []
+    for shard in shards:
+        path = _xy_route(hardware, shard.source_rank, shard.target_rank)
+        rows.append({
+            "relative_tp_rank": shard.relative_tp_rank,
+            "source_rank": shard.source_rank,
+            "target_rank": shard.target_rank,
+            "bytes": shard.bytes,
+            "noc_path": list(path),
+            "noc_hops": max(0, len(path) - 1),
+        })
+    return rows
 
 
 class WscLlmOnlineScheduler(OnlineSchedulerBase):
@@ -315,12 +348,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 静态映射语义;A/B 对拍剥离清单条目)。
         self._instance_graph = InstanceGraph(self.topology)
 
-        # 蓝图 :1694-1698:KV 账本(reserve_context_tokens 同参)。
+        # 蓝图 :1694-1698:KV 账本。
         # offline: wsc_llm_scheduler.py
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
-            reserve_context_tokens=config.kv_reserve_context_tokens,
         )
 
         # 蓝图 :1699-1702:实例账本。
@@ -351,9 +383,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 只访问该集合(sorted 保持实例 index 序 = 离线循环序,决策确定性
         # 不受影响),不做全量实例扫描。
         self._ready_frontier = set()
-        # §7.3:admission retry ready set(legacy 迁移占位;v1 无生产者,
-        # 恒为空;结束审计必须为空)。
-        self._admission_retry_ready = set()
         # 蓝图 :1729-1732:容量 epoch / 准入门控。
         # offline: wsc_llm_scheduler.py
         self.capacity_epoch = [0 for _ in self.topology.instances]
@@ -742,6 +771,38 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 snapshot.encode()).hexdigest(),
         }
 
+    def _decode_decision_dict(self, runtime, route) -> dict:
+        """decode 决策行构造(问题 2A 修复 2026-09-05:从 _emit_train
+        joiner 循环的内联构造抽出,原 4 字段逐样搬移;新增
+        decode_target_evictions 序列化——decode 侧逐出(#2 预占/#4 move/
+        #5 grow_decode 累积)此前从未落盘;发射后由调用点置空核销,
+        镜像 completion 对 completion_evictions 的先序列化后置空语义)。
+
+        问题 4b(2026-09-05):prefill_decode_transfer 传
+        hardware=self.topology.hardware,shards 逐项补 noc_path/noc_hops
+        (rank 级 XY 路由,与离线 _paired_transfer 的 routes 行同源),
+        供 hopbytes shard 级 mesh 跳口径消费。"""
+        return {
+            "decode_instance_index": runtime.decode_instance_index,
+            "static_route": {
+                "prefill_instance_index": route.prefill_instance_index,
+                "decode_instance_index": route.decode_instance_index,
+                "path": list(route.path),
+                "hop_count": route.hop_count,
+                "shared_edges": [list(edge)
+                                 for edge in route.shared_edges],
+            },
+            "decode_queue_depth_before_enqueue":
+                runtime.decode_queue_depth_before_enqueue,
+            "decode_target_evictions": [
+                _eviction_record_dict(record)
+                for record in runtime.decode_target_evictions
+            ],
+            "prefill_decode_transfer": _kv_transfer_dict(
+                runtime.prefill_decode_transfer,
+                hardware=self.topology.hardware),
+        }
+
     def _emit_train(self, state, tick: int) -> None:
         """把冻结的列车计划交给构图器发射,注册 exit 标记 watch,并挂起
         in_flight_train(busy 门 = 一个列车在飞;§3.6 仅 D 实例)。
@@ -789,22 +850,16 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 {"kind": "decode", "request_id": runtime.request_id,
                  "priority": 0},
                 tick,
-                decision={
-                    "decode_instance_index": runtime.decode_instance_index,
-                    "static_route": {
-                        "prefill_instance_index": route.prefill_instance_index,
-                        "decode_instance_index": route.decode_instance_index,
-                        "path": list(route.path),
-                        "hop_count": route.hop_count,
-                        "shared_edges": [list(edge)
-                                         for edge in route.shared_edges],
-                    },
-                    "decode_queue_depth_before_enqueue":
-                        runtime.decode_queue_depth_before_enqueue,
-                    "prefill_decode_transfer": _kv_transfer_dict(
-                        runtime.prefill_decode_transfer),
-                },
+                decision=self._decode_decision_dict(runtime, route),
             )
+            # 问题 2A 修复(2026-09-05):decode 决策核销——上行的临时快照
+            # 即全集(时间线已证:发射点必在 decode_target_evictions 全部
+            # append(#2 reserve/#4 move/#5 grow_decode)之后、之后无
+            # append;joiner 必在 append 后才进 active_decode),发射后置空
+            # 镜像 completion 对 completion_evictions 的先序列化后置空
+            # 语义,防未来工具读 decode 行时与 prefill 行 #2/#3 双计。
+            # M4 的既有置空(:1048 一带)保留为幂等兜底。
+            runtime.decode_target_evictions = ()
         first_token = self._first_token_plan(plan, joiners)
         if first_token is not None:
             train_plan["first_token"] = first_token
@@ -1051,9 +1106,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.history_action = None
         runtime.history_source_instance_index = None
         runtime.history_transfer_bytes = None
+        runtime.history_transfer_shards = ()   # 问题 4b holder 同步核销
         runtime.history_recompute_tokens = None
         runtime.history_cache_state_before = None
         runtime.hbm_before_request = None
+        runtime.reservation_credit = None    # 净额修正(2026-09-06)同步核销
         runtime.kv_state_after_completion = None
         runtime.kv_instance_after_completion = None
         runtime.hbm_after_completion = None
@@ -1219,13 +1276,51 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.decode_target_evictions = tuple(  # :1773-1775
             (*runtime.decode_target_evictions, *reservation.evictions))
         if not reservation.admitted:  # :1776-1782
-            if reservation.evictions:
-                self._note_capacity_change(
+            # 准入预占净额修正(2026-09-06):全量预约把"本会话尚未迁走的
+            # 旧 KV"与"终态全量"重复计入 decode 实例(super-linear 记账,
+            # 超长会话在队列尾部永久 deep-gap)。仅当旧 KV 确实 RESIDENT 于
+            # decode 目标(它稍后被本流程的 prepare_history 迁走)时,改按
+            # 净额 max(0, 终态−旧驻留)重试;否则维持现状全量语义。
+            snap = self.kv_manager.session_snapshot(runtime.session_id)
+            if (snap is not None and snap.state == RESIDENT
+                    and snap.instance_index == decode_instance):
+                credit = tuple(snap.shard_bytes)
+                net_shards = tuple(
+                    max(0, final - have)
+                    for final, have in zip(final_shards, credit))
+                full_attempt_evictions = reservation.evictions
+                reservation = self.kv_manager.reserve_request_capacity(
+                    runtime.request_id,
+                    runtime.session_id,
                     decode_instance,
-                    *(record.victim_instance_index
-                      for record in reservation.evictions),
+                    net_shards,
+                    now_ns,
+                    phase="prefill_admission",
+                    reason="static_decode_final_kv_reservation_net_credit",
                 )
-            return False
+                runtime.decode_target_evictions = tuple(
+                    (*runtime.decode_target_evictions, *reservation.evictions))
+                if not reservation.admitted:
+                    # 净额仍失败:两次尝试的逐出都是真实 mutation,epoch
+                    # 唤醒必须合并覆盖(丢第一次会楔死等待重试的准入)。
+                    if full_attempt_evictions or reservation.evictions:
+                        self._note_capacity_change(
+                            decode_instance,
+                            *(record.victim_instance_index
+                              for record in full_attempt_evictions),
+                            *(record.victim_instance_index
+                              for record in reservation.evictions),
+                        )
+                    return False
+                runtime.reservation_credit = credit
+            else:
+                if reservation.evictions:
+                    self._note_capacity_change(
+                        decode_instance,
+                        *(record.victim_instance_index
+                          for record in reservation.evictions),
+                    )
+                return False
         runtime.decode_capacity_reserved = True  # :1783
         before_snapshot = self.kv_manager.session_snapshot(  # :1784
             runtime.session_id)
@@ -1241,10 +1336,14 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             runtime.request_id,
             required_context_tokens=runtime.prefill_context_tokens,
         )
-        runtime.admission_evictions = decision.evictions  # :1797
+        runtime.admission_evictions = tuple(  # :1797
+            (*runtime.admission_evictions, *decision.evictions))
         if decision.admission_blocked:  # :1798-1808
             self.kv_manager.release_request_capacity(runtime.request_id, now_ns)
             runtime.decode_capacity_reserved = False
+            # 净额修正(2026-09-06):release 是 pop 语义,按登记值(净额)
+            # 对称释放自动正确;credit 随之失效,防跨 attempt 残留。
+            runtime.reservation_credit = None
             self._note_capacity_change(
                 prefill_instance,
                 decode_instance,
@@ -1255,9 +1354,31 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                   for record in decision.evictions),
             )
             return False
+        # 净额修正回补(2026-09-06):prepare_history 的 NOC 迁移已把旧 KV
+        # 从 decode 目标删掉(resident→prefill 侧),立即把净额预约回补到
+        # 全量——复刻原设计"从准入占位到 P→D move 完成"的防抢占语义
+        # (move 时刻 decode 侧 existing=0,需要全量空间);resident→reserved
+        # 1:1 换位,任何瞬间不超订。
+        if runtime.reservation_credit is not None:
+            if decision.source_instance_index != decode_instance:
+                raise RuntimeError(
+                    "net-credit reservation expected the history migration "
+                    "to vacate the static Decode instance (source="
+                    f"{decision.source_instance_index!r}, decode="
+                    f"{decode_instance!r})")
+            self.kv_manager.extend_request_capacity(
+                runtime.request_id,
+                runtime.reservation_credit,
+                now_ns,
+                reason="history_vacated_decode_target",
+            )
+            runtime.reservation_credit = None
         runtime.history_action = decision.action  # :1809
         runtime.history_source_instance_index = decision.source_instance_index  # :1810
         runtime.history_transfer_bytes = decision.transfer_bytes  # :1811
+        # 问题 4b(2026-09-05):留存 shard 明细供 prefill 决策序列化
+        # (此前只取聚合 bytes、shards 被丢弃;local_hit/ABSENT 时为 ())。
+        runtime.history_transfer_shards = decision.transfer_shards
         runtime.history_recompute_tokens = decision.recompute_tokens  # :1812
         growth = self.kv_manager.grow_prefill(  # :1826-1831
             runtime.session_id,
@@ -1408,6 +1529,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 "history_source_instance_index":
                     runtime.history_source_instance_index,
                 "history_transfer_bytes": runtime.history_transfer_bytes,
+                # 问题 4b(2026-09-05):shard 级路由序列化(NOC_MIGRATE 时
+                # 非空,逐 shard noc_path/noc_hops;A/B 对拍剥离清单条目)。
+                "history_transfer_shards": _history_transfer_shard_dicts(
+                    self.topology.hardware,
+                    runtime.history_transfer_shards),
                 "history_recompute_tokens": runtime.history_recompute_tokens,
                 "admission_evictions": [
                     _eviction_record_dict(record)
@@ -1546,10 +1672,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
     # --------------------------------------------------------------- 收尾 --
 
     def verify_run_end(self) -> None:
-        """基类协议校验之上,叠加离线 :2094-2101 的收尾断言与阶段 4 §7.3
-        结束审计(事件索引队列全部为空:arrival heap / ready frontier /
-        admission retry ready set)。拼 batch 改造:增加列车账本清空断言
-        (在飞列车/已核销待收信号/未加入列车的 decode 成员)。"""
+        """基类协议校验之上,叠加阶段 4 §7.3 结束审计(事件索引队列全部
+        为空:arrival heap / ready frontier)。拼 batch 改造:增加列车账本
+        清空断言(在飞列车/已核销待收信号/未加入列车的 decode 成员)。"""
         super().verify_run_end()
         if self.completed_requests != self.expected_request_count:
             raise RuntimeError(
@@ -1580,9 +1705,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "run ended with non-empty ready frontier: {!r}".format(
                     sorted(self._ready_frontier)))
-        if self._admission_retry_ready:
-            raise RuntimeError(
-                "run ended with non-empty admission retry ready set")
         if self.graph.completion_gates:
             raise RuntimeError(
                 "strategy run ended with unretired completion gates: {!r}"

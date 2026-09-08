@@ -9,7 +9,7 @@ state, or capacity-driven remapping in this implementation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import functools
 import hashlib
 import json
@@ -38,8 +38,8 @@ _EVENTS_COMPACT_THRESHOLD = 8192
 #
 # P1 权威 HBM delta journal(2026-08-30):recorder 处于 journal 模式
 # (MemoryActionRecorder(journal_path=...))时,manager 每次公开 mutation 构成
-# 一个 journal 事务(③):入口 begin,内部嵌套的公开复用(如 reserve 内的
-# enforce_watermark)只加深深度并入同一事务;最外层正常返回 = commit 点,
+# 一个 journal 事务(③):入口 begin,内部嵌套的公开复用(如准入前置的
+# ensure_physical_fit)只加深深度并入同一事务;最外层正常返回 = commit 点,
 # 在 _check_invariants_after_mutation 已逐内层通过之后执行 ④ 逐 rank 对账
 # (manager 实际状态 vs journal before+Σdelta 推出的 after)。journal 是纯
 # 观测旁路:不改任何准入/逐出/放置决策,不改变任何返回值。
@@ -76,7 +76,6 @@ def _metrics_anchor_for_phase(phase: str) -> str:
         # (wsc_llm_scheduler try_admit_prefill); doc sec.7.8 anchors
         # admission/reservation actions at the request Prefill start.
         "prefill_admission": "prefill_start",
-        "watermark": "prefill_start",
         "decode": "decode_start",
         "prefill_decode": "decode_start",
         "completion": "completion",
@@ -94,7 +93,7 @@ def _journal_transaction(method: Any) -> Any:
       _check_invariants_after_mutation 已通过,随即执行 ④ 逐 rank 对账
       _journal_reconcile_transaction(manager 快照 vs journal 记账)。
     - 嵌套公开复用(retire_terminal_session 内部的 release_request_
-      capacity、reserve 内部的 enforce_watermark/ensure_physical_fit 等):
+      capacity、准入前置路径内部的 ensure_physical_fit 等):
       深度 +1 并入外层同一事务,不另起 id——事务粒度 = 调度器视角的一次
       manager 公开 mutation。
     - 异常路径:放弃事务登记(abort),不执行对账(避免二次异常掩盖
@@ -369,13 +368,6 @@ class EvictionRecord:
 
 
 @dataclass(frozen=True)
-class WatermarkResult:
-    evictions: tuple[EvictionRecord, ...]
-    deferred: bool
-    insufficient_ranks: tuple[int, ...]
-
-
-@dataclass(frozen=True)
 class CapacityResult:
     evictions: tuple[EvictionRecord, ...]
     admitted: bool
@@ -451,10 +443,8 @@ class SessionKVCacheManager:
         topology: Any,
         model: Any,
         *,
-        reserve_context_tokens: int = 1_000_000,
         strict_invariants: Optional[bool] = None,
     ) -> None:
-        _require_nonnegative_int(reserve_context_tokens, "reserve_context_tokens")
         if strict_invariants is not None and not isinstance(strict_invariants, bool):
             raise ValueError("strict_invariants must be a bool or None")
         instances = tuple(topology.instances)
@@ -466,12 +456,8 @@ class SessionKVCacheManager:
         self.topology = topology
         self.model = model
         self.tp_degree = next(iter(instance_sizes))
-        self.reserve_context_tokens = reserve_context_tokens
         self.model_weight_bytes_by_tp_rank = model_weight_shard_bytes_by_tp_rank(
             model, self.tp_degree
-        )
-        self.reserve_shard_bytes = kv_cache_shard_bytes_for_tokens(
-            model, reserve_context_tokens, self.tp_degree
         )
         self._rank_states: dict[int, NodeHBMState] = {}
         self._rank_relative_indexes: dict[int, int] = {}
@@ -485,14 +471,6 @@ class SessionKVCacheManager:
                     capacity_bytes=topology.hardware.local_hbm_capacity_bytes,
                     model_weight_bytes=self.model_weight_bytes_by_tp_rank[relative_rank],
                 )
-                if state.remaining_bytes < self.reserve_shard_bytes[relative_rank]:
-                    raise ValueError(
-                        "1M KV reserve does not fit local HBM: "
-                        f"instance={instance.index}, relative_tp_rank={relative_rank}, "
-                        f"rank={rank}, hbm_capacity={state.capacity_bytes}, "
-                        f"model_weight={state.model_weight_bytes}, "
-                        f"reserve={self.reserve_shard_bytes[relative_rank]}"
-                    )
                 self._rank_states[rank] = state
                 self._rank_relative_indexes[rank] = relative_rank
         self._sessions: dict[str, SessionKVState] = {}
@@ -513,7 +491,11 @@ class SessionKVCacheManager:
         self._pressure_event_keys_by_request: dict[
             str, set[tuple[str, str, str, int]]
         ] = {}
-        self._deferred_instances: set[int] = set()
+        # D4 (2026-09-05): 被动逐出深缺口计数——ensure_physical_fit 候选
+        # 耗尽(活跃会话占满、无可逐冷会话)优雅推迟 admitted=False 时递增,
+        # 由 online_service summary 行(kv_deep_gap_events)落盘观测;
+        # 实证负载预期恒 0(纯被动反事实:峰值占用 90%~97%、深缺口=0)。
+        self.deep_gap_events: int = 0
         self._strict_kv_invariants = (
             _strict_kv_invariants_from_environment()
             if strict_invariants is None
@@ -578,10 +560,6 @@ class SessionKVCacheManager:
         return tuple(sorted(self._sessions))
 
     @property
-    def deferred_instances(self) -> tuple[int, ...]:
-        return tuple(sorted(self._deferred_instances))
-
-    @property
     def node_states(self) -> tuple[NodeHBMState, ...]:
         return tuple(self._rank_states[rank] for rank in sorted(self._rank_states))
 
@@ -610,8 +588,6 @@ class SessionKVCacheManager:
         self,
         instance_index: int,
         required_shards: Sequence[int],
-        *,
-        watermark: bool = False,
     ) -> tuple[int, ...]:
         instance = self.topology.instance(instance_index)
         if len(required_shards) != len(instance.ranks):
@@ -1301,63 +1277,6 @@ class SessionKVCacheManager:
         return record
 
     @_journal_transaction
-    def enforce_watermark(
-        self,
-        instance_index: int,
-        now_ns: int,
-        trigger_request_id: str,
-        protected_sessions: Iterable[str] = (),
-        *,
-        phase: str = "watermark",
-    ) -> WatermarkResult:
-        evictions: list[EvictionRecord] = []
-        insufficient = self._insufficient(
-            instance_index, self.reserve_shard_bytes, watermark=True
-        )
-        # A deletion only changes the selected victim; the remaining completed
-        # inactive residents keep both their eligibility and LRU order for this
-        # eviction stage.  Snapshot the sorted candidates once, while retaining
-        # the capacity check after every victim.
-        candidates = (
-            self._candidate_sessions(instance_index, protected_sessions)
-            if insufficient
-            else []
-        )
-        candidate_index = 0
-        while insufficient:
-            if candidate_index >= len(candidates):
-                before = self._remaining(instance_index)
-                self._deferred_instances.add(instance_index)
-                self._pressure_event(
-                    now_ns=now_ns,
-                    phase=phase,
-                    event_type="watermark_deferred",
-                    reason="active_sessions_or_no_cold_victim",
-                    trigger_request_id=trigger_request_id,
-                    target_instance_index=instance_index,
-                    before=before,
-                    after=before,
-                    insufficient_ranks=insufficient,
-                )
-                return WatermarkResult(tuple(evictions), True, insufficient)
-            victim = candidates[candidate_index]
-            candidate_index += 1
-            evictions.append(
-                self._delete(
-                    victim,
-                    now_ns=now_ns,
-                    phase=phase,
-                    reason="restore_1m_reserve",
-                    trigger_request_id=trigger_request_id,
-                )
-            )
-            insufficient = self._insufficient(
-                instance_index, self.reserve_shard_bytes, watermark=True
-            )
-        self._deferred_instances.discard(instance_index)
-        return WatermarkResult(tuple(evictions), False, ())
-
-    @_journal_transaction
     def ensure_physical_fit(
         self,
         instance_index: int,
@@ -1390,7 +1309,7 @@ class SessionKVCacheManager:
             raise ValueError(f"request cannot fit an empty instance: {details}")
         evictions: list[EvictionRecord] = []
         insufficient = self._insufficient(instance_index, required)
-        # See enforce_watermark(): eligibility and LRU order of unselected
+        # See ensure_physical_fit(): eligibility and LRU order of unselected
         # candidates are static inside this single reclamation stage.
         candidates = (
             self._candidate_sessions(instance_index, protected_sessions)
@@ -1401,6 +1320,10 @@ class SessionKVCacheManager:
         while insufficient:
             if candidate_index >= len(candidates):
                 before = self._remaining(instance_index)
+                # D4 (2026-09-05): 被动逐出深缺口——候选耗尽(活跃会话占满、
+                # 无可逐冷会话)优雅推迟 admitted=False;capacity_epoch 重试
+                # 机制保留(无死锁风险),计数入 summary 行观测。
+                self.deep_gap_events += 1
                 self._pressure_event(
                     now_ns=now_ns,
                     phase=phase,
@@ -1425,6 +1348,11 @@ class SessionKVCacheManager:
                 )
             )
             insufficient = self._insufficient(instance_index, required)
+        if self._insufficient(instance_index, required):
+            # I3 (2026-09-05): 逐出循环退出即必须已满足本请求 required
+            # (被动逐出"逐到刚好够即停"的显式断言;多逐或少逐都是缺陷)。
+            raise RuntimeError(
+                "physical-fit stage returned success while still insufficient")
         return CapacityResult(tuple(evictions), True, ())
 
     @_journal_transaction
@@ -1444,9 +1372,6 @@ class SessionKVCacheManager:
         if request_id in self._reservations:
             raise RuntimeError(f"duplicate KV reservation for request {request_id}")
         required = tuple(int(value) for value in required_shards)
-        watermark = self.enforce_watermark(
-            instance_index, now_ns, request_id, (session_id,), phase=phase
-        )
         fit = self.ensure_physical_fit(
             instance_index,
             required,
@@ -1456,7 +1381,7 @@ class SessionKVCacheManager:
             phase=phase,
             reason=reason,
         )
-        evictions = tuple((*watermark.evictions, *fit.evictions))
+        evictions = fit.evictions
         if not fit.admitted:
             return CapacityResult(evictions, False, fit.insufficient_ranks)
         for rank, value in zip(self.topology.instance(instance_index).ranks, required):
@@ -1530,6 +1455,66 @@ class SessionKVCacheManager:
                 )
         return reservation
 
+    @_journal_transaction
+    def extend_request_capacity(
+        self,
+        request_id: str,
+        extra_shards: Sequence[int],
+        now_ns: int,
+        *,
+        reason: str = "reservation_extend",
+    ) -> RequestCapacityReservation:
+        """按 extra_shards 增量扩补一笔已登记的 decode 容量预约。
+
+        准入预占净额修正(2026-09-06)的回补侧:``_try_admit_prefill`` 在全量
+        预约撞 deep-gap 时改按净额(终态 − 本会话旧驻留)重试,而
+        ``prepare_history`` 的 NOC 迁移把旧 KV 从 decode 目标实例删掉后,
+        必须把净额预约回补到全量——复刻原设计"从准入占位到 P→D move 完成"
+        的防抢占语义(move 时刻 KV 已物理搬到 prefill 实例,目标侧
+        existing=0,需要全量空间)。resident→reserved 1:1 换位:迁移删除
+        的旧驻留字节与回补的预约字节相等,任何瞬间 weight+resident+
+        reserved ≤ capacity 不超订。
+        """
+
+        reservation = self._reservations.get(request_id)
+        if reservation is None:
+            raise RuntimeError(f"unknown KV reservation for request {request_id}")
+        extra = tuple(int(value) for value in extra_shards)
+        if len(extra) != self.tp_degree or any(value < 0 for value in extra):
+            raise ValueError("reservation extension shard vector is invalid")
+        for rank, value in zip(
+            self.topology.instance(reservation.instance_index).ranks, extra
+        ):
+            self._rank_states[rank].reserved_request_bytes += value
+        # frozen dataclass:replace 重建并重赋值(增量账本随后从新值刷新)。
+        extended = replace(
+            reservation,
+            shard_bytes=tuple(
+                current + addition
+                for current, addition in zip(reservation.shard_bytes, extra)
+            ),
+        )
+        self._reservations[request_id] = extended
+        self._check_invariants_after_mutation(reservation_ids=(request_id,))
+        if self._metrics_recorder is not None:
+            for rank, value in zip(
+                self.topology.instance(extended.instance_index).ranks, extra
+            ):
+                if not value:
+                    continue
+                self._metrics_recorder.record(
+                    planner_time_ns=now_ns,
+                    anchor_kind="prefill_start",
+                    request_id=request_id,
+                    session_id=extended.session_id,
+                    rank=rank,
+                    instance_index=extended.instance_index,
+                    allocation_key=f"reservation:{request_id}",
+                    reserved_kv_delta_bytes=int(value),
+                    cause=f"reservation_extend:{reason}",
+                )
+        return extended
+
     def _history_shards(self, tokens: int) -> tuple[int, ...]:
         return kv_cache_shard_bytes_for_tokens(self.model, tokens, self.tp_degree)
 
@@ -1574,13 +1559,6 @@ class SessionKVCacheManager:
         if any(value < 0 for value in needed):
             raise RuntimeError("session KV would shrink during history preparation")
         protected = (session_id,) if state is not None else ()
-        watermark = self.enforce_watermark(
-            target_instance_index,
-            now_ns,
-            trigger_request_id,
-            protected,
-            phase=phase,
-        )
         fit = self.ensure_physical_fit(
             target_instance_index,
             needed,
@@ -1590,7 +1568,7 @@ class SessionKVCacheManager:
             phase=phase,
             reason="history_and_prefill_admission",
         )
-        evictions = tuple((*watermark.evictions, *fit.evictions))
+        evictions = fit.evictions
         if not fit.admitted:
             action = NO_HISTORY if state is None else (RECOMPUTE if state.state == EVICTED else LOCAL_HIT)
             return HistoryDecision(
@@ -1789,13 +1767,6 @@ class SessionKVCacheManager:
         delta = tuple(want - current for want, current in zip(desired, state.shard_bytes))
         if any(value < 0 for value in delta):
             raise ValueError("session KV context cannot shrink")
-        watermark = self.enforce_watermark(
-            instance_index,
-            now_ns,
-            trigger_request_id,
-            (session_id,),
-            phase=phase,
-        )
         fit = self.ensure_physical_fit(
             instance_index,
             delta,
@@ -1805,7 +1776,7 @@ class SessionKVCacheManager:
             phase=phase,
             reason=reason,
         )
-        evictions = tuple((*watermark.evictions, *fit.evictions))
+        evictions = fit.evictions
         if not fit.admitted:
             return CapacityResult(evictions, False, fit.insufficient_ranks)
         self._add_shards(instance_index, delta)
@@ -1868,13 +1839,6 @@ class SessionKVCacheManager:
             state.shard_bytes if source_instance == target_instance_index else tuple(0 for _ in desired_final)
         )
         required = tuple(want - current for want, current in zip(desired_final, existing_target))
-        watermark = self.enforce_watermark(
-            target_instance_index,
-            now_ns,
-            trigger_request_id,
-            (session_id,),
-            phase="decode",
-        )
         fit = self.ensure_physical_fit(
             target_instance_index,
             required,
@@ -1884,7 +1848,7 @@ class SessionKVCacheManager:
             phase="decode",
             reason="decode_target_capacity",
         )
-        evictions = tuple((*watermark.evictions, *fit.evictions))
+        evictions = fit.evictions
         empty_transfer = KVTransfer(
             action=LOCAL_HIT,
             phase="prefill_decode",
@@ -2031,16 +1995,10 @@ class SessionKVCacheManager:
             before=before,
             after=before,
         )
-        result = self.enforce_watermark(
-            state.instance_index,
-            completion_ns,
-            request_id,
-            phase="completion",
-        )
         # The request can never retry admission after completion.  Retire its
         # bounded-dedup state even when the session has a later turn.
         self._forget_pressure_event_keys(request_id)
-        return result.evictions
+        return ()
 
     @_journal_transaction
     def retire_terminal_session(
@@ -2119,13 +2077,6 @@ class SessionKVCacheManager:
         self._metrics_segment_counters.pop(session_id, None)
         self._forget_pressure_event_keys(terminal_request_id)
         del self._sessions[session_id]
-        if (
-            released_instance_index is not None
-            and not self._insufficient(
-                released_instance_index, self.reserve_shard_bytes, watermark=True
-            )
-        ):
-            self._deferred_instances.discard(released_instance_index)
         self._check_invariants_after_mutation(session_ids=(session_id,))
         return released_instance_index
 
@@ -2140,13 +2091,6 @@ class SessionKVCacheManager:
         active = [state.session_id for state in self._sessions.values() if state.active]
         if active:
             raise RuntimeError(f"planning ended with active KV sessions: {sorted(active)}")
-        deferred = [
-            instance.index
-            for instance in self.topology.instances
-            if self._insufficient(instance.index, self.reserve_shard_bytes)
-        ]
-        if deferred:
-            raise RuntimeError(f"planning ended below watermark on instances: {deferred}")
 
     def _check_invariants(self) -> None:
         for state in self._rank_states.values():

@@ -132,8 +132,8 @@ PROVISIONAL_BUCKET_NS = 5_000_000
 
 TOKEN_MANIFEST_FILENAME = "manifest.json"
 
-# P1 权威账本（阶段2 manager mutation 提交点落盘；journal 开关 off 或
-# legacy 变体 run 不存在 → decision-log 重放上界路径）。
+# P1 权威账本（阶段2 manager mutation 提交点落盘；journal 开关 off 时
+# → decision-log 重放上界路径）。
 KV_DELTA_JOURNAL_RELPATH = Path("results") / "kv_delta_journal.jsonl"
 KV_DELTA_JOURNAL_CHECKSUM_RELPATH = (
     Path("results") / "kv_delta_journal_checksum.json")

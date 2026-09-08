@@ -152,13 +152,16 @@ class FailClosedTests(unittest.TestCase):
             require_bucket_edges(manifest)
 
     def test_bucket_index_semantics(self):
+        # 2026-09-05 口径裁决：interior edges 为左桶闭上界（边界值归左桶），
+        # 末桶无上限（x > edges[-1] 归末桶，不再报错）；x < edges[0] 仍报错。
         edges = [0, 100, 200]
         self.assertEqual(bucket_index(edges, 0), 0)
         self.assertEqual(bucket_index(edges, 99), 0)
-        self.assertEqual(bucket_index(edges, 100), 1)
-        self.assertEqual(bucket_index(edges, 200), 1)  # 末桶闭合
-        with self.assertRaises(SloToolError):
-            bucket_index(edges, 201)
+        self.assertEqual(bucket_index(edges, 100), 0)  # interior 边界归左桶
+        self.assertEqual(bucket_index(edges, 101), 1)
+        self.assertEqual(bucket_index(edges, 200), 1)
+        self.assertEqual(bucket_index(edges, 201), 1)  # 末桶吸收越界
+        self.assertEqual(bucket_index(edges, 10**9), 1)
         with self.assertRaises(SloToolError):
             bucket_index(edges, -1)
 
@@ -718,6 +721,96 @@ class WarmupTests(unittest.TestCase):
         self.assertAlmostEqual(payload["relative_change"], 0.8)
         self.assertFalse(payload["warmup_stable"])
 
+
+
+class CppLogFallbackTests(unittest.TestCase):
+    """P1 契约：cpp.log → metrics.log → cpp.log.gz 统一回退。
+
+    归档（archive_run_outputs.sh）后 run_dir 只剩 metrics.log（[METRIC]
+    无损抽取）与 cpp.log.gz（全量原文）；三条路径读到的记录集必须同一。
+    """
+
+    RECORDS = [
+        {"type": "request", "queue_index": 0, "request_id": "r0",
+         "prefill_start_ns": 100, "prefill_end_ns": 200},
+        {"type": "memory_anchor", "subject_id": 0, "rank": 1,
+         "node_id": "n1", "tick_ns": 150},
+    ]
+
+    def _metric_lines(self, run_dir: Path) -> str:
+        cpp_log = run_dir / "cpp.log"
+        return "".join(line + "\n" for line in
+                       cpp_log.read_text(encoding="utf-8").splitlines()
+                       if line.startswith("[METRIC] "))
+
+    def _read_all(self, run_dir: Path) -> list[dict]:
+        return list(slo_common.read_cpp_metric_records(
+            slo_common.resolve_cpp_metric_log(run_dir)))
+
+    def test_plain_cpp_log(self):
+        run_dir = synthetic.make_run_dir("fb0")
+        synthetic.write_cpp_log(run_dir, self.RECORDS)
+        records = self._read_all(run_dir)
+        self.assertEqual([r.get("type") for r in records],
+                         ["init", "request", "memory_anchor"])
+        self.assertEqual(slo_common.read_init_record(run_dir)["repo_variant"],
+                         "astra-sim-face")
+
+    def test_metrics_log_only_matches_cpp_log_records(self):
+        plain = synthetic.make_run_dir("fb1a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb1b")
+        (archived / "metrics.log").write_text(self._metric_lines(plain),
+                                              encoding="utf-8")
+        self.assertEqual(self._read_all(archived), self._read_all(plain))
+        self.assertEqual(slo_common.read_init_record(archived),
+                         slo_common.read_init_record(plain))
+
+    def test_cpp_log_gz_only_matches_cpp_log_records(self):
+        import gzip
+        plain = synthetic.make_run_dir("fb2a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb2b")
+        raw = plain.joinpath("cpp.log").read_text(encoding="utf-8")
+        # 混入非 [METRIC] 行验证过滤不受压缩形态影响。
+        raw = "[sim] some non-metric line\n" + raw + "[sim] tail\n"
+        with gzip.open(archived / "cpp.log.gz", "wt",
+                       encoding="utf-8") as handle:
+            handle.write(raw)
+        self.assertEqual(self._read_all(archived), self._read_all(plain))
+        self.assertEqual(slo_common.read_init_record(archived),
+                         slo_common.read_init_record(plain))
+
+    def test_fallback_order_prefers_cpp_log_then_metrics_log(self):
+        run_dir = synthetic.make_run_dir("fb3")
+        synthetic.write_cpp_log(run_dir, self.RECORDS)
+        (run_dir / "metrics.log").write_text(
+            "[METRIC] {\"type\": \"init\", \"repo_variant\": \"decoy\"}\n",
+            encoding="utf-8")
+        self.assertEqual(slo_common.resolve_cpp_metric_log(run_dir).name,
+                         "cpp.log")
+        (run_dir / "cpp.log").unlink()
+        self.assertEqual(slo_common.resolve_cpp_metric_log(run_dir).name,
+                         "metrics.log")
+        self.assertEqual(slo_common.read_init_record(run_dir)
+                         ["repo_variant"], "decoy")
+
+    def test_missing_all_three_fails_closed(self):
+        run_dir = synthetic.make_run_dir("fb4")
+        with self.assertRaises(SloToolError):
+            slo_common.resolve_cpp_metric_log(run_dir)
+
+    def test_restore_decomposition_entry_reads_archived_run_dir(self):
+        plain = synthetic.make_run_dir("fb5a")
+        synthetic.write_cpp_log(plain, self.RECORDS)
+        archived = synthetic.make_run_dir("fb5b")
+        (archived / "metrics.log").write_text(self._metric_lines(plain),
+                                              encoding="utf-8")
+        rows_plain, summary_plain = restore_decomposition.collect(plain)
+        rows_archived, summary_archived = restore_decomposition.collect(
+            archived)
+        self.assertEqual((rows_plain, summary_plain),
+                         (rows_archived, summary_archived))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

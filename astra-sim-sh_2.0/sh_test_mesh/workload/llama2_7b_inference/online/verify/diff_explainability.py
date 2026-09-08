@@ -44,11 +44,17 @@ cpp.log 缺失或未解析出任何门计数器——立即报错退出 2,不产
 的差异或行数对不上;2 = 数据源缺失/为空(fail-closed)。"""
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 import re
 import sys
+
+_ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ONLINE_DIR not in sys.path:
+    sys.path.insert(0, _ONLINE_DIR)
+from bridge_request_journal import iter_request_records  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -88,16 +94,6 @@ def _resolve_jsonl(run_dir, name):
                  "response_*.json 消费即删,不可作为数据源)".format(
                      name, bridge_path, results_path))
 
-
-def _seq_files(run_dir, prefix):
-    bridge_dir = os.path.join(run_dir, "bridge")
-    seqs = []
-    for name in os.listdir(bridge_dir):
-        if name.startswith(prefix) and name.endswith(".json"):
-            body = name[len(prefix):-len(".json")]
-            if body.isdigit():
-                seqs.append(int(body))
-    return sorted(seqs)
 
 
 def _load_run(run_dir):
@@ -158,14 +154,9 @@ def _load_run(run_dir):
     arrivals = []      # (tick, request_id) 序列
     reasons = 0
     request_digest_excl_summary = hashlib.sha256()
-    request_seqs = _seq_files(run_dir, "request_")
-    if not request_seqs:
-        _fail_closed("bridge 无 request_*.json(0 个):{}——空数据源禁止"
-                     "比较".format(bridge_dir))
-    for seq in request_seqs:
-        with open(os.path.join(bridge_dir, "request_{}.json".format(seq)),
-                  "r", encoding="utf-8") as source:
-            req = json.load(source)
+    request_record_count = 0
+    for seq, req in iter_request_records(bridge_dir):
+        request_record_count += 1
         arrivals.extend((req["tick"], record["request_id"])
                         for record in req.get("arrivals") or [])
         for group in req.get("completed_groups") or []:
@@ -177,6 +168,10 @@ def _load_run(run_dir):
                     req["tick"]
         reasons += len(req.get("reasons") or [])
         _digest_request_excluding_summary(request_digest_excl_summary, req)
+    if request_record_count == 0:
+        _fail_closed(
+            "bridge request journal/legacy request files are empty:{}——空数据源"
+            "禁止比较".format(bridge_dir))
     request_digest = request_digest_excl_summary.hexdigest()
 
     cpp_log_path = os.path.join(run_dir, "cpp.log")
@@ -210,9 +205,14 @@ def _digest_request_excluding_summary(hasher, req):
 
 
 def _load_cpp_counters(cpp_log_path):
-    if not os.path.exists(cpp_log_path):
+    if os.path.exists(cpp_log_path):
+        opener = open
+    elif os.path.exists(cpp_log_path + ".gz"):
+        cpp_log_path += ".gz"
+        opener = gzip.open
+    else:
         return None
-    with open(cpp_log_path, "r", encoding="utf-8", errors="replace") as source:
+    with opener(cpp_log_path, "rt", encoding="utf-8", errors="replace") as source:
         text = source.read()
     counters = {}
     delivery = re.search(r"\[online\] delivery_count=(\d+)", text)

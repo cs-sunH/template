@@ -173,16 +173,20 @@ class NodeStore {
     bool empty() const;
 
     // -------------------------------------------------------------------------
-    // M2 node GC (2026-08-23, --online-node-gc). Finished nodes with no
+    // M2 node GC (2026-08-23; the --online-node-gc CLI arm was removed by
+    // the B.3 cleanup (2026-09-05) -- collection is always on on the
+    // official path). Finished nodes with no
     // unfinished children are erased at the committer's end-of-commit
     // quiescent point, keeping the store at the in-flight window instead of
     // the whole-run cumulative graph. Amortized O(1) per node (candidate
     // FIFO: every node enters at most once -- see finish_node).
     // -------------------------------------------------------------------------
 
-    /// Enable/disable collection (default OFF: fixtures and --online-node-gc
-    /// 0 keep the pre-M2 no-collection behavior, including the memory
-    /// profile). With GC off, finish_node does not even enqueue.
+    /// Enable/disable collection (default OFF: fixtures keep the pre-M2
+    /// no-collection behavior, including the memory profile; the
+    /// --online-node-gc CLI arm was removed by the B.3 cleanup (2026-09-05),
+    /// so the official path always enables collection). With GC off,
+    /// finish_node does not even enqueue.
     void set_gc_enabled(bool enabled);
 
     /// Drain the candidate FIFO and erase every eligible node. MUST only be

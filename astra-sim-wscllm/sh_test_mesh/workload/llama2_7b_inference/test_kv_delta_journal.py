@@ -90,7 +90,6 @@ class KvDeltaJournalTests(unittest.TestCase):
         manager = SessionKVCacheManager(
             _build_topology(capacity),
             model,
-            reserve_context_tokens=0,
             strict_invariants=True,
         )
         return manager, recorder
@@ -246,7 +245,7 @@ class KvDeltaJournalTests(unittest.TestCase):
         twin_model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         twin_manager = SessionKVCacheManager(
             _build_topology(10_000), twin_model,
-            reserve_context_tokens=0, strict_invariants=True)
+            strict_invariants=True)
         set_metrics_observer(recorder)
         self._drain_full_lifecycle(manager)
         set_metrics_observer(twin)
@@ -349,7 +348,7 @@ class KvDeltaJournalTests(unittest.TestCase):
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         manager = SessionKVCacheManager(
             _build_topology(10_000), model,
-            reserve_context_tokens=0, strict_invariants=True)
+            strict_invariants=True)
         self._drain_full_lifecycle(manager)
         manager.assert_final_state()
         self.assertGreater(len(recorder.deltas), 0)

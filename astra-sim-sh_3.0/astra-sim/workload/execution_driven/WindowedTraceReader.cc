@@ -17,7 +17,6 @@ position -- always by the arrival calendar built by the streaming index pass
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -77,11 +76,9 @@ uint64_t nearest_rank_percentile(std::vector<uint64_t>& vals, double rank) {
 
 WindowedTraceReader::WindowedTraceReader(const std::string& csv_path,
                                          RequestIngress& ingress,
-                                         const size_t high_water,
                                          const uint64_t max_arrival_ns)
     : csv_path_(csv_path),
       ingress_(ingress),
-      high_water_(high_water),
       max_arrival_ns_(max_arrival_ns) {
     if (csv_path.empty()) {
         // No --request-queue-csv: request-neutral IDLE start. The reader is
@@ -487,11 +484,9 @@ WindowedTraceReader::arrival_audit() const {
     audit.reserve(calendar_.size());
     for (const CalendarEntry& entry : calendar_) {
         if (!entry.submitted && !entry.rejected) {
-            // Not yet in the simulation (backpressure-parked cursor, or a
-            // mid-run audit snapshot). Mid-run checkpoints therefore never
-            // misclassify parked rows as gate failures; a row still parked
-            // at RUN END is caught by the completion audit instead
-            // (accepted + dropped != turn-0 rows).
+            // Not yet in the simulation (backpressure-parked cursor). A row
+            // still parked at RUN END is caught by the completion audit
+            // instead (accepted + dropped != turn-0 rows).
             continue;
         }
         ArrivalAuditEntry row;
@@ -580,122 +575,8 @@ WindowedTraceReader::audit_static_arrivals() const {
     return summary;
 }
 
-bool WindowedTraceReader::write_checkpoint(const std::string& path) const {
-    nlohmann::json cp;
-    cp["schema"] = 1;
-    cp["kind"] = "windowed_reader_checkpoint";
-    cp["restorable"] = false;
-    cp["purpose"] = "run_end_audit_only";
-    cp["reader_kind"] = "calendar";
-    cp["high_water"] = high_water_;  // advisory since the P0 fix
-    cp["max_arrival_ns"] = max_arrival_ns_;
-    cp["header_seen"] = header_seen_;
-    cp["indexed"] = indexed_;
-    cp["eof"] = eof_;
-    cp["data_rows"] = data_rows_;
-    cp["consumed_idx"] = consumed_idx_;
-    // Deterministic checkpoint encoding despite unordered runtime lookup.
-    std::vector<int64_t> outstanding(outstanding_rows_.begin(),
-                                     outstanding_rows_.end());
-    std::sort(outstanding.begin(), outstanding.end());
-    cp["outstanding_rows"] = std::move(outstanding);
-    cp["rows_read"] = rows_read_;
-    cp["rejected_out_of_range"] = rejected_out_of_range_;
-    cp["read_pumps"] = read_pumps_;
-    cp["peak_occupancy"] = peak_occupancy_;
-    {
-        nlohmann::json calendar;
-        calendar["entries"] = calendar_.size();
-        calendar["cursor"] = calendar_cursor_;
-        uint64_t submitted = 0;
-        uint64_t rejected = 0;
-        for (const CalendarEntry& entry : calendar_) {
-            submitted += entry.submitted ? 1 : 0;
-            rejected += entry.rejected ? 1 : 0;
-        }
-        calendar["submitted"] = submitted;
-        calendar["rejected"] = rejected;
-        cp["calendar"] = std::move(calendar);
-    }
-    {
-        nlohmann::json prov;
-        prov["fnv1a64"] = prov_.fnv1a64;
-        prov["csv_bytes"] = prov_.csv_bytes;
-        prov["data_rows"] = prov_.data_rows;
-        prov["sessions"] = prov_.sessions;
-        prov["turn0_count"] = prov_.turn0_count;
-        prov["turn0_arrival_min_ns"] = prov_.turn0_arrival_min_ns;
-        prov["turn0_arrival_max_ns"] = prov_.turn0_arrival_max_ns;
-        prov["turn0_adjacent_inversions"] = prov_.turn0_adjacent_inversions;
-        prov["session_blocks_contiguous"] = prov_.session_blocks_contiguous;
-        prov["sidecar_status"] = provenance_status_;
-        cp["provenance"] = std::move(prov);
-    }
-    {
-        nlohmann::json audit = nlohmann::json::array();
-        for (const ArrivalAuditEntry& row : arrival_audit()) {
-            nlohmann::json item;
-            item["queue_index"] = row.queue_index;
-            item["declared_arrival_ns"] = row.declared_arrival_ns;
-            item["reader_discovered_tick"] = row.reader_discovered_tick;
-            item["effective_arrival_ns"] = row.effective_arrival_ns;
-            item["late_by_ns"] = row.late_by_ns;
-            item["late_source"] = row.late_source;
-            audit.push_back(std::move(item));
-        }
-        cp["arrival_audit"] = std::move(audit);
-        const ArrivalAuditSummary summary = audit_static_arrivals();
-        nlohmann::json sum;
-        sum["turn0_submitted"] = summary.turn0_submitted;
-        sum["late_static_submit"] = summary.late_static_submit;
-        sum["late_external_stream"] = summary.late_external_stream;
-        sum["late_future_alarm_rounding"] = summary.late_future_alarm_rounding;
-        sum["t0_boundary_clamp"] = summary.t0_boundary_clamp;
-        sum["delay_p50_ns"] = summary.delay_p50_ns;
-        sum["delay_p99_ns"] = summary.delay_p99_ns;
-        sum["delay_max_ns"] = summary.delay_max_ns;
-        sum["nonzero_delay_rows"] = summary.nonzero_delay_rows;
-        sum["gate_ok"] = summary.gate_ok;
-        sum["gate_why"] = summary.gate_why;
-        cp["arrival_audit_summary"] = std::move(sum);
-    }
-    cp["written_at_wall_ns"] = now_ns();
-    const std::string tmp = path + ".tmp";
-    std::ofstream out(tmp, std::ios::trunc);
-    if (!out.is_open()) {
-        std::cerr << "[Error] (execution_driven/windowed_reader) cannot "
-                     "write checkpoint "
-                  << tmp << std::endl;
-        return false;
-    }
-    out << cp.dump() << "\n";
-    out.flush();
-    out.close();
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-        std::cerr << "[Error] (execution_driven/windowed_reader) atomic "
-                     "rename of checkpoint failed: "
-                  << path << std::endl;
-        std::remove(tmp.c_str());
-        return false;
-    }
-    return true;
-}
-
-bool WindowedTraceReader::read_checkpoint(const std::string& path) {
-    std::cerr
-        << "[Error] (execution_driven/windowed_reader) restore is unsupported "
-           "for audit-only window snapshot: "
-        << path
-        << " (EventQueue/RequestIngress/ServiceCoordinator/MetricCollector "
-           "state is not checkpointed)"
-        << std::endl;
-    return false;
-}
-
 void WindowedTraceReader::report(std::ostream& os) const {
-    os << "[online] windowed reader: high_water=" << high_water_
-       << " (calendar reader: advisory)"
-       << " max_arrival_ns=" << max_arrival_ns_
+    os << "[online] windowed reader: max_arrival_ns=" << max_arrival_ns_
        << (max_arrival_ns_ == 0 ? " (unbounded)" : "") << " rows=" << rows_read_
        << " total_rows=" << total_data_rows()
        << " turn0_rows=" << turn0_data_rows()

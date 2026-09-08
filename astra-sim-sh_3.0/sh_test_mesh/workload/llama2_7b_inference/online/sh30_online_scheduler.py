@@ -16,7 +16,7 @@
     decode 完成（:3986-3999）                       _complete_requests（同 tick）
     下一 turn arrival（:4000-4006）                 _complete_requests（同 tick）
   completion_order 批（:4008-4042）               _complete_requests
-    mark_complete / enforce_reserve / 快照          同名调用逐行迁移
+    mark_complete / 快照                            同名调用逐行迁移
   arrival 批（:4044-4058）                        _on_arrival（记 arrival →
                                                  pending_admissions → retry；
                                                  truncate_history 已随 sidecar
@@ -111,21 +111,40 @@ from online.graph_batch_builder import (  # noqa: E402
 )
 
 
+_TASK_LOAD_CACHE_CAPACITY = 4096
+
+
+def _bounded_task_load_memo(cache: dict, key, compute, *, capacity: int) -> int:
+    """确定性 FIFO 的精确 Roofline memo。
+
+    缓存只保存同参纯估算器的整数结果；淘汰最早插入项只会触发同函数
+    重算，不会改变任务负载值或任何映射 / KV 决策输入。
+    """
+    if capacity <= 0:
+        raise ValueError("task-load memo capacity must be positive")
+    try:
+        return cache[key]
+    except KeyError:
+        pass
+    value = compute()
+    if len(cache) >= capacity:
+        del cache[next(iter(cache))]
+    cache[key] = value
+    return value
+
+
 # --------------------------------------------------------------------------
 # TaskA 消融开关（作者裁定 2026-08-26）：env SH30_ABLATION ∈
-# {none,no_lb,no_affinity,no_tiered_eviction,no_lb_no_affinity}，缺省/未设 =
+# {none,no_lb,no_affinity,no_lb_no_affinity}，缺省/未设 =
 # none = 现行完整方案（构造性保证：none 档不改变任何现有执行路径，全部
 # 新分支只增不改）。非法值在调度器初始化即 raise（fail-closed，对齐
-# SH_ADMIT_GATE_VERIFY 的 env 纪律）。no_tiered_eviction 档由 KVCacheManager
-# 自读同一 env（face_scheduler.py _ensure_capacity 阶段1门），本文件不重复
-# 实现其 KV 行为。档位不写入 manifest（run 级 provenance 由 campaign 侧
-# run_dir 环境快照承载）。
+# SH_ADMIT_GATE_VERIFY 的 env 纪律）。档位不写入 manifest（run 级
+# provenance 由 campaign 侧 run_dir 环境快照承载）。
 # --------------------------------------------------------------------------
 _ABLATION_MODES = (
     "none",
     "no_lb",
     "no_affinity",
-    "no_tiered_eviction",
     "no_lb_no_affinity",
 )
 
@@ -222,7 +241,6 @@ class _OnlineRequestRuntime:
         "history_transfer", "history_evictions", "prefill_evictions",
         "prefill_decode_transfer", "decode_evictions", "completion_evictions",
         "kv_location_after_completion", "kv_instance_after_completion",
-        "reserve_unmet_ranks",
         "admitted", "completed", "completion_ns",
     )
 
@@ -275,7 +293,6 @@ class _OnlineRequestRuntime:
         self.completion_evictions = ()
         self.kv_location_after_completion = None
         self.kv_instance_after_completion = None
-        self.reserve_unmet_ranks = ()
         self.admitted = False
         self.completion_ns = None
         self.completed = False
@@ -327,7 +344,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                  decision_log_sink=None, train_ledger_sink=None,
                  profile_sink=None, mode: str = "strategy",
                  sensing: bool = False,
-                 defensive_reply_cache: bool = False):
+                 defensive_reply_cache: bool = False,
+                 sensing_query_sink=None, online_stats_sink=None,
+                 ledger_sink=None):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -338,6 +357,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             decision_log_sink=decision_log_sink,
             profile_sink=profile_sink,
             defensive_reply_cache=defensive_reply_cache,
+            sensing_query_sink=sensing_query_sink,
+            online_stats_sink=online_stats_sink,
+            ledger_sink=ledger_sink,
         )
         if mode != "strategy":
             raise ValueError("Sh30OnlineScheduler requires mode == 'strategy'")
@@ -349,8 +371,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
         # TaskA 消融开关（SH30_ABLATION，作者裁定 2026-08-26）：初始化一次
         # 读取（env 先例：SH_ADMIT_GATE_VERIFY / SH_TRAIN_MAX_ITER）。在
-        # 拓扑/KV 账本构建前解析——非法值在任何消融分支（含 face_scheduler
-        # 侧 no_tiered_eviction 门）生效之前 fail-closed 退出。
+        # 拓扑/KV 账本构建前解析——非法值在任何消融分支生效之前
+        # fail-closed 退出。
         self._ablation = _parse_ablation_mode(
             os.environ.get("SH30_ABLATION", "none"))
         # no_lb：3 个 select_prefill_instance 调用点退化为掩码内首选可行；
@@ -373,7 +395,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self.kv_manager = KVCacheManager(
             self.topology,
             config.model,
-            reserve_context_tokens=config.kv_reserve_context_tokens,
         )
         self.edge_free_mask = edge_free_instance_mask(
             self.topology, self.kv_manager.edge_ranks)
@@ -391,6 +412,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self.model = config.model
         self._prefill_task_cache = {}
         self._decode_task_load_cache = {}
+        # 高基数 context/token 输入的纯 Roofline memo 固定有界；逐出后按
+        # 原估算器精确重算，不参与或改变任何策略语义。
+        self._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
 
         self.runtimes = [
             _OnlineRequestRuntime(record, p_chunk)
@@ -399,6 +423,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         ]
         self.runtime_by_request_id = {
             runtime.request_id: runtime for runtime in self.runtimes}
+        self._runtime_index = {
+            runtime.request_id: index
+            for index, runtime in enumerate(self.runtimes)}
         by_turn = {}
         for runtime in self.runtimes:
             by_turn[(runtime.session_id, runtime.turn_index)] = runtime
@@ -1212,7 +1239,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _complete_requests(self, completed_now, tick: int):
         """offline: :3986-4042 decode 完成分支 + completion_order 批
         （下一 turn arrival 排程 :4000-4006 + mark_complete :4016-4020 +
-        enforce_reserve :4021-4031 + 快照 :4032-4042），段 3 发射 + 下一次
+        快照 :4032-4042），段 3 发射 + 下一次
         session arrival 排程（离线 push_event 在线改为 future alarm，
         时刻 = 完成边界 tick + interval）。
 
@@ -1273,17 +1300,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 ),
             )
             self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 6/9（mark_complete）
-        # offline: :4021-4031 再全部 enforce_reserve
+        # offline: :4021-4031 完成路径段（D-clear 2026-09-05）：完成边界
+        # 零逐出，仅保留结构守卫与恒空 completion_evictions 的下游同步。
         for request_id in completion_order:
             runtime = self.runtime_by_request_id[request_id]
             if runtime.decode_instance_index is None:
                 raise RuntimeError("completed request has no Decode instance")
-            (runtime.completion_evictions,
-             runtime.reserve_unmet_ranks) = self.kv_manager.enforce_reserve(
-                instance_index=runtime.decode_instance_index,
-                trigger_request_id=runtime.request_id,
-            )
-            self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 7/9（enforce_reserve）
+            # D-clear (2026-09-05): 主动驱逐已物理清除——完成路径零逐出。
+            runtime.completion_evictions = ()
             self.graph.sync_pending_history_after_evictions(
                 runtime.completion_evictions)
         # offline: :4032-4042 完成快照 + completion 批（合同①）：
@@ -1308,9 +1332,19 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     "completion_evictions": [
                         _transfer_summary(transfer)
                         for transfer in runtime.completion_evictions],
-                    "reserve_unmet_ranks": list(runtime.reserve_unmet_ranks),
                 },
             )
+            following = self.next_request[request_id]
+            if following is None:
+                # This is the terminal-only ownership boundary: graph and log
+                # consumers above have read the completion state, while an
+                # intermediate turn must retain its KV for the future alarm.
+                self.kv_manager.retire_terminal_session(
+                    runtime.session_id,
+                    tick,
+                    request_id,
+                )
+                self._bump_kv_ledger_epoch()
             # M4 核销即删（2026-08-23）：请求完成后其 KV 转移对象/准入
             # 负载快照等胖字段再无读者（逐出已随 completion 批发射进图、
             # 审计已随决策行落盘；下一 turn 是独立 runtime；runtimes 列表
@@ -1324,6 +1358,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             runtime.history_location_before = None
             runtime.drain_block_ends = None
             runtime.prefill_instance_loads = ()
+            # REQUEST_COMPLETE 边界后该 runtime 及其索引再无读者。释放
+            # map、slot 和已消费的 next link，避免已完成 session turn 被
+            # predecessor 的链条或预构建列表永久钉住。
+            self.runtime_by_request_id.pop(request_id, None)
+            index = self._runtime_index.pop(request_id, None)
+            if index is None:
+                raise RuntimeError(
+                    "completed request lost runtime index {!r}".format(
+                        request_id))
+            self.runtimes[index] = None
+            self.next_request.pop(request_id, None)
 
     # ------------------------------------------------------------- 准入 --
 
@@ -1419,7 +1464,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self._task_load_snapshot(state, now_ns)
             for state in self.instances)
         runtime.prefill_hbm_feasible_instances = hbm_feasible_instances
-        if runtime.session_id in self.kv_manager.session_ids:
+        if self.kv_manager.has_session(runtime.session_id):
             history_snapshot = self.kv_manager.session_snapshot(
                 runtime.session_id)
         else:
@@ -1612,6 +1657,22 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "history_transfer_bytes": runtime.history_transfer_bytes,
                 "history_tokens_discarded":
                     runtime.history_tokens_discarded,
+                # 问题 4a(S3 路由序列化,2026-09-05):对齐 S1
+                # (sh10_online_scheduler.py:1140-1142)补齐 holder 的
+                # shard 级序列化——_transfer_summary 只读导出 shards[].
+                # noc_hops/noc_path(创建时由 deterministic_xy_route
+                # 算好,零新算);既有聚合 history_transfer_bytes 保留。
+                # A/B 剥离清单字段;hopbytes.py collect_sh30 读取端已
+                # 前向兼容(旧 log 无新键 → 数值不变)。
+                "history_transfer": (
+                    _transfer_summary(runtime.history_transfer)
+                    if runtime.history_transfer else None),
+                "history_evictions": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.history_evictions],
+                "prefill_evictions": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.prefill_evictions],
             },
         )
 
@@ -1631,6 +1692,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             tick,
             decision={
                 "decode_instance_index": runtime.decode_instance_index,
+                # 问题 4a(S3 路由序列化,2026-09-05):对齐 S1
+                # (sh10_online_scheduler.py:1187-1188)补齐 prefill→decode
+                # 迁移与 decode 侧逐出的 shard 级序列化(_transfer_summary
+                # 同上,零新算)。核销置空沿用既有 completion M4 块
+                # (:1362-1367),不新增提前置空——每请求恰一条 decode 行,
+                # completion 行已存在,无双计。A/B 剥离清单字段。
+                "prefill_decode_transfer": (
+                    _transfer_summary(runtime.prefill_decode_transfer)
+                    if runtime.prefill_decode_transfer else None),
+                "decode_evictions": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.decode_evictions],
             },
         )
 
@@ -1640,12 +1713,15 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                                     context_tokens) -> int:
         """offline: face_scheduler.py（缓存同款）。"""
         key = (instance_size, chunk_tokens, context_tokens)
-        if key not in self._prefill_task_cache:
-            self._prefill_task_cache[key] = estimate_prefill_task_load_ns(
+        return _bounded_task_load_memo(
+            self._prefill_task_cache, key,
+            lambda: estimate_prefill_task_load_ns(
                 self.hardware, self.model,
                 instance_size=instance_size, chunk_tokens=chunk_tokens,
-                context_tokens=context_tokens)
-        return self._prefill_task_cache[key]
+                context_tokens=context_tokens),
+            capacity=getattr(
+                self, "_task_load_cache_capacity", _TASK_LOAD_CACHE_CAPACITY),
+        )
 
     def _decode_task_load_ns_cached(self, *, instance_size,
                                     current_context_tokens, generated_tokens,
@@ -1656,17 +1732,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         经绑定不入 key。"""
         key = (instance_size, current_context_tokens, generated_tokens,
                average_decode_length, running_step_fraction_remaining)
-        cached = self._decode_task_load_cache.get(key)
-        if cached is None:
-            cached = estimate_decode_remaining_task_load_ns(
+        return _bounded_task_load_memo(
+            self._decode_task_load_cache, key,
+            lambda: estimate_decode_remaining_task_load_ns(
                 self.hardware, self.model,
                 instance_size=instance_size,
                 current_context_tokens=current_context_tokens,
                 generated_tokens=generated_tokens,
                 average_decode_length=average_decode_length,
-                running_step_fraction_remaining=running_step_fraction_remaining)
-            self._decode_task_load_cache[key] = cached
-        return cached
+                running_step_fraction_remaining=running_step_fraction_remaining),
+            capacity=getattr(
+                self, "_task_load_cache_capacity", _TASK_LOAD_CACHE_CAPACITY),
+        )
 
     def _task_load_snapshot(self, state, now_ns: int):
         """offline: face_scheduler.py task_load_snapshot 的在线
@@ -1888,10 +1965,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with blocked HBM admissions: "
                 "{}".format(pending_ids[:5]))
-        if self.completed_requests != len(self.runtimes):
+        if self.completed_requests != self.expected_request_count:
             raise RuntimeError(
                 "strategy run ended with {}/{} requests complete".format(
-                    self.completed_requests, len(self.runtimes)))
+                    self.completed_requests, self.expected_request_count))
+        if self.runtime_by_request_id or self._runtime_index or \
+                any(runtime is not None for runtime in self.runtimes):
+            raise RuntimeError("strategy run ended with unreleased runtimes")
         if any(state.qp or state.active_decode
                or state.pending_decode_ready
                or state.in_flight_train is not None
@@ -1920,6 +2000,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with stale admit attempt epochs: "
                 "{}".format(sorted(self._admit_attempt_epoch)[:5]))
+        self.kv_manager.assert_final_state()
 
 
 def _transfer_summary(transfer):

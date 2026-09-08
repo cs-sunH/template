@@ -96,21 +96,6 @@ class LegacyOracleWindowedTraceReader {
     /// io ns, throughput rows/s, late arrivals, rejected).
     void report(std::ostream& os) const;
 
-    /// Phase 7 §10.5: run-end window-position audit snapshot. JSON, atomically
-    /// written (tmp + rename). It deliberately is NOT a restart checkpoint:
-    /// the reader alone cannot serialize EventQueue alarms, RequestIngress
-    /// commands/one-shot indices, ServiceCoordinator counters, or
-    /// MetricCollector parent state. Returns false if the audit snapshot could
-    /// not be written; failure never changes simulation state.
-    bool write_checkpoint(const std::string& path) const;
-
-    /// Compatibility API retained fail-closed. Run-end snapshots are audit
-    /// evidence only, so every call returns false and leaves both the reader
-    /// and ingress untouched. A future restart feature must checkpoint the
-    /// complete event/ingress/service/metrics state atomically instead of
-    /// partially rewinding this reader.
-    bool read_checkpoint(const std::string& path);
-
   private:
     std::ifstream file_;
     RequestIngress& ingress_;

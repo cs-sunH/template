@@ -13,7 +13,9 @@ LICENSE file in the root directory of this source tree.
 #include <json/json.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -32,6 +34,35 @@ constexpr double kUtilEpsilon = 1e-6;
 [[noreturn]] void fatal_metrics_error(const std::string& message) {
     std::cerr << "[METRIC][ERROR] " << message << std::endl;
     exit(EXIT_FAILURE);
+}
+
+[[noreturn]] void fatal_metric_write(const int error_number) noexcept {
+    if (error_number == 0) {
+        std::fprintf(stderr,
+                     "[METRIC][FATAL] write to stdout made no progress\n");
+    } else {
+        std::fprintf(stderr,
+                     "[METRIC][FATAL] write to stdout failed: %s (errno=%d)\n",
+                     std::strerror(error_number), error_number);
+    }
+    // Do not route this through MetricCollector or buffered iostreams: a
+    // write-channel failure must fail closed without recursively emitting.
+    ::_exit(EXIT_FAILURE);
+}
+
+void write_all_or_die(const char* bytes, size_t remaining) noexcept {
+    while (remaining > 0) {
+        const ssize_t written = ::write(STDOUT_FILENO, bytes, remaining);
+        if (written > 0) {
+            bytes += written;
+            remaining -= static_cast<size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        fatal_metric_write(written == 0 ? 0 : errno);
+    }
 }
 
 std::string u128_to_string(unsigned __int128 value) {
@@ -82,8 +113,177 @@ MetricCollector& MetricCollector::instance() {
     return collector;
 }
 
+MetricCollector::~MetricCollector() {
+    // Destructors cannot report a failed close safely.  All operational close
+    // paths use close_memory_anchor_spool_or_die(); this is a final guard for
+    // abnormal test/lifecycle exits before finalize().
+    if (this->memory_anchor_spool_ != nullptr) {
+        std::fclose(this->memory_anchor_spool_);
+        this->memory_anchor_spool_ = nullptr;
+    }
+}
+
+void MetricCollector::reset_for_initialize() {
+    // initialize() is documented as one-shot in production, but the singleton
+    // is also used by focused fixtures.  Drain a prior buffered record and
+    // close the old anonymous file before dropping every state member so a
+    // repeated initialize has neither stale anchors nor a leaked descriptor.
+    flush_emit_buffer();
+    close_memory_anchor_spool_or_die();
+    *this = MetricCollector();
+}
+
+void MetricCollector::ensure_online_memory_anchor_spool() {
+    if (this->memory_anchor_spool_ != nullptr) {
+        return;
+    }
+    errno = 0;
+    this->memory_anchor_spool_ = std::tmpfile();
+    if (this->memory_anchor_spool_ == nullptr) {
+        const int error_number = errno;
+        fatal_metrics_error(
+            "cannot create anonymous online memory-anchor spool: " +
+            std::string(error_number == 0 ? "unknown error"
+                                          : std::strerror(error_number)));
+    }
+}
+
+void MetricCollector::close_memory_anchor_spool_or_die() {
+    if (this->memory_anchor_spool_ == nullptr) {
+        return;
+    }
+    std::FILE* const spool = this->memory_anchor_spool_;
+    this->memory_anchor_spool_ = nullptr;
+    if (std::fclose(spool) != 0) {
+        const int error_number = errno;
+        fatal_metrics_error(
+            "failed to close anonymous online memory-anchor spool: " +
+            std::string(error_number == 0 ? "unknown error"
+                                          : std::strerror(error_number)));
+    }
+}
+
+void MetricCollector::rebuild_online_transfer_anchor_interest() {
+    this->online_transfer_anchor_keys_needed_.clear();
+    this->online_transfer_anchor_subjects_needed_.clear();
+    this->online_transfer_anchor_ticks_.clear();
+    this->online_transfer_anchor_by_subject_.clear();
+    for (const auto& action : this->memory_actions_) {
+        if (action.anchor_kind != "transfer_complete" ||
+            action.trigger_queue_index < 0) {
+            continue;
+        }
+        this->online_transfer_anchor_subjects_needed_.insert(
+            action.trigger_queue_index);
+        this->online_transfer_anchor_keys_needed_.insert(
+            TransferAnchorKey{action.trigger_queue_index, action.rank});
+    }
+}
+
+void MetricCollector::append_online_memory_anchor(
+    const MemoryAnchorTick& anchor) {
+    ensure_online_memory_anchor_spool();
+    if (std::fwrite(&anchor, sizeof(anchor), 1, this->memory_anchor_spool_) !=
+        1) {
+        const int error_number = errno;
+        fatal_metrics_error(
+            "failed to write anonymous online memory-anchor spool: " +
+            std::string(error_number == 0 ? "unknown error"
+                                          : std::strerror(error_number)));
+    }
+    if (this->memory_anchor_spool_record_count_ ==
+        std::numeric_limits<uint64_t>::max()) {
+        fatal_metrics_error("online memory-anchor spool record count overflow");
+    }
+    this->memory_anchor_spool_record_count_++;
+
+    // Keep only the two maxima required by transfer_complete resolution.
+    // Events for subjects with no transfer action remain in the spool for
+    // output, but intentionally consume no resident index memory.
+    if (this->online_transfer_anchor_subjects_needed_.count(
+            anchor.subject_id) == 0) {
+        return;
+    }
+    const auto subject_it =
+        this->online_transfer_anchor_by_subject_.find(anchor.subject_id);
+    if (subject_it == this->online_transfer_anchor_by_subject_.end() ||
+        anchor.tick > subject_it->second) {
+        this->online_transfer_anchor_by_subject_[anchor.subject_id] =
+            anchor.tick;
+    }
+
+    const TransferAnchorKey key{anchor.subject_id, anchor.rank};
+    if (this->online_transfer_anchor_keys_needed_.count(key) == 0) {
+        return;
+    }
+    const auto rank_it = this->online_transfer_anchor_ticks_.find(key);
+    if (rank_it == this->online_transfer_anchor_ticks_.end() ||
+        anchor.tick > rank_it->second) {
+        this->online_transfer_anchor_ticks_[key] = anchor.tick;
+    }
+}
+
+void MetricCollector::emit_memory_anchor_record(
+    const MemoryAnchorTick& anchor) const {
+    json record;
+    record["schema"] = 1;
+    record["type"] = "memory_anchor";
+    record["source"] = "simulator";
+    record["repo_variant"] = this->repo_variant_;
+    record["run_id"] = this->run_id_;
+    record["subject_id"] = anchor.subject_id;
+    record["rank"] = anchor.rank;
+    record["node_id"] = anchor.node_id;
+    record["tick_ns"] = anchor.tick;
+    emit_record(record.dump());
+}
+
+void MetricCollector::emit_online_memory_anchor_spool_records() {
+    if (this->memory_anchor_spool_ == nullptr) {
+        return;
+    }
+    if (std::fflush(this->memory_anchor_spool_) != 0) {
+        const int error_number = errno;
+        fatal_metrics_error(
+            "failed to flush anonymous online memory-anchor spool: " +
+            std::string(error_number == 0 ? "unknown error"
+                                          : std::strerror(error_number)));
+    }
+    if (std::fseek(this->memory_anchor_spool_, 0, SEEK_SET) != 0) {
+        const int error_number = errno;
+        fatal_metrics_error(
+            "failed to rewind anonymous online memory-anchor spool: " +
+            std::string(error_number == 0 ? "unknown error"
+                                          : std::strerror(error_number)));
+    }
+    for (;;) {
+        MemoryAnchorTick anchor{};
+        const size_t bytes = std::fread(&anchor, 1, sizeof(anchor),
+                                        this->memory_anchor_spool_);
+        if (bytes == sizeof(anchor)) {
+            emit_memory_anchor_record(anchor);
+            continue;
+        }
+        if (bytes == 0 && std::feof(this->memory_anchor_spool_) != 0) {
+            break;
+        }
+        std::string message =
+            "failed to read anonymous online memory-anchor spool";
+        if (std::ferror(this->memory_anchor_spool_) != 0) {
+            const int error_number = errno;
+            message += ": ";
+            message += error_number == 0 ? "unknown error"
+                                         : std::strerror(error_number);
+        } else {
+            message += ": truncated record";
+        }
+        fatal_metrics_error(message);
+    }
+}
+
 void MetricCollector::initialize(const std::string& manifest_path,
                                  const std::string& detail_level) {
+    reset_for_initialize();
     if (detail_level != "off" && detail_level != "summary" &&
         detail_level != "full") {
         fatal_metrics_error("invalid --metrics-detail value: " + detail_level +
@@ -402,6 +602,20 @@ void MetricCollector::on_node_issue(int rank, uint64_t node_id, Tick tick) {
     for (const auto& event : node_it->second) {
         apply_event(event, rank, node_id, tick);
     }
+    // R2 one-shot erase (frozen plan §4-B2, 2026-08-29): every
+    // (rank, node) edge fires at most once (GraphSource::take_node consumes
+    // the free set, online store ids are never reused, and anchor
+    // registration (Phase B-1.5) precedes the issue pass (B-5)), so this
+    // bucket's routing duty is complete once applied. Erase it immediately;
+    // drop the rank bucket when it empties. Only the ROUTING tables are
+    // erased: apply_event has already copied everything finalize consumes
+    // (memory_anchor_ticks_ / spool + transfer maxima / requests_ /
+    // request_boundaries_ / first_token_ticks_ / iterations_) into its own
+    // derived storage.
+    rank_it->second.erase(node_it);
+    if (rank_it->second.empty()) {
+        this->issue_events_.erase(rank_it);
+    }
 }
 
 void MetricCollector::on_node_complete(int rank, uint64_t node_id, Tick tick) {
@@ -415,6 +629,11 @@ void MetricCollector::on_node_complete(int rank, uint64_t node_id, Tick tick) {
     }
     for (const auto& event : node_it->second) {
         apply_event(event, rank, node_id, tick);
+    }
+    // R2 one-shot erase: see on_node_issue.
+    rank_it->second.erase(node_it);
+    if (rank_it->second.empty()) {
+        this->complete_events_.erase(rank_it);
     }
 }
 
@@ -487,8 +706,12 @@ void MetricCollector::apply_event(const NodeMetricEvent& event, int rank,
         return;
     }
     case EventCode::MEMORY_ANCHOR_COMPLETE: {
-        this->memory_anchor_ticks_.push_back(
-            MemoryAnchorTick{event.subject_id, rank, node_id, tick});
+        const MemoryAnchorTick anchor{event.subject_id, rank, node_id, tick};
+        if (this->online_mode_) {
+            append_online_memory_anchor(anchor);
+        } else {
+            this->memory_anchor_ticks_.push_back(anchor);
+        }
         return;
     }
     case EventCode::FIRST_TOKEN_COMPLETE: {
@@ -577,8 +800,22 @@ void MetricCollector::clear_static_node_events() {
     // online nodes. Clearing keeps the dynamic anchors as the sole event
     // source. Requests/arrivals/memory actions stay loaded (the manifest
     // request list is authoritative for arrivals; anchors are not).
+    if (!this->enabled_) {
+        return;
+    }
     this->issue_events_.clear();
     this->complete_events_.clear();
+    // D3 (2026-08-28): latch online mode for emit_watermark_records (the
+    // hbm_watermark bucket lines are the documented all-zero series there
+    // -- see the header comment on online_mode_).
+    if (!this->online_mode_) {
+        this->online_mode_ = true;
+        rebuild_online_transfer_anchor_interest();
+    }
+    // Open at the online/static transition, before a terminal event can be
+    // observed.  A temp-file failure is therefore deterministic and
+    // fail-closed instead of silently falling back to an unbounded vector.
+    ensure_online_memory_anchor_spool();
 }
 
 void MetricCollector::online_register_ranks(const std::string& request_id,
@@ -608,12 +845,17 @@ void MetricCollector::online_register_ranks(const std::string& request_id,
     target.insert(ranks.begin(), ranks.end());
 }
 
-void MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
+bool MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
                                                   const std::string& request_id,
                                                   const std::string& kind,
                                                   bool transfer_anchor) {
+    // R2 (2026-08-29): returns whether the (rank, node) HAS an anchor on
+    // some edge after this call -- true also for an idempotent duplicate
+    // hit (the OnlineNode fast-path flag must be set in both cases). The
+    // disabled / unknown-request / unknown-kind paths return false because
+    // no routing entry exists, matching the Workload-side enabled() gate.
     if (!this->enabled_) {
-        return;
+        return false;
     }
     uint8_t event_code = 0;
     if (kind == "prefill_start") {
@@ -631,11 +873,11 @@ void MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
     } else if (transfer_anchor) {
         event_code = static_cast<uint8_t>(EventCode::MEMORY_ANCHOR_COMPLETE);
     } else {
-        return;  // unknown kind: nothing to register
+        return false;  // unknown kind: nothing to register
     }
     const auto it = this->request_index_by_request_id_.find(request_id);
     if (it == this->request_index_by_request_id_.end()) {
-        return;  // unknown request (see online_register_ranks)
+        return false;  // unknown request (see online_register_ranks)
     }
     // apply_event resolves subjects through request_index_by_queue_index_,
     // so the event subject is the queue index (the manifest semantics).
@@ -654,10 +896,16 @@ void MetricCollector::online_register_node_anchor(int rank, uint64_t node_id,
     for (const auto& existing : table) {
         if (existing.event_code == event.event_code &&
             existing.subject_id == event.subject_id) {
-            return;
+            return true;  // duplicate: the anchor exists -- flag stays set
         }
     }
     table.push_back(event);
+    // A2 (2026-08-28): remember the (rank, node) pair so
+    // online_release_request_anchors can erase the routing entry at the
+    // request's REQUEST_COMPLETE commit (duplicate pairs erase
+    // idempotently; the reverse entry itself is freed with the request).
+    this->online_anchor_nodes_[request_id].emplace_back(rank, node_id);
+    return true;
 }
 
 void MetricCollector::check_consistency(bool condition,
@@ -693,13 +941,61 @@ std::optional<Tick> MetricCollector::resolve_arrival(size_t request_index) {
 }
 
 void MetricCollector::emit_record(const std::string& json_line) const {
-    // Single-line JSON with a fixed prefix (doc sec.5.9). Write the whole
-    // line with one unbuffered syscall: mixing std::cout with spdlog's
-    // stdout sink interleaves their separate buffers and can split a record
-    // across an unrelated log line.
-    const std::string line = "[METRIC] " + json_line + "\n";
-    const ssize_t written = ::write(STDOUT_FILENO, line.data(), line.size());
-    (void)written;
+    // Single-line JSON with a fixed prefix (doc sec.5.9). C5 (2026-08-28):
+    // records accumulate in emit_buffer_ and are drained at 1 MiB (which
+    // bounds both memory and crash-loss windows) instead of one syscall per
+    // record. write_all_or_die handles short writes and EINTR; a permanent
+    // stdout failure is fail-closed rather than silently dropping records.
+    this->emit_buffer_ += "[METRIC] ";
+    this->emit_buffer_ += json_line;
+    this->emit_buffer_ += "\n";
+    if (this->emit_buffer_.size() >= (1u << 20)) {
+        write_all_or_die(this->emit_buffer_.data(), this->emit_buffer_.size());
+        this->emit_buffer_.clear();
+    }
+}
+
+void MetricCollector::flush_emit_buffer() const {
+    // C5 (2026-08-28): drain the buffered [METRIC] channel. finalize() calls
+    // this at its end; the link-observer emission path calls it once after its
+    // last record.
+    if (this->emit_buffer_.empty()) {
+        return;
+    }
+    write_all_or_die(this->emit_buffer_.data(), this->emit_buffer_.size());
+    this->emit_buffer_.clear();
+}
+
+void MetricCollector::online_release_request_anchors(
+    const std::string& request_id) {
+    // A2 (2026-08-28): the completed request's anchor routing entries are
+    // dead weight (see the header comment). requests_ / first_token_ticks_
+    // stay -- finalize emits the request row and the first-token boundary
+    // from them.
+    if (!this->enabled_) {
+        return;
+    }
+    const auto it = this->online_anchor_nodes_.find(request_id);
+    if (it == this->online_anchor_nodes_.end()) {
+        return;
+    }
+    for (const auto& [rank, node_id] : it->second) {
+        const auto issue_rank = this->issue_events_.find(rank);
+        if (issue_rank != this->issue_events_.end()) {
+            issue_rank->second.erase(node_id);
+            if (issue_rank->second.empty()) {
+                this->issue_events_.erase(issue_rank);
+            }
+        }
+        const auto complete_rank = this->complete_events_.find(rank);
+        if (complete_rank != this->complete_events_.end()) {
+            complete_rank->second.erase(node_id);
+            if (complete_rank->second.empty()) {
+                this->complete_events_.erase(complete_rank);
+            }
+        }
+    }
+    this->online_anchor_nodes_.erase(it);
 }
 
 void MetricCollector::emit_observer_record(const std::string& json_line) const {
@@ -711,7 +1007,7 @@ void MetricCollector::emit_observer_record(const std::string& json_line) const {
 
 void MetricCollector::finalize(const std::vector<Sys*>& systems,
                                Tick sim_end_tick) {
-    if (!this->enabled_) {
+    if (!this->enabled_ || this->finalized_) {
         return;
     }
     const bool full_detail = (this->detail_level_ == "full");
@@ -1388,19 +1684,21 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             }
             emit_record(record.dump());
         }
-        for (const auto& anchor : this->memory_anchor_ticks_) {
-            json record;
-            record["schema"] = 1;
-            record["type"] = "memory_anchor";
-            record["source"] = "simulator";
-            record["repo_variant"] = this->repo_variant_;
-            record["run_id"] = this->run_id_;
-            record["subject_id"] = anchor.subject_id;
-            record["rank"] = anchor.rank;
-            record["node_id"] = anchor.node_id;
-            record["tick_ns"] = anchor.tick;
-            emit_record(record.dump());
+        if (this->online_mode_) {
+            // The raw anonymous spool is replayed exactly here, preserving
+            // the legacy memory_anchor block's fields, multiplicity, and
+            // event-arrival order without retaining it in RAM.
+            emit_online_memory_anchor_spool_records();
+        } else {
+            for (const auto& anchor : this->memory_anchor_ticks_) {
+                emit_memory_anchor_record(anchor);
+            }
         }
+    }
+    // Summary detail deliberately suppresses raw anchor records too; close
+    // the file in either detail mode before the later ledger replay.
+    if (this->online_mode_) {
+        close_memory_anchor_spool_or_die();
     }
 
     // Capacity-time integral over the planner memory ledger (doc sec.7.8),
@@ -1540,6 +1838,12 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         std::cerr << "[METRIC][ERROR] " << this->dropped_events_
                   << " node events referenced unknown subjects" << std::endl;
     }
+    // C5 (2026-08-28): all finalize-time records are buffered -- drain the
+    // channel so the [METRIC] block is complete before main_online's
+    // run-end log lines (the post-finalize link-observer path reuses the
+    // same buffer and flushes again when done).
+    flush_emit_buffer();
+    this->finalized_ = true;
 }
 
 namespace {
@@ -1593,16 +1897,18 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     // node complete tick across ranks (doc sec.7.8 transfer row).
     std::map<std::pair<int64_t, int>, Tick> transfer_anchor_ticks;
     std::map<int64_t, Tick> transfer_anchor_by_subject;
-    for (const auto& anchor : this->memory_anchor_ticks_) {
-        const auto key = std::make_pair(anchor.subject_id, anchor.rank);
-        auto it = transfer_anchor_ticks.find(key);
-        if (it == transfer_anchor_ticks.end() || anchor.tick > it->second) {
-            transfer_anchor_ticks[key] = anchor.tick;
-        }
-        auto subj_it = transfer_anchor_by_subject.find(anchor.subject_id);
-        if (subj_it == transfer_anchor_by_subject.end() ||
-            anchor.tick > subj_it->second) {
-            transfer_anchor_by_subject[anchor.subject_id] = anchor.tick;
+    if (!this->online_mode_) {
+        for (const auto& anchor : this->memory_anchor_ticks_) {
+            const auto key = std::make_pair(anchor.subject_id, anchor.rank);
+            auto it = transfer_anchor_ticks.find(key);
+            if (it == transfer_anchor_ticks.end() || anchor.tick > it->second) {
+                transfer_anchor_ticks[key] = anchor.tick;
+            }
+            auto subj_it = transfer_anchor_by_subject.find(anchor.subject_id);
+            if (subj_it == transfer_anchor_by_subject.end() ||
+                anchor.tick > subj_it->second) {
+                transfer_anchor_by_subject[anchor.subject_id] = anchor.tick;
+            }
         }
     }
 
@@ -1669,24 +1975,45 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                 }
             }
         } else if (action.anchor_kind == "transfer_complete") {
-            const auto it = transfer_anchor_ticks.find(
-                std::make_pair(action.trigger_queue_index, action.rank));
-            if (it != transfer_anchor_ticks.end()) {
-                anchor_tick = it->second;
+            std::optional<Tick> rank_anchor;
+            std::optional<Tick> subject_anchor;
+            if (this->online_mode_) {
+                const auto rank_it = this->online_transfer_anchor_ticks_.find(
+                    TransferAnchorKey{action.trigger_queue_index, action.rank});
+                if (rank_it != this->online_transfer_anchor_ticks_.end()) {
+                    rank_anchor = rank_it->second;
+                }
+                const auto subject_it =
+                    this->online_transfer_anchor_by_subject_.find(
+                        action.trigger_queue_index);
+                if (subject_it !=
+                    this->online_transfer_anchor_by_subject_.end()) {
+                    subject_anchor = subject_it->second;
+                }
             } else {
+                const auto rank_it = transfer_anchor_ticks.find(
+                    std::make_pair(action.trigger_queue_index, action.rank));
+                if (rank_it != transfer_anchor_ticks.end()) {
+                    rank_anchor = rank_it->second;
+                }
+                const auto subject_it = transfer_anchor_by_subject.find(
+                    action.trigger_queue_index);
+                if (subject_it != transfer_anchor_by_subject.end()) {
+                    subject_anchor = subject_it->second;
+                }
+            }
+            if (rank_anchor.has_value()) {
+                anchor_tick = rank_anchor;
+            } else if (subject_anchor.has_value()) {
                 // Not every ledger target rank owns an ET transfer node
                 // (e.g. ranks outside the request's decode set). Fall back
                 // to the request's last transfer node complete tick across
                 // ranks (doc sec.7.8 transfer row), counted separately.
-                const auto subj_it = transfer_anchor_by_subject.find(
-                    action.trigger_queue_index);
-                if (subj_it == transfer_anchor_by_subject.end()) {
-                    reason = "missing_transfer_anchor";
-                } else {
-                    anchor_tick = subj_it->second;
-                    transfer_anchor_fallback_by_rank[action.rank]++;
-                    totals.transfer_anchor_request_level_fallback++;
-                }
+                anchor_tick = subject_anchor;
+                transfer_anchor_fallback_by_rank[action.rank]++;
+                totals.transfer_anchor_request_level_fallback++;
+            } else {
+                reason = "missing_transfer_anchor";
             }
         } else {
             reason = "unknown_anchor_kind";
@@ -2068,7 +2395,13 @@ void MetricCollector::emit_watermark_records(
     // it (some rank changed), plus the FIRST and LAST bucket of the window
     // which always emit -- empty middle buckets are omitted to keep the
     // log inside the WP6/WP8 disk budget.
-    if (full_detail) {
+    // D3 (2026-08-28): online mode skips the bucket lines entirely -- the
+    // online synthetic manifests carry no planner ledger, so every bucket
+    // is the documented flat-zero series whose authoritative WP8 source is
+    // the ledger.jsonl replay (slo_tools/hbm_watermark.py header) and
+    // metrics_postprocess consumes none of them. The per-rank summary
+    // records below stay (they carry the "why zero" note).
+    if (full_detail && !this->online_mode_) {
         const uint64_t period =
             this->watermark_period_ns_ > 0 ? this->watermark_period_ns_ : 1;
         const uint64_t last_bucket = sim_end_tick > 0

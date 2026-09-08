@@ -23,7 +23,7 @@ namespace AstraSimAnalytical {
 
 /**
  * CommonNetworkApi implements common AstraNetworkAPI interface
- * that both congestion_unaware and congestion_aware network API inherit.
+ * that the congestion_aware network API inherits.
  */
 class CommonNetworkApi : public AstraNetworkAPI {
   public:

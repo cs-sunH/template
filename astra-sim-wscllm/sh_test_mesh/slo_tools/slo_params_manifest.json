@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_note": "SLO 离线后处理 B 类参数清单。B4b（2026-08-26/27）已按主规格（各指标测试建议.md，合并自原执行规格 v5）§1 各推导程序、基于 B4a 证据（/tmp/slo_wps/params/：bucket_candidates、五仓 t_isolated/violation_curves/warmup_rolling/overhead_tiers、WP6 复测）与文献口径（SLO指标大全文档.md §2/§3.2/§7）填充全部 value+evidence+rationale，五仓逐字节相同冻结。约束回执：bucket_percentiles 首次从全量 astra_compute_20.csv 计算后冻结、不得每次重算；alpha/epsilon 一经确定全 campaign 冻结、所有策略共用同一 α。参数【值+证据+理由】总表另见 B4b 交付报告参数附录。slo_tools 各脚本对所需参数一律 fail-closed：遇 null/缺失/非法即非零退出并指明参数名。bucket_percentiles.value 结构为 {\"percentiles\": [p1, p2, ...], \"prefill_edges_tokens\": [...], \"decode_edges_tokens\": [...]}（edges 含首尾哨兵、与 percentiles 切点一一对应，桶 i 覆盖 edges[i] <= x < edges[i+1]、末桶闭合）。",
+  "_note": "SLO 离线后处理 B 类参数清单。B4b（2026-08-26/27）已按主规格（各指标测试建议.md，合并自原执行规格 v5）§1 各推导程序、基于 B4a 证据（/tmp/slo_wps/params/：bucket_candidates、五仓 t_isolated/violation_curves/warmup_rolling/overhead_tiers、WP6 复测）与文献口径（SLO指标大全文档.md §2/§3.2/§7）填充全部 value+evidence+rationale，五仓逐字节相同冻结。约束回执：bucket_percentiles 首次从全量 astra_compute_20.csv 计算后冻结、不得每次重算；alpha/epsilon 一经确定全 campaign 冻结、所有策略共用同一 α。参数【值+证据+理由】总表另见 B4b 交付报告参数附录。slo_tools 各脚本对所需参数一律 fail-closed：遇 null/缺失/非法即非零退出并指明参数名。bucket_percentiles.value 结构为 {\"percentiles\": [p1, p2, ...], \"prefill_edges_tokens\": [...], \"decode_edges_tokens\": [...]}（edges 含首尾哨兵、与 percentiles 切点一一对应；interior edges [415,2361,16470]/[91,489,1785] 为各左桶闭上界（如 decode=91 归 d1、prefill=415 归 p1），末桶无上限（x > edges[-1] 归末桶）——2026-09-05 裁决：与 campaign BucketGrid 语义统一；edges 数组值未变）。",
   "params": {
     "bucket_percentiles": {
       "value": {

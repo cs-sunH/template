@@ -33,8 +33,7 @@ transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceB
 迭代数) → [exit 标记] → 共享 end barrier;DECODE_COMPLETION watch 成员 =
 exit 标记节点(列车体后、end barrier 前的真实节点);completion_gates
 账本 = 本列车 post-barrier 节点(下一 turn interval gate 的 after_node_id
-来源,与旧整段发射的 end-barrier 口径一致)。legacy 变体(kv_cache_
-policy=legacy)不走列车,保留 emit_decode_batch 旧两段式 API。
+来源,与旧整段发射的 end-barrier 口径一致)。
 """
 
 import os
@@ -91,24 +90,6 @@ def first_token_split_enabled() -> bool:
     进程内切换。
     """
     return os.environ.get("SH_FIRST_TOKEN_SPLIT", "0") == "1"
-
-
-def _apply_hbm_charge(node: dict, hbm_charge, where: str) -> None:
-    """comm 节点 optional 键 hbm_charge(relevant_distributed 变体,
-    2026-09-02;总文档 §2.3/裁决 #35)。
-
-    在线 JSON GraphBatch 路径的合法键 = snake_case ``hbm_charge``
-    (C++ ParsedGraphBatch N13,check_key_set fail-closed 拒未知键/错拼
-    键,缺省 true 两端自动计费)。``None`` = 不写键 = 现状行为(字节
-    等价,golden 兼容);显式 bool = 写键。3300 读边的 recv 端传
-    ``False``(读边不落 D 的 HBM)——全仓首个显式 false。
-    """
-    if hbm_charge is None:
-        return
-    if not isinstance(hbm_charge, bool):
-        raise ValueError(
-            f"{where}: hbm_charge must be None or bool, got {hbm_charge!r}")
-    node["comm"]["hbm_charge"] = hbm_charge
 
 
 class OnlineTraceBuilder:
@@ -288,22 +269,20 @@ class OnlineTraceBuilder:
         node["coll"]["involved_dim"] = [True, True]
 
     def comm_send(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int, hbm_charge=None) -> None:
+                  comm_tag: int) -> None:
         node = self._new_node(name, COMM_SEND_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
-        _apply_hbm_charge(node, hbm_charge, name)
 
     def comm_recv(self, name: str, *, src: int, dst: int, comm_size: int,
-                  comm_tag: int, hbm_charge=None) -> None:
+                  comm_tag: int) -> None:
         node = self._new_node(name, COMM_RECV_NODE)
         node["comm"]["src"] = int(src)
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
-        _apply_hbm_charge(node, hbm_charge, name)
 
     # ------------------------------------------------------------- 只读属性 --
 
@@ -391,24 +370,9 @@ class GraphBatchBuilder:
         # rank 的 previous_id 不清空,本 request 的 prefill 链首可链上一
         # request 在本 rank 的链尾(共享 rank 上的链串行化)。
         # 保留:within-request 串行化;decode 段 frontier 接续(2026-08-19
-        # 统一,见 _emit_decode);同 session interval gate。
+        # 统一,见列车发射的 transfer-3000 触发链);同 session interval gate。
         marker = self._mark()
         members = self._emit_prelim(request_plan)
-        self._collect(marker)
-        return members
-
-    def emit_decode_batch(self, request_plan: dict) -> dict:
-        """发射 request 的 decode 整段(含 prefill_to_decode transfer 3000 /
-        decode 整段 / decode_request_end_barrier)(PREFILL_DRAIN 决策的图)。
-
-        strategy 恒走 roofline 物理时钟。
-
-        返回 DECODE_COMPLETION watch 成员:{rank: end barrier 前的 decode
-        末节点 id}(共享 DECODE_COMPLETION 锚点口径)。
-        """
-        self._set_context(request_plan, "decode", 1)
-        marker = self._mark()
-        members = self._emit_decode(request_plan)
         self._collect(marker)
         return members
 
@@ -514,63 +478,6 @@ class GraphBatchBuilder:
         members = {rank: bounds[1] for rank, bounds in prefill_bounds.items()}
         return members
 
-    def _emit_decode(self, request_plan: dict) -> dict:
-        """发射动态 GraphBatch 的 transfer-3000、decode 和 end-barrier 块。"""
-        builders = self.builders
-        prefill_group = self.group_by_index[request_plan["prefill_instance_index"]]
-        decode_group = self.group_by_index[request_plan["decode_instance_index"]]
-        prefix = _prefix_of(request_plan)
-        # [frontier 接续裁决,strategy 死锁修复统一(2026-08-19,对齐 sh_1.0/
-        # sh_2.0)] strategy **不做任何块末恢复/段内清链**:per-rank
-        # previous_id 无条件接续当前 frontier，per-rank 发行序 = 全局发射序——
-        # 任意两个发射段在
-        # 所有共享 rank 上的相对次序一致,跨请求 P2P(send/recv tag 匹配)
-        # 与 collective 参与序不可能反转成环。transfer3000 的 comm_send
-        # (prefill rank)链当前 frontier(经 per-rank 全序传递性仍包含本
-        # request 的 prefill 块末);comm_recv(decode rank)链当前 frontier
-        # (跨 request 边,含上一 request 的 decode end barrier)。(2026-08-15 的
-        # own-prefill-end 恢复 / None-restore 裁决自此废止。)
-        _paired_transfer(
-            config=self.config, builders=builders,
-            queue_index=request_plan["queue_index"], category=3000,
-            name="{}_prefill_to_decode_kv".format(prefix),
-            source_group=prefill_group, target_group=decode_group,
-            total_bytes=kv_cache_bytes_for_tokens(
-                self.config.model, request_plan["prefill_context_tokens"]),
-        )
-        tp = len(decode_group.ranks)
-        spans = tuple(
-            (1, request_plan["prefill_context_tokens"] + step + 1)
-            for step in range(request_plan["decode_length"])
-        )
-        members = {}
-        for relative_rank, rank in enumerate(decode_group.ranks):
-            transformer_pass_aggregated(
-                builders[rank],
-                phase="{}_decode_request_aggregated".format(prefix),
-                pass_spans=spans, layers=self.config.layers,
-                hidden_size=self.config.hidden_size,
-                ffn_size=self.config.ffn_size, tensor_parallel=tp,
-                pg_name=decode_group.pg_name, vocab_size=self.config.vocab_size,
-                bytes_per_elem=self.config.bytes_per_elem,
-                num_heads=self.config.num_heads,
-                tensor_parallel_rank=relative_rank,
-                mlp_variant=self.config.mlp_variant,
-            )
-            # completion candidate = end barrier 前每 rank 的 decode 末节点
-            # (DECODE_COMPLETION watch 成员)。
-            members[rank] = builders[rank].previous_id
-            builders[rank].all_reduce(
-                "{}_decode_request_end_barrier".format(prefix), 1,
-                decode_group.pg_name)
-        # completion gate 账本: end barrier 后的 previous_id 是 barrier 自身
-        # (下一 turn 的 interval gate after_node_id 指向它)。
-        self.completion_gates[request_plan["session_id"]] = (
-            request_plan["decode_instance_index"],
-            {rank: builders[rank].previous_id for rank in decode_group.ranks},
-        )
-        return members
-
     def emit_iteration_train(self, train_plan: dict) -> dict:
         """发射一趟 D 侧 decode 迭代列车(拼 batch 改造核心,2026-08-22;
         设计文档 §3.2"迭代列车聚合发射"+ §3.6 wscllm PD 分离豁免)。
@@ -587,7 +494,7 @@ class GraphBatchBuilder:
           joiners           新成员 request_plan 列表(含 prefill_instance_
                             index/prefill_context_tokens)——transfer 3000
                             迁移节点先于列车体(触发链 = per-rank frontier,
-                            与既有 _emit_decode 同款;drain 决策事件已在
+                            与旧整段 decode 发射同款;drain 决策事件已在
                             发射前交付,prefill 主体物理已完成)
           pass_spans        成员×迭代展开的 (tokens, kv) 平铺列表
           iterations        迭代数(= weight_passes:权重字节 ×迭代数,
@@ -751,28 +658,14 @@ class GraphBatchBuilder:
         """折叠列车体(17 类聚合节点;weight_passes = 权重读取次数)。
 
         拆分时首步批传首步 span 组 + weight_passes=1,余量批传余量组 +
-        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。
-
-        relevant_distributed 变体(2026-09-02,总文档 §3.3 KV 归因覆盖):
-        train_plan 可选键 "local_kv_bytes"(缺省 None = 现状全量 KV 口径,
-        逐字节等价)——与 train_plan["pass_spans"] 对齐的 per-span 列表,
-        每元素 None 或逐 rank D 本地 piece 字节序列,透传到
-        transformer_pass_aggregated 的 local_kv_bytes(远程成员的 span 只
-        计 D 本地 piece 字节,防与 3300 源端计费双计)。"""
+        iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。"""
         instance_index = train_plan["instance_index"]
         decode_group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
-        local_kv_values = _select_train_local_kv_bytes(train_plan, pass_spans)
         for builder in self.builders.values():
             builder.set_context(train_id, "decode", 1)
         tensor_parallel = len(decode_group.ranks)
         for relative_rank, rank in enumerate(decode_group.ranks):
-            local_kv_bytes = None
-            if local_kv_values is not None:
-                local_kv_bytes = [
-                    None if value is None else int(value[relative_rank])
-                    for value in local_kv_values
-                ]
             transformer_pass_aggregated(
                 self.builders[rank],
                 phase=train_id,
@@ -788,7 +681,6 @@ class GraphBatchBuilder:
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
                 weight_passes=weight_passes,
-                local_kv_bytes=local_kv_bytes,
             )
 
     def _emit_first_token_markers(self, train_plan: dict,
@@ -896,41 +788,6 @@ class GraphBatchBuilder:
         """列车标记节点(每 rank 1 个小 COMP 节点;上下文由调用方设置)。"""
         self.builders[rank].comp(name, 1, 1)
         return self.builders[rank].previous_id
-
-
-def _select_train_local_kv_bytes(train_plan: dict, body_spans):
-    """relevant_distributed 变体:列车体 local_kv_bytes 的 per-span 选值。
-
-    train_plan 可选键 "local_kv_bytes" = 与 train_plan["pass_spans"] 逐位
-    对齐的 per-span 列表(每元素 None = 该 span 全量 KV 口径,或逐 rank
-    D 本地 piece 字节序列,由 B3 调度器按 KVPlacement 精确计算)。
-
-    拆分列车(首步批/余量批)的 body_spans 是全列表的保序子序列——按
-    "最早未消费位置"的贪心子序列匹配逐位选取(重复 span 值亦正确);
-    整列发射时 body_spans == 全列表,退化为逐位恒等。长度不对齐/子序列
-    不匹配 fail-closed(RuntimeError,与其他构图校验同款)。
-    """
-    local_kv_bytes = train_plan.get("local_kv_bytes")
-    if local_kv_bytes is None:
-        return None
-    full_spans = list(train_plan["pass_spans"])
-    if len(local_kv_bytes) != len(full_spans):
-        raise RuntimeError(
-            "train local_kv_bytes must align with pass_spans "
-            f"({len(local_kv_bytes)} values for {len(full_spans)} spans)")
-    selected = []
-    cursor = 0
-    for span in body_spans:
-        key = tuple(span)
-        while cursor < len(full_spans) and tuple(full_spans[cursor]) != key:
-            cursor += 1
-        if cursor >= len(full_spans):
-            raise RuntimeError(
-                "train body spans are not a subsequence of the frozen "
-                f"pass_spans (mismatch at span {key!r})")
-        selected.append(local_kv_bytes[cursor])
-        cursor += 1
-    return selected
 
 
 def _prefix_of(request_plan: dict) -> str:

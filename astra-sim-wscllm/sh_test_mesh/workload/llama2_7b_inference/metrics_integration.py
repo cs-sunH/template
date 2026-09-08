@@ -10,10 +10,6 @@ graph construction.
 WSC-LLM differences versus the FACE original:
 
 - ``REPO_VARIANT`` is ``astra-sim-wscllm``.
-- The legacy WSC planner (Relevant(P,D) static Decode domain) keeps no
-  ``final_edge_weights``; the legacy KV digest payload therefore uses the
-  allocator's ``final_remaining_capacity_bytes`` instead.
-
 The manifest is exactly the frozen-schema product of
 :class:`metrics_schema.MetricManifestBuilder`; no extra keys are injected
 beyond what the frozen ``MetricsManifest`` dataclass emits.
@@ -27,8 +23,7 @@ Legacy digest recipes:
   (``sort_keys``, compact separators) of the original manifest's ``requests``
   array, which carries the WSC-LLM prefill/decode mapping and KV placement.
 - ``kv_event_digest``: SHA256 of the canonical JSON of the KV event payload
-  (session-LRU: every ``KVCacheEvent`` field row in order; legacy: the final
-  remaining capacities of the Relevant(P,D) allocator).
+  (session-LRU: every ``KVCacheEvent`` field row in order).
 """
 
 from __future__ import annotations
@@ -241,15 +236,6 @@ def kv_event_payload_session_lru(events: Sequence[Any]) -> list[list[Any]]:
         ]
         for event in events
     ]
-
-
-def kv_event_payload_legacy(plan: Any) -> dict[str, Any]:
-    """Legacy WSC Relevant(P,D) allocator outcome (there is no KV event log)."""
-
-    return {
-        "policy": "wsc_relevant_pd_static_decode_domain",
-        "final_remaining_capacity_bytes": list(plan.final_remaining_capacity_bytes),
-    }
 
 
 def load_chiplets_per_npu() -> int:

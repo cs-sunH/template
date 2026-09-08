@@ -14,15 +14,11 @@ endif ()
 project(AstraSim_Analytical)
 
 # Compilation target
-set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_unaware/congestion_aware)")
+set(BUILDTARGET "all" CACHE STRING "Compilation target ([all]/congestion_aware)")
 
 # Include src files to compile
 file(GLOB srcs_common
         ${CMAKE_CURRENT_SOURCE_DIR}/common/*.cc
-)
-
-file(GLOB srcs_congestion_unaware
-        ${CMAKE_CURRENT_SOURCE_DIR}/congestion_unaware/*.cc
 )
 
 file(GLOB srcs_congestion_aware
@@ -40,31 +36,6 @@ target_include_directories(AstraSim_Analytical_ChunkIdGeneratorTest PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/network_backend/analytical/include)
 set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
         PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-
-# Compile Congestion Unaware Backend
-if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_unaware")
-    add_executable(AstraSim_Analytical_Congestion_Unaware ${srcs_congestion_unaware} ${srcs_common})
-    target_sources(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/congestion_unaware/main.cc)
-
-    # Link libraries
-    target_link_libraries(AstraSim_Analytical_Congestion_Unaware LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Unaware LINK_PRIVATE Analytical_Congestion_Unaware)
-
-    # Include directories
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Unaware PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-
-    # Properties
-    # TODO: Switch to OFF after binary_function deprecation has been resolved
-    set_target_properties(AstraSim_Analytical_Congestion_Unaware PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Unaware
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
-endif ()
 
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
@@ -190,15 +161,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc
             ${srcs_execution_driven})
 
-    # R3 (frozen plan §3.6 / stage E) RemoteFifoLedger real-backend-port
-    # fixture (test-only): PER_NPU with out-of-order npu-ids (key label),
-    # PER_NODE 2x2 (shared-port active/pending/peak), MEMORY_POOL (single
-    # port) -- per-port counters against the backend queue's closed-form
-    # serial service ticks; never part of the baseline gates.
-    add_executable(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_fifo_ledger_test.cc
-            ${srcs_execution_driven})
 
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
@@ -225,8 +187,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_ServiceVacuumTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmTest LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -265,9 +225,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -348,13 +305,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Same output-directory convention as the reader test above (bin/).
     set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_LocalHbmTest
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
             PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/

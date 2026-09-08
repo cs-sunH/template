@@ -129,7 +129,10 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
 
     value 结构（B4 填充后）：{"percentiles": [...],
     "prefill_edges_tokens": [...], "decode_edges_tokens": [...]}，
-    edges 含首尾哨兵；桶 i 覆盖 edges[i] <= x < edges[i+1]，末桶闭合。
+    edges 含首尾哨兵；interior edges 为各左桶闭上界（桶 i 覆盖
+    edges[i] < x <= edges[i+1] 的整数域右闭区间，首桶左端含 edges[0]），
+    末桶无上限（x > edges[-1] 归末桶）——2026-09-05 口径裁决，与
+    campaign_common.BucketGrid 语义统一；edges 数组值未变。
     """
     value = require_param(manifest, "bucket_percentiles")
     if not isinstance(value, dict):
@@ -148,19 +151,32 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
 
 
 def bucket_index(edges: Sequence[float], x: float) -> int:
-    """桶 i 覆盖 edges[i] <= x < edges[i+1]，末桶闭合（x 可等于末哨兵）。"""
+    """interior edges 为各左桶闭上界，末桶无上限。
+
+    桶 i（非末桶）覆盖 edges[i] <= x <= edges[i+1]——interior 边界值归左桶
+    （如 decode edges [1,91,489,1785,32000] 下 91→桶 0、92→桶 1、
+    1785→桶 2、1786→桶 3；prefill [1,415,2361,16470,950002] 下 415→桶 0）；
+    末桶吸收一切越界值（x > edges[-1] 不再 fail-closed，归末桶）；
+    x < edges[0] 仍报错。
+
+    2026-09-05 口径裁决：与 campaign_common.BucketGrid（interior bounds
+    为各桶闭上界、末桶延伸至 +inf）完全等价；edges 数组值一律未变，
+    仅重解释语义（此前为左闭右开 edges[i] <= x < edges[i+1] 且
+    x > edges[-1] 报错）。
+    """
     if len(edges) < 2:
         fail("分桶边界至少需要两个哨兵值")
-    if x < edges[0] or x > edges[-1]:
-        fail(f"长度 {x} 落在分桶边界 [{edges[0]}, {edges[-1]}] 之外——"
+    if x < edges[0]:
+        fail(f"长度 {x} 小于分桶边界下哨兵 {edges[0]}——"
              f"分桶边界与数据不匹配（边界以 manifest 冻结值为准）")
     lo, hi = 0, len(edges) - 2
+    # 最小 i 使 x <= edges[i+1]（interior 边界归左桶）；均不满足则归末桶
     while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if edges[mid] <= x:
-            lo = mid
+        mid = (lo + hi) // 2
+        if x <= edges[mid + 1]:
+            hi = mid
         else:
-            hi = mid - 1
+            lo = mid + 1
     return lo
 
 

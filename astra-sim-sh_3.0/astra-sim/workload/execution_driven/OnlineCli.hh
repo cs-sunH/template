@@ -20,19 +20,6 @@ online entry must parse its own family explicitly:
                         stays IDLE and reads no pre-loaded queue (the static
                         baseline config, trace_config.csv:12, stays separate
                         from the online defaults).
-  --request-window-rows advisory only since the P0 turn-0 fix (2026-08-30):
-                        the reader builds a full turn-0 arrival calendar
-                        from a single streaming index pass and submits in
-                        ARRIVAL order regardless of this value (the old
-                        semantics -- bounding how far ahead rows could be
-                        READ, which tied turn-0 discovery to file position --
-                        is exactly the late-discovery defect the fix
-                        eradicates: early-arriving turn-0 rows sitting late
-                        in the file were submitted after their declared
-                        arrival). The knob is still parsed, stored, reported
-                        and checkpointed ("calendar reader: advisory"), 0
-                        included, for CLI/checkpoint compatibility; it no
-                        longer changes any behavior.
   --request-max-arrival-ns
                         frozen simulation input window upper bound (ns) for
                         turn-0 arrivals; rows beyond it are rejected (never
@@ -73,9 +60,16 @@ online entry must parse its own family explicitly:
                         main-loop wait_for_work() parking family (that is
                         --idle-watchdog-s below).
   --idle-watchdog-s     P0-2 (2026-08-31, 总文档 §4 P0-2.3) wall-clock
-                        event-loop parking watchdog, double seconds,
-                        frozen default 0 = OFF (the original unbounded
-                        wait_for_work() contract). When > 0, the main
+                        event-loop parking watchdog, double seconds.
+                        Default 1.0 (2026-09-05: the watchdog ships armed
+                        -- silent stalls fail closed in ~1 s instead of
+                        hanging; healthy official runs never reach the
+                        parking point since every calendar arrival is
+                        pre-scheduled as a queue event). The explicit
+                        value 0 = OFF restores the original unbounded
+                        wait_for_work() contract (fixtures and
+                        external-producer runs that legitimately idle
+                        pass it). When > 0, the main
                         loop's input-open parking point
                         (ServiceCoordinator::checked_wait_deadline +
                         wait_for_work_until; steady_clock -- WALL clock,
@@ -112,40 +106,18 @@ online entry must parse its own family explicitly:
                         inputs (Python queue ledger + KV ledger + static
                         route) never consume it, so sensing-on runs keep the
                         phase-2 decision sequence byte-identical.
-  --online-node-gc      M2 node GC (2026-08-23; A1 amortization 2026-08-28):
-                        value <0|1>, frozen default 1 (on -- A1 flipped the
-                        2026-08-23 ruling: collection is amortized, the
-                        commit tail only counts pending candidates and
-                        drains every per-rank NodeStore once >= 4096 have
-                        accumulated, then the run end forces one final
-                        collection, eliminating the light-load wall regression
-                        that motivated the old default-off). The commit tail
-                        also prunes the (rank, json id) -> store id map at
-                        the same watermark, keeping the C++ side at the
-                        in-flight window instead of the whole-run cumulative
-                        graph (memory). Collected nodes were finished, so
-                        edges that still reference them resolve to the
-                        NodeStore dead-parent no-op; validate() resolves
-                        pruned ids below the per-rank dense-prefix watermark
-                        only -- never-emitted ids stay fail-closed. 0 =
-                        pre-M2 behavior (nodes never erased; emergency
-                        rollback arm). Inline "=" and separate-value forms
-                        legal; any other token is a hard error.
-  --online-validate     C1 validate switch (2026-08-28): <0|1|N>. 1 (frozen
+  --online-validate     C1 validate switch (2026-08-28), amended by the B.2
+                        cleanup (2026-09-05): strict <0|1> enum. 1 (frozen
                         CLI default, fail-closed like the pre-C1 behavior)
                         = every batch runs GraphBatchCommitter::validate()
                         before commit; 0 = production fast path, validation
                         skipped entirely (the official runner passes
                         "${SH_ONLINE_VALIDATE:-0}"; smoke/fixture/verify
-                        runs pass 1 explicitly); N >= 2 = sample every Nth
-                        committed batch (batch index % N == 0 -- the counter
-                        is the committer's graph_batch_count, i.e. the batch
-                        about to be committed). Sampling changes only the
-                        validate counters/diagnostics (graph_validate_ns /
-                        graph_validate_count and the consistency record's
-                        validate fields -- whitelisted cpp.log diffs), never
-                        the committed state: commit() is untouched and a
-                        validated batch still gates on validate() first.
+                        runs pass 1 explicitly) while commit()'s mandatory
+                        liveness preflight stays armed. The former N >= 2
+                        sample-every-Nth-batch tier is removed: any other
+                        token is a hard parse error, so a stale script can
+                        never silently change validation frequency.
 
 Hard-error rules: unknown flags in the online family (prefixes --request-,
 --bridge-, --close-, --online-) are rejected, because the shared parser would
@@ -190,9 +162,11 @@ struct OnlineCliOptions {
     // response polls only (see the --bridge-timeout-ms doc above).
     int bridge_timeout_ms = 0;
     // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop parking
-    // watchdog (seconds; 0 = off, the frozen default). See --idle-watchdog-s
+    // watchdog (seconds). Default 1.0 since 2026-09-05 (ships armed;
+    // explicit 0 = off restores the unbounded wait_for_work() contract
+    // for fixtures/external-producer runs). See --idle-watchdog-s
     // above; consumed by the main loop's input-open parking point.
-    double idle_watchdog_s = 0.0;
+    double idle_watchdog_s = 1.0;
     std::string request_queue_csv;
     // Step 1-10: optional external-producer FIFO (IDLE fixture injection).
     std::string command_fifo;
@@ -200,29 +174,18 @@ struct OnlineCliOptions {
     // the per-rank injected-unfinished ledger summary delivery (查询/审计
     // 输入,非策略判据输入 -- 感知开关必须经显式 feature flag 进入).
     bool sensing_enabled = false;
-    // Phase 7 §10.4 / P0 fix (2026-08-30): ADVISORY ONLY. The turn-0
-    // arrival calendar is always complete and submissions always follow
-    // arrival order; this knob no longer bounds discovery (the old row
-    // window semantics was the late-discovery defect). Kept parsed,
-    // reported and checkpointed (default 128, 0 accepted) for CLI and
-    // checkpoint compatibility.
-    size_t request_window_rows = 128;
     // Phase 7 §10.4: turn-0 arrival upper bound; beyond = rejected (ns).
     // Backport fix (2026-08-16, sh_2.0测试 §5.1): default UNBOUNDED (0 = no
     // cap). The window is an explicit experiment knob only; any drop it
     // causes is counted and fail-closes the run-end completion audit.
     uint64_t request_max_arrival_ns = 0;
-    // M2 node GC (2026-08-23; A1 amortization 2026-08-28): 1 = collect
-    // finished childless nodes at the committer's end-of-commit quiescent
-    // point (amortized: the commit tail counts pending candidates and only
-    // drains once >= 4096 accumulated; the run end forces one final pass);
-    // 0 = pre-M2 never-erase behavior. Frozen default 1 (A1 flipped the
-    // 2023-08-23 light-load-regression ruling; see main_online.cc).
-    int online_node_gc = 1;
-    // C1 validate switch (2026-08-28): 1 = full pre-commit validation (the
-    // pre-C1 behavior, frozen CLI default so bare invocations stay
-    // fail-closed); 0 = production skip; N >= 2 = sample every Nth batch.
-    // The official runner passes "${SH_ONLINE_VALIDATE:-0}".
+    // C1 validate switch (2026-08-28), B.2 cleanup (2026-09-05): strict
+    // <0|1> enum -- 1 = full pre-commit validation (the pre-C1 behavior,
+    // frozen CLI default so bare invocations stay fail-closed); 0 =
+    // production skip (commit() retains its mandatory liveness preflight).
+    // The N >= 2 sample-every-Nth-batch tier is removed; any other value is
+    // rejected at parse time. The official runner passes
+    // "${SH_ONLINE_VALIDATE:-0}".
     int online_validate = 1;
 };
 

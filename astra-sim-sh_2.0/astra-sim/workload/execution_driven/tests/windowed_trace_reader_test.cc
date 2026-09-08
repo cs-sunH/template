@@ -8,11 +8,10 @@ turn-0 arrival calendar (方案见 WindowedTraceReader.hh; 2问题分析与解�
 方案kimi.md §4.3). Exercises the calendar reader standalone -- no network
 simulation, no baseline artifacts touched:
 
-  Part A  Calendar submission + advisory window: the FIRST pump runs the
+  Part A  Calendar submission: the FIRST pump runs the
           whole index pass (structure validation, per-row metrics-order
           registration, turn>0 pre-registration) and submits every turn-0
-          in ARRIVAL order; --request-window-rows no longer bounds
-          discovery (advisory); consumption shrinks the outstanding set.
+          in ARRIVAL order; consumption shrinks the outstanding set.
   Part B  Row semantics: turn-0 rows are submitted exactly once (command
           queue count == turn-0 row count), turn>0 rows are registered but
           never submitted (future_alarm path), EOF yields data_rows == total
@@ -26,10 +25,6 @@ simulation, no baseline artifacts touched:
           late_external_stream (never in late_static_submit).
   Part E  Request-neutral no-CSV path: an empty path constructs an
           already-EOF reader (no-op pumps, zero rows).
-  Part F  Phase-7 §10.5 audit snapshot: atomic write succeeds and now
-          carries the provenance + arrival_audit blocks; restore is
-          explicitly unsupported and always leaves reader/ingress state
-          untouched.
   Part G  Backport fix (2026-08-16, sh_2.0测试 §5.1) -- DEFAULT UNBOUNDED
           arrival window: synthetic envelopes at arbitrary (well beyond
           30 s) arrivals are ALL accepted under the 0 default (constructor
@@ -47,8 +42,8 @@ simulation, no baseline artifacts touched:
           the fire order is the CALENDAR order (arrival, queue_index), all
           discovered at tick 0, late_static_submit == 0, arrival gate ok.
   Part L  First session block longer than the old default window (>128
-          turns) under window=8 (advisory): every row is reachable in one
-          pump (the old bounded reader could not read the whole block).
+          turns): every row is reachable in one pump (the old bounded
+          reader could not read the whole block).
   Part M  arrival==0 boundary: t0_boundary_clamp classification, exempt
           from the gate (late_static_submit stays 0, gate ok).
   Part N  Same tick, multiple sessions: the equal-arrival group fires in
@@ -171,7 +166,7 @@ std::vector<std::string> sample_rows() {
     return rows;
 }
 
-void test_calendar_submission_advisory_window() {
+void test_calendar_submission() {
     const std::string csv = fixture_path("windowed_reader_test_window");
     write_csv(csv, sample_rows());
 
@@ -181,9 +176,7 @@ void test_calendar_submission_advisory_window() {
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
 
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
-    expect(reader.high_water() == 4,
-           "advisory window value is stored and reported");
+    WindowedTraceReader reader(csv, ingress);
     // First pump: the WHOLE file is indexed (window no longer bounds
     // discovery) and every turn-0 row is submitted in arrival order.
     expect(!reader.pump(), "first pump indexes and drains the calendar");
@@ -197,7 +190,7 @@ void test_calendar_submission_advisory_window() {
     expect(reader.current_window_occupancy() == 10,
            "outstanding = submitted-but-unfired turn-0 rows");
     expect(reader.peak_window_occupancy() == 10,
-           "peak outstanding reached 10 (window=4 is advisory)");
+           "peak outstanding reached 10");
     expect(reader.provenance().data_rows == 11, "provenance data_rows");
     expect(reader.provenance().sessions == 10, "provenance sessions");
     expect(reader.provenance().turn0_count == 10, "provenance turn0_count");
@@ -226,8 +219,7 @@ void test_calendar_submission_advisory_window() {
     expect(reader.current_window_occupancy() == 8,
            "out-of-order consumption retires exactly itself");
     expect(reader.rejected_out_of_range() == 0, "no rejections in part A");
-    std::printf("[fixture] part A PASS: calendar submission / advisory "
-                "window\n");
+    std::printf("[fixture] part A PASS: calendar submission\n");
 }
 
 void test_row_semantics() {
@@ -242,7 +234,7 @@ void test_row_semantics() {
 
     // Advisory window 0 and 128 are now EQUIVALENT: both index the whole
     // file and submit every turn-0 in arrival order.
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/0);
+    WindowedTraceReader reader(csv, ingress);
     expect(!reader.pump(), "window 0: one pump drains the calendar");
     expect(reader.eof(), "window 0 reaches EOF");
     expect(reader.data_rows() == 11, "data_rows == 11");
@@ -271,7 +263,7 @@ void test_out_of_range_rejection() {
     ingress.bind(&eq, &mailbox, &svc);
 
     // max_arrival_ns = 30s: row 1 (20s) in range, row 2 (40s) rejected.
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/0,
+    WindowedTraceReader reader(csv, ingress,
                                /*max_arrival_ns=*/30000000000ULL);
     reader.pump();
     expect(reader.rejected_out_of_range() == 1,
@@ -350,99 +342,6 @@ void test_late_counter_split() {
                 "source\n");
 }
 
-void test_checkpoint_audit_only() {
-    const std::string csv = fixture_path("windowed_reader_test_checkpoint");
-    write_csv(csv, sample_rows());
-    const std::string cp = fixture_path("windowed_reader_test_checkpoint", ".json");
-
-    // Index 6 rows worth of state by draining part of the calendar through
-    // a capacity-limited ingress, then checkpoint.
-    {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress(/*capacity=*/4);
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
-        reader.pump();  // indexes everything; submits 4 of 10 turn-0 rows
-        expect(reader.rows_read() == 11,
-               "index pass complete even under backpressure");
-        expect(ingress.pending_command_count() == 4,
-               "ingress capacity parks the calendar cursor (backpressure)");
-        expect(!reader.eof(), "cursor parked: eof not yet reached");
-        expect(reader.write_checkpoint(cp), "checkpoint written");
-    }
-
-    // A reader-only restore would lose the pending turn>0 ingress index map,
-    // already-scheduled turn-0 alarms, service counters, and metrics parents.
-    // Reject even a valid snapshot and leave a fresh reader wholly untouched.
-    {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
-        expect(!reader.read_checkpoint(cp),
-               "valid audit snapshot is not a restart checkpoint");
-        expect(reader.rows_read() == 0 && reader.data_rows() == 0 &&
-                   reader.current_window_occupancy() == 0 &&
-                   ingress.pending_queue_index_count() == 0,
-               "rejected restore leaves reader and ingress untouched");
-        expect(!reader.pump(), "fresh reader indexes the whole file");
-        expect(reader.rows_read() == 11,
-               "rejected restore does not seek or skip input rows");
-
-        // The P0 checkpoint carries the provenance + arrival audit blocks.
-        std::ifstream in(cp);
-        const std::string body((std::istreambuf_iterator<char>(in)),
-                               std::istreambuf_iterator<char>());
-        expect(body.find("\"arrival_audit\"") != std::string::npos,
-               "checkpoint contains the arrival_audit array");
-        expect(body.find("\"arrival_audit_summary\"") != std::string::npos,
-               "checkpoint contains the arrival_audit_summary");
-        expect(body.find("\"provenance\"") != std::string::npos,
-               "checkpoint contains the provenance block");
-        expect(body.find("\"calendar\"") != std::string::npos,
-               "checkpoint contains the calendar block");
-        std::remove(cp.c_str());
-    }
-
-    // Missing file -> false (nothing to restore).
-    {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
-        expect(!reader.read_checkpoint("/tmp/no_such_checkpoint.json"),
-               "missing checkpoint returns false");
-        expect(reader.rows_read() == 0, "missing checkpoint leaves state");
-    }
-
-    // Corrupt file -> false, state untouched (fail-closed).
-    {
-        EventQueue eq;
-        DecisionMailbox mailbox;
-        ServiceCoordinator svc;
-        RequestIngress ingress;
-        ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
-        {
-            std::ofstream bad(fixture_path("windowed_reader_test_bad_cp", ".json").c_str());
-            bad << "{ not json\n";
-        }
-        expect(!reader.read_checkpoint(
-                   fixture_path("windowed_reader_test_bad_cp", ".json").c_str()),
-               "corrupt checkpoint returns false");
-        expect(reader.rows_read() == 0, "corrupt checkpoint leaves state");
-        std::remove(fixture_path("windowed_reader_test_bad_cp", ".json").c_str());
-    }
-    std::printf("[fixture] part F PASS: audit snapshot write (provenance + "
-                "arrival audit) / restore unsupported fail-closed\n");
-}
-
 void test_no_csv_path() {
     EventQueue eq;
     DecisionMailbox mailbox;
@@ -450,7 +349,7 @@ void test_no_csv_path() {
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
 
-    WindowedTraceReader reader("", ingress, /*high_water=*/128);
+    WindowedTraceReader reader("", ingress);
     expect(reader.eof(), "empty path constructs an already-EOF reader");
     expect(!reader.pump(), "pump on the no-CSV reader returns false");
     expect(reader.data_rows() == 0, "no-CSV reader reads zero rows");
@@ -481,7 +380,7 @@ void test_default_unbounded_window() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, /*high_water=*/0);
+        WindowedTraceReader reader(csv, ingress);
         reader.pump();
         expect(reader.rejected_out_of_range() == 0,
                "default window is unbounded: nothing rejected");
@@ -535,7 +434,7 @@ void test_explicit_window_fail_closed() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/2,
+    WindowedTraceReader reader(csv, ingress,
                                /*max_arrival_ns=*/25000000000ULL);
     reader.pump();
     ingress.drain_commands();  // effective-arrival records exist from here
@@ -611,7 +510,7 @@ void test_queue_index_lifetime_and_fail_closed() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/1);
+    WindowedTraceReader reader(csv, ingress);
 
     // The index pass pre-registers EVERY turn>0 row up front (P0 fix:
     // O(rows), no longer bounded by the window).
@@ -688,7 +587,7 @@ void test_out_of_order_consumption_bound() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/4);
+    WindowedTraceReader reader(csv, ingress);
     expect(!reader.pump() && reader.rows_read() == 8,
            "out-of-order: one pump reads and submits all eight rows");
 
@@ -751,7 +650,7 @@ void test_calendar_out_of_order_turn0() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/2);
+    WindowedTraceReader reader(csv, ingress);
     const std::vector<FireRecord> seq =
         run_calendar_and_capture(csv, ingress, eq, reader);
 
@@ -781,7 +680,7 @@ void test_calendar_out_of_order_turn0() {
 }
 
 // Part L: a first session block longer than the old default window (150
-// turns) under window=8 (advisory). The old bounded reader could not hold
+// turns). The old bounded reader could not hold
 // the whole block; the calendar reader indexes everything in one pump.
 void test_first_block_over_window() {
     const std::string csv = fixture_path("windowed_reader_test_longblock");
@@ -802,9 +701,9 @@ void test_first_block_over_window() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/8);
+    WindowedTraceReader reader(csv, ingress);
     expect(!reader.pump(), "one pump drains the whole 151-row file");
-    expect(reader.rows_read() == 151, "all rows indexed (window=8 advisory)");
+    expect(reader.rows_read() == 151, "all rows indexed");
     expect(reader.data_rows() == 151, "data_rows == 151");
     expect(ingress.pending_queue_index_count() == 149,
            "every turn>0 row of the long block pre-registered");
@@ -832,7 +731,7 @@ void test_arrival_zero_boundary() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/128);
+    WindowedTraceReader reader(csv, ingress);
     const std::vector<FireRecord> seq =
         run_calendar_and_capture(csv, ingress, eq, reader);
     expect(seq.size() == 2, "both turn-0 rows fired");
@@ -880,7 +779,7 @@ void test_same_tick_multi_session() {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/128);
+    WindowedTraceReader reader(csv, ingress);
     const std::vector<FireRecord> seq =
         run_calendar_and_capture(csv, ingress, eq, reader);
     expect(seq.size() == 4, "four turn-0 rows fired");
@@ -915,7 +814,7 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader probe(csv, ingress, 128);
+        WindowedTraceReader probe(csv, ingress);
         probe.pump();
         const auto& p = probe.provenance();
         std::ofstream out(sidecar);
@@ -936,7 +835,7 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, 128);
+        WindowedTraceReader reader(csv, ingress);
         reader.pump();
         expect(reader.provenance_sidecar_status() == "matched",
                "provenance: matching sidecar -> matched, run proceeds");
@@ -962,10 +861,10 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, 128);
+        WindowedTraceReader reader(csv, ingress);
         expect_exit_code(
             [&]() {
-                WindowedTraceReader tampered(csv, ingress, 128);
+                WindowedTraceReader tampered(csv, ingress);
                 tampered.pump();
             },
             EXIT_FAILURE,
@@ -993,7 +892,7 @@ void test_provenance_tampering() {
             ServiceCoordinator svc;
             RequestIngress ingress;
             ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress, 128);
+            WindowedTraceReader tampered(csv, ingress);
             tampered.pump();
         },
         EXIT_FAILURE,
@@ -1008,7 +907,7 @@ void test_provenance_tampering() {
         ServiceCoordinator svc;
         RequestIngress ingress;
         ingress.bind(&eq, &mailbox, &svc);
-        WindowedTraceReader reader(csv, ingress, 128);
+        WindowedTraceReader reader(csv, ingress);
         reader.pump();
         expect(reader.provenance_sidecar_status() == "absent-no-gate",
                "absent sidecar: no gate, run proceeds");
@@ -1038,7 +937,7 @@ void test_structure_validation_fail_closed() {
             ServiceCoordinator svc;
             RequestIngress ingress;
             ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress, 128);
+            WindowedTraceReader tampered(csv, ingress);
             tampered.pump();
         },
         EXIT_FAILURE,
@@ -1056,7 +955,7 @@ void test_structure_validation_fail_closed() {
             ServiceCoordinator svc;
             RequestIngress ingress;
             ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress, 128);
+            WindowedTraceReader tampered(csv, ingress);
             tampered.pump();
         },
         EXIT_FAILURE,
@@ -1073,7 +972,7 @@ void test_structure_validation_fail_closed() {
             ServiceCoordinator svc;
             RequestIngress ingress;
             ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress, 128);
+            WindowedTraceReader tampered(csv, ingress);
             tampered.pump();
         },
         EXIT_FAILURE,
@@ -1091,7 +990,7 @@ void test_structure_validation_fail_closed() {
             ServiceCoordinator svc;
             RequestIngress ingress;
             ingress.bind(&eq, &mailbox, &svc);
-            WindowedTraceReader tampered(csv, ingress, 128);
+            WindowedTraceReader tampered(csv, ingress);
             tampered.pump();
         },
         EXIT_FAILURE,
@@ -1120,7 +1019,7 @@ void test_gate_trips_on_delayed_submission() {
     ServiceCoordinator svc;
     RequestIngress ingress(/*capacity=*/1);
     ingress.bind(&eq, &mailbox, &svc);
-    WindowedTraceReader reader(csv, ingress, /*high_water=*/128);
+    WindowedTraceReader reader(csv, ingress);
     reader.pump();
     expect(ingress.pending_command_count() == 1,
            "capacity-1 ingress parks the second calendar entry");
@@ -1182,11 +1081,10 @@ void test_gate_trips_on_delayed_submission() {
 }  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
-    test_calendar_submission_advisory_window();
+    test_calendar_submission();
     test_row_semantics();
     test_out_of_range_rejection();
     test_late_counter_split();
-    test_checkpoint_audit_only();
     test_no_csv_path();
     test_default_unbounded_window();
     test_explicit_window_fail_closed();
@@ -1207,8 +1105,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
     }
     std::printf("[windowed_reader_test] ALL PASS: calendar submission / row "
                 "semantics / out-of-range rejection / split late counters / "
-                "audit checkpoint (provenance + arrival audit) / no-CSV "
-                "path / default unbounded window / explicit-window "
+                "no-CSV path / default unbounded window / explicit-window "
                 "fail-closed audit / queue-index pre-registration / "
                 "out-of-order outstanding / out-of-order turn-0 calendar / "
                 "long first block / t0 boundary / same-tick ordering / "

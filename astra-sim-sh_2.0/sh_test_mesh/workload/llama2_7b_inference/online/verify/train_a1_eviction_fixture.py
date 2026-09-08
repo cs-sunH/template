@@ -10,12 +10,11 @@ trace 小窗不保证触发 KV 压力——本装置用小容量硬件（4 GiB/N
 
   1. §7.3 不变量：decode 成员-迭代总数 == Σ decode_length（3,588）；
      chunk 总数 == Σ ceil(prefill/512)（61）；
-  2. 逐出实际发生（typed eviction：human 会话先减半——三态 KV 的
-     partial_hbm_remote 状态可达）且运行 PASS；
-  3. sh_2.0 特性保留专项：partial 前缀两段式迁移至少发生一次
-     （train_ledger 存在 partial=True 的列车 = 首 chunk 按层段拆分
-     发射的 admission→列车两段式流水；typed eviction 的“先减半”
-     保证小容量下 partial 状态必然先于全逐出出现）；
+  2. 逐出实际发生（准入期 typed eviction：human 会话先减半——三态
+     KV 的 partial_hbm_remote 状态可达）且运行 PASS；
+  3. sh_2.0 特性保留专项：partial 前缀两段式迁移覆盖（尽力断言——
+     主动驱逐退役后无完成边界保证，机制由 _ensure_capacity 单测
+     覆盖；被动准入算术下预期仍发生）；
   4. 全部 11 请求完成（交付 reasons 四类各 11）。
 
 编排：合成输入落 /tmp → 备份 trace_config.csv → 临时指向合成队列/
@@ -46,16 +45,14 @@ HARDWARE_SRC = os.path.join(
     REPO, "sh_test_mesh/hardware/face_case5_config_c.json")
 
 # 14 请求（§7.3 不变量断言用，Σ decode/chunks 由行数据求和）。
-# 容量压力设计（4 GiB/NPU ≈ 20.4K token/实例 KV 预算；reserve 3K
-# token 水位）：12 个 turn-0 会话（各 ~9.5K token final）在 ~3ms 内
-# 到达，queue-depth 均衡使 3 个实例各承载 2 个会话（成对实例剩余
-# ~1.1K < reserve 3K → 完成边界 enforce_reserve 必触发 typed 两阶段
-# 逐出）；成对实例上先完成者（A/B，短 decode）成为后完成者
-# （J/K，长 decode）完成时的逐出候选——half-suffix 逐出后剩余
-# ~5.8K ≥ reserve 3K，恰好停在 partial_hbm_remote（不全逐出）。
-# A/B 的 turn-1（interval 2s，晚于配对会话完成/逐出点）到达时
-# history_location_before == partial_hbm_remote → admission 走 partial
-# 前缀两段式迁移分支 → 首 chunk 列车 partial=True。
+# 容量压力设计（4 GiB/NPU ≈ 20.4K token/实例 KV 预算）：12 个 turn-0
+# 会话（各 ~9.5K token final）在 ~3ms 内到达，queue-depth 均衡使 3 个
+# 实例各承载 2 个会话——12 会话 × ~9.5K 对 ~20.4K/实例预算严重超订，
+# 准入期 _ensure_capacity 的 typed 两阶段逐出（主动驱逐退役后唯一
+# 逐出入口）必然触发，partial_hbm_remote 状态可达（不全逐出）。
+# A/B 的 turn-1（interval 2s）到达时 history_location_before ==
+# partial_hbm_remote → admission 走 partial 前缀两段式迁移分支 →
+# 首 chunk 列车 partial=True（尽力覆盖，见下方 partial 断言注释）。
 # 行结构：(session, turn, request_id, prefill, decode, arrival_ns,
 #         interval_ns, next_trigger_type)
 REQUESTS = [
@@ -115,9 +112,8 @@ def main() -> int:
     config = config.replace(
         "config,local_hbm_capacity_profile,validation-160gib",
         "config,local_hbm_capacity_profile,a1-eviction-4gib")
-    config = config.replace(
-        "config,kv_reserve_context_tokens,1000000",
-        "config,kv_reserve_context_tokens,3000")
+    # D-clear (2026-09-05)：kv_reserve_context_tokens 配置链保留（审计
+    # 口径）但运行期零消费者，按 CSV 原值使用即可，无需替换（R8）。
     lines = [line for line in config.splitlines()
              if line.startswith("config,request_queue_csv,")]
     if len(lines) != 1:
@@ -155,7 +151,8 @@ def main() -> int:
                 run_dir, "results/online_decision_log.jsonl")):
             decision = json.loads(line).get("decision", {})
             # sh_2.0 决策日志口径：逐出以 *_eviction_count 计数字段记录
-            # （母本 sh_1.0 为列表字段；此处按本仓 schema 计数）。
+            # （母本 sh_1.0 为列表字段）；主动驱逐退役后 completion 段
+            # 恒 0，此处断言的是准入族逐出（history/prefill/decode）。
             for key in ("history_eviction_count", "prefill_eviction_count",
                         "decode_eviction_count",
                         "completion_eviction_count"):
@@ -163,14 +160,17 @@ def main() -> int:
         if evictions == 0:
             fail("eviction path not exercised (§7.7 requires synthetic "
                  "coverage)")
-        # sh_2.0 特性保留专项：partial 前缀两段式迁移（typed eviction
-        # 减半 → partial_hbm_remote → 后续 turn 的 admission 走 prefix
-        # 迁移 + suffix 恢复分支 → 首 chunk 列车 partial=True）。
+        # sh_2.0 特性保留专项：partial 前缀两段式迁移（准入逐出减半 →
+        # partial_hbm_remote → 后续 turn 的 admission 走 prefix 迁移 +
+        # suffix 恢复分支 → 首 chunk 列车 partial=True）。
+        # R8 (2026-09-05) 降级为尽力断言：完成边界主动驱逐退役后，
+        # partial 迁移不再有"必触发"的设计保证；被动准入算术下预期仍
+        # 发生，机制本身由 _ensure_capacity 单测覆盖。
         partial_trains = [r for r in ledger if r.get("partial")]
         if not partial_trains:
-            fail("partial prefix two-stage migration was not exercised "
-                 "(expected at least one partial=True train under the "
-                 "4 GiB fixture)")
+            print("[a1-eviction-fixture] NOTE: no partial=True train in "
+                  "this run; partial prefix two-stage migration coverage "
+                  "is best-effort after active eviction removal")
         print(f"[a1-eviction-fixture] PASS: trains={len(ledger)} "
               f"member_iters={member_iters} chunks={chunks} "
               f"evictions={evictions} partial_trains={len(partial_trains)}")

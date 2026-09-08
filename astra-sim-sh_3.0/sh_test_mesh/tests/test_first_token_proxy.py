@@ -136,11 +136,14 @@ class ProxyFormulaTests(unittest.TestCase):
         self.assertIn("P=8", note)
 
     def test_short_debut_interpolates_within_train(self):
-        """decode_length=1 (P=1) inside an 8-iteration train: the weight
+        """decode_length=4 (P=4) inside an 8-iteration train: the weight
         sum still runs over the TRAIN's N=8 iterations (first token lands
         with iteration 1), NOT the debut's participation -- summing over
-        P would degenerate to share=1 and overshoot completion
-        (7/1454 rows in the 60s reference run before this fix)."""
+        P would degenerate to share=1 and overshoot completion whenever
+        the debut exits before the train boundary (7/1454 rows in the 60s
+        reference run before this fix).  decode_length==1 is no longer
+        interpolated but pinned to completion -- see
+        test_dl1_pinned_to_completion."""
         index = _fake_index(
             {"r": (0, _ledger_row(tick=1_000_000, iterations=8))},
             {0: 9_000_000},
@@ -155,13 +158,31 @@ class ProxyFormulaTests(unittest.TestCase):
             1_000_000 + (weights[0] / sum(weights)) * 8_000_000))
         value, note = mp._first_token_proxy_value(
             index,
-            self._entry(request_id="r", decode_length=1,
-                        final_context_tokens=4097),
+            self._entry(request_id="r", decode_length=4,
+                        final_context_tokens=4100),
             self._record(request_id="r"))
         self.assertEqual(value, expected)
         self.assertLess(value, 9_000_000)
         self.assertIn("N=8", note)
-        self.assertIn("P=1", note)
+        self.assertIn("P=4", note)
+
+    def test_dl1_pinned_to_completion(self):
+        """decode_length==1 debut inside a MULTI-iteration train: share<1
+        interpolation lands BEFORE the recorded completion tick, but
+        exact-mode semantics for dl1 is first_token==completion -- pin and
+        say so (face 0902 full_rt: 18/268 dl1 rows, up to 4.9s early)."""
+        index = _fake_index(
+            {"r": (0, _ledger_row(tick=1_000_000, iterations=8))},
+            {0: 9_000_000},
+        )
+        value, note = mp._first_token_proxy_value(
+            index,
+            self._entry(request_id="r", decode_length=1,
+                        final_context_tokens=4097),
+            self._record(request_id="r", completion_ns=5_000_000))
+        # raw interpolation would land at ~1M + share*8M << 5M
+        self.assertEqual(value, 5_000_000)
+        self.assertIn("pinned_to_completion", note)
 
     def test_clamped_to_completion_for_one_iteration_train(self):
         """N=1 退化列车：share=1 -> proxy=下一发射边界 > completion（边界晚
@@ -334,6 +355,31 @@ class EndToEndRowsTests(unittest.TestCase):
         rows = self._rows()
         self.assertEqual(rows["session_0_request_0"]["first_token_ns"],
                          expected)
+
+    def test_dl1_debut_pinned_to_completion(self):
+        """decode_length==1 debut riding an N=8 train (e2e guard against
+        the pin/hard-invariant being deleted): the filled proxy row keeps
+        first_token_ns == completion_ns with the pinned_to_completion note,
+        and the dl1 hard invariant in _request_rows_for_run does not trip."""
+        sidecar = Path(self.records[0]["manifest_path"]).parent / "manifest.json"
+        manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+        manifest["requests"][0]["decode_length"] = 1
+        manifest["requests"][0]["final_context_tokens"] = 4097
+        sidecar.write_text(json.dumps(manifest), encoding="utf-8")
+        self._write_log()
+        with (self.results_dir / "train_ledger.jsonl").open(
+                "w", encoding="utf-8") as sink:
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_1", tick=1_000_000,
+                joiners=["session_0_request_0"])) + "\n")
+            sink.write(json.dumps(_ledger_row(
+                train_id="batch_train_i0_2", tick=9_000_000)) + "\n")
+        rows = self._rows()
+        row = rows["session_0_request_0"]
+        self.assertEqual(row["first_token_ns"], row["completion_ns"])
+        self.assertEqual(row["completion_ns"], 41_000_000)
+        self.assertEqual(row["first_token_source"], "train_interpolated")
+        self.assertIn("pinned_to_completion", row["instructions"])
 
 
 if __name__ == "__main__":

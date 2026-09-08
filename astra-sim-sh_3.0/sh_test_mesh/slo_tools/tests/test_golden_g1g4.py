@@ -141,7 +141,7 @@ class G1SingleRequestNoContention(unittest.TestCase):
         synthetic.write_jsonl(
             self.run_dir, "train_ledger.jsonl", [
                 {"train_id": "t", "instance_index": 3, "tick": 8000,
-                 "drains": ["s0_r0"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["s0_r0"], "joiners": []},
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 1000})
@@ -241,9 +241,9 @@ class G2TwoRequestsQueued(unittest.TestCase):
         synthetic.write_jsonl(
             self.run_dir, "train_ledger.jsonl", [
                 {"train_id": "t0", "instance_index": 0, "tick": 500,
-                 "drains": ["r0"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["r0"], "joiners": []},
                 {"train_id": "t1", "instance_index": 0, "tick": 900,
-                 "drains": ["r1"], "exits": [], "joiners": []},
+                 "drains": [], "exits": ["r1"], "joiners": []},
             ])
         manifest = synthetic.write_slo_manifest(
             self.run_dir, {"imbalance_bucket_ns": 100})
@@ -456,7 +456,9 @@ class ScanExportSkeletonTests(unittest.TestCase):
             synthetic.write_cpp_log(run_dir, [],
                                     repo_variant="astra-sim-face")
             run_dirs.append(run_dir)
-        out = run_dirs[0].parent / "norm.csv"
+        # 输出落独立临时目录：run_dirs 的 /tmp 根为多仓并行测试共享，
+        # 固定名 norm.csv 会竞态互踩（mkdtemp 隔离，任务2修复）。
+        out = synthetic.make_run_dir("nm_out") / "norm.csv"
         args = slo_argv(["normalized", *[str(d) for d in run_dirs],
                          "-o", str(out)])
         self.assertEqual(slo_stats.cmd_normalized(args), 0)

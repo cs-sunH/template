@@ -634,6 +634,16 @@ def _first_token_proxy_value(
     if completion is not None and proxy_ns > completion:
         proxy_ns = completion
         note += " clamped_to_completion(train_end_boundary>completion)"
+    elif (completion is not None and decode_length == 1
+          and proxy_ns < completion):
+        # decode_length==1: the request's only decode iteration IS its first
+        # token, so exact-mode semantics is first_token==completion (see the
+        # clamp note above).  A dl1 debut riding a MULTI-iteration train gets
+        # share<1 and the interpolation lands BEFORE the recorded completion
+        # tick (face 0902 full_rt: 18/268 dl1 rows, up to 4.9s early); pin to
+        # completion -- the same value the N=1 clamp above yields.
+        proxy_ns = completion
+        note += " pinned_to_completion(decode_length==1,proxy<completion)"
     return proxy_ns, note
 
 
@@ -838,6 +848,18 @@ def _request_metric_rows(
                     prefix + f"first_token_ns {first_token} outside "
                     f"[arrival_ns {arrival}, completion_ns {completion}]"
                 )
+        # dl1 hard invariant (proxy rows only): a decode_length==1 proxy row
+        # MUST equal completion -- the pin/clamp branches above guarantee it;
+        # exact rows are exempt (WP9_CONTRACT sec.6 TP-skew: first_token may
+        # legitimately sit at/before completion).
+        if (first_token_source == _FIRST_TOKEN_SOURCE_PROXY
+                and first_token is not None and completion is not None
+                and manifest_decode == 1
+                and first_token != completion):
+            raise PostprocessError(
+                prefix + "decode_length==1 proxy first_token_ns != "
+                "completion_ns (dl1 first token IS the last token; "
+                "pinned_to_completion path broken)")
 
         turn_index = record.get("turn_index")
         if turn_index is None:

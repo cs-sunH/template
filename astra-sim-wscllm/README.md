@@ -155,7 +155,7 @@ comm_write）、`hbm_peak_concurrent_jobs`、`hbm_redistribution_events`、真�
 
 ## 1. 本仓是什么
 
-- **策略语义（保留对象，未改动）**：PD 分离：6P:3D + StaticPdMapping 静态路由；session_lru_recompute（默认）、legacy（FCFS 队头阻塞 + kv_event_payload_legacy.json）与 relevant_distributed（D′ 分布式 KV 存放，第三变体，2026-09-02——见 §3.2；两既有变体一行不动）三变体；legacy/session_lru 为 RESIDENT/EVICTED 两态、session 驻留状态/字节数由运行时 KV 账本（SessionKVCacheManager）动态维护，无 sidecar
+- **策略语义（保留对象，未改动）**：PD 分离：6P:3D + StaticPdMapping 静态路由；唯一在线 KV 策略变体 `session_lru_recompute`（legacy 与 relevant_distributed 两个历史变体已于 2026-09-05 按《A.5-legacy变体调度器清除修改方案.md》清除，`kv_cache_policy` 值域 fail-closed 收紧为单值）；RESIDENT/EVICTED 两态、session 驻留状态/字节数由运行时 KV 账本（SessionKVCacheManager）动态维护，无 sidecar
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），五仓接口一致。
@@ -200,8 +200,6 @@ cd sh_test_mesh/workload/llama2_7b_inference && python3 plan_materializer.py && 
 # ④ 跑③④（GEN_MATCH：generated/ 下须恰一个 llama2_7b_inference_54npus_* 目录）
 bash sh_test_mesh/run_scripts/run_online_strategy.sh <run_dir> <绝对路径 request_csv>
 bash sh_test_mesh/run_scripts/run_online_strategy_sensing.sh <run_dir> <绝对路径 request_csv>
-bash sh_test_mesh/run_scripts/run_online_strategy_legacy.sh <run_dir> <request_csv> <legacy_gen>
-bash sh_test_mesh/run_scripts/run_online_strategy_relevant.sh <run_dir> <request_csv>   # relevant_distributed 第三变体（§3.2；KV_REMOTE_READ=physical|ideal_masked，缺省 physical）
 
 # ⑤ 指标后处理 + ④对账
 bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
@@ -230,19 +228,14 @@ python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile
 #    上界层，超限只诊断不认证、exit 0），一律不传分桶/聚合参数（粗化
 #    留给下游画图脚本）；
 #    非 full 档依赖 request_metrics.csv 的子命令按设计跳过并写说明；
-#    legacy 变体（face/wscllm）额外跳过 load_imbalance/hbm_watermark
-#    （legacy 无列车台账；分配器语义不兼容 session-KV 水位重建）；
-#    relevant_distributed 变体（B4b/2026-09-02）跳过 hbm_watermark
-#    （决策日志含 run_header/kv_* 新行、无 session-KV 逐出语义，水位
-#    重放口径不适用——容量合规由调度器 run-end journal 守恒门承载；
-#    load_imbalance 照常，列车台账在场），均写说明、不算失败。
+#    train_ledger 缺失时跳过 load_imbalance，同样写说明、不算失败。
 #    env SH_SLO_POSTPROCESS：1=默认 warn（子命令失败只写
 #    slo_postprocess.FAIL 标记，不推翻仿真结果）、0=整步跳过、
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
 #    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2）——run_dir
 #    自包含，与仓还原状态解耦
 # ⑥ 一键清空测试记录 + 编译产物（还原裸仓库 = 无物化输入 + 无 build/）
-bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config[_legacy] 指针回占位）
+bash sh_test_mesh/run_scripts/clean_test_records.sh      # 清物化输入/运行产物/缓存（含 trace_config 指针回占位）
 bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（build/）
 #    （或一步到位：clean_test_records.sh --full）
 ```
@@ -257,8 +250,7 @@ bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（bui
 PASS 判据：completed == 物化请求数、no_decision=0、single_node=0、
 delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据）。
 
-指标档位（B1/WP0 起）：各变体 runner（strategy/sensing/legacy/relevant，2026-09-02
-起四个）的 `--metrics-detail` 不再硬编码
+指标档位（B1/WP0 起）：两个 runner（strategy/sensing）的 `--metrics-detail` 不再硬编码
 summary——优先级 env `SH_METRICS_DETAIL` > 本仓
 `sh_test_mesh/workload/llama2_7b_inference/metrics_config.json` 的
 `detail_level`（off|summary|full）；env 与 json 均非法/缺失时 fail-closed
@@ -392,16 +384,19 @@ tick 差，相对 ≤6.6e-5）、GraphBatch 增量 = debut 请求数。metrics_s
 ### 3.1 在线二进制机制旗标（--online-* 家族）
 
 `AstraSim_Analytical_Congestion_Aware_Online` 显式解析 `--online-*` 家族
-（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标两枚：
+（OnlineCli.hh 契约；家族内未知旗标硬错）。机制类旗标一枚：
 
 | 旗标 | 取值 | 缺省 | 语义 |
 |---|---|---|---|
-| `--online-node-gc` | `0\|1` | `1`（开） | M2 节点 GC（2026-08-23）+ **A1 摊销化（2026-08-28，默认翻转）**：GraphBatchCommitter 在批提交静止点（issue pass 完全返回后）回收各 rank NodeStore 中"已 finish 且无未完 children"的节点，并按同水位修剪 (rank, json id) → store id 映射，C++ 侧内存维持在途窗口而非全程累计图（2s 冒烟实测 retained 143652→12）。被回收节点必已 finished，仍指向它的跨批边按 NodeStore 死父规则无阻塞（validate 仅按 per-rank 稠密前缀水位线放行已修剪 id，从未存在的 id 照旧 fail-closed）。`0` = M2 前永不删除行为（应急回退臂）。决策序列与全部工件不受该旗标影响（GC 开/关两臂均字节对拍验收）。**摊销化设计（替代 2026-08-23"默认关"裁决）**：commit 尾只做 O(#ranks) 的候选计数，攒够 4096 个 finished 节点才真正回收一次，run 末强制收尾一次——旧实现"每 commit 全量回收"是当时轻载墙钟回归（30s 档 +35~55%）的来源，摊销后本仓 2s 冒烟墙钟对基线 −53.2%（17.88s→8.37s），回归消除。 |
-| `--online-validate` | `0\|1\|N` | `1`（全量） | **C1（2026-08-28）**：GraphBatch 提交前全量校验开关。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验）；`N≥2` = 每 N 批抽 1 批（按 committer 的 graph_batch_count 取模）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
+| `--online-validate` | `0\|1` | `1`（全量） | **C1（2026-08-28）；B.2 清除（2026-09-05）移除 N 抽检档**：GraphBatch 提交前全量校验开关。`1` = 每批校验（改前行为，裸调用的 fail-closed 缺省）；`0` = 生产快速路径（跳过校验，commit() 的强制活性预检保留）。取值域为严格 `0\|1` 枚举，`N≥2` 或其它任何值启动即硬错误（杜绝陈旧脚本静默改变校验频率）。只影响 validate 计数/诊断（graph_validate_ns 等白名单字段），不影响已提交状态。生产 runner 默认传 0（env `SH_ONLINE_VALIDATE` 可覆盖），冒烟/fixture/verify 脚本显式传 1。 |
 
-runner 脚本（strategy/sensing/legacy/relevant 四个（legacy 变体 Python 侧不接 B3 sink，
-relevant 变体装配口径同 session_lru；C++ 开关同构））显式传
-`--online-node-gc "${SH_ONLINE_NODE_GC:-1}"` 与
+`--online-node-gc` 旗标已由 **B.3 清除（2026-09-05）** 整支移除：M2 节点 GC
+摊销回收恒开（原 `0` 臂 = pre-M2 永不删除应急回退臂已删，现仅 fixtures 内部
+Context 开关可达），任何 `--online-node-gc` 调用按家族未知旗标规则启动即
+硬错误（`unknown online-family option`），陈旧脚本无法静默禁用 GC；决策序列
+与全部工件不受影响（历史生产调用恒为默认 1）。
+
+runner 脚本（strategy/sensing 两个（装配口径相同；C++ 开关同构））显式传
 `--online-validate "${SH_ONLINE_VALIDATE:-0}"`；fixture runner（idle/
 wakeup_guard/same_tick_milestone）显式 `--online-validate 1`。运行期证据：
 cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
@@ -410,8 +405,11 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 停泊看门狗与桥超时（P0-2，2026-08-31；sync-A16 批次4 2026-09-01 以 face
 批次P 后交付版为母本同步 FP1 数值/解析加固；**wscllm 范围裁决**见下）：
 
-- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `0`=关（`wait_for_work()`
-  原契约不动，IDLE fixture 零影响）；开时停泊点墙钟超时即带停泊点诊断
+- `--idle-watchdog-s <秒>`：墙钟停泊看门狗，缺省 `1.0`=武装（2026-09-05：
+  静默楔死 ~1s 即 fail-closed abort，不再无声挂死；官方 CSV run 到达全量
+  预排为队列事件、健康运行不停车不受影响。显式 `0`=关恢复 `wait_for_work()`
+  原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
+  墙钟超时即带停泊点诊断
   （tick/active/pending_alarm/window_occupancy/mailbox 等 12 字段）
   `online_fatal` abort（`--idle-` 前缀同受家族未知旗标硬错保护）。
   **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
@@ -435,26 +433,27 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
   （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文已随 A3
   移植（`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
-- **window advisory 裁决（2026-08-30 P0 fix 延续）**：`--request-window-rows`
-  在本仓不改变任何行为（calendar reader 按 arrival 序提交）；runner 的
-  `SH_REQUEST_WINDOW_ROWS` 透传（sync-A16 批次4）仅为五仓 CLI/checkpoint
-  兼容口径统一，**本仓不设 C++ 启动 span 预检/拒绝门**（合同 §3.1），
-  `SH_REQUEST_WINDOW_ROWS` 的任何取值（含 0/正数）都不构成非法配置。
-- **FP1 整数解析加固（2026-09-01，sync-A16 批次P）**：
-  `--request-window-rows` / `--request-max-arrival-ns` /
-  `--bridge-timeout-ms` / `--online-validate` 统一"纯 ASCII 数字词法（拒
+- **window advisory 旋钮已删除（2026-09-05 A.3 清除；原 2026-08-30 P0 fix
+  延续裁决）**：`--request-window-rows` 死旋钮已从四仓物理删除——calendar
+  reader 按 arrival 序提交，窗口值从不约束读取与提交，删除不改变任何行为；
+  现传入该选项即 `unknown online-family option` 硬错误（fail-closed），
+  runner 不再透传 `SH_REQUEST_WINDOW_ROWS`。
+- **FP1 整数解析加固（2026-09-01，sync-A16 批次P）；B.2 清除（2026-09-05）修订**：
+  `--request-max-arrival-ns` / `--bridge-timeout-ms`
+  统一"纯 ASCII 数字词法（拒
   `" -1"`/`"\t-1"`/`"+1"`）→ `errno=0` + ERANGE 拒 → endptr 到串尾 →
-  目标类型上限（前两者 size_t/uint64_t、bridge-timeout-ms 与
-  online-validate 另加 `<= INT_MAX`）→ 才转换"合同，失败不部分写入
-  `out`；`--online-validate=4294967296` 曾会回绕为 0 静默关闭图验证
-  （fail-open），现启动即拒。
+  目标类型上限（前两者 size_t/uint64_t、bridge-timeout-ms
+  另加 `<= INT_MAX`）→ 才转换"合同，失败不部分写入
+  `out`。`--online-validate` 原同属该整数词法族
+  （`--online-validate=4294967296` 曾会回绕为 0 静默关闭图验证，fail-open）；
+  B.2 清除后改为严格 `0|1` 枚举解析，任何其它值（含抽检 N≥2 与越界大数）
+  启动即硬错误。
 - runner 透传 env：`BRIDGE_TIMEOUT_MS` 三态——未设=缺省 120000（须大于
   负载最慢单决策与 Python 侧 FIFO 开启等待）、显式 `0`=永等逃生口、正值=
   该毫秒值；它只武装 C++ 桥 response poll（Python 单次交换停滞族，含
   Python 启动即死形态），管不到停泊族（由 `--idle-watchdog-s` 兜住）。
-  **A4 缺省收紧声明（P0-2，唯一行为收紧）**：三个 runner（strategy/
-  sensing/legacy；legacy 此前完全未武装——楔死实证 Python 启动即死后 C++
-  桥空等 2h53m）未设/空时一律注入 `--bridge-timeout-ms 120000`；逃生口
+  **A4 缺省收紧声明（P0-2，唯一行为收紧）**：两个 runner（strategy/
+  sensing）未设/空时一律注入 `--bridge-timeout-ms 120000`；逃生口
   `BRIDGE_TIMEOUT_MS=0`；C++ 裸调用缺省仍为 0（永等）不变。
 
 ### 3.1.1 运行开销与日志瘦身开关（2026-08-28，A/B/C/D 系列改造）
@@ -474,8 +473,8 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   保留集不受影响）、campaign_provenance.json、
   `results/kv_delta_journal.jsonl` + `results/kv_delta_journal_checksum.json`
   （P1/2026-08-30 权威 HBM delta journal 与 run 末 checksum 门产物，常驻
-  不压缩；journal 开关 off 或 legacy 变体跑不产生）、
-  bridge/checkpoints/、P2 拷入的 `metrics_manifest.json`/`manifest.json`、
+  不压缩；journal 开关 off 时不产生）、
+  P2 拷入的 `metrics_manifest.json`/`manifest.json`、
   P3 自动 SLO 提取产物（`slo_*.csv`、`slo_*.json`、`cache_events.csv`、
   `kv_hit_states.csv`、`slo_postprocess.log`、`slo_postprocess.FAIL` 若有）。
   任一阶段失败不归档、
@@ -547,72 +546,6 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   暂不能 cursorize：future alarm 和 GraphBatchBuilder 仍按 `queue_index`
   随机解析未来请求。
 
-### 3.2 relevant_distributed 第三变体（D′ 分布式 KV 存放，2026-09-02）
-
-实现工作区根《WSC-LLM的KV存放策略.md》的分布式 KV 存放；唯一权威实施依据 =
-《wscllm要补充的选择分析方案总文档.md》（含 37 条裁决与数值算例）。
-
-- **定位**：第三 `kv_cache_policy` 变体；`legacy` / `session_lru_recompute`
-  两个既有变体与它们的全部既有测试一行不动（显式启用，代码 fallback
-  `"legacy"` 与 checked-in csv 缺省 `session_lru_recompute` 两处均不动）。
-- **启用方式**：`kv_cache_policy=relevant_distributed` + 官方入口
-  `bash sh_test_mesh/run_scripts/run_online_strategy_relevant.sh <run_dir>
-  <request_csv>`——policy 传递沿用 legacy 脚本机制（online_service 显式
-  `--config`，不依赖代码默认值）：runner 从当前 trace_config.csv 派生 run 内
-  配置 `${run_dir}/trace_config_relevant.csv`（仅改写 kv_cache_policy 行 +
-  追加 kv_remote_read 行，其余行含 request_queue_csv 指针原样保留）；plan
-  物化 / GEN_MATCH / 看门狗 / 后处理 / SLO 提取 / 归档与主 runner 同构。
-- **参数**：
-  - 新 optional 配置键 `kv_remote_read = physical（缺省）| ideal_masked`，
-    runner 经 env `KV_REMOTE_READ` 透传：physical = 发射 3300 远程读边 +
-    列车体裁远程 KV 分量（策略真实行为）；ideal_masked = 不发射 3300、不裁
-    分量（现状字节口径）——严格 A/B 对照（假设边界实验，策略文档"假设边界"节；
-    实测报告见 `docs/relevant_distributed/ab_h28_report.md`）。
-  - env `SH_RUNTIME_CONFIG_DIR`（缺省不设）：覆盖 C++ runtime_config 四小件
-    目录——H28 d2d/hbm ratio 扫描用（派生 hardware json 变体 →
-    config_resolver 派生独立 slug 目录；缺省 = 主 hardware json 的
-    `face_case5_config_c__validation-160gib__no_memory_expansion`，行为不变）。
-  - 列车机制两默认值继承主变体：`SH_TRAIN_MAX_ITER` 交付默认 8（0=不设限）、
-    `SH_FIRST_TOKEN_SPLIT` 缺省关。
-  - `--sensing` 显式拒绝（fail-closed，legacy 同款）。
-- **机制概述**（新变体不再发射 3000 迁移；3100/3300 编号为新族，1900/1000 族
-  复用既有语义）：
-  - **准入三条件一次性预分配**：按 final context 一次完成；decode 段
-    [prefill_ctx, final) 硬钉 D；条件 = ①D′ 空域总量 / ②P 整段暂存 /
-    ③D 容 decode 段；放置全序 (tier, distance_to_decode, −剩余容量,
-    instance_index)（tier D=0/P=1/中间 die≥2；legacy 变体保留旧序
-    (2,1,0,3,4) 与其测试，有意共存）；D′ = 单条选定静态路径实例集合
-    （默认布局全 1 跳 → D′={P,D}），逐 NPU 账本记账（容量 − 权重分片）。
-  - **背压**：准入前检查 + FCFS 队头阻塞（复用 legacy 路径，零新事件类型）；
-    空域不可行 ValueError（配置非法）/ 当前容量不足 None（等释放重查）两档。
-  - **3100 散布写边**（drain 边界，P→owner）：两端 HBM 计费（write-once），
-    P-piece 零边；守恒 Σ3100 + P-piece = kv(prefill_ctx)（golden 门）。
-  - **3300 远程读边**（列车期，per 列车×成员×源）：字节 = p_m × R_{m,s}
-    精确式；send 源端 HBM 计费、recv 不写 D 的 HBM（全仓首个显式
-    `hbm_charge=false`）；双端侧插 + recv 注入该成员自己的 exit 标记。
-  - **1000 族多源历史拉回**（多轮）：源 = 旧 pieces 各实际源实例 → 新 P，
-    两端计费；经 P 重放置（不做历史感知选点）。
-  - **KV delta journal**：四字段 schema 零改动（pieces → resident cause=
-    relevant_placement、staging scratch → reserved cause=staging_scratch），
-    run 末守恒门由调度器 `verify_run_end()` 内联执行（journal 权威重放：
-    逐 rank resident=0/reserved=0/physical=weight；不落 checksum 证书文件）；
-    hbm_watermark 对本变体跳过（session-KV 重放口径不适用，见 §2 ⑤b）。
-- **新测试文件**：`test_wsc_relevant_memory_scheduler.py`（纯分配器：三条件/
-  全序/算例 B/守恒/还原）、`test_relevant_kv_invariants.py`（发射层 golden
-  三件套 + tag/hbm_charge/local_kv_bytes 契约）、
-  `online/test_wsc_llm_relevant_online_scheduler.py`（混合骨架：背压/多轮/
-  发射序/run-end 审计）；`slo_tools/tests/run_golden_live.py` 新增 R1 场景
-  （溢出到 P 的请求逐条手算断言 3100/3300 字节与位置表；断言函数离线自测 =
-  `python3 sh_test_mesh/slo_tools/tests/run_golden_live.py --selftest`）；
-  `slo_tools/hopbytes.py` wscllm 登记扩 1000/3100/3300 三族（决策行生成侧
-  routes 的 noc_hops，实例级口径）；`slo_tools/kv_cache_adapter.py` 仓内
-  policy 分发（prefill 行 history_canonical_hit_state → full/partial/
-  no_history，无 miss 路径；1000/3100 路由行逐实例聚合成 canonical 事件，
-  `--reconcile` 对账；测试 = `tests/test_kv_adapter_relevant.py`）；
-  `slo_tools/relevant_observations.py` 三个观测后处理（裁决 #24：每实例
-  resident/remote KV 占用时序、读边字节分布、背压持续时长——run 报告
-  附属脚本，不进契约工具链，只读不改决策；`--selftest` 手算断言）。
-
 ## 4. 机制回归 fixtures
 
 `run_online_idle_fixture.sh`（IDLE 五态生命周期）、`run_online_wakeup_guard_fixture.sh`、
@@ -675,7 +608,31 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   复位 P 实例 busy 并登记等待 decode 准入（容量 epoch/dirty 门控下重查，
   固定静态映射不 remap）；`_on_decode_complete` 落 KV 完成账本（拼 batch
   改造后 active_decode 出队与 busy 复位移至列车核销）；`_on_request_complete`
-  排下一 turn 的 arrival alarm。
+  排下一 turn 的 arrival alarm。准入预占按净额+迁移后回补（2026-09-06）：
+  prefill 准入在静态 decode 目标预占终态 KV 时，若全量预约因本会话旧驻留
+  重复计入而 deep-gap、且旧 KV 仍 RESIDENT 于该 decode 实例，则按净额
+  （终态−旧驻留）重试；`prepare_history` 迁移删除旧驻留后经
+  `extend_request_capacity` 回补到全量（防抢占语义保持，resident→reserved
+  1:1 换位，任何瞬间不超订）。
+- **上条净额预占的由来（2026-09-06 准入双重计账楔死故障，6×8 拓扑全量首跑
+  实证；完整分析见《wscllm准入预占双重计账修复方案.md》）**：全量 22816 请求
+  首跑提交至 22740 后楔死——4 个终态 85万–105万 token 超长会话被静态 P→D
+  路由各钉死在一个 decode 实例，准入重试永 insufficient 且无事件可唤醒重试，
+  C++ 侧事件队列+决策邮箱全空后由统一死端守卫 fail-closed
+  （`main_online.cc:1653`，安全网本身正确、未改）。根因是记账错误而非容量
+  真不够：准入预占终态全量 KV 时未扣减本会话尚驻留于同一 decode 实例的旧 KV
+  （`ensure_physical_fit` 的 remaining 不减自身旧驻留 + `protected_sessions`
+  禁逐出自身），tp4 128 KiB/token/rank 下"旧+新"≈260GB ≫ 每 rank 预算
+  ≈168.5GB（上下文 ≳64.2万 token 即触发，队内最大 104.8万）；运行中期其它
+  会话的准入会触发 LRU 顺手清走旧 KV，故长会话前几百 turn 均可通过，队列
+  尾部再无新准入 → `capacity_epoch` 永不变化 → 永等楔死。物理上 KV 原地单调
+  增长（旧 ⊂ 新）从不同时容纳旧+新，故只修记账位点＝上条的条件化净额预占 +
+  迁移后回补，改动仅 `wsc_llm_online_scheduler.py`、`session_kv_manager.py`
+  两个 Python 文件与单测。验证：单测 `online/test_admission_net_credit.py`
+  （旧代码永久推迟/新代码准入成功且不变量干净/release 对称归零；旧 KV 在其它
+  实例、EVICTED、净额钳 0 边界与旧行为一致）；30s 标准冒烟冻结基线与修复前
+  逐字节一致（条件分支不触发）；4instance 全量重跑 22816/22816 全完成、无
+  lost-wakeup。
 - request_aggregated 折算口径：每个请求相位按 rank 折成 17 类算子节点
   （13 类层内算子 + attention/MLP 两个 All-Reduce + final norm + logits），
   聚合 FLOPs、tensor/HBM 字节、可选远端读与集合通信载荷与 token 展开总量
@@ -709,8 +666,7 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   推进恰一次、退出成员移出 active_decode），后续信号清 pending 集合，
   陈旧错配 fail-closed；核销后同 tick 即可冻结下一列车（连续 batching）。
   列车台账 `train_ledger.jsonl`：D 侧行 member_iterations>0，P 侧行
-  prefill_chunks>0，两类字段互斥（无混合列车）。legacy 变体
-  （kv_cache_policy=legacy）不走列车，保留旧两段式 `emit_decode_batch`。
+  prefill_chunks>0，两类字段互斥（无混合列车）。
 - 接栅栏与段末屏障：列车/段发射不做块末恢复/段内清链，per-rank
   `previous_id` 无条件接续当前 frontier（per-rank 发行序 = 全局发射序，
   2026-08-19 五仓统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟

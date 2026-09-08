@@ -72,6 +72,7 @@ Exit code 0 on ALL PASS.
 */
 
 #include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -81,7 +82,6 @@ Exit code 0 on ALL PASS.
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
-#include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <cstdio>
 #include <cstdlib>
@@ -91,7 +91,6 @@ Exit code 0 on ALL PASS.
 #include <vector>
 
 using namespace AstraSim;
-using namespace Analytical;
 using namespace AstraSimAnalytical;
 using namespace AstraSimAnalyticalCongestionAware;
 using namespace NetworkAnalytical;
@@ -213,7 +212,7 @@ int main(int argc, char* argv[]) {
     // shared CmdLineParser::get exit(-1)s on a never-provided option with no
     // default, so every option read below is guaranteed present.  The strings
     // must outlive passthrough, hence the named locals.
-    bool has_workload = false, has_remote = false, has_network = false;
+    bool has_workload = false, has_network = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strncmp(argv[i], "--scenario=", 11) == 0 ||
             std::strncmp(argv[i], "--fixture-root=", 15) == 0) {
@@ -222,9 +221,6 @@ int main(int argc, char* argv[]) {
         if (std::strncmp(argv[i], "--workload-configuration", 25) == 0) {
             has_workload = true;
         }
-        if (std::strncmp(argv[i], "--remote-memory-configuration", 30) == 0) {
-            has_remote = true;
-        }
         if (std::strncmp(argv[i], "--network-configuration", 24) == 0) {
             has_network = true;
         }
@@ -232,15 +228,10 @@ int main(int argc, char* argv[]) {
     }
     const std::string default_workload = "--workload-configuration=" +
         fixture_root + "/fixture";
-    const std::string default_remote = "--remote-memory-configuration=" +
-        fixture_root + "/remote_memory.json";
     const std::string default_network = "--network-configuration=" +
         fixture_root + network_dir + "network.yml";
     if (!has_workload) {
         passthrough.push_back(const_cast<char*>(default_workload.c_str()));
-    }
-    if (!has_remote) {
-        passthrough.push_back(const_cast<char*>(default_remote.c_str()));
     }
     if (!has_network) {
         passthrough.push_back(const_cast<char*>(default_network.c_str()));
@@ -250,8 +241,6 @@ int main(int argc, char* argv[]) {
                           passthrough.data());
     const auto comm_group_configuration =
         cmd_line_parser.get<std::string>("comm-group-configuration");
-    const std::string remote_memory_path =
-        cmd_line_parser.get<std::string>("remote-memory-configuration");
     const auto logging_configuration =
         cmd_line_parser.get<std::string>("logging-configuration");
     const auto logging_folder =
@@ -293,8 +282,6 @@ int main(int argc, char* argv[]) {
 
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
-        std::make_unique<AnalyticalRemoteMemory>(remote_memory_path);
     auto systems = std::vector<Sys*>();
 
     auto queues_per_dim = std::vector<int>();
@@ -306,7 +293,7 @@ int main(int argc, char* argv[]) {
         auto network_api = std::make_unique<CongestionAwareNetworkApi>(i);
         auto* const system =
             new Sys(i, fixture_root + "/fixture", comm_group_configuration,
-                    system_path, memory_api.get(), network_api.get(),
+                    system_path, network_api.get(),
                     npus_count_per_dim, queues_per_dim, injection_scale,
                     comm_scale, rendezvous_protocol);
         network_apis.push_back(std::move(network_api));

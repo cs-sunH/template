@@ -3,23 +3,19 @@
 2026-08-26）的 python 级单测（不跑仿真）。
 
 覆盖（每档 >= 2 个构造性用例 + fail-closed）：
-  - 开关解析：5 个合法档位；非法值 _parse_ablation_mode raise；
+  - 开关解析：4 个合法档位；非法值 _parse_ablation_mode raise；
     Sh30OnlineScheduler.__init__ 非法 env fail-closed（基类打桩）；
     各档 __init__ 派生旗标（no_lb/no_affinity 布尔）。
   - none 档（缺省等价）：_select_prefill_instance 与直调
     select_prefill_instance 逐值恒等；三分支（1a/1/3）选择与现树一致；
     分支2 sticky；驻留不可行仍返回 False；drain decode == prefill 实例
-    （decode_hbm_feasible_instances 零调用）；KV 阶段1逐出序不变。
+    （decode_hbm_feasible_instances 零调用）。
   - no_lb 档：_select_prefill_instance 退化为掩码内首选可行（min 索引，
     负载不进判据）；空掩码 fail-closed；分支 1a/1/3 调用点退化断言。
   - no_affinity 档：分支2 LOCAL sticky 退化为全集均衡选择；PARTIAL 钉扎
     边界不动；drain decode 走均衡路径（real KVCacheManager：跨实例
     noc_migrate + joiner 入 decode 实例 pending_decode_ready + 预约迁移/
     释放 + 会话搬家）；驻留不可行但全集可行时不再等待。
-  - no_tiered_eviction 档：KVCacheManager 旗标 env 感知；_ensure_capacity
-    跳过阶段1 suffix-half offload（首受害者整段直达 REMOTE_MEMORY）；
-    多受害者 typed FIFO；逐出字节数 == 全层 shard 手算（KV 守恒）；
-    后续同 session 恢复为整段 remote_load（0..L）而非 suffix 版。
   - no_lb_no_affinity 档：两旗标同置；分支2/decode 选择随 no_lb 取首选
     可行（decode_hbm_feasible_instances 仍被调用——消融路径证明）。
 
@@ -112,7 +108,17 @@ class _AdmitKVStub:
     def __init__(self, feasible, history=None, session_ids=()):
         self._feasible = tuple(feasible)
         self._history = history
-        self.session_ids = set(session_ids)
+        self._session_ids = set(session_ids)
+        self.has_session_calls = 0
+
+    @property
+    def session_ids(self):
+        raise AssertionError(
+            "admission membership must not materialize sorted session_ids")
+
+    def has_session(self, session_id):
+        self.has_session_calls += 1
+        return session_id in self._session_ids
 
     def request_hbm_feasible_instances(self, **kwargs):
         return self._feasible
@@ -212,7 +218,7 @@ def _admit_once(scheduler, request_id):
 class AblationModeParseTest(unittest.TestCase):
     """_parse_ablation_mode：合法档位/非法值 fail-closed。"""
 
-    def test_all_five_modes_parse(self):
+    def test_all_four_modes_parse(self):
         for mode in _ABLATION_MODES:
             self.assertEqual(_parse_ablation_mode(mode), mode)
 
@@ -275,7 +281,6 @@ class SchedulerInitAblationTest(unittest.TestCase):
         expectations = {
             "no_lb": (True, False),
             "no_affinity": (False, True),
-            "no_tiered_eviction": (False, False),
             "no_lb_no_affinity": (True, True),
         }
         for mode, (no_lb, no_affinity) in expectations.items():
@@ -358,6 +363,18 @@ class TryAdmitNoLbTest(unittest.TestCase):
         scheduler.edge_free_mask = edge_free_mask
         _add_queued_load(scheduler, 0, "heavy0")
         return _admit_once(scheduler, "new")
+
+    def test_membership_uses_one_direct_lookup(self):
+        """会话存在性判定不得为一次准入排序整个活跃会话集合。"""
+        remote = SimpleNamespace(location="remote_memory")
+        kv = _AdmitKVStub(
+            (True, True), history=remote, session_ids=("new_session",))
+        scheduler = _shell_scheduler(kv)
+
+        admitted, _ = _admit_once(scheduler, "new")
+
+        self.assertTrue(admitted)
+        self.assertEqual(kv.has_session_calls, 1)
 
     def test_branch_1a_full_set_lb_degenerates(self):
         """分支 1a（无非边缘实例→全集均衡）：none 选轻载 1，no_lb 选 0。"""
@@ -482,8 +499,7 @@ class DrainDecodeAffinityTest(unittest.TestCase):
         hardware = _tiny_hardware()
         model = _tiny_model()
         topology = _two_instance_topology(hardware)
-        kv = KVCacheManager(
-            topology, model, reserve_context_tokens=1000)
+        kv = KVCacheManager(topology, model)
         scheduler = _shell_scheduler(
             kv, no_lb=no_lb, no_affinity=no_affinity,
             topology=topology, hardware=hardware, model=model)
@@ -620,233 +636,6 @@ class DrainDecodeAffinityTest(unittest.TestCase):
             ["r0"])
         self.assertEqual(
             runtime.prefill_decode_transfer.kind, "local_hit")
-
-
-# ---------------------------------------------------------------------------
-# no_tiered_eviction：face_scheduler._ensure_capacity 阶段1门
-# ---------------------------------------------------------------------------
-
-def _tiny_kv_manager(capacity_bytes=300, reserve_context_tokens=19,
-                     layers=4):
-    hardware = FaceHardware(
-        mesh_rows=2,
-        mesh_cols=2,
-        local_hbm_capacity_bytes=capacity_bytes,
-        local_hbm_bandwidth_gbps=1.0,
-        d2d_bandwidth_gbps=2.0,
-        peak_perf_tflops=1.0,
-        d2d_latency_ns=0,
-        local_hbm_latency_ns=0,
-    )
-    model = FaceModel(
-        layers=layers,
-        hidden_size=2,
-        ffn_size=2,
-        num_heads=2,
-        vocab_size=2,
-        bytes_per_elem=1,
-        mlp_variant="gelu",
-    )
-    topology = build_instances(
-        hardware,
-        (
-            FaceInstanceSpec("ins0", "1", (0, 1)),
-            FaceInstanceSpec("ins1", "2", (2, 3)),
-        ),
-    )
-    return KVCacheManager(
-        topology, model,
-        reserve_context_tokens=reserve_context_tokens), model
-
-
-def _seed_local_session(manager, session_id, *, instance_index=0,
-                        context_tokens, completion_ns=None,
-                        next_request_type=None):
-    manager.prepare_prefill(
-        session_id=session_id,
-        target_instance_index=instance_index,
-        history_tokens=0,
-        trigger_request_id="%s_initial" % session_id,
-    )
-    manager.expand_prefill(
-        session_id=session_id,
-        instance_index=instance_index,
-        context_tokens=context_tokens,
-        trigger_request_id="%s_initial" % session_id,
-    )
-    if completion_ns is not None:
-        manager.mark_complete(
-            session_id, completion_ns,
-            next_request_type=next_request_type)
-
-
-def _seed_pressure_fixture():
-    """oldest(10,t=10) / second(10,t=20) / active(5,在飞) 同驻实例 0。"""
-    manager, model = _tiny_kv_manager()
-    _seed_local_session(
-        manager, "oldest", context_tokens=10, completion_ns=10,
-        next_request_type="human")
-    _seed_local_session(
-        manager, "second", context_tokens=10, completion_ns=20,
-        next_request_type="human")
-    _seed_local_session(manager, "active", context_tokens=5)
-    return manager, model
-
-
-def _remaining(manager, instance_index=0):
-    return tuple(
-        snapshot.remaining_bytes
-        for snapshot in manager.hbm_snapshots(instance_index)
-    )
-
-
-class NoTieredEvictionFlagTest(unittest.TestCase):
-
-    def test_flag_reflects_env(self):
-        """env 感知：仅 no_tiered_eviction 档置位；其余档/未设一律 False
-        （缺省零行为差的构造性前提）。"""
-        with mock.patch.dict(os.environ):
-            os.environ.pop("SH30_ABLATION", None)
-            manager, _ = _tiny_kv_manager()
-            self.assertFalse(manager.disable_tiered_eviction)
-        for mode in ("none", "no_lb", "no_affinity",
-                     "no_lb_no_affinity"):
-            with mock.patch.dict(os.environ, {"SH30_ABLATION": mode}):
-                manager, _ = _tiny_kv_manager()
-                self.assertFalse(manager.disable_tiered_eviction)
-        with mock.patch.dict(
-                os.environ, {"SH30_ABLATION": "no_tiered_eviction"}):
-            manager, _ = _tiny_kv_manager()
-            self.assertTrue(manager.disable_tiered_eviction)
-
-
-class NoTieredEvictionEnsureCapacityTest(unittest.TestCase):
-    """阶段1（suffix-half）跳过：LOCAL→REMOTE 整段直达。触发点 =
-    expand_prefill 的 _ensure_capacity（prefill_growth_capacity）。"""
-
-    def test_none_mode_keeps_two_stage_sequence(self):
-        """none 档（未设 env）：两阶段逐出序不变——X=20 压力下
-        [suffix(oldest), suffix(second), full(oldest)]，与现树行为一致。"""
-        with mock.patch.dict(os.environ):
-            os.environ.pop("SH30_ABLATION", None)
-            manager, _ = _seed_pressure_fixture()
-            evictions = manager.expand_prefill(
-                session_id="active", instance_index=0,
-                context_tokens=20, trigger_request_id="grow")
-            self.assertEqual(
-                [
-                    (t.session_id, t.layer_start, t.layer_end,
-                     t.resident_prefix_layers_after)
-                    for t in evictions
-                ],
-                [("oldest", 2, 4, 2), ("second", 2, 4, 2),
-                 ("oldest", 0, 2, 0)],
-            )
-            self.assertEqual(
-                manager.session_snapshot("oldest").location,
-                KVCacheManager.REMOTE_MEMORY)
-            self.assertEqual(
-                manager.session_snapshot("second").location,
-                KVCacheManager.PARTIAL_HBM_REMOTE)
-
-    def test_stage1_skipped_full_eviction_direct(self):
-        """no_tiered_eviction 档：X=12 压力（none 档恰只需 suffix-half
-        oldest）下首受害者整段逐出（0..4 → REMOTE_MEMORY），无
-        partial_hbm_remote 产生。"""
-        with mock.patch.dict(
-                os.environ, {"SH30_ABLATION": "no_tiered_eviction"}):
-            manager, model = _seed_pressure_fixture()
-            self.assertTrue(manager.disable_tiered_eviction)
-            before = _remaining(manager)
-            evictions = manager.expand_prefill(
-                session_id="active", instance_index=0,
-                context_tokens=12, trigger_request_id="grow")
-            self.assertEqual(len(evictions), 1)
-            transfer = evictions[0]
-            self.assertEqual(transfer.session_id, "oldest")
-            self.assertEqual(
-                (transfer.layer_start, transfer.layer_end), (0, 4))
-            self.assertEqual(
-                transfer.resident_prefix_layers_after, 0)
-            self.assertEqual(
-                transfer.reason, "prefill_growth_capacity_full_fallback")
-            self.assertEqual(
-                manager.session_snapshot("oldest").location,
-                KVCacheManager.REMOTE_MEMORY)
-            # 全层 shard 手算对拍（整段 = 10 token × 4 层）。
-            expected = sum(kv_cache_shard_bytes_for_layer_range(
-                model, 10, manager.tp_degree,
-                layer_start=0, layer_end=4))
-            self.assertEqual(transfer.total_bytes, expected)
-            # KV 守恒：逐出释放 − 增长占用 == 净余量变化（逐 rank）。
-            growth = sum(kv_cache_shard_bytes_for_layer_range(
-                model, 12, manager.tp_degree,
-                layer_start=0, layer_end=4)) - sum(
-                kv_cache_shard_bytes_for_layer_range(
-                    model, 5, manager.tp_degree,
-                    layer_start=0, layer_end=4))
-            after = _remaining(manager)
-            per_rank_freed = expected // manager.tp_degree
-            per_rank_growth = growth // manager.tp_degree
-            self.assertEqual(
-                tuple(a - b for a, b in zip(after, before)),
-                tuple(
-                    per_rank_freed - per_rank_growth
-                    for _ in before))
-            # 全会话无一处于 PARTIAL（阶段1未运行）。
-            for snapshot in manager.session_snapshots():
-                self.assertNotEqual(
-                    snapshot.location,
-                    KVCacheManager.PARTIAL_HBM_REMOTE)
-
-    def test_heavier_pressure_multiple_full_evictions_fifo(self):
-        """更高压力：仍 typed FIFO（human 类内 completion_ns 升序）整段
-        逐出 oldest → second，不产生任何 PARTIAL 中间态。"""
-        with mock.patch.dict(
-                os.environ, {"SH30_ABLATION": "no_tiered_eviction"}):
-            manager, _ = _seed_pressure_fixture()
-            evictions = manager.expand_prefill(
-                session_id="active", instance_index=0,
-                context_tokens=25, trigger_request_id="grow")
-            self.assertEqual(
-                [(t.session_id, t.layer_start, t.layer_end)
-                 for t in evictions],
-                [("oldest", 0, 4), ("second", 0, 4)])
-            for session_id in ("oldest", "second"):
-                self.assertEqual(
-                    manager.session_snapshot(session_id).location,
-                    KVCacheManager.REMOTE_MEMORY)
-            active = manager.session_snapshot("active")
-            self.assertEqual(active.location, KVCacheManager.LOCAL_HBM)
-            self.assertEqual(active.context_tokens, 25)
-
-    def test_restore_after_full_eviction_is_whole_context(self):
-        """整段逐出后的同 session 恢复 = history_remote_restore 全层
-        remote_load（0..4），而非 suffix 版（2..4）。"""
-        with mock.patch.dict(
-                os.environ, {"SH30_ABLATION": "no_tiered_eviction"}):
-            manager, _ = _seed_pressure_fixture()
-            manager.expand_prefill(
-                session_id="active", instance_index=0,
-                context_tokens=12, trigger_request_id="grow")
-            self.assertEqual(
-                manager.session_snapshot("oldest").location,
-                KVCacheManager.REMOTE_MEMORY)
-            _, transfer, _ = manager.prepare_prefill(
-                session_id="oldest",
-                target_instance_index=0,
-                history_tokens=10,
-                trigger_request_id="restore",
-            )
-            self.assertEqual(transfer.kind, "remote_load")
-            self.assertEqual(
-                transfer.reason, "history_remote_restore")
-            self.assertEqual(
-                (transfer.layer_start, transfer.layer_end), (0, 4))
-            restored = manager.session_snapshot("oldest")
-            self.assertEqual(restored.location, KVCacheManager.LOCAL_HBM)
-            self.assertEqual(
-                restored.resident_prefix_layers, 4)
 
 
 if __name__ == "__main__":

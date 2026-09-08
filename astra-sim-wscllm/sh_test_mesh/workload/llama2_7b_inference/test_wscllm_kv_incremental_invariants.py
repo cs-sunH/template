@@ -48,7 +48,6 @@ def _manager(strict_invariants: bool) -> SessionKVCacheManager:
     return SessionKVCacheManager(
         topology,
         model,
-        reserve_context_tokens=0,
         strict_invariants=strict_invariants,
     )
 

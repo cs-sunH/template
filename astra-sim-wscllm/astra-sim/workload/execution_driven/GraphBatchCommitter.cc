@@ -152,7 +152,7 @@ bool collective_comm_type_has_completion_path(const uint64_t comm_type) {
     // Workload::issue_coll_comm() implements exactly these Chakra enum values.
     // Any other value reaches its unsupported-collective throw after the node
     // has already been taken from a NodeStore, so it is liveness-critical when
-    // full validation is sampled out.
+    // full validation is off.
     switch (comm_type) {
         case 0:  // ALL_REDUCE
         case 2:  // ALL_GATHER
@@ -183,9 +183,8 @@ void GraphBatchCommitter::apply_delta_facts(
                 prefill_drained.erase(ev.request_id);
                 break;
             case DecisionReason::DECODE_COMPLETION:
-            case DecisionReason::RESOURCE_READY:
                 // No tracking change (decode completion alone never ends a
-                // request; RESOURCE_READY is a reserved bit never produced).
+                // request).
                 break;
         }
     }
@@ -315,8 +314,8 @@ std::optional<std::string> GraphBatchCommitter::validate_json_id_stream(
 
 std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     const StateDelta& delta, const GraphBatch& batch) const {
-    // This is deliberately independent of validate(): production can skip or
-    // sample that exhaustive diagnostic pass, but it must never commit a batch
+    // This is deliberately independent of validate(): production can skip
+    // that exhaustive diagnostic pass, but it must never commit a batch
     // that can strand graph nodes, stage watches, p2p callbacks, collectives,
     // or request accounting.  Every container below is local; no fact set,
     // NodeStore, WatchRegistry, ingress queue, counter, or affine record is
@@ -357,7 +356,6 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     facts_it->second.prefill_drained = false;
                     break;
                 case DecisionReason::DECODE_COMPLETION:
-                case DecisionReason::RESOURCE_READY:
                     break;
             }
         }

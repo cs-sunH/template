@@ -13,9 +13,14 @@
   * instance  = decision log kind=decode 行的 decision.decode_instance_index
     （请求实际占用的是其 decode 实例；PD 迁移仓的 prefill 段归属不重复
     计——固定算法只取一个 (instance, interval) 对/请求）；
-  * drain     = train_ledger 中 drains 数组含该 request_id 的记录 tick。
-    （train_ledger 是 graph batch 账本；本脚本只读取 drains/exits 归属，
-    不 dump 账本内容。）
+  * drain     = train_ledger 中非 first_step 的 batch_train 行 exits 数组
+    含该 request_id 的行 tick（D 侧终态行）。
+    （train_ledger 是 graph batch 账本；本脚本只读取 exits 归属，不 dump
+    账本内容。2026-09-04 口径修正：原读 drains 行——WP9 拆分格式下请求
+    在准入 tick 即被退化 prefill_train 行 drain（wsc_llm_online_scheduler
+    准入路径同步拼 P 侧行），admission→drain 区间 100% 零长度，wscllm
+    全仓 time_avg_backlog 退化为 0；exits 终态行在五仓账本格式下均每请求
+    恰一行，0902 批次实测 0 重复/0 缺失/0 零长度区间。）
 
 统计口径：每实例时间平均积压 b̄_i = Σ(桶内积压×桶长)/总跨度；
 CV = stdev_population(b̄_i)/mean(b̄_i)；Max/Mean = max(b̄_i)/mean(b̄_i)。
@@ -95,20 +100,28 @@ def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
         # WP9 首步批账本行（first_step=true，SPLIT=ON 发射边界记录）不是
         # 终态 drain：真实 drain 在余量批行（同 train_id 的非 first_step
         # 行）。跳过以保持"每请求恰一次 drain"不变量（2026-08-27 B3
-        # 集成验证发现：拆分列车的 first_step 行也携带 drains 数组）。
+        # 集成验证发现：拆分列车的 first_step 行也携带 exits 数组）。
         if record.get("first_step"):
             skipped_first_step_rows += 1
             continue
-        drained = record.get("drains")
-        if not isinstance(drained, list):
-            fail("train_ledger 记录缺 drains 数组（schema 不符）")
+        train_id = record.get("train_id")
+        if not isinstance(train_id, str) or not train_id:
+            fail("train_ledger 记录缺字符串 train_id（schema 不符）")
+        if train_id.startswith("prefill_train"):
+            # WP9 拆分格式的 P 侧退化列车行在准入 tick 发射并携带 drains
+            # ——非终态（终态在 D 侧 batch_train 行的 exits）。非拆分格式
+            # 无 prefill_train 行，本分支为空操作。
+            continue
+        exited = record.get("exits")
+        if not isinstance(exited, list):
+            fail("train_ledger 记录缺 exits 数组（schema 不符）")
         tick = record.get("tick")
         instance = record.get("instance_index")
         if not isinstance(tick, int) or not isinstance(instance, int):
             fail("train_ledger 记录缺整数 tick/instance_index（schema 不符）")
-        for request_id in drained:
+        for request_id in exited:
             if not isinstance(request_id, str):
-                fail("train_ledger drains 成员必须是 request_id 字符串")
+                fail("train_ledger exits 成员必须是 request_id 字符串")
             if request_id in drains:
                 fail(f"请求 {request_id} 被多条列车 drain（应恰一次）")
             drains[request_id] = (tick, instance)

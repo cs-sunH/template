@@ -22,9 +22,7 @@ void CmdLineParser::define_options() noexcept {
         "comm-group-configuration", "Communicator group configuration fi`le",
         cxxopts::value<std::string>()->default_value("empty"))(
         "system-configuration", "System configuration file",
-        cxxopts::value<std::string>())("remote-memory-configuration",
-                                       "Remote memory configuration file",
-                                       cxxopts::value<std::string>())(
+        cxxopts::value<std::string>())(
         "network-configuration", "Network configuration file",
         cxxopts::value<std::string>())(
         "logging-configuration", "Logging configuration file",

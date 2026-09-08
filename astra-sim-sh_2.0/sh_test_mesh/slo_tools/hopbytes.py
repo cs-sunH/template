@@ -12,20 +12,24 @@
                     读取时优先用显式 noc_hops，缺省由 noc_path 推导）。
   astra-sim-wscllm  实例级：decode 决策的 static_route.hop_count ×
                     prefill_decode_transfer.total_bytes（粒度为实例间
-                    hop，非 rank 级；历史迁移记录无路由 → 计入
-                    bytes_without_hops）。
-  astra-sim-face    决策日志未落任何 noc 路由字段（生成侧
-                    generate_face_trace.py:474-506 的 routes 只进 trace
-                    物化，不进 decision log）→ 无可聚合记录，
-                    bytes 全部计入 bytes_without_hops（TODO_FACE：需
-                    native 侧补落字段后重评）。
+                    hop，非 rank 级）。2026-08-26 B2wp9py 起 prefill 决策
+                    对 history NOC_MIGRATE 迁移附加 noc_hops 字段
+                    （实例图最短路，同粒度）→ history 迁移纳入覆盖
+                    （60s 基线覆盖 70.4% → 满覆盖；字段为 A/B 对拍
+                    剥离清单条目）。
+  astra-sim-face    per-TP-shard 级（B2wp9py 起决策日志附带只读
+                    hops 列表：prefill=history_noc_hops、decode=
+                    kv_noc_hops，与 shards 一一对齐；hops 全等时
+                    聚合 bytes×hops[0] 与逐 shard 求和严格相等）。
+                    旧产物无字段 → bytes_without_hops。
   astra-sim-sh_2.0  WP9-线5（2026-08-26）起 decision 逐传输对象序列化
                     transfer_hop_bytes[].{total_bytes, noc_hop_bytes,
                     shard_count}（KVTransfer shards 按 deterministic_xy_
                     route 生成、在线复用）→ hop_bytes 可聚合;local_hit
                     无物理搬运不计入。旧产物（字段缺失）回退 coverage=0。
-  astra-sim-sh_3.0  同 S2（TODO_S3；sh30 决策只落聚合 bytes 与 affinity
-                    reason）。
+  astra-sim-sh_3.0  B4 起（2026-08-26）消费 shards[].noc_hops/noc_path
+                    （现状 completion_evictions 落盘；count/fallback 语义
+                    同 S1）；无路由的聚合 bytes 字段不计入本账。
 
 覆盖率为 0 的仓输出 hop_bytes=0 并显式标注 coverage，不臆造 hop 数。
 """
@@ -112,19 +116,94 @@ def collect_sh10(record: dict, acc: dict, per_request: dict) -> None:
             _accumulate_shard_transfers(entry, request_id, acc, per_request)
 
 
+def collect_face(record: dict, acc: dict, per_request: dict) -> None:
+    """face 变体（2026-08-27 B3 补齐）：B2wp9py 起决策日志附带只读
+    noc 观测字段——prefill 决策 history_noc_hops、decode 决策
+    kv_noc_hops（均为 per-TP-shard hops 列表，与 shards 一一对齐，
+    无物理传输时空列表）。基线事实核对（60s 窗）：decode 1244 条
+    shards/hops 长度零错位、每条 hops 全等；prefill 1079 条 hops 全等。
+    聚合口径：
+      decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确）；
+      prefill = history_transfer_bytes × hops[0]（per-shard hops 全等
+      ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布）。
+    旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低）。
+    """
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id") or NA
+    kind = record.get("kind")
+
+    def _slot():
+        return per_request.setdefault(
+            request_id, {"actions": 0, "hop_bytes": 0,
+                         "bytes_with": 0, "bytes_without": 0})
+
+    if kind == "prefill":
+        nbytes = decision.get("history_transfer_bytes")
+        hops = decision.get("history_noc_hops")
+        if isinstance(nbytes, int) and nbytes > 0:
+            if isinstance(hops, list) and hops and all(
+                    isinstance(h, int) and h >= 0 for h in hops):
+                hop_bytes = nbytes * hops[0]
+                slot = _slot()
+                slot["actions"] += 1
+                slot["hop_bytes"] += hop_bytes
+                slot["bytes_with"] += nbytes
+                acc["actions_with_hops"] += 1
+                acc["hop_bytes_total"] += hop_bytes
+                acc["bytes_with_hops"] += nbytes
+            else:
+                slot = _slot()
+                slot["bytes_without"] += nbytes
+                acc["bytes_without_hops"] += nbytes
+    elif kind == "decode":
+        transfer = decision.get("prefill_decode_transfer")
+        hops = decision.get("kv_noc_hops")
+        shards = (transfer or {}).get("shards") if isinstance(
+            transfer, dict) else None
+        if isinstance(shards, list) and isinstance(hops, list) \
+                and len(shards) == len(hops):
+            for shard, hop in zip(shards, hops):
+                nbytes = (shard or {}).get("bytes")
+                if not isinstance(nbytes, int) or nbytes <= 0:
+                    continue
+                if isinstance(hop, int) and hop >= 0:
+                    slot = _slot()
+                    slot["actions"] += 1
+                    slot["hop_bytes"] += nbytes * hop
+                    slot["bytes_with"] += nbytes
+                    acc["actions_with_hops"] += 1
+                    acc["hop_bytes_total"] += nbytes * hop
+                    acc["bytes_with_hops"] += nbytes
+                else:
+                    slot = _slot()
+                    slot["bytes_without"] += nbytes
+                    acc["bytes_without_hops"] += nbytes
+
+
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
     if record.get("kind") != "decode":
-        # 历史迁移（prefill 决策）无路由字段 → bytes_without_hops。
+        # 历史迁移（prefill 决策）：2026-08-26 B2wp9py 起附带 noc_hops
+        # 字段（实例图最短路）→ 纳入覆盖；旧产物无该字段时按
+        # bytes_without_hops 处理（向后兼容）。
         if record.get("kind") == "prefill":
             nbytes = decision.get("history_transfer_bytes")
             if isinstance(nbytes, int) and nbytes > 0:
+                hops = decision.get("noc_hops")
                 slot = per_request.setdefault(
                     request_id, {"actions": 0, "hop_bytes": 0,
                                  "bytes_with": 0, "bytes_without": 0})
-                slot["bytes_without"] += nbytes
-                acc["bytes_without_hops"] += nbytes
+                if isinstance(hops, int) and hops >= 0:
+                    slot["actions"] += 1
+                    slot["hop_bytes"] += nbytes * hops
+                    slot["bytes_with"] += nbytes
+                    acc["actions_with_hops"] += 1
+                    acc["hop_bytes_total"] += nbytes * hops
+                    acc["bytes_with_hops"] += nbytes
+                else:
+                    slot["bytes_without"] += nbytes
+                    acc["bytes_without_hops"] += nbytes
         return
     transfer = decision.get("prefill_decode_transfer")
     static_route = decision.get("static_route")
@@ -150,7 +229,8 @@ def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
 
 
 def collect_aggregate_only(record: dict, acc: dict, per_request: dict) -> None:
-    """FACE/S2/S3：产物无 noc hops 字段——bytes 全部计入无覆盖侧。"""
+    """S2 旧产物（transfer_hop_bytes 缺席，collect_sh20 回退）：
+    bytes 全部计入无覆盖侧。"""
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
     kind = record.get("kind")
@@ -216,6 +296,40 @@ def collect_sh20(record: dict, acc: dict, per_request: dict) -> None:
     collect_aggregate_only(record, acc, per_request)
 
 
+def collect_sh30(record: dict, acc: dict, per_request: dict) -> None:
+    """S3（B4 升级，2026-08-26）：消费 decision log 的 shards[].noc_hops/
+    noc_path 新字段（B3 60s 证据：completion_evictions 96 行 / 960 shards
+    全带 noc_hops；ad-hoc 复核 hop_bytes=2383397232640）。
+
+    count/fallback 语义与 S1 分支一致（_accumulate_shard_transfers：显式
+    noc_hops 优先、noc_path 推导兜底、无路由 bytes 计 bytes_without_hops）。
+    holder 集照 S1（history_transfer / prefill_decode_transfer / 各类
+    逐出列表）；S3 现仅 completion_evictions 落 shards，其余 holder 留作
+    字段同步后的前向兼容。B3 之前的 aggregate-only 停用口径
+    （history_transfer_bytes / prefill_decode_transfer_bytes 无路由可聚）
+    不再计入本账——那些记录无 noc 路由信息，不属于 Hop-Bytes 可判定
+    宇宙；其量级（60s 参考跑 1045595684864 B）由门 JSON 另行登记。
+    """
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id") or NA
+    kind = record.get("kind")
+    if kind == "prefill":
+        _accumulate_shard_transfers(decision.get("history_transfer"),
+                                    request_id, acc, per_request)
+        for field in ("history_evictions", "prefill_evictions"):
+            for entry in decision.get(field) or []:
+                _accumulate_shard_transfers(entry, request_id, acc,
+                                            per_request)
+    elif kind == "decode":
+        _accumulate_shard_transfers(decision.get("prefill_decode_transfer"),
+                                    request_id, acc, per_request)
+        for entry in decision.get("decode_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+    elif kind == "completion":
+        for entry in decision.get("completion_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+
+
 REPO_HOP_SOURCES: dict[str, dict] = {
     "astra-sim-sh_1.0": {
         "collector": collect_sh10,
@@ -229,10 +343,12 @@ REPO_HOP_SOURCES: dict[str, dict] = {
                  "历史迁移无路由计入 bytes_without_hops",
     },
     "astra-sim-face": {
-        "collector": collect_aggregate_only,
-        "granularity": "none",
-        "notes": "TODO_FACE：decision log 未落 noc 路由字段（生成侧 "
-                 "routes 仅进 trace 物化）——coverage=0，不臆造 hop 数",
+        "collector": collect_face,
+        "granularity": "per-TP-shard(history_noc_hops/kv_noc_hops)",
+        "notes": "B2wp9py 起决策日志附带只读 noc hops 列表"
+                 "（prefill=history_noc_hops，decode=kv_noc_hops，"
+                 "与 shards 一一对齐）；旧产物无字段 → "
+                 "bytes_without_hops（coverage 如实降低，不臆造）",
     },
     "astra-sim-sh_2.0": {
         "collector": collect_sh20,
@@ -243,23 +359,38 @@ REPO_HOP_SOURCES: dict[str, dict] = {
                  "（字段缺失）回退 coverage=0 口径",
     },
     "astra-sim-sh_3.0": {
-        "collector": collect_aggregate_only,
-        "granularity": "none",
-        "notes": "TODO_S3：decision log 仅聚合 bytes，无路由——coverage=0",
+        "collector": collect_sh30,
+        "granularity": "shard(noc_path)",
+        "notes": "B4 起消费 shards[].noc_hops/noc_path（现状仅 "
+                 "completion_evictions 落盘；其余 holder 前向兼容）；"
+                 "无路由的聚合 bytes 字段不计入本账（count/fallback "
+                 "语义同 S1）",
     },
 }
 
 
-def cmd_hopbytes(args: argparse.Namespace) -> int:
-    repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
+def hopbytes_prepare(repo_variant: str) -> tuple[dict, dict, dict]:
+    """A4 driver 用：source 登记 + 空累积态。"""
     source = REPO_HOP_SOURCES.get(repo_variant)
     if source is None:
         fail(f"未登记的 repo_variant：{repo_variant}（REPO_HOP_SOURCES 需扩表）")
     acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
            "bytes_with_hops": 0, "bytes_without_hops": 0}
-    per_request: dict[str, dict] = {}
+    return source, acc, {}
+
+
+def cmd_hopbytes(args: argparse.Namespace) -> int:
+    # CLI 入口（独立运行行为不变）。A4 driver 经 hopbytes_prepare /
+    # collector / hopbytes_emit 组合复用同一逻辑（单遍 decision log）。
+    repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
+    source, acc, per_request = hopbytes_prepare(repo_variant)
     for record in iter_jsonl(args.run_dir / DECISION_LOG_RELPATH):
         source["collector"](record, acc, per_request)
+    return hopbytes_emit(args, repo_variant, source, acc, per_request)
+
+
+def hopbytes_emit(args: argparse.Namespace, repo_variant: str, source: dict,
+                  acc: dict, per_request: dict[str, dict]) -> int:
     total_bytes = acc["bytes_with_hops"] + acc["bytes_without_hops"]
     coverage = (acc["bytes_with_hops"] / total_bytes) if total_bytes else 0.0
     total_row = (repo_variant, source["granularity"],

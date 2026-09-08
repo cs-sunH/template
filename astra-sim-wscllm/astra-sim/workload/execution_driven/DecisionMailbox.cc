@@ -92,11 +92,10 @@ StateDelta build_state_delta(std::vector<DecisionEvent> events,
                                  injected_unfinished) {
     // Phase 4 (v1): the compatibility form fills the v1 defaults --
     // delivery_epoch == delivery_sequence, empty completed_nodes /
-    // retry_items / affected_ranks, and the self-consistent snapshot
-    // handle. Existing call sites (fixtures) compile unchanged and stay
-    // v1-consistent.
+    // affected_ranks, and the self-consistent snapshot handle. Existing
+    // call sites (fixtures) compile unchanged and stay v1-consistent.
     return build_state_delta_v1(std::move(events), tick, delivery_sequence,
-                                deferred_from_tick, {}, {}, {},
+                                deferred_from_tick, {}, {},
                                 std::move(injected_unfinished));
 }
 
@@ -104,7 +103,7 @@ StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, const uint64_t tick,
     const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
     std::vector<CompletedNodeFact> completed_nodes,
-    std::vector<int64_t> retry_items, std::vector<int> affected_ranks,
+    std::vector<int> affected_ranks,
     std::vector<RankInjectedSummary> injected_unfinished) {
     StateDelta delta;
     delta.delivery_sequence = delivery_sequence;
@@ -116,7 +115,6 @@ StateDelta build_state_delta_v1(
     delta.deferred_from_tick = deferred_from_tick;
     delta.events = std::move(events);
     delta.completed_nodes = std::move(completed_nodes);
-    delta.retry_items = std::move(retry_items);
     delta.affected_ranks = std::move(affected_ranks);
     // v1 placeholder + the frozen expiry rule (valid only in the delivery
     // epoch and tick it was created in): the self-consistent handle.

@@ -97,6 +97,17 @@ struct CompletionKey {
     }
 };
 
+struct CompletionKeyHash {
+    size_t operator()(const CompletionKey& key) const {
+        size_t hash = std::hash<int>{}(key.rank);
+        hash ^= std::hash<uint64_t>{}(key.node_id) + 0x9e3779b9 +
+                (hash << 6) + (hash >> 2);
+        hash ^= std::hash<uint64_t>{}(key.generation) + 0x9e3779b9 +
+                (hash << 6) + (hash >> 2);
+        return hash;
+    }
+};
+
 /// A fired stage-completion watch (步骤 1-5 操作 2). The reason mapping
 /// (stage -> PREFILL_DRAIN / DECODE_COMPLETION) is the step-1-6 mailbox
 /// wiring concern, not the registry's.
@@ -141,13 +152,14 @@ class WatchRegistry {
         std::set<NodeTerminalStatus> satisfying_statuses);
 
     /// Completion-fact recording, called by the online hook (read-only with
-    /// respect to the graph; never releases dependencies). No-ops on unknown
-    /// identity / generation mismatch / non-member / duplicate / fired watch.
-    /// Fires once when every expected member has a satisfying terminal.
-    void on_node_terminal(const CompletionKey& key, const NodeStoreMeta& meta,
-                          NodeTerminalStatus status);
+    /// respect to the graph; never releases dependencies). The direct member
+    /// index means ordinary non-watch terminals never construct/copy the
+    /// request_id/stage metadata. A key may belong to multiple watches; each
+    /// retains its own duplicate/status/fire semantics.
+    void on_node_terminal(const CompletionKey& key, NodeTerminalStatus status);
 
-    /// Fired watches since the last call; the internal queue is drained.
+    /// Fired watches since the last call in no-notifier fixture/polling mode;
+    /// production notifier mode retains no polling queue.
     std::vector<WatchFire> fired_and_drain();
 
     /// Registered-but-not-fired watches. Run-end audit must be 0 (aborted
@@ -185,6 +197,11 @@ class WatchRegistry {
     uint64_t next_watch_id_ = 1;
     std::unordered_map<uint64_t, StageWatch> watches_;
     std::map<Identity, uint64_t> identity_to_watch_;
+    // Direct terminal routing. Each expected member appends its watch id at
+    // registration; remove_watch removes that id from every corresponding
+    // vector. Multiple logical watches may intentionally share one key.
+    std::unordered_map<CompletionKey, std::vector<uint64_t>, CompletionKeyHash>
+        member_to_watch_ids_;
     // Phase 4: per-request watch-id index (for the REQUEST_COMPLETE-commit
     // removal; keeps removal O(watches of the request) instead of a full
     // scan).
@@ -199,6 +216,13 @@ class WatchRegistry {
 /// Context for the online CompletionObserver hook (owns the registry and,
 /// step 1-8, the post-commit deferred issue-pass wiring).
 struct OnlineCompletionHookContext {
+    using IssuePassCallback = void (*)(void* context, int rank);
+
+    OnlineCompletionHookContext() = default;
+    OnlineCompletionHookContext(const OnlineCompletionHookContext&) = delete;
+    OnlineCompletionHookContext& operator=(const OnlineCompletionHookContext&) =
+        delete;
+
     WatchRegistry* registry = nullptr;
     /// Step 1-8: the per-tick deferred drain (post-commit phase). The hook
     /// schedules one per-rank issue pass into the SAME tick's deferred drain;
@@ -210,15 +234,38 @@ struct OnlineCompletionHookContext {
     /// itself never calls issue_dep_free_nodes in online mode (no static
     /// auto-advance), yet the pipeline advances continuously -- a freed
     /// child is issued in the same tick, keeping the offline completion
-    /// times. Both null = the hook only records facts (fixture mode).
-    NetworkAnalytical::EventQueue* event_queue = nullptr;
-    std::vector<Workload*>* workloads = nullptr;
-    /// Phase 4 (schema v1): the per-delivery completed-facts buffer
-    /// (StateDelta.completed_nodes). The hook appends ONE fact per node
-    /// terminal; the tick-end gate moves the buffer into the delivery and
-    /// clears it. Driver-owned (main_online.cc); null = facts not recorded
-    /// (fixture mode).
-    std::vector<CompletedNodeFact>* completed_facts = nullptr;
+    /// times. Until configure_issue_passes() is called, the hook only records
+    /// facts (fixture mode).
+    ///
+    /// The scheduler coalesces repeated terminal callbacks for the same rank
+    /// into one pending pass. Its callback arguments are allocated once at
+    /// configuration time and remain stable for the entire run. The pending
+    /// bit is cleared before invoking the callback so nested completions can
+    /// append a new same-rank pass to the current deferred drain.
+    void configure_issue_passes(
+        NetworkAnalytical::EventQueue* event_queue, size_t rank_count,
+        IssuePassCallback callback, void* callback_context);
+    bool schedule_issue_pass(int rank);
+    [[nodiscard]] size_t pending_issue_pass_count() const;
+    /// Phase 4 (schema v1): the per-delivery completed-facts collector
+    /// (StateDelta.completed_nodes). Default mode aggregates terminal counts
+    /// without per-node records; exact mode is opt-in. Driver-owned
+    /// (main_online.cc); null = facts not recorded (fixture mode).
+    CompletedFactAccumulator* completed_facts = nullptr;
+
+  private:
+    struct IssuePassArg {
+        OnlineCompletionHookContext* owner = nullptr;
+        int rank = -1;
+    };
+
+    static void issue_pass_trampoline(void* arg);
+
+    NetworkAnalytical::EventQueue* event_queue_ = nullptr;
+    IssuePassCallback issue_pass_callback_ = nullptr;
+    void* issue_pass_callback_context_ = nullptr;
+    std::vector<uint8_t> issue_pass_pending_;
+    std::vector<IssuePassArg> issue_pass_args_;
 };
 
 /// Online-mode CompletionObserver hook (步骤 1-5 操作 3). Does ONLY:
