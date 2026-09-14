@@ -1152,10 +1152,16 @@ def _emit_kv_transfer(
                     shard.bytes,
                     hbm_access_mode=1,
                 )
+                # 逐出旁路支链尾部观测(2026-09-13):直连路径的池写完成
+                # 节点即源端释放节点。发射内部零改动,仅暴露节点 id 供
+                # builder 登记 pending_store_tails(store→restore 前递依赖)。
+                edge_store_node_id = builders[edge_rank].previous_id
                 record.update(
                     {
                         "direct_edge_access": True,
                         "source_release_dependency": "mem_store_completion",
+                        "edge_store_node_id": edge_store_node_id,
+                        "source_ack_recv_node_id": edge_store_node_id,
                     }
                 )
             else:
@@ -1184,6 +1190,10 @@ def _emit_kv_transfer(
                     f"{action_name}_shard{shard_index}_remote_store",
                     shard.bytes,
                 )
+                # 逐出旁路支链尾部观测(2026-09-13):池写完成节点 + 源端
+                # ack recv 节点。发射内部零改动,仅暴露节点 id 供 builder
+                # 登记 pending_store_tails(store→restore 前递依赖)。
+                edge_store_node_id = builders[edge_rank].previous_id
                 builders[edge_rank].comm_send(
                     f"{action_name}_shard{shard_index}_ack_to_rank{source_rank}",
                     src=edge_rank,
@@ -1198,12 +1208,15 @@ def _emit_kv_transfer(
                     comm_size=1,
                     comm_tag=ack_tag,
                 )
+                source_ack_recv_node_id = builders[source_rank].previous_id
                 record.update(
                     {
                         "direct_edge_access": False,
                         "data_tag": data_tag,
                         "ack_tag": ack_tag,
                         "source_release_dependency": "remote_store_ack_recv",
+                        "edge_store_node_id": edge_store_node_id,
+                        "source_ack_recv_node_id": source_ack_recv_node_id,
                     }
                 )
 

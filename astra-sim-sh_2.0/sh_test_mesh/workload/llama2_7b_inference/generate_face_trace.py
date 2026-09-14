@@ -752,10 +752,17 @@ def _emit_kv_transfer(
                     shard.bytes,
                     hbm_access_mode=1,
                 )
+                # 支链化改注（逐出并行，2026-09-13）：观察式读取池写尾部
+                # 节点 id（发射本身一行不改）——直连路径的释放节点即该
+                # mem_store（source_release_dependency 同义），供在线
+                # 侧登记在飞 store 尾部 / 回迁补边（主方案 §3.3）。
+                edge_store_node_id = builders[edge_rank].previous_id
                 record.update(
                     {
                         "direct_edge_access": True,
                         "source_release_dependency": "mem_store_completion",
+                        "edge_mem_store_node_id": edge_store_node_id,
+                        "source_release_node_id": edge_store_node_id,
                     }
                 )
             else:
@@ -784,6 +791,7 @@ def _emit_kv_transfer(
                     f"{action_name}_shard{shard_index}_remote_store",
                     shard.bytes,
                 )
+                edge_store_node_id = builders[edge_rank].previous_id
                 builders[edge_rank].comm_send(
                     f"{action_name}_shard{shard_index}_ack_to_rank{source_rank}",
                     src=edge_rank,
@@ -798,12 +806,18 @@ def _emit_kv_transfer(
                     comm_size=1,
                     comm_tag=ack_tag,
                 )
+                # 支链化改注（逐出并行，2026-09-13）：观察式读取池写尾部
+                # （边缘 mem_store）与源端释放节点（ack recv）id——发射
+                # 本身一行不改，供在线侧登记在飞 store 尾部（主方案 §3.3）。
+                source_release_node_id = builders[source_rank].previous_id
                 record.update(
                     {
                         "direct_edge_access": False,
                         "data_tag": data_tag,
                         "ack_tag": ack_tag,
                         "source_release_dependency": "remote_store_ack_recv",
+                        "edge_mem_store_node_id": edge_store_node_id,
+                        "source_release_node_id": source_release_node_id,
                     }
                 )
 
@@ -844,6 +858,10 @@ def _emit_kv_transfer(
                 f"{action_name}_shard{shard_index}_remote_load",
                 shard.bytes,
             )
+            # 支链化改注（逐出并行，2026-09-13）：观察式读取池读节点
+            # （边缘 mem_load）id——发射本身一行不改，供在线侧回迁补边
+            # 的 store→restore 前递依赖挂点（主方案 §3.3）。
+            edge_mem_load_node_id = builders[edge_rank].previous_id
             data_tag: Optional[int] = None
             if edge_rank != target_rank:
                 data_tag = tag_allocator.take()
@@ -884,6 +902,7 @@ def _emit_kv_transfer(
                     "request_tag": request_tag,
                     "data_tag": data_tag,
                     "direct_edge_access": edge_rank == target_rank,
+                    "edge_mem_load_node_id": edge_mem_load_node_id,
                     "target_hbm_completion_node_id": (
                         target_hbm_completion_node_id
                     ),

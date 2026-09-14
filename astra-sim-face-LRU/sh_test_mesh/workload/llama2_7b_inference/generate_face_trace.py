@@ -971,6 +971,11 @@ def _emit_kv_transfer(
                     {
                         "direct_edge_access": True,
                         "source_release_dependency": "mem_store_completion",
+                        # B4(2026-09-13,逐出支链化):只扩返回值暴露支链尾部
+                        # (发射内部一行不改)——边缘 mem_store 完成门 =
+                        # store→restore 前递依赖的登记粒度;直连链无 ack。
+                        "edge_store_node_id": builders[edge_rank].previous_id,
+                        "source_ack_node_id": None,
                     }
                 )
             else:
@@ -999,6 +1004,7 @@ def _emit_kv_transfer(
                     f"{action_name}_shard{shard_index}_remote_store",
                     shard.bytes,
                 )
+                edge_store_node_id = builders[edge_rank].previous_id
                 builders[edge_rank].comm_send(
                     f"{action_name}_shard{shard_index}_ack_to_rank{source_rank}",
                     src=edge_rank,
@@ -1019,6 +1025,11 @@ def _emit_kv_transfer(
                         "data_tag": data_tag,
                         "ack_tag": ack_tag,
                         "source_release_dependency": "remote_store_ack_recv",
+                        # B4(2026-09-13,逐出支链化):只扩返回值暴露支链尾部
+                        # (发射内部一行不改)——边缘 mem_store = 补边粒度,
+                        # 源端 ack_recv 仅为保守变体备查。
+                        "edge_store_node_id": edge_store_node_id,
+                        "source_ack_node_id": builders[source_rank].previous_id,
                     }
                 )
 

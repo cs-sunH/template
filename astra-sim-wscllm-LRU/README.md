@@ -301,6 +301,36 @@ comm_write / restore / pool_read / pool_write）、`hbm_peak_concurrent_jobs`、
 （错开既有 `queue_index*10000+{1000,1900,3000}` 段）；新节点命名避开
 `first_token` / `batch_train_` C++ 名字锚点子串。
 
+**逐出旁路支链（2026-09-13，KV 逐出与 request 推理并行化）**：三个逐出发射点
+（`history_evictions` / `prefill_evictions` / joiner `decode_evictions`，含净额
+预占路径经 decode 段的发射）经 `online/graph_batch_builder.py` 的
+`_emit_side_branch`（全 rank `chain_checkpoint` fork → 发射 → `restore_chain`，
+分支**不 join**）fork 到旁路分支——逐出物理链不再阻塞主链任何节点（回迁/屏障/
+列车体），同 rank 上逐出流（COMM_READ）与推理计算（COMPUTE）时间重叠，HBM
+争用由 C++ `LocalHbmBandwidthModel` 的 **N-way 均分模型自动在线裁决**（C++ 零
+改动，逐流加入/离开即时重分配）。触发门语义不变：history 逐出的到达/interval
+门、decode 逐出的 prefill 段末门仍挂在分支首节点（只对齐逐出**开始**时刻，
+去掉的是完成阻塞）；`prefill_evictions` 无显式门，支链根 = fork 时各 rank
+主链 frontier——fork 点可能合法携带的主链 armed 依赖（turn-0 准入形态的
+到达/interval 门 arm，2026-09-13 勘误证实的既有形态）由 helper **暂存清空、
+不进分支、恢复后归还原主链消费者**，分支自己的触发门 arming 在分支内完成
+并被消费（发射后滞留即泄漏 fail-closed，四仓统一契约）；joiner 迁移
+（transfer 3000）与 join 标记保持主链。逐出节点随既有准入/列车批发射（无独立
+逐出批、无 watch）。
+
+- **瞬态双占用窗口口径**：并行窗口内被逐旧 KV 尚未物理离开本地 HBM 而新
+  request 的 KV 正在写入——容量权威在 Python 台账（决策时刻记账，窗口上界 =
+  该 rank 在飞逐出字节数），C++ 无容量强制、指标口径不变；论文引用不得把窗口
+  期台账值当物理占用。
+- **store→restore 前递依赖（唯一新增正确性边）**：支链化后"同会话逐出池写先于
+  其下一轮池读"的传递性失效，发射侧以 `pending_store_tails` 登记表（按会话登记
+  在飞 store 支链的边缘 `mem_store` 尾部；两段式 suffix/full 各一条）+ 回迁发射
+  统一入口（非 partial 全量 `remote_load` 与 PARTIAL 流水 suffix 恢复）发射前补
+  边：同缘直接 arm 依赖（store `mem_store` 完成挂回迁链首）；跨缘 1B p2p 中继
+  （store 边缘在池写完成后发 1B、回迁边缘收 1B 后其池读链在其后，tag 走
+  `TransferTagAllocator`）。粒度 = 池写落盘（不等源端 ack 全程）；懒处理（store
+  早已完成时补边即刻满足零时延）；terminal 会话终结时清登记。
+
 **恢复六分支**（下一轮到达、映射照常选点后——**映射不看 KV 位置**——
 `prepare_history` 按态分流；**RECOMPUTE 已从历史路径删除**——恢复取代重算，
 `remaining_chunks` 不再有 `ceil(history/p_chunk)` 项）：

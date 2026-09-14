@@ -166,6 +166,44 @@ prefill/decode/completion（仅 prefill 为 generation 0）。Python 生产者
   served bytes（comp/comm_read/comm_write/pool_read/pool_write/restore）、峰值并发
   作业数、均分重分配事件数（旧键保持）。
 
+### H. KV 逐出与推理计算的并行执行（2026-09-13，仅 Python 发射层）
+
+KV 逐出的物理传输（`remote_store` 链）与 request 推理计算**并行执行**；C++ 侧零改动，
+HBM 带宽仲裁完全由 §G 的 N-way 均分模型在线裁决（逐出流与 COMPUTE 流同 rank 同时
+在场时自动 `full_rate / N`，流加入/离开即时重分配——`redistribution_events` 可观测）。
+
+- **旁路支链执行语义**（`WL/online/graph_batch_builder.py` `_emit_side_branch`）：
+  三类逐出发射循环（准入 history 逐出 / 准入 prefill 逐出 / joiner decode 逐出）经
+  fork 包裹搬离 per-rank 主链——fork 自各 rank 当前 frontier，`chain_checkpoint →
+  分支内发射 → restore_chain` 复用既有 PARTIAL 后缀恢复的段内分支机制。触发门
+  （到达/间隔 timer gate、drain 列车 barrier）仍在分支内构建并挂**分支首节点**：
+  逐出的**开始**时刻语义不变；去掉的是"逐出**完成**（含 1B ack 回环）阻塞其后一切
+  计算"的链序串行化。分支不 join、不挂 watch、不发明独立逐出批（逐出节点仍随既有
+  准入/列车批发射）。恢复类迁移（`prefill_decode_transfer`、history 回迁、
+  noc_migrate）保持主链不动。fork 前既有主链 armed 依赖（turn-0 arrival gate /
+  local_hit arm）由 helper stash-and-clear 保真留给主链原消费者；分支内 arming 未被
+  消费则 fail-closed。
+- **store→restore 前递依赖补偿**（唯一必须新增的正确性边）：支链化后"同会话逐出
+  池写先于其下一轮池读"的主链传递性保障失效。构图器维护
+  `pending_store_tails` 登记表（session → 在飞 remote_store 支链的边缘 `mem_store`
+  尾部，两段式逐出的 suffix 与 full 两笔逐 shard 各登记一条，restore 读全区间须等
+  齐），回迁发射统一入口（REMOTE 全量 `remote_load` 段 + PARTIAL 后缀恢复支链入
+  口）查表补边：同边缘 rank 直接 `arm_dependency`（同 rank data_dep 跨批次合法）；
+  跨边缘 rank（仅 REMOTE 全量跨实例回迁可达）复用 1B p2p 中继模式
+  （`..._store_sidelink_s<store>_r<restore>` send/recv 对，桥协议内跨 rank 依赖的
+  唯一合法载体）。粒度取 store 的边缘 `mem_store` 完成；store 早已完成时补边即刻
+  满足（懒处理）。回迁消费即清；会话终结（`_emit_completion` terminal 分支）清
+  登记。`_emit_kv_transfer` 仅扩展返回值暴露尾部节点 id（发射节点/边逐字节不变）。
+- **瞬态双占用窗口口径**：并行窗口内新 request 的 KV 正在写入本地 HBM 而被逐出的
+  旧 KV 尚未物理离开——这是时间模型的既定建模近似（容量权威在 Python 台账、决策
+  时刻记账；C++ 无容量强制，`capacity_violations` 回放的是决策时刻数据）。**窗口
+  上界 = 该 rank 在飞逐出字节数**；引用窗口期数值时不得把台账值当物理占用使用。
+  若未来要求物理严格，正确修法是 ack 锚定延后释放（独立改造，不在本仓）。
+- **测试**：`WL/online/test_eviction_side_branch_structure.py`（fork/支链/门/stash
+  结构断言）、`WL/online/test_store_restore_ordering.py`（同缘/跨缘/两段式/PARTIAL
+  排序断言）、`WL/online/verify/train_a1_eviction_fixture.py` 场景 2（逐出后立刻
+  再到达的端到端 store→restore 覆盖）。
+
 
 ## 本压缩包的精简仿真入口
 

@@ -72,7 +72,28 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 human半→human全→tool半→tool全）；半驻留 session 的后续请求与其他驻留状态
 一样按负载均衡映射实例（2026-08-21 起，此前为固定回原实例的硬亲和），映射到
 异实例时先经 NoC 迁移已驻留的部分前缀（history_partial_prefix_migrate），
-恢复采用"前缀计算与后缀远端加载"流水重叠；本 rank 的全部 HBM
+恢复采用"前缀计算与后缀远端加载"流水重叠；
+- **逐出物理链与推理计算并行（逐出旁路支链，2026-09-13）**：Python 发射层
+  把三处逐出循环（准入 history 逐出 / 准入 prefill 逐出 / joiner decode
+  逐出）经 `GraphBatchBuilder._emit_side_branch` fork 到旁路分支——分支首
+  节点依赖 = fork 节点 + 触发门（到达 gate / drain 列车 barrier，启动时机
+  不变），分支不 join、悬空收尾：逐出的物理完成（源端 1B ack）不再阻塞
+  同 rank 主链上的任何计算（回迁/屏障/列车体）。台账、准入、两阶段逐出
+  策略、决策日志契约零改动。逐出流与计算流时间重叠时**自动进入 N-way
+  均分**（上条流体模型，无需任何开关）。并行窗口内存在瞬态双占用（新
+  KV 写入而旧 KV 尚未离开本地 HBM）——上界 = 该 rank 在飞逐出字节数；
+  这是时间模型的既定建模近似（容量权威在 Python 台账、决策时刻记账，
+  C++ 不做容量强制，指标口径不变），论文引用不得把窗口期台账值当物理
+  占用。
+- **store→restore 前递依赖（支链化唯一新增的正确性边）**：逐出支链悬空
+  后，"同会话逐出池写先于其下一轮池读"的旧链序传递性失效——回迁发射
+  统一入口按会话查 `pending_store_tails` 在飞 store 尾部登记表补边：同缘
+  直接 data 边（store 边缘 `mem_store` → 回迁边缘 `mem_load`），跨缘
+  （REMOTE 全量回迁可换实例）经 1B p2p 中继（桥协议内跨 rank 依赖唯一
+  合法载体）；两段式逐出的 suffix/full 两笔 store 均被依赖；终态会话在
+  completion 段清登记；懒处理（store 已完成则边即刻满足、零额外时延）。
+  noc_migrate 与 partial 前缀两段流水不补边（活会话迁移读本地 HBM，与
+  在飞 store 的源端读层区间不交）；本 rank 的全部 HBM
   用户（推理 COMP、KV restore DMA、NoC p2p comm 数据端点读/写、池流量端点读/写）
   按 N-way 流体模型**严格均分**带宽（`full_rate/N`，任一作业完成立即事件驱动重分配；
   读写共享同一总线与总带宽、不区分峰值/持续；`astra-sim/workload/LocalHbmBandwidthModel.cc`，

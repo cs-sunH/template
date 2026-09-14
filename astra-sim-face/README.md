@@ -97,6 +97,20 @@ prefill 与 decode 不分池。
 | astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
+**删除型逐出的执行口径（2026-09-13 补记，逐出/推理并行化方案 §4.5 基线仓定位）**：本仓逐出为
+**删除型**——容量压力下 `SessionKVCacheManager._delete()`（`session_kv_manager.py:1031-1089`）
+只做即时台账扣减（shard 字节出账 + 会话置 EVICTED）与决策日志 `evict_delete` 事件记录，**无 ET
+图节点表示、无 DMA 传输、无 HBM 带宽消耗**（类 docstring 明示 `evict_delete` "intentionally
+has no ET representation"），因此逐出与同 rank 在跑的推理计算**不存在物理资源争用，天然并行**。
+被逐会话的后续到达按**全量重算**处理：`history_recompute_tokens` 直接折进 prefill 计算（决策行
+`effective_prefill_tokens = prefill_length + history_recompute_tokens`，
+`face_online_scheduler.py:1536-1538`；recompute 段与当前 prefill 段共用同一 chunk 机制进入
+迭代列车），重算段是普通 COMP 节点，照常参与本地 HBM 带宽多用户均分模型（§G）。本仓唯一的
+物理 KV 流量是活会话跨实例迁移 NOC_MIGRATE（history 驻留迁移与 prefill→decode 迁移，恢复类
+语义：迁移节点物理先于使用它的计算）。与 -LRU 改造仓（astra-sim-face-LRU）的物理逐出/回迁
+链路形成对照：后者逐出是真实物理传输，其与推理计算的并行化改造见该仓 README；本仓无可并行化
+的逐出物理链，不涉及也未做此类改造。
+
 四仓还共享同一套 Execution-Driven 在线仿真机制层（`astra-sim/workload/execution_driven/`：
 RequestIngress / DecisionMailbox / DecisionBridge / GraphBatchCommitter 等）：策略决策由
 Python 在线服务层实时给出，计时由 C++ 物理时钟推进；各仓仅保留路径③（strategy 关感知）

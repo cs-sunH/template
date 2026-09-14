@@ -14,6 +14,13 @@ decode 整段）的列车化重构，设计文档《层次 B Continuous Batching
   - 准入动作（ARRIVAL 边界，emit_admission_batch）= 到达/interval gate →
     history_evictions → history_transfer（含 partial 流水恢复全部节点）→
     prefill_evictions → prefill readiness barrier；prefill 主体不再在此发射；
+  - KV 逐出并行化（2026-09-13）：history/prefill/decode 三类逐出发射循环
+    经 _emit_side_branch 包成旁路支链（fork 自各 rank 当前 frontier，触发门
+    挂分支首节点，不 join 回主链）——逐出物理传输与主链上的推理计算并行，
+    HBM 带宽由 C++ LocalHbmBandwidthModel 的 N-way 均分在线裁决；"同会话
+    store 池写先于其 restore 池读"的前递保障改由 pending_store_tails 登记
+    + 回迁发射前 _arm_pending_store_edges 补边承担（同缘 arm / 跨缘 1B
+    p2p 中继）；prefill_decode_transfer 等恢复类迁移保持主链不动；
   - 迭代列车（各决策边界，emit_iteration_train）= joiner 的 decode_evictions
     （触发门 = drain 列车 barrier）→ prefill→decode 迁移 →（有 joiner 时）
     共享 readiness barrier → join/pstart 标记 → 折叠列车体（成员×迭代 span，
@@ -385,6 +392,14 @@ class GraphBatchBuilder:
         # 仍在准入批发射（与 suffix 恢复并行的语义改为经此账本挂到含其首
         # chunk 的列车体），见 emit_iteration_train 的 first_chunk_member。
         self._suffix_body_arms = {}
+        # KV 逐出并行化（2026-09-13）：store→restore 前递依赖登记表——
+        # session_id → 该会话全部在飞 remote_store 逐出支链的尾部
+        # (edge_rank, edge mem_store 节点 id, 源端 ack_recv 节点 id) 列表。
+        # 同会话两段式逐出（suffix + full fallback）逐 shard 分别登记
+        # （restore 读全区间，须等齐全部在飞 store）；回迁发射时统一补边
+        # 消费（_arm_pending_store_edges），会话终结时清除（_emit_completion
+        # 的 terminal 分支）。
+        self.pending_store_tails = {}
         self.batch = None  # 当前批次累加器（由 begin_batch 建立）
         # WP9 首步批标记（2026-08-26）：本批是否含首步批发射（digests 行
         # first_step=True 标记的来源；OFF 侧恒 False，不进任何产物）。
@@ -660,9 +675,20 @@ class GraphBatchBuilder:
                 # 迟到的旧转移标记会把门回退到过期位置，见 sh_2.0 seq4689 事故）。
                 return record
 
-            for transfer in joiner.get("decode_evictions") or ():
-                emit_transfer(transfer, "decode_evictions",
-                              trigger_gate=decode_eviction_trigger)
+            # KV 逐出并行化（2026-09-13）：joiner decode 逐出搬进旁路分支
+            # ——drain 列车 barrier 触发门保留在分支首节点（逐出开始时刻
+            # 不变），分支不 join（逐出物理完成不再阻塞 readiness barrier
+            # 与列车体）；紧随其后的 prefill_decode_transfer（恢复类迁移，
+            # decode_start 指标锚点）保持主链不动。
+            decode_transfers = joiner.get("decode_evictions") or ()
+            if decode_transfers:
+                def emit_decode_evictions() -> None:
+                    for transfer in decode_transfers:
+                        record = emit_transfer(
+                            transfer, "decode_evictions",
+                            trigger_gate=decode_eviction_trigger)
+                        self._register_store_tails(transfer, record)
+                self._emit_side_branch(emit_decode_evictions)
             pd_transfer = joiner.get("prefill_decode_transfer")
             if pd_transfer is None:
                 raise RuntimeError(
@@ -936,6 +962,126 @@ class GraphBatchBuilder:
             return
         gate.location = location
 
+    # ------------------------------------ KV 逐出旁路支链（2026-09-13）--
+
+    def _emit_side_branch(self, emit_fn) -> None:
+        """把一段逐出发射包成旁路分支（主方案 §3.2）：全 rank 暂存并清空
+        既有 pending 依赖 → fork 快照 → 发射（分支内自行接续成链；触发门
+        的 arming 必须在 emit_fn 内部完成）→ 恢复主链 → 归还暂存依赖。
+        分支不 join——被包裹的物理逐出链不再阻塞主链任何节点，HBM 争用由
+        C++ LocalHbmBandwidthModel 的 N-way 均分模型在线裁决。
+
+        fork 前非空 pending 的处理（对任务书原案的偏差，REPORT
+        DEVIATIONS 登记）：S3 源码现实中 prefill_evictions 发射点之前存在
+        合法的主链 armed 依赖（turn-0 arrival gate 的 arm_timer_gate 与
+        local_hit history 的 arm），按原案字面 fail-closed 会在正常流量
+        崩溃。改为 stash-and-clear 的语义等价实现：分支首节点 parent 恰为
+        fork frontier（不带任何 armed 门），主链恢复后原依赖照常由其本来
+        的消费者（readiness barrier 等）消费——与逐出链在主链上时完全一致
+        的图依赖。分支内部 arming 而未被任何节点消费（触发门泄漏）仍
+        fail-closed。
+        """
+        stashed = {}
+        for rank, builder in self.builders.items():
+            stashed[rank] = builder.pending_extra_dependencies
+            if builder.pending_extra_dependencies:
+                builder.pending_extra_dependencies = []
+        checkpoints = {
+            rank: builder.chain_checkpoint()
+            for rank, builder in self.builders.items()
+        }
+        try:
+            emit_fn()
+            for builder in self.builders.values():
+                if builder.pending_extra_dependencies:
+                    raise RuntimeError(
+                        "side-branch left unconsumed pending deps on "
+                        f"rank {builder.rank}")
+        finally:
+            for rank, builder in self.builders.items():
+                builder.restore_chain(checkpoints[rank])
+                if stashed[rank]:
+                    builder.pending_extra_dependencies.extend(stashed[rank])
+
+    def _register_store_tails(self, transfer, record) -> None:
+        """逐出支链的边缘 mem_store 尾部登记（主方案 §3.3 登记侧）。
+
+        仅 remote_store 逐出登记；record 为 _emit_kv_transfer 的返回值
+        （2026-09-13 起携带 edge_store_node_id / source_ack_recv_node_id）。
+        """
+        if transfer.kind != "remote_store":
+            return
+        tails = self.pending_store_tails.setdefault(transfer.session_id, [])
+        for shard_record in record["shards"]:
+            tails.append((
+                shard_record["edge_rank"],
+                shard_record["edge_store_node_id"],
+                shard_record["source_ack_recv_node_id"],
+            ))
+
+    def _arm_pending_store_edges(self, transfer, name_prefix: str) -> None:
+        """回迁发射前的 store→restore 前递依赖补偿（主方案 §3.3）。
+
+        逐出支链化后"同会话 store 池写先于其 restore 池读"的主链传递性
+        保障失效；本方法在回迁（remote_load）发射前查 pending_store_tails
+        补边，粒度取 store 的边缘 mem_store 完成（池写落盘）：
+
+        - 同边缘 rank：直接 arm（同 rank 显式 data_dep 跨批次合法，桥经
+          持久 (rank,id) 解析）；
+        - 跨边缘 rank：复用 _emit_transfer_trigger 的 1B p2p 中继模式
+          （store 边缘 arm 后发 1B；restore 边缘收 1B，回迁链链其后）——
+          桥拒绝跨 rank 直边，1B p2p 是协议内唯一合法载体。S3 仅 REMOTE
+          全量回迁（可跨实例）可达跨缘；PARTIAL 钉扎同实例同 rank 必同缘。
+
+        store 早已物理完成时补边即刻满足（懒处理，无需判在飞）。消费即
+        清：该会话首次回迁的池读已排序于全部在飞 store 之后，后续回迁读
+        的是不再变化的池数据，无 hazard。发射次序：先跨缘中继（此时
+        restore 边缘 rank 尚无 armed 依赖，中继 recv 不吞并同缘 arm），
+        后同缘 arm（由回迁链在该 rank 的首节点消费）。"""
+        entries = self.pending_store_tails.pop(transfer.session_id, None)
+        if not entries:
+            return
+        restore_edges = []
+        for shard in transfer.shards:
+            if (shard.edge_rank is not None
+                    and shard.edge_rank not in restore_edges):
+                restore_edges.append(shard.edge_rank)
+        same_edge_arms = {}
+        relay_arms = {}
+        for edge_rank, store_node_id, _ack_node_id in entries:
+            for restore_edge in restore_edges:
+                if edge_rank == restore_edge:
+                    same_edge_arms.setdefault(
+                        restore_edge, []).append(store_node_id)
+                else:
+                    relay_arms.setdefault(
+                        (edge_rank, restore_edge),
+                        []).append(store_node_id)
+        for (store_edge, restore_edge), store_ids in relay_arms.items():
+            tag = self.tag_allocator.take()
+            store_builder = self.builders[store_edge]
+            for node_id in store_ids:
+                store_builder.arm_dependency(node_id)
+            store_builder.comm_send(
+                f"{name_prefix}_store_sidelink_s{store_edge}"
+                f"_r{restore_edge}",
+                src=store_edge,
+                dst=restore_edge,
+                comm_size=1,
+                comm_tag=tag,
+            )
+            self.builders[restore_edge].comm_recv(
+                f"{name_prefix}_store_sidelink_s{store_edge}"
+                f"_r{restore_edge}",
+                src=store_edge,
+                dst=restore_edge,
+                comm_size=1,
+                comm_tag=tag,
+            )
+        for rank, store_ids in same_edge_arms.items():
+            for node_id in store_ids:
+                self.builders[rank].arm_dependency(node_id)
+
     def _emit_admission_actions(self, request_plan: dict) -> None:
         """turn-gates / history / prefill 准入动作的在线发射
         （拼 batch 改造，2026-08-22）。
@@ -1043,14 +1189,21 @@ class GraphBatchBuilder:
             reconcile_pending_history_location(
                 pending_gate, _as_plan(request_plan))
 
-        # ---- history_evictions ----
-        history_eviction_trigger = TransferTriggerGate(
-            control_instance_index=pending_gate.source_instance_index,
-            node_gates=pending_gate.timer_gates,
-        )
-        for transfer in request_plan["history_evictions"]:
-            emit_transfer(transfer, "history_evictions",
-                          trigger_gate=history_eviction_trigger)
+        # ---- history_evictions（KV 逐出并行化 2026-09-13：旁路支链化；
+        #      到达/间隔 timer gate 触发门在分支内构建并挂分支首节点——
+        #      逐出开始时刻不变，物理完成不再阻塞其后主链的一切计算）----
+        if request_plan["history_evictions"]:
+            def emit_history_evictions() -> None:
+                history_eviction_trigger = TransferTriggerGate(
+                    control_instance_index=pending_gate.source_instance_index,
+                    node_gates=pending_gate.timer_gates,
+                )
+                for transfer in request_plan["history_evictions"]:
+                    record = emit_transfer(
+                        transfer, "history_evictions",
+                        trigger_gate=history_eviction_trigger)
+                    self._register_store_tails(transfer, record)
+            self._emit_side_branch(emit_history_evictions)
 
         partial_history_restore = (
             request_plan["history_location_before"] is not None
@@ -1073,12 +1226,26 @@ class GraphBatchBuilder:
                     pending_gate.timer_gates[relative_index])
         elif not partial_history_restore:
             # gate location 已在弹出时归一化到权威快照（见上方裁决注释）。
-            emit_transfer(_as_plan(request_plan).history_transfer,
+            history_transfer = _as_plan(request_plan).history_transfer
+            if history_transfer.kind == "remote_load":
+                # KV 逐出并行化（2026-09-13）：REMOTE 全量回迁入口的
+                # store→restore 前递补边（跨实例回迁可达跨缘，1B 中继
+                # 仅此路径需要）。
+                self._arm_pending_store_edges(
+                    history_transfer, f"{prefix}_history_transfer")
+            emit_transfer(history_transfer,
                           "history_transfer", gate=pending_gate)
 
-        # ---- prefill_evictions ----
-        for transfer in request_plan["prefill_evictions"]:
-            emit_transfer(transfer, "prefill_evictions")
+        # ---- prefill_evictions（KV 逐出并行化 2026-09-13：旁路支链化，
+        #      无触发门；fork 时可能存在主链 armed 依赖（turn-0 arrival
+        #      gate / local_hit 的 arm），由 _emit_side_branch 的
+        #      stash-and-clear 保真留给主链屏障消费）----
+        if request_plan["prefill_evictions"]:
+            def emit_prefill_evictions() -> None:
+                for transfer in request_plan["prefill_evictions"]:
+                    record = emit_transfer(transfer, "prefill_evictions")
+                    self._register_store_tails(transfer, record)
+            self._emit_side_branch(emit_prefill_evictions)
 
         # ---- readiness barrier / partial 流水恢复 ----
         if partial_history_restore:
@@ -1115,6 +1282,12 @@ class GraphBatchBuilder:
                 timer_gates=prefix_barrier_nodes,
                 location=history_before.location,
             )
+            # KV 逐出并行化（2026-09-13）：PARTIAL 后缀恢复支链入口的
+            # store→restore 前递补边——arm 必须在 checkpoint 之后、回迁
+            # 发射之前（分支区域内部），由回迁链在该 rank 的首节点消费
+            # （PARTIAL 钉扎同实例，实测恒同缘直接 arm）。
+            self._arm_pending_store_edges(
+                history_transfer, f"{prefix}_history_transfer")
             history_record = emit_transfer(history_transfer,
                                            "history_transfer", gate=branch_gate)
             suffix_restore_nodes_by_rank = {}
@@ -1256,6 +1429,12 @@ class GraphBatchBuilder:
         else:
             self.deferred_session_locations.pop(request_plan["session_id"],
                                                 None)
+            # KV 逐出并行化（2026-09-13）：终态会话清 store 尾部登记
+            # （不再有回迁读者；等价于 kv_manager.retire_terminal_session
+            # 的登记侧镜像，改动面约束下落点在构图器）。完成路径零逐出
+            # 维持，不发任何传输。残余：终结完成之后才被逐出的"永不再
+            # 来"会话条目驻留至 run 结束（O(会话数) 上界，无正确性影响）。
+            self.pending_store_tails.pop(request_plan["session_id"], None)
 
     # ------------------------------------------------------------- 属性 --
 

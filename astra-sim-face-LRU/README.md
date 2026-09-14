@@ -250,7 +250,7 @@ local_hbm_restore_bytes_issued）、峰值并发作业数、均分重分配事�
   否则不逐）；`SH_STRICT_KV_INVARIANTS=1` 全量审计（三态白名单 / 层域断言 /
   REMOTE 无实例无驻留层 / 逐 rank expected_kv 重算 / 预占一致性）。
 - 终局会话 `retire_terminal_session`：层域减账 + 远端账面静默核销（不发传输、
-  **不算逐出**）。
+  **不算逐出**）；构图器同点位清除该会话的 store 支链尾部登记。
 
 **远端共享池与物理链路**（远端池**无容量上限、无自身置换**；边缘端口严格 FIFO
 单事务 `耗时 = λ_rem + bytes/B_rem`；逐 source/target rank 取**最近边缘端口**
@@ -266,6 +266,40 @@ local_hbm_restore_bytes_issued）、峰值并发作业数、均分重分配事�
 KV 传输 tag 由 `TransferTagAllocator` 从 **10,000,000** 起单调分配（错开既有
 `queue_index*10000+{1000,1900,3000}` 段）；新节点命名避开 `first_token` /
 `batch_train_` C++ 名字锚点子串。
+
+**逐出与推理并行（旁路支链，2026-09-13）**：四处逐出发射点（准入 history
+逐出 / prefill 增长逐出 / 列车头 joiner decode 逐出 / blocked admission
+逐出）的 remote_store 物理链经构图器 `_emit_side_branch` fork 到**旁路分支**：
+分支根 = fork 时刻该 rank 主链 frontier，触发门（到达 / 间隔 / drain 块末）
+原样保留——门只对齐逐出的**开始**时刻；主链从同一 fork 点继续，逐出链尾
+（源端 1B ack）不再阻塞其后任何计算（含其他会话的列车体），HBM 争用由 §G
+的 N-way 均分模型在线自动裁决（逐出 COMM_READ 流与列车 COMPUTE 流同 rank
+时间重叠即均分，无需任何配置；同 rank 第二个受害者 send 仍受 comm 单槽串行
+——设备模型既有事实）。分支不 join、不挂 watch、不单独成批（"无 watch 纯
+mem 批不驱动决策交付"语义不变）；blocked 逐出的 `(prefill, 0)` 上下文
+stamping 与 `_mark`/`_collect` 留在包裹外，C++ in-flight 资格门不受影响；
+紧随 joiner decode 逐出其后的 prefill→decode 迁移保持主链（恢复类迁移
+语义上必须先于 decode 计算完成）。统一 helper 契约（主方案 §3.2，2026-09-13
+勘误后四仓同文）：fork 点可能合法携带属于主链的未消费 pending 门依赖（如
+turn-0 准入的到达门——turn-0 也会为给新请求腾容量而逐出其他会话），由
+helper 暂存清空、主链恢复后原样归还（图依赖与逐出链在主链上时完全一致）；
+分支自己的触发门 arming 必须在包裹的发射闭包内完成并被消费，发射后仍滞留
+即泄漏 fail-closed。
+
+**store→restore 前递依赖补偿**：支链化后"同会话逐出池写先于其下一轮池读"
+的链序传递性失效——构图器按会话登记在飞 store 支链尾部（`pending_store_tails`
+，粒度 = 边缘 `mem_store` 完成），回迁发射统一入口（REMOTE 全量 remote_load
+与 PARTIAL 后缀恢复分支）发射前查表补边：同缘直接挂同 rank data_dep、跨缘
+经 1B p2p 中继承载时序（桥拒绝跨 rank 直边）；两段式逐出的 suffix 与 full
+两笔 store 均被依赖（restore 读全区间须等齐），terminal 会话回收登记。
+懒处理：store 早已物理完成时补边即刻满足、零额外时延。
+
+**瞬态双占用窗口口径**：容量权威在 Python 台账、**决策时刻**记账（本仓既有
+语义，逐出策略/准入/`capacity_violations` 口径均不变，C++ 无容量强制）；
+并行窗口内新 request 的 KV 写入与被逐旧 KV 的搬出在物理上共存——这不是
+新引入的误差类别（"决策后、物理传输完成前"的窗口本就存在，并行化只是允许
+计算与该窗口重叠），窗口上界 = 该 rank 在飞逐出字节数；论文引用不得把窗口
+期台账值当物理占用。
 
 **恢复六分支**（下一轮到达、映射照常选点后，`prepare_history` 按态分流；
 **RECOMPUTE 已从历史路径删除**——恢复取代重算，`remaining_chunks` 不再有
@@ -683,12 +717,14 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
 - `sh_test_mesh/tests/` + workload 根 + online/：pytest（-LRU 改造后基线：
   tests/ 48 + workload 根 34（test_face_scheduler 25 / kv_incremental_invariants 3 /
-  tiered_eviction_sequence 6）+ online/ 62（另 7 subtests）= **144 passed**，
+  tiered_eviction_sequence 6）+ online/ 74（另 7 subtests）= **156 passed**，
   `SH_STRICT_KV_INVARIANTS=1` 下同绿；2026-08-22 拼 batch 改造新增
   online/test_weight_passes.py(4) + online/test_train_machinery.py(9) +
   online/test_graph_batch_builder.py(7)；2026-08-29 内存根治续作新增
   online/test_propagating_tail.py(8)；2026-09 -LRU 改造新增/改写
-  test_face_tiered_eviction_sequence.py(6) + 计费钉子/流水专项等）
+  test_face_tiered_eviction_sequence.py(6) + 计费钉子/流水专项等；
+  2026-09-13 逐出旁路支链改造新增 test_eviction_side_branch_structure.py(7)
+  + test_store_restore_ordering.py(5)）
 - `sh_test_mesh/slo_tools/tests/`：120 例（B4 后 34→38 watermark / 总 114→120）；
   其中 3 例（driver_parity ×2 + load_imbalance 手算例）为**改前基线既有失败**
   ——原 face 仓与 sh_2.0 仓同样失败（环境性/共享基线问题），与 -LRU 改造无关
