@@ -1115,10 +1115,16 @@ class GraphBatchBuilder:
         每相对位 rank 对：源 rank arm 原 gate 后发 1B p2p（源 gate 触发
         后启动）→ 目标 rank 收 1B → 目标 rank 发射重建 timer 节点
         （runtime_ns=0，仅依赖该 recv）。返回源实例 = prefill 实例的新
-        PendingHistoryGate，五个消费点（history_evictions 触发门 /
-        no-transfer arm / local_hit arm / partial 恢复 arm / noc 源端
-        触发）全部按同实例语义转正。孤儿 timer 节点 O(跨实例轮次 ×
-        TP)、runtime_ns=0，可忽略。"""
+        PendingHistoryGate。R16-5（2026-09-15）按代码重枚举四个真实消费
+        点（交叉断言过：history_evictions 触发门 :1362-1369（发射器
+        remote_store 分支消费 trigger）/ no-transfer arm :1421-1423 /
+        partial 恢复 arm :1484-1486+:1506-1507 / 通用 remote_load arm
+        :1450-1451→发射器 remote_load 分支 arm+1B 中继）——旧 docstring
+        的"noc 源端触发"是死参数分支（发射器 noc_migrate 分支从不消费
+        trigger_gate，实参已删）、"local_hit arm"是幻影（通用循环对
+        local_hit 先 continue，发射器 local_hit+gate 路径自本构建器
+        不可达；pd_transfer :715 不传 gate）。孤儿 timer 节点
+        O(跨实例轮次 × TP)、runtime_ns=0，可忽略。"""
         source_group = self.group_by_index[
             pending_gate.source_instance_index]
         prefill_group_ranks = self.group_by_index[
@@ -1433,24 +1439,22 @@ class GraphBatchBuilder:
                     != history_transfer.source_instance_index
                 ):
                     # joint（§2.2）：上一轮在异地执行时，到达/间隔 gate 在
-                    # 上一执行实例的 rank 上，而 copy 的源端在 home——
-                    # 跨实例控制经标准 trigger 通道（1B 中继）承载，源端
-                    # send 等到达 gate 触发后启动。
-                    emit_transfer(
-                        history_transfer, "history_transfer",
-                        trigger_gate=TransferTriggerGate(
-                            control_instance_index=(
-                                pending_gate.source_instance_index),
-                            node_gates=pending_gate.timer_gates,
-                        ))
+                    # 上一执行实例的 rank 上，而 copy 的源端在 home。在线
+                    # 模式下因果由"图批于准入时刻喂入"承载（NEW-1：发射器
+                    # noc_migrate 分支从不消费 trigger_gate，R16-5 已删原
+                    # 死参数实参——本分支为无门控发射，链式顺序兜底；若
+                    # 未来接通离线/回放模式，接通 noc_migrate 的 trigger
+                    # 消费是前置条件，见 PROVENANCE 登记）。
+                    emit_transfer(history_transfer, "history_transfer")
                 else:
                     emit_transfer(history_transfer,
                                   "history_transfer", gate=pending_gate)
 
         # ---- prefill_evictions（KV 逐出并行化 2026-09-13：旁路支链化，
         #      无触发门；fork 时可能存在主链 armed 依赖（turn-0 arrival
-        #      gate / local_hit 的 arm），由 _emit_side_branch 的
-        #      stash-and-clear 保真留给主链屏障消费）----
+        #      gate 的 arm_timer_gate——R16-5 订正：local_hit 在通用循环
+        #      先 continue、不 arm，原"local_hit 的 arm"表述失实），由
+        #      _emit_side_branch 的 stash-and-clear 保真留给主链屏障消费）----
         if request_plan["prefill_evictions"]:
             def emit_prefill_evictions() -> None:
                 for transfer in request_plan["prefill_evictions"]:

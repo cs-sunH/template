@@ -134,10 +134,17 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
   时序同样重锚 merge_done**（R11）：下一轮 alarm = merge 尾标记完成
   + interval，下一轮 interval gate 前递依赖 merge 尾标记节点）。
 * **动作语义（§2.2 表）**：stay=本地命中/部分恢复；copy=基础历史复制
-  为工作副本（前缀 NoC + 缺失后缀池恢复）；recompute=**只重算缺失
-  区间**（R13：@驻留目标复用权威前缀、仅物化缺失后缀层（span 基 =
-  H，recompute@home 与 stay 同构本地提交、merge 零流量）；@异地/
-  REMOTE 基础整份重算（span 基 = 0））；remote-read=基础历史留
+  为工作副本（前缀 NoC + 缺失后缀池恢复）——**实现/测试锚点（R16，
+  2026-09-15）**：物化 = `face_scheduler.py` `_noc_transfer`（层区间化，
+  `[0, base_prefix)`）+ `_remote_load_transfer`（`[base_prefix, L)`）、
+  计价 = `joint_cost_model.py` `estimate_action` ACTION_COPY 两腿
+  （`noc_prefix+pool_suffix_restore`）；单测 =
+  `joint/test_joint_review3_fixes.py`（复合两笔物化/计价闭式/图发射/
+  水印重放/merge 回归 22 用例，含 8b 图发射快路径）+ 容量压力夹具（PARTIAL×copy 端到端
+  命中）；recompute=**只重算缺失区间**（R13：@驻留目标复用权威前缀、
+  仅物化缺失后缀层（span 基 = H，recompute@home 与 stay 同构本地提交、
+  merge 零流量）；@异地/REMOTE 基础整份重算（span 基 = 0））；
+  remote-read=基础历史留
   home，执行端仅驻留新增量 KV——**适用性边界（N1(a) 裁定）**：要求
   基础历史全层驻留（LOCAL）；PARTIAL 的池后缀无"前缀 home + 后缀
   池"混合读流原语（后端能力边界，非 joint 理论排除），PARTIAL 会话
@@ -208,14 +215,26 @@ bash sh_test_mesh/run_scripts/clean_test_records.sh && bash sh_test_mesh/run_scr
 ## 6. 测试
 
 ```bash
-cd sh_test_mesh/workload/llama2_7b_inference
-python3 -m pytest joint/ test_face_scheduler.py \
-    test_sh30_kv_incremental_invariants.py online/ -q
-# 交付基线：289 passed + 1 skipped + 7 subtests（含基底守恒/结构测试的
-# joint 语义更新版、kimi 复审+终审+四审修复批 test_joint_review2_fixes.py
-# 31 用例；
-# 绑定已退役 SH30_ABLATION 语义的 test_ablation_switch.py 已删。全仓口径
-# 另含 slo_tools 三文件收集错误——基底固有，与本仓改动无关）。
+cd sh_test_mesh
+python3 -m pytest tests/ slo_tools/tests/ workload/llama2_7b_inference \
+    --ignore=slo_tools/tests/test_driver_parity.py \
+    --ignore=slo_tools/tests/test_golden_g1g4.py \
+    --ignore=slo_tools/tests/test_slo_contract.py -q
+# 交付基线：311 passed + 1 skipped + 7 subtests（R16 批起 = 289 基线 +
+# test_joint_review3_fixes.py 22 用例：copy@PARTIAL 复合两笔物化/守卫/
+# 计价闭式（含 L∤inc 公式钉死）/图构建复合发射/水印重放/merge 回归/
+# copy@home×PARTIAL 退化负例/序列回归/日志形状 + hopbytes 复合采集；
+# 绑定已退役 SH30_ABLATION 语义的 test_ablation_switch.py 已删）。
+# 口径订正（外部审查处置批 2026-09-15；三轮深审再订正分解式）：此前
+# 此栏把全树计数配给了 workload/llama2_7b_inference 四目标窄命令
+# （该命令实收 229 = 本仓目标面 joint/+根两 test 文件+online/）；
+# 全树实收 312 = 目标面 229 + slo_tools 可收集 34 + sh_test_mesh/
+# tests 49 → 311 passed + 1 skipped（skip = slo_tools test_hbm_
+# watermark.py:1086 phase2 journal fixture 缺失）。slo_tools 三文件
+# （driver_parity/golden_g1g4/slo_contract）从 sh_test_mesh 根收集
+# 即 ImportError（伴生模块 synthetic.py 在其目录内、不在 sys.path；
+# 目录内可收集 80 项）——基底固有的调用目录依赖，与本仓改动无关，
+# --ignore 排除。
 ```
 
 定向验收覆盖（`joint/test_joint_mechanisms.py` 对应《设计方案》§8 表）：
@@ -236,6 +255,22 @@ affinity-first 恒 stay（home 优先与联合选择的最优重合）。**冒�
 配置；产物落仓外持久目录 `/home/sunhao/joint_smoke_evidence/<combo>/`
 全套留存——run.log/决策日志/env 快照/退出码，复审可独立复验；
 PROVENANCE §7-14/§9）。
+
+**容量压力夹具（R16-4-7，2026-09-15）**：
+`sh_test_mesh/run_scripts/joint_capacity_stress_fixture.sh [window_ns]
+[capacity_profile] [evidence_root] [combo]`（缺省 10s × stress-28gib ×
+TJE，缺省档即可全判据 PASS）——小 HBM 压力档
+（`hardware/face_case5_config_c_stress.json` 孪生源，备份→切
+trace_config→还原）使 E 逐出真实发生、PARTIAL 形成、跨实例
+复合 copy 真实命中；判据 = 退出码 0 + PARTIAL×copy 计数 > 0（noc 腿
+layer_end < L）+ deep_gap 台账空（硬门禁，台账侧车缺失 = fail-closed）；merge_degrade 计数落盘
+披露（run 目录 `judge_summary.json`）不门禁——R4 设计内计价行为，
+10s 窗内与 PARTIAL 形成通道同链不可分（外部审查处置批 2026-09-15
+改造；此前"两台账空"硬门禁使缺省档必然 FAIL）。中量程门禁档 =
+150s × stress-128gib（两台账皆 0）/stress-96gib（动态工况最全，见
+PROVENANCE §11）。runner 经 `SH_RUNTIME_RC_DIR` 覆盖指向
+stress 档 runtime_config（正式跑保持缺省 160gib）。证据落
+`/home/sunhao/joint_r16_stress_evidence/`；PROVENANCE §11。
 
 ## 7. 硬件概念（沿用 sh_3.0 口径）
 

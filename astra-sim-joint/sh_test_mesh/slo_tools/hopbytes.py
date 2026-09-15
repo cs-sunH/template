@@ -330,6 +330,45 @@ def collect_sh30(record: dict, acc: dict, per_request: dict) -> None:
             _accumulate_shard_transfers(entry, request_id, acc, per_request)
 
 
+def collect_joint(record: dict, acc: dict, per_request: dict) -> None:
+    """joint 变体（R16-7，2026-09-15）：S3 超集 + 复合两笔采集。
+
+    prefill 分支优先消费复数 ``history_transfers`` 列表（R12 起逐传输
+    序列化）：copy@PARTIAL 复合 = 前缀 noc_migrate + 后缀 remote_load
+    两笔——单数 ``history_transfer`` 恒为第一笔（前缀腿），会系统性漏
+    计后缀腿 edge→target 的 NoC 段（R16 之前历史传输恒 ≤1 笔、缺口不
+    存在，复合形态本批首次激活）。旧产物无复数字段时回退单数口径
+    （新老产物可区分，先例 = collect_sh20 的列表逐条采集）。local_hit
+    行 shards 为空，逐条采集自然零贡献；decode/completion 分支同 S3
+    （prefill_decode_transfer 单笔、completion_evictions；completion
+    的 merge_transfers 维持 relevant_kinds 过滤外不消费的既有口径）。
+    """
+    decision = record.get("decision") or {}
+    request_id = record.get("request_id") or NA
+    kind = record.get("kind")
+    if kind == "prefill":
+        transfers = decision.get("history_transfers")
+        if isinstance(transfers, list):
+            for entry in transfers:
+                _accumulate_shard_transfers(entry, request_id, acc,
+                                            per_request)
+        else:
+            _accumulate_shard_transfers(decision.get("history_transfer"),
+                                        request_id, acc, per_request)
+        for field in ("history_evictions", "prefill_evictions"):
+            for entry in decision.get(field) or []:
+                _accumulate_shard_transfers(entry, request_id, acc,
+                                            per_request)
+    elif kind == "decode":
+        _accumulate_shard_transfers(decision.get("prefill_decode_transfer"),
+                                    request_id, acc, per_request)
+        for entry in decision.get("decode_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+    elif kind == "completion":
+        for entry in decision.get("completion_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+
+
 REPO_HOP_SOURCES: dict[str, dict] = {
     "astra-sim-sh_1.0": {
         "collector": collect_sh10,
@@ -367,12 +406,15 @@ REPO_HOP_SOURCES: dict[str, dict] = {
                  "语义同 S1）",
     },
     "astra-sim-joint": {
-        "collector": collect_sh30,
+        "collector": collect_joint,
         "granularity": "shard(noc_path)",
-        "notes": "2026-09-14 登记：joint 决策日志为 S3 超集（传输对象"
-                 " shards[].noc_path 同构；新增 kind=joint_admission 审计"
-                 "行与 completion 的 merge_transfers 均携带 shards，"
-                 "relevant_kinds 过滤外的不消费；hop 覆盖口径同 S3）",
+        "notes": "2026-09-14 登记 + R16-7（2026-09-15）：joint 决策日志"
+                 "为 S3 超集——prefill 分支优先消费复数 "
+                 "history_transfers 列表（copy@PARTIAL 复合两笔逐条"
+                 "采集；旧产物无复数字段回退单数口径）；新增 kind="
+                 "joint_admission 审计行与 completion 的 merge_transfers"
+                 " 均携带 shards，relevant_kinds 过滤外的不消费；hop 覆盖"
+                 "口径同 S3（count/fallback 语义）",
     },
 }
 

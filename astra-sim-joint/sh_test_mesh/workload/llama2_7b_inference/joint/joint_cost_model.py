@@ -579,8 +579,13 @@ class JointCostModel:
         N1 裁定 (a)（2026-09-14）：remote-read 要求基础历史**全层驻留**
         home HBM（LOCAL）——PARTIAL 的池后缀不存在"前缀 home + 后缀池"
         混合读流原语（后端能力边界，非 joint 理论排除；partial 会话跨
-        实例服务走 copy——前缀 NoC + 后缀池恢复，已实现且正确）。LOCAL
-        会话 remote-read 不受影响；README 动作适用性表按此口径披露。
+        实例服务走 copy——前缀 NoC + 后缀池恢复，已实现且正确；实现/
+        测试锚点（R16，2026-09-15）：物化 face_scheduler._noc_transfer
+        层区间化 + copy 分支 [0, base_prefix)；计价本函数 ACTION_COPY
+        两腿 noc_prefix+pool_suffix_restore；单测
+        joint/test_joint_review3_fixes.py 22 用例 + 容量压力夹具
+        joint_capacity_stress_fixture.sh）。LOCAL 会话 remote-read 不受
+        影响；README 动作适用性表按此口径披露。
         """
         results = []
         is_home = (
@@ -697,25 +702,34 @@ class JointCostModel:
                     rates=self.rates)
                 notes.append("partial_suffix_pool_restore")
         elif action == ACTION_COPY:
-            # LOCAL/PARTIAL 别处：整份驻留历史经 NoC 复制为工作副本；
-            # REMOTE：从池恢复必要历史到目标。
+            # LOCAL/PARTIAL 别处：复合两腿——驻留前缀经 NoC 复制、缺失
+            # 后缀经池端口恢复（R16-3/D2-3，2026-09-15：与物化
+            # face_scheduler.prepare_prefill 的 noc_migrate[0,prefix) +
+            # remote_load[prefix,L) 同源；旧口径整份全按 NoC 速率对
+            # PARTIAL 基系统性低估）；REMOTE：从池恢复必要历史到目标。
             resident_bytes = sum(session.history_bytes_by_tp_rank)
+            missing = sum(session.missing_bytes_by_tp_rank)
             if session.location == "remote_memory":
                 history_prep = _pool_transfer_ns(
-                    total_bytes=sum(session.missing_bytes_by_tp_rank)
-                    + resident_bytes,
+                    total_bytes=missing + resident_bytes,
                     divisor=pool_divisor, rates=self.rates)
                 notes.append("pool_restore_to_target")
             else:
+                # 后缀腿必须带 missing 守卫：_pool_transfer_ns 对零字节
+                # 仍返回端口时延（pool_latency_ns），无守卫会击穿 LOCAL
+                # 基与旧值逐位一致（stay 分支 if missing 即先例）。
                 divisor = self.flow_registry.divisor_multi(
                     candidate_paths, include_self=True)
                 history_prep = _transfer_ns(
-                    total_bytes=resident_bytes
-                    + sum(session.missing_bytes_by_tp_rank),
+                    total_bytes=resident_bytes,
                     path_hops=hops, divisor=divisor,
                     rates=self.rates, per_hop_latency_ns=None,
                     startup_ns=0)
-                notes.append("noc_working_copy")
+                if missing:
+                    history_prep += _pool_transfer_ns(
+                        total_bytes=missing, divisor=pool_divisor,
+                        rates=self.rates)
+                notes.append("noc_prefix+pool_suffix_restore")
         elif action == ACTION_RECOMPUTE:
             # 无历史搬运；重算缺失区间的时间计入计算段（R13：@驻留仅
             # 缺失后缀折算 token，@异地整份历史；§13.2 复用收益体现为
@@ -769,11 +783,15 @@ class JointCostModel:
         if session.home_instance is not None and (
                 session.home_instance != instance_index
                 or session.location == "remote_memory"):
-            # K4（kimi 复审，2026-09-14）+ 自查 C（2026-09-15）：merge 段
-            # 计价按**基础位置**分流——LOCAL/PARTIAL 基 = 增量口径
-            # （input + 因果 decode 增长）经 NoC 回 home + home 侧空间
-            # 准备等待（PARTIAL 后缀部分实际写池，整份增量回传为保守
-            # 上界）；REMOTE 基 = 执行侧 merge_back 走**池写**
+            # K4（kimi 复审，2026-09-14）+ 自查 C（2026-09-15）+
+            # R16-3（GLM 三审，2026-09-15）：merge 段计价按**基础位置**
+            # 分流——LOCAL/PARTIAL 基 = 增量口径（input + 因果 decode
+            # 增长）按基础驻留前缀**逐 rank 分裂**：前缀增量经 NoC 回
+            # home + 后缀增量写池（执行端池端口）+ home 侧空间准备等待
+            # （与物化 merge_back 的两笔拆分同源；旧"整份增量回传 NoC"
+            # 对 PARTIAL 基是系统性**低估**——池端口单字节速率仅 NoC
+            # 的 ~1/7.9，方向经实配速率核实，非代码注释旧称的"保守
+            # 上界"）；REMOTE 基 = 执行侧 merge_back 走**池写**
             # （_increment_pool_store_transfer，经执行端池端口），无
             # home 空间准备（home 不持有基础）。此前统一 NoC→home 口径
             # 对 REMOTE 基是路由错配（K4 只修了字节口径）。执行端空间
@@ -790,6 +808,19 @@ class JointCostModel:
                     rates=self.rates)
                 notes.append("merge_to_pool_backing")
             else:
+                # 拆分公式形态钉死（GLM 四审 P2-2）：
+                # prefix = inc × p // L; suffix = inc − prefix——两腿之和
+                # 恒等于 inc（守恒）；LOCAL（p == L）下 prefix = inc、
+                # suffix = 0 与旧值逐位一致；inc // L × p 会在 L∤inc 的
+                # 合成视图下破坏 LOCAL 一致性，两腿独立取整则丢守恒。
+                layers = self.model_layers
+                base_prefix = min(
+                    max(session.resident_prefix_layers, 0), layers)
+                prefix_increments_by_rank = tuple(
+                    increment * base_prefix // layers
+                    for increment in merge_increments_by_rank)
+                prefix_increments = sum(prefix_increments_by_rank)
+                suffix_increments = increments - prefix_increments
                 merge_route, merge_hops = self._route_pair(
                     instance_index, session.home_instance)
                 merge_divisor = self.flow_registry.divisor_multi(
@@ -797,16 +828,25 @@ class JointCostModel:
                         instance_index, session.home_instance),
                     include_self=True)
                 merge_ns = _transfer_ns(
-                    total_bytes=increments, path_hops=merge_hops,
+                    total_bytes=prefix_increments, path_hops=merge_hops,
                     divisor=merge_divisor, rates=self.rates,
                     per_hop_latency_ns=None, startup_ns=0)
+                if suffix_increments > 0:
+                    # 后缀池腿守卫与 copy 段同因：_pool_transfer_ns 零
+                    # 字节时延陷阱；除数挂执行端池端口仲裁（与 REMOTE
+                    # 基分支同源同口径）。
+                    merge_ns += _pool_transfer_ns(
+                        total_bytes=suffix_increments,
+                        divisor=self._pool_divisor(instance_index),
+                        rates=self.rates)
                 # home 侧空间准备：按 home 当前占用估计释放等待（§3.2 不
-                # 认为"写回免费"；需求 = 增量逐 rank——保守上界，PARTIAL
-                # 后缀部分实际写池不占 home）。
+                # 认为"写回免费"）；需求 = 前缀增量逐 rank——物化侧
+                # _ensure_capacity(home, prefix_shards) 本就只备前缀，
+                # 同源自洽（后缀实际写池不占 home）。
                 home_load = self.loads.get(session.home_instance)
                 if home_load is not None:
                     merge_ns += self._eviction_wait_estimate(
-                        home_load, merge_increments_by_rank, notes,
+                        home_load, prefix_increments_by_rank, notes,
                         instance_index=session.home_instance,
                         prefix="home_merge")
                 notes.append(f"merge_to_home={session.home_instance}")

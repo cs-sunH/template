@@ -436,3 +436,295 @@ K5 报告中"重建 gate 为何带 duration"的疑问一并答复（duration 不
      joint_action），维持防御现状。
 9. **验证**：全仓单测复绿（数字见交付摘要）；冒烟矩阵 10/10 重跑
    PASS；裸仓终检通过。
+
+## 11. R16 修复批（第二次错误 D2-1/D2-2/D2-3 + 四审 P1/P2，2026-09-15）
+
+（本节引用行号除注明"当前"外均为方案底座 @`23848a9` 口径——描述
+修复前状态的历史行号；修复后文件的现行行号见各文件 docstring 内锚点。）
+
+输入：`joint第二次错误报告文档.md`（0914 双拓扑 TJE 10/10 臂 rc=134）、
+`joint错误的分析报告02.md`（消融 22 臂 campaign 全灭）、
+`joint第二次修改方案.md`（R16 施工方案，四轮审查收敛稿）。
+
+1. **根因（D2-1/D2-2，两报告一致、方案逐一核验）**：copy@PARTIAL×跨实例
+   按 README 声明的"前缀 NoC + 缺失后缀池恢复"复合语义规划，但
+   `_noc_transfer` 只有整会话全层迁移能力（无层区间参数 + 全驻留守卫
+   :2685-2686 + 字节源读全量声明 session.shard_bytes）；R1' 去钉扎后该
+   组合首次真实可达即 fail-closed（决策桥 seq 2988 → C++ SIGABRT）。
+   修复（R16-1/R16-2）：
+   - `_noc_transfer` 层区间泛化：必填 `layer_start/layer_end`；守卫改
+     区间包含判定 `0 <= layer_start < layer_end <= resident_prefix_layers`
+     （语义严格变宽而非放松——旧守卫是 layer_end==L 特例）；字节源改
+     `kv_cache_shard_bytes_for_layer_range(context_tokens,…)` 不再读
+     session.shard_bytes（全量声明口径，PARTIAL 下是幻影字节源）；
+     `resident_prefix_layers_before/after = layer_start/layer_end`（本仓
+     区间传输惯例，:2773/:3788/:3841 同例）；
+   - copy 分支传 `[0, base_prefix)`；move_prefill_to_decode 显式传
+     `[0, L)`（守卫等价、字节相等；before 字段 L→0 属死元数据惯例变更，
+     唯一行为性消费者 `_mark_pending_history_store` 仅门控 remote_store，
+     P3-a 已核无影响）；
+2. **D2-3 计价同源（方案新增，两报告均漏）+ merge 段同族同修（GLM 三审
+   裁定修正——原 K4 注释自称"保守上界"方向错误，实为系统性低估：池端口
+   单字节速率仅 NoC 的 ~1/7.9，实配 `face_case5_config_c.json:27-37`）**：
+   - copy@LOCAL/PARTIAL 计价拆两腿：前缀经 `_transfer_ns`（NoC 速率）、
+     后缀经 `_pool_transfer_ns`（池端口 + `_pool_divisor` 仲裁），后缀腿
+     带 `if missing:` 守卫（零字节时延陷阱，:523-529——无守卫击穿 LOCAL
+     逐位一致）；notes `noc_working_copy` → `noc_prefix+pool_suffix_restore`；
+   - merge 段 LOCAL/PARTIAL 基增量按 `prefix = inc × p // L; suffix =
+     inc − prefix` 逐 rank 分裂（公式形态钉死——GLM 四审 P2-2：两腿和
+     恒等 inc、LOCAL（p=L）逐位不变；`inc // L × p` 在 L∤inc 合成视图下
+     破坏一致性）；后缀池腿带守卫 + 挂 `_pool_divisor(exec)`；home 驱逐
+     等待按前缀增量估缺口（物化侧 `_ensure_capacity(home, prefix_shards)`
+     本就只备前缀）；REMOTE 基（merge_to_pool_backing）不动；
+   - 残差口径（GLM 四审 C-F2）：拆分后后缀池腿仍漏计 edge→target NoC
+     段与目标 HBM restore 写（~1.44× 族内一致低估，stay/REMOTE/copy/
+     merge 后缀全同漏 `_pool_transfer_ns` 族，跨动作比较部分抵消）——
+     登记为已知简化，中量程档轻量抽查兜底（量级偏差 > 1.5× 则扩词表）；
+3. **NEW-1 处置（doc-vs-impl，GLM 二审）**：发射器 noc_migrate 分支
+   （generate_face_trace.py:646-708）从不消费 trigger_gate（唯一调用点在
+   remote_store 分支 :719-728）；图构建 :1441-1444 传入的 trigger_gate 为
+   死参数——**删除实参、保留 if/else 分支结构**（MY-1：统一传
+   gate=pending_gate 会对跨实例 copy 确定性 raise）、订正 :1435-1438 注释
+   为"无门控发射 + 准入喂入承载因果"、`_rebuild_interval_gate_on_target`
+   docstring "五个消费点"按代码重枚举为四个真实消费点（history_evictions
+   触发门 / no-transfer arm / partial 恢复 arm / 通用 remote_load arm；
+   删去的"noc 源端触发"= 死参数分支、"local_hit arm" = 幻影——通用循环
+   对 local_hit 先 continue，发射器 local_hit+gate 路径自本构建器不可
+   达）、:1450-1453 "local_hit 的 arm" 注释同批订正。**若未来接入离线/
+   回放模式，接通 noc_migrate 的 trigger 消费是前置条件**；发射器
+   :654-664 的 noc_migrate 门 arm 为无生产调用方的死防御代码（MY-2）；
+4. **NEW-3 处置（注脚）**：后缀腿 edge→target 的 NoC 段争用不计入本候选
+   自身除数，只经 R15 流登记影响后续候选——与 stay-partial 分支既有简化
+   一致（generate_face_trace.py:862-883）；
+5. **R16-6（GLM 四审 P1）**：copy@home×PARTIAL 退化守卫扩展——
+   `:3402-3406` 原只拦 LOCAL，PARTIAL 落穿 Case B 后 :3556 整份工作副本
+   叠驻留前缀双计 + 完成结算撞 N9 防御确定性 raise（适用性现排除该组合，
+   但本仓两次事故都是"不可达直到修复打开它"）。守卫条件扩
+   `base_location ∈ {LOCAL_HBM, PARTIAL_HBM_REMOTE} and home == exec`；
+   PARTIAL 镜像 stay-partial 模板（只恢复缺失后缀、不建工作副本、
+   working_kind 保持 None）——适用性注释"退化为 stay"的声明语义对齐；
+6. **R16-7（GLM 四审 P2-1）**：hopbytes joint 收集器 `collect_joint`——
+   prefill 分支优先消费复数 `history_transfers` 列表逐条采集（copy@PARTIAL
+   复合两笔；R16 之前历史传输恒 ≤1 笔、缺口不存在）；旧产物无复数字段
+   回退单数口径（新老产物可区分）；decode/completion 同 S3；
+7. **P3 登记清单（GLM 四审，一句话级）**：(a) transfer_anchor_sink 在线
+   路径零调用方——机制未接线，§3 观察面项降级纯登记；(b)
+   `_noc_transfer` 字节源隐式依赖 `context_tokens == history_tokens`
+   （准入不变量 :3308-3315 保证，写点同步全集已核）——脆弱耦合注记；
+   (c) KVCapacityError 失败路径残留 stale `base_*`——良性；(d) `_per_rank`
+   均分近似 vs 物化逐 rank 精确（R3'.2 族）——决策时点口径；(e) 决策时点
+   prefix vs merge 时点 R4 降级漂移——"同源"限定为"决策时点同源"；
+   (f) 既有死代码两则（`_completed_full_candidates`、`base_shard_bytes`）
+   ——登记不动；(g) home_merge 驱逐注记出现条件随前缀化收窄（C-F3）；
+   (h) 深审二轮：merge 拆分在合成视图下前缀增量可为零（inc×p < L），
+   此时 NoC 腿仍计 `_transfer_ns` 的逐跳时延项（d2d_latency×hops，
+   ~20 ns 量级）而物化侧零字节腿整体跳过——幻影时延仅存在于合成
+   视图（生产 inc 为 MB 级、恒非零），量级 10^6 倍低于信号，登记不修；
+8. **验证阶梯（§6，不可跳级）**：
+   - L1 单测：311 passed + 1 skipped（+7 subtests）＝ 基线 289 + R16 新增
+     22（`joint/test_joint_review3_fixes.py`：核心端到端两笔物化/守卫
+     语义/计价闭式含 L∤inc 公式钉死/图构建复合发射（8a 逐出×两笔同图
+     + noc 无门控 + 后缀真门控 + 1B 中继 + store→restore 前递边 + barrier
+     顺序）/水印复合重放/merge 回归/8b 退化负例/8c 序列回归/8d 日志形状
+     + hopbytes 四用例 + 深审二轮补 8b 图发射快路径用例）；既有 merge_ns 数值绑定四处逐位存活（LOCAL 基
+     p=L 恒等）；
+   - L2 容量压力夹具（R16-4-7，`run_scripts/joint_capacity_stress_fixture.sh`
+     + `hardware/face_case5_config_c_stress.json`（档位 24/26/28/29/30/32
+     + 中量程 44 GiB）+ runner `SH_RUNTIME_RC_DIR` 覆盖）：
+     **RED**——未修复代码 10s 窗 × stress-28gib 复现 D2-1 精确签名
+     （`face_scheduler:2686` raise → 桥 fail-closed seq 2988 → C++
+     SIGABRT rc=134；证据 `RED_TJE_stress-28gib`）；
+     **GREEN**——修复后同档 rc=0 全程 GREEN + SLO 九步后处理全过 +
+     PARTIAL×copy 命中 1（52,028-token 会话：noc[0,26) 22.16 GB +
+     remote_load[26,32) 5.11 GB，home 5 → exec 6）+ deep_gap 空；
+     hopbytes 复合采集 E2E 生效（coverage 1.0，714 actions）。
+     档位标定：28 GiB 命中但 1 条 merge_degrade、29/30/32 GiB 零命中
+     ——10s 窗（29 会话）内 PARTIAL 的唯一形成通道是 R4 merge 自降级
+     本身（全日志仅 3 笔 remote_store 且全在 completion merge 段），
+     命中与降级同链不可分；准入通道 E 后缀逐出需会话沉淀规模（报告02
+     §1：标准容量 ~3,636 次准入），属 L3 尺度——台账空判据随 L3 调档
+     落实；
+   - L3 中量程门禁（~2000 请求窗（150s，1918 行、131 会话）× 压力
+     缩减容量，TJE）——**两档证据并呈**（判据配方 D-F4-e 全落地）：
+     * stress-96gib（~0.90× 聚合负载/容量比；压力源 = sticky-home
+       倾斜 + copy 工作副本双驻留）：rc=0 全程 GREEN + SLO 九步过；
+       PARTIAL×copy 命中 **48**；动态工况全在场——hbm_wait>0 × 15
+       （max 0.72 s）、joint_admission_failed × 15（准入失败重试）、
+       joint_admission_wait × 196、decode 停滞/唤醒 × 18 对、跨实例
+       轮换 1285、deep_gap 空；5 条**边缘性** merge_degrade（各降
+       1-2 层、0.7-1.5 GB，集中热 home 5/6/7/0）如实在案；
+     * stress-128gib（~0.67×）：**fixture 判据全 PASS**（rc=0 +
+       PARTIAL×copy=1 > 0 + merge_degrade/deep_gap 两台账空）；copy
+       1353/stay 565、跨实例轮换 1271；
+     * 档位谱系（`face_case5_config_c_stress.json` 注记同源）：44 GiB
+       （~1.95× 聚合）越过活性包络（760 次准入失败 + 63132 次等待
+       探针饥饿、EOF 33 在途未结算 → run-end 校验 fail-closed
+       rc=134——容量物理边界基准点，非代码缺陷；J 行为正常 1228
+       copy/280 stay）、10s 窗 29/30/32 GiB 零命中（PARTIAL 形成通道
+       未达）；
+     * **自审订正（2026-09-15 深审轮）**：本批早期档位标注的推导数字
+       把 K+V 因子重复计入（每 token 全实例 KV 应为 524288 B 而非
+       1048576 B）——"最大会话 23.4 GiB/rank""1.8×/1.35×/3.9× 聚合
+       过订阅"等标签全部虚大一倍，已订正为 11.7 GiB 与 0.90×/0.67×/
+       1.95×（实测档位标定本身按运行结果作出、不受影响；压力机制
+       归因修正为"倾斜+双驻留"而非"聚合过订阅"）；stress JSON 注记
+       与夹具头注同步订正；
+     * **R16-3 计价 vs 物理轻量抽查（深审轮补执行）**：96 GiB 档全部
+       48 个 PARTIAL×copy 行——noc 腿与 remote_load 腿 total_bytes 与
+       `kv_cache_shard_bytes_for_layer_range(H, [0,p)/[p,L))` 逐行
+       **48/48 精确一致**（计价字节 ↔ 物理腿接线零分叉）；系数层
+       残差按 C-F2 口径登记（后缀腿计价 1.953e-3 vs 物理 2.81e-3
+       ns/B = 1.44× 族内一致低估，< 1.5× 抽查阈值）；逐节点 C++ 计
+       时级比对属 L4 口径；
+     * 深尾部墙钟（M2/F3 观察项）：96 GiB 档 3.4 min/1918 行 =
+       0.11 s/行，优于 10s 档 0.23 s/行——无深尾部爆炸；重试门
+       键翻转未造成墙钟劣化（低2 观察项过）；
+   - L4 全量重跑（消融 22 臂 + 双拓扑 TJE 第三次）按方案 §6.4 另行
+     调度执行后回填；本批先以 2s 标准配置 10 配置冒烟矩阵重跑 +
+     与上批存档逐位比对收口"修复只影响竞争路径"（见交付摘要）；
+   - **标准配置回归收口（§6.4 前半）**：`joint_smoke_matrix.sh` 2s 窗
+     10 配置重跑 **10/10 PASS**（证据根 `/home/sunhao/joint_smoke_evidence_r16`，
+     含 SH_ADMIT_GATE_VERIFY/SH_SNAPSHOT_VERIFY/SH_ONLINE_VALIDATE=1
+     影子验证跑）；全部 10 配置决策日志与上批存档
+     （`/home/sunhao/joint_smoke_evidence`）**notes 更名归一后逐位一致**
+     （84 行/配置，含 cost_ns/merge_ns 逐位相同——LOCAL 基计价逐位
+     不变的设计验证；唯一差异 = R16-3 notes 字符串
+     `noc_working_copy` → `noc_prefix+pool_suffix_restore`，joint_
+     admission 审计行内）；
+   - **图层级回归（深审轮补强）**：`SH_GRAPH_DIGESTS=1` TJE 2s 三跑
+     A/B/A——新代码两跑**确定性成立**（1394 行摘要逐位同）、stash
+     回退旧代码第三跑 **A==C 逐位一致**（证据根
+     `/home/sunhao/joint_r16_stress_evidence/graph_digest_ABC/`）——死参数删除对发射图**零节点级变化**的直接证明（此
+     前两证据根均未启用 digests，决策日志比对未覆盖图层）；
+9. **仿真速度口径**：纯参数化改动，热路径无新增节点/边；计价 O(1) 闭式
+   项；C++ 零改动、无需重编译。
+10. **外部审查处置批（kimi 复审 2026-09-15，五项发现逐项处置）**：
+   - **P1（采纳并施工）**：容量夹具判据 3"两台账空"硬门禁与缺省档
+     RED→GREEN 目标自相矛盾（10s 窗 PARTIAL 形成通道与 merge 自降级
+     同链不可分，缺省 28gib 档必然 judge 退出 2）。改造：deep_gap 空
+     保持硬门禁；merge_degrade 计数落盘披露（run 目录
+     judge_summary.json，gated=false + 归因 reason）不门禁。
+   - **P1 施工中自查补漏（第二处判据缺陷）**：旧 judge 误读台账键
+     `deep_gap_records`（KVCapacityError 携带字段名；侧车导出键为
+     `deep_gap_events`——face_scheduler 落账列表即后者）——deep_gap
+     门禁此前恒空转（None 恒过）。一并修正键名；128gib 证据两台账
+     实为皆空，历史 PASS 结论不受影响。
+   - **P2（时间线裁定：审查读取时刻为真，订正系并行落盘）**：审查称
+     stress JSON 各档注记与夹具头注仍是虚大一倍旧数字（23.4 GiB/
+     1.8×/1.35×/3.9×/42.3 GiB）——其读取时刻为真：JSON 订正
+     mtime 19:20:39 落其审查窗口内（订正与本审查并行落盘），第
+     22 用例 19:34 补齐（其计数 310 = 289+21 为补齐前快照）；订正
+     后状态全仓 grep 仅命中本节 §11-8 自审段对旧标签的引述（引述
+     即披露），JSON/头注为订正后数字（11.7 GiB/524288 B/0.90×/
+     0.67×/1.95×，含 2026-09-15 自审订正注记）——原"查无实据"
+     措辞过强（仅对订正后状态成立），本条按时间线裁定改写。仓根
+     template.tar.gz（10:51 快照）实含本仓 767 条目（sh_test_mesh
+     下 106）但不含 stress JSON/夹具/新测试等 R16 交付——非旧
+     数字来源（原"不含本仓任何文件"表述失实，kimi 二轮订正）。
+   - **P3（状态复核 + 纪律登记）**：外部 digest 探针
+     （/tmp/joint_digest_new/run_digest.sh）改写 trace_config.csv 无
+     trap 还原，致裸仓脏态与 request-neutral 守卫 1 红——审查方已
+     git checkout 恢复；本批复核占位指针三行完好。纪律（自本批起
+     登记）：一次性探针脚本必须带 trap 还原、跑毕复核 git status
+     （与本仓夹具 EXIT trap 同款约束）。build/ 已随探针会话清除——
+     本批按 README §4 重建二进制后复跑夹具（见下）；裸仓收口后 L4
+     前需再建。
+   - **P4（闭合：三支撑数字均可由留存产物复算）**：44 GiB 档——
+     决策日志 kind 频次 joint_admission_failed=760、
+     joint_admission_wait=63132；python.log fatal 行完整列出 33 个
+     un-settled 请求（kimi 二轮复审 ast.literal_eval 鲁棒解析 =33，
+     本方程序化复核一致——原 "34" 系目测计数错误传递，§11-8 与
+     本条一并订正；同段 1228 copy/280 stay 经本批复核精确，另实测
+     8 次 remote-read 未在原登记内）。审查未复现系按裸数字 grep
+     （频次非打印串）；§11-8 登记数字与留存证据互证成立。
+   - **P5（升级为 L4 必检项）**：merge 后缀池腿系数级残差（计价
+     1.953e-3 vs 物理 2.81e-3 ns/B = 1.44×，C-F2 口径）——L4 全量
+     campaign 必须做逐节点 C++ 计时级 vs 计价闭式比对，不得以轻量
+     抽查（96 GiB 档 48/48 接线一致）收口。
+   - **本批复跑验证（C++ 重建后）**：缺省档夹具（10s × stress-28gib
+     × TJE）全判据 PASS——rc=0 + judge 退出 0；judge_summary.json：
+     partial_copy_hits=1、copy_prefill_rows=117、deep_gap_events=[]、
+     merge_degrade 披露计数=1（session_12 [27,32) 2844672000 B）；
+     决策日志 1080 行与上一 GREEN run 逐位 diff 一致（台账/退出码
+     同——确定性全量实证）；EXIT trap 还原核验通过。全树单测
+     （README §6 订正后命令）311 passed + 1 skipped + 7 subtests。
+   - **README §6 命令-计数口径错配（本批新发现并订正）**：原文把
+     全树计数（311+1+7）写在 workload/llama2_7b_inference 四目标窄
+     命令下（该命令实收 229 = 本仓目标面）；全树实收 312 = 目标面
+     229 + slo_tools 可收集 34 + sh_test_mesh/tests 49 → 311
+     passed + 1 skipped（skip = slo_tools test_hbm_watermark.py:1086
+     phase2 journal fixture 缺失），slo_tools 三文件（driver_parity/
+     golden_g1g4/slo_contract）--ignore 排除。README 已改订正后
+     全树命令并分别标注两类口径。
+   - **三轮深审补强（本批收尾自查，2026-09-15）**：
+     ① judge 侧车缺失分支补 fail-closed——joint_kv_ledgers.json
+     缺失时判据 3 此前空转通过（None 恒过）；正常结束必导出、缺失
+     即证据链断裂应 FAIL。负路径以交付脚本原样抽取的 judge 体验证：
+     正例退出 0 / 侧车缺失退出 2 / deep_gap 非空退出 2。
+     ② 本节早稿分解式算术错（sh_test_mesh/tests 实收 49 非 48）
+     已订正——"48"系 311−229−34 差额倒推未实测，本轮直接计数
+     补证（tests/ 49、slo_tools 34、目标面 229，312 收集 → 311
+     passed + 1 skipped）。
+     ③ slo_tools 三文件收集错误归因订正为实证事实：synthetic.py
+     在 slo_tools/tests/ 目录内、从 sh_test_mesh 根收集不在
+     sys.path（ImportError: No module named 'synthetic'）；三文件
+     在其目录内可收集 80 项——基底固有的调用目录依赖；此前
+     "依赖仓外驱动/golden 资产"为未实证猜测，README/本节已删改。
+     ④ judge 终版（键名修正 + fail-closed）整跑复验：缺省档夹具
+     再次全判据 PASS（judge_summary 含 ledger_sidecar_present=
+     true），决策日志与上一 run 逐位一致——确定性链跨三次 run。
+     ⑤ 开关清单 §9 SH_RUNTIME_RC_DIR 行号引用订正 31-36 →
+     31-35（RC 赋值行实测 35）。
+     ⑥ 四轮深审：README §3 披露表"21 用例"计数残留订正为 22（第
+     22 用例落地时只同步了 §6 与本节 L1 段、漏 §3——同批四处计数
+     声称的同步面清单自此补全：§3/§6/§11-8/§11-10 四处口径互证）。
+     四轮深审其余审计面结论：test_joint_review3_fixes.py 全文通读
+     无空转断言/无跨用例状态泄漏/无仓内写入；hopbytes collect_joint
+     local_hit 口径闭合（shards 驱动采集，local_hit 零 shards 零贡献，
+     与 kv_cache_adapter 的 kind 过滤殊途同归）；pytest 1 warning 归因
+     系统 protobuf 库（非本仓代码）；四测试文件计数 38/22/31/22=113
+     与 PROVENANCE 历史条目全部对上（:176 "22"为真实巧合）；测试内
+     "sh30 :2404-2414"行号引用实测未漂移；96gib/44gib 台账实测
+     degrade=5/54、deep_gap=0，与 §11-8 登记口径一致。
+   - **五轮深审补强（2026-09-15）**：
+     ① 全量 hunk 级 diff 审计：五个代码文件（face_scheduler/
+     joint_cost_model/graph_batch_builder/hopbytes/run_online_strategy）
+     的全部改动 hunk 逐一对照 R16 落点复核，无越界或漏改——补上
+     "该改的改了、不该改的没改"中后一半的审计盲区。
+     ② 第三处 "21 用例" 残留（joint_cost_model applicable_actions
+     docstring 内）订正为 22——四轮 sweep 只扫 README/PROVENANCE 两
+     文档、漏源码内计数引用；sweep 面自此扩为全仓。
+     ③ hopbytes 注册表路径无测试钉：现有用例直接调用 collect_joint、
+     绕过 REPO_HOP_SOURCES 分发——错配时测试全绿而实跑静默漏计
+     后缀腿；已在 HopbytesCompositeCollectionTest 内补 assertIs 注册
+     表钉死（不增用例数）。
+     ④ 24/26gib 档注记系标定前猜测、证据根无对应 run 目录：本批补跑
+     并按实测改写——24gib 零命中/119 copy 行/1 次降级/run GREEN
+     rc=0（夹具判据 2 在该档不过，下边界基准点）；26gib 命中 1 +
+     deep_gap 空全判据 PASS（与 28gib 同带）；10s 窗命中带定为
+     {26, 28} GiB（24 与 29+ GiB 均为零）。
+     ⑤ run_online_strategy.sh 补入哈希清单（8 个修改文件中唯一漏登，
+     24 → 25 项）——防篡改盲区闭合。
+   - **kimi 二轮复审处置（2026-09-15，四新发现 + 时间线裁定）**：
+     ① R-新2（采纳，已修）：44 GiB un-settled 请求实为 **33** 个
+     （其 ast.literal_eval 鲁棒解析 + 本方程序化复核一致，全文唯一
+     列表无截断）——§11-8 与本节 P4 两处 "34" 系原始目测计数错误
+     传递，均已订正；同段 1228/280 防御性复核精确（另实测 8 次
+     remote-read 未在原登记内）。审计数字必须与产物一致。
+     ② R-新1（采纳登记）：交付通报先于终态核验——其 19:59 实测
+     哈希 23 OK+1 FAILED（恰为本批最后编辑的夹具）、20:21 亲见
+     build/generated 仍在（20:27:38 才清）；与 §11-8"注记先于
+     同步"同族、第二次复发。纪律（自本批起）：**交付通报必须后置
+     于终态核验（哈希全过/clean/裸仓/git/单测快跑），核验与通报
+     之间零编辑**；做不到时通报须显式标注"收尾进行中"。本批通报
+     即按此纪律以终态核验输出为末次动作。
+     ③ R-新3（采纳，已修）："template.tar.gz 不含本仓任何文件"
+     表述失实——实含本仓 767 条目（sh_test_mesh 下 106）、不含
+     R16 新交付三文件；实质论点（非旧数字来源）不变，P2 条已按
+     事实改写。
+     ④ R-新4（知悉，无动作）：审查期间工作区为活动目标；19:23-
+     19:32 mtime 异动系图摘要 A/B/A stash/pop 副作用、内容未变，
+     其代码锚点（:2689/:3445/:3617/:3779）与本仓当前逐点吻合。
+     ⑤ P2 时间线裁定落档：审查方读取时刻为真（mtime 19:20:39 落
+     其窗口），原"查无实据"过强、"推定"升级为实锤并行落盘时间
+     线（见改写后 P2 条）。

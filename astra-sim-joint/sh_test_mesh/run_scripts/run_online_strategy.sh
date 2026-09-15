@@ -28,7 +28,11 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
+# RC（runtime_config 四小件目录）：缺省 = 权威硬件源 + validation-160gib
+# 档（plan_materializer 装载配置时物化）。SH_RUNTIME_RC_DIR 可覆盖为同
+# 根下其它物化档（R16 容量压力夹具用——stress 档目录名嵌 slug+profile、
+# 硬编码无法命中；仅夹具/验证使用，正式跑保持缺省，2026-09-15）。
+RC="${SH_RUNTIME_RC_DIR:-${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool}"
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正）：向 C++ 桥传

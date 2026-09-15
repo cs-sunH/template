@@ -2681,11 +2681,38 @@ class KVCacheManager:
         trigger_request_id: str,
         source_instance_index: int,
         target_instance_index: int,
+        layer_start: int,
+        layer_end: int,
     ) -> KVTransfer:
-        if session.resident_prefix_layers != self.model.layers:
-            raise RuntimeError("NoC migration requires a fully resident session")
+        """R16-1（2026-09-15）：层区间 NoC 迁移原语。
+
+        守卫改区间包含判定：``0 <= layer_start < layer_end <=
+        resident_prefix_layers``——驻留恒为前缀形态（不变量 ：2166-2172），
+        区间 ⊆ [0, resident_prefix) ⟺ 所传字节物理在场（旧全驻留守卫是
+        ``layer_end == L`` 特例，语义严格变宽而非放松）。字节源按层区间
+        从 context_tokens 派生（隐式依赖准入不变量的
+        ``context_tokens == history_tokens``，登记 PROVENANCE P3-b），
+        **不读** ``session.shard_bytes``（全量声明口径，PARTIAL 下是幻影
+        字节源——D2-1 根因）。``resident_prefix_layers_before/after`` 沿
+        本仓区间传输惯例 = layer_start/layer_end（:2800/:3871/:3924 同例）。
+        """
+        if not (
+            0 <= layer_start < layer_end <= session.resident_prefix_layers
+        ):
+            raise RuntimeError(
+                f"NoC migration layer range [{layer_start}, {layer_end}) is "
+                f"not contained in the resident prefix "
+                f"[0, {session.resident_prefix_layers}) "
+                f"(session {session.session_id})")
         source = self.topology.instance(source_instance_index)
         target = self.topology.instance(target_instance_index)
+        transfer_shards = kv_cache_shard_bytes_for_layer_range(
+            self.model,
+            session.context_tokens,
+            self.tp_degree,
+            layer_start=layer_start,
+            layer_end=layer_end,
+        )
         shards = tuple(
             KVTransferShard(
                 source_rank=source_rank,
@@ -2695,11 +2722,11 @@ class KVCacheManager:
                 noc_path=deterministic_xy_route(
                     self.topology.hardware, source_rank, target_rank
                 ),
-                layer_start=0,
-                layer_end=self.model.layers,
+                layer_start=layer_start,
+                layer_end=layer_end,
             )
             for source_rank, target_rank, shard_bytes in zip(
-                source.ranks, target.ranks, session.shard_bytes
+                source.ranks, target.ranks, transfer_shards
             )
             if shard_bytes > 0
         )
@@ -2711,13 +2738,13 @@ class KVCacheManager:
             trigger_request_id=trigger_request_id,
             source_instance_index=source_instance_index,
             target_instance_index=target_instance_index,
-            total_bytes=session.total_bytes,
+            total_bytes=sum(transfer_shards),
             shards=shards,
             model_layers=self.model.layers,
-            layer_start=0,
-            layer_end=self.model.layers,
-            resident_prefix_layers_before=self.model.layers,
-            resident_prefix_layers_after=self.model.layers,
+            layer_start=layer_start,
+            layer_end=layer_end,
+            resident_prefix_layers_before=layer_start,
+            resident_prefix_layers_after=layer_end,
         )
 
     def _remote_load_transfer(
@@ -3401,17 +3428,66 @@ class KVCacheManager:
         # ---- 跨实例动作：建立工作副本（基础历史保留在原位置）。 ----
         if (
             action == "copy"
-            and base_location == self.LOCAL_HBM
+            and base_location in {self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE}
             and base_instance == exec_instance
         ):
-            # 退化防御：copy 选在基础历史驻留实例上 == stay（成本模型
-            # 已排除该候选；此处不建立第二份工作副本）。
-            transfers.append(self._local_hit_transfer(
+            if base_location == self.LOCAL_HBM:
+                # 退化防御：copy 选在基础历史驻留实例上 == stay（成本模型
+                # 已排除该候选；此处不建立第二份工作副本）。
+                transfers.append(self._local_hit_transfer(
+                    phase="history",
+                    reason="history_local_reuse",
+                    session=session,
+                    trigger_request_id=trigger_request_id,
+                ))
+                self._check_invariants_after_mutation(session_ids=(session_id,))
+                return before, tuple(transfers), tuple(evictions)
+            # R16-6（GLM 四审 P1，2026-09-15）：copy@home×PARTIAL —— 此前
+            # 守卫只拦 LOCAL，PARTIAL 落穿 Case B 后会在 :3556 把整份工作
+            # 副本叠在驻留前缀上双计、完成结算撞 N9 防御确定性 raise（适用
+            # 性现排除该组合，但"不可达"不是"无害"）。镜像 stay-partial
+            # 模板退化：只恢复缺失后缀、不建工作副本、working_kind 保持
+            # None（与适用性注释"退化为 stay、不构成第二份工作副本"的
+            # 声明语义对齐——实现追上文档）。
+            suffix_start = base_prefix
+            suffix_shards = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                history_tokens,
+                self.tp_degree,
+                layer_start=suffix_start,
+                layer_end=self.model.layers,
+            )
+            evictions.extend(self._ensure_capacity(
+                exec_instance,
+                suffix_shards,
                 phase="history",
-                reason="history_local_reuse",
+                reason="history_suffix_target_capacity",
+                trigger_request_id=trigger_request_id,
+                reservation_request_id=reservation_request_id,
+            ))
+            transfers.append(self._remote_load_transfer(
+                phase="history",
+                reason="history_remote_suffix_restore",
                 session=session,
                 trigger_request_id=trigger_request_id,
+                target_instance_index=exec_instance,
+                layer_start=suffix_start,
+                layer_end=self.model.layers,
             ))
+            self._add_local_shards(exec_instance, suffix_shards)
+            session.location = self.LOCAL_HBM
+            session.resident_prefix_layers = self.model.layers
+            self._metrics_add_segment(
+                session_id,
+                exec_instance,
+                history_tokens,
+                suffix_start,
+                self.model.layers,
+                suffix_shards,
+                anchor_kind="transfer_complete",
+                request_id=trigger_request_id,
+                cause="history_remote_suffix_restore",
+            )
             self._check_invariants_after_mutation(session_ids=(session_id,))
             return before, tuple(transfers), tuple(evictions)
         if (
@@ -3535,6 +3611,9 @@ class KVCacheManager:
                 reservation_request_id=reservation_request_id,
             ))
             if home_side_instance != exec_instance:
+                # R16-2：前缀腿只传驻留前缀 [0, base_prefix)——R16-1
+                # 层区间化后 PARTIAL 基不再撞全驻留守卫；LOCAL 基
+                # （base_prefix == L）与旧全层口径逐位一致。
                 transfers.append(self._noc_transfer(
                     phase="history",
                     reason="history_prefix_working_copy",
@@ -3542,6 +3621,8 @@ class KVCacheManager:
                     trigger_request_id=trigger_request_id,
                     source_instance_index=home_side_instance,
                     target_instance_index=exec_instance,
+                    layer_start=0,
+                    layer_end=base_prefix,
                 ))
             if any(suffix_shards):
                 transfers.append(self._remote_load_transfer(
@@ -3702,6 +3783,8 @@ class KVCacheManager:
             trigger_request_id=trigger_request_id,
             source_instance_index=source_instance_index,
             target_instance_index=target_instance_index,
+            layer_start=0,
+            layer_end=self.model.layers,
         )
         self._remove_local_shards(source_instance_index, session.shard_bytes)
         self._add_local_shards(target_instance_index, session.shard_bytes)
