@@ -113,7 +113,21 @@ def _decision_shell(kv_manager, *, hardware=None, model=None, topology=None,
     scheduler.hardware = hardware
     scheduler.model = model
     scheduler.p_chunk = PREFILL_CHUNK_SIZE
-    scheduler.average_decode_length = 10.0
+    # N12（R15-4）甄别改写：标定常数 → 在线估计器（冷启动 10 同数值）。
+    from joint.joint_cost_model import (
+        CausalHorizonEstimator, LinkFlowRegistry,
+    )
+    scheduler._joint_horizon = CausalHorizonEstimator(
+        cold_start_default_tokens=10)
+    # R15：流登记表/池端口（drain 路径的登记/注销钩子）。
+    from online.sh30_online_scheduler import _PoolPortRegistry
+    scheduler._joint_flows = LinkFlowRegistry()
+    scheduler._pool_ports = _PoolPortRegistry()
+    scheduler._instance_edge_ports = {
+        instance.index: tuple(sorted({
+            kv_manager.nearest_edge(rank) for rank in instance.ranks}))
+        for instance in topology.instances
+    }
     scheduler._prefill_task_cache = {}
     scheduler._decode_task_load_cache = {}
     scheduler._snapshot_verify = False

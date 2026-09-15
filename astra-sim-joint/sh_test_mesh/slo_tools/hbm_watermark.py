@@ -466,6 +466,9 @@ REPO_VARIANTS: dict[str, dict] = {
     "astra-sim-joint": {
         "eviction_lists": (
             ("completion", "completion_evictions", _scalar_bytes),
+            ("prefill", "history_evictions", _scalar_bytes),
+            ("prefill", "prefill_evictions", _scalar_bytes),
+            ("decode", "decode_evictions", _scalar_bytes),
         ),
         "restore": {"bytes_path": ["history_transfer_bytes"],
                     "source_field": "history_source_instance_index"},
@@ -475,14 +478,18 @@ REPO_VARIANTS: dict[str, dict] = {
         "eviction_coverage": "full_reconciled",
         "capacity_field_evidence":
             "trace_config: local_hbm_capacity_profile → hardware json 同 FACE",
-        "joint_coverage_note": (
-            "2026-09-14 登记，S3 基线映射（joint 行 schema 为超集；"
-            "kind=joint_admission 审计行已跳过）。已知覆盖缺口：joint "
-            "专属事件 merge_transfers（增量回传 home / 池写回）与跨实例"
-            "工作副本释放未入重放词表——home 侧增量存在低估、执行端副本"
-            "存在高估，按 run 标注部分覆盖口径（PROVENANCE.md 偏差 "
-            "SLO-JOINT-CALIBER）；逐 rank 判决需 kv_delta_journal 权威层"
-            "（本仓暂不产出，同 S3）"),
+        # R12（2026-09-14）：joint 专属事件入重放词表——跨实例工作副本
+        # 双驻留记账（base/working）、merge 增量回传（noc→home）与池写、
+        # home_merge_base_degrade 自降级、remote-read 仅增量驻留、
+        # recompute@home 缺失后缀物化（R13）。决策行的 joint 专属审计行
+        # （joint_admission/joint_admission_failed/joint_admission_wait/
+        # joint_decode_stall/joint_decode_wake）非账本行，跳过不进重放。
+        "joint": True,
+        "joint_audit_kinds": (
+            "joint_admission", "joint_admission_failed",
+            "joint_admission_wait", "joint_decode_stall",
+            "joint_decode_wake",
+        ),
     },
 }
 
@@ -1211,14 +1218,24 @@ def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
 
 
 class SessionState:
-    """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。"""
+    """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。
 
-    __slots__ = ("instance", "bytes", "tokens")
+    R12（2026-09-14，joint）：跨实例工作副本期间双驻留记账——
+    base_instance/base_bytes 描述 home 侧权威基础驻留（primary 的
+    instance/bytes 此时描述执行端工作副本），消除 joint 专属事件
+    （merge 回传/池写回/工作副本释放）不在词表时的"home 低估、执行端
+    高估"系统性偏差。
+    """
+
+    __slots__ = ("instance", "bytes", "tokens", "base_instance",
+                 "base_bytes")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
         self.bytes: int = 0
         self.tokens: int = 0
+        self.base_instance: Optional[int] = None
+        self.base_bytes: int = 0
 
 
 class ReplayReport:
@@ -1291,6 +1308,19 @@ class WatermarkReplay:
 
     def _session(self, session_id: str) -> SessionState:
         return self.sessions.setdefault(session_id, SessionState())
+
+    def stash_base(self, session_id: str) -> None:
+        """R12（joint）：跨实例工作副本建立时把 home 侧基础驻留转 base
+        记账——primary 的 instance/bytes 此后描述执行端工作副本。"""
+        session = self._session(session_id)
+        if session.base_instance is not None:
+            fail(f"joint base stash on already-stashed session "
+                 f"{session_id!r}——重复建立工作副本，账本与重放不一致")
+        session.base_instance = session.instance
+        session.base_bytes = session.bytes
+        session.instance = None
+        session.bytes = 0
+        session.tokens = 0
 
     def _expected_bytes(self, tokens: int) -> int:
         return self.coef * tokens
@@ -1516,9 +1546,9 @@ class WatermarkScan:
         where = f"{self.log_path}:seq={record.get('seq', '?')}"
         request_id = record.get("request_id")
         kind = record.get("kind")
-        if kind == "joint_admission":
-            # joint 仓新增审计行（全候选成本表/开关状态；每请求的
-            # prefill 账本行仍独立存在）——非账本行，跳过不进重放。
+        if kind in mapping.get("joint_audit_kinds", ()):
+            # joint 审计行（全候选成本表/准入失败折叠/stall-wake 事件）——
+            # 非账本行，跳过不进重放。
             return
         if not isinstance(request_id, str) or not request_id:
             fail(f"{where}: 决策记录缺 request_id")
@@ -1548,9 +1578,23 @@ class WatermarkScan:
             replay.apply_evict(action, request_id)
 
         decision = record.get("decision") or {}
+        joint_action = (
+            decision.get("joint_action")
+            if mapping.get("joint") else None)
 
         # 2) 按记录类型主动作。
-        if kind == "prefill":
+        if joint_action is not None:
+            # R12：joint 专属事件重放（双驻留记账）。
+            if kind == "prefill":
+                self._joint_prefill(
+                    replay, decision, tick, session_id, token_row)
+            elif kind == "decode":
+                self._joint_decode(
+                    replay, decision, tick, session_id, token_row, joint_action)
+            else:
+                self._joint_completion(
+                    replay, decision, tick, session_id, token_row, joint_action)
+        elif kind == "prefill":
             target_instance = decision.get("prefill_instance_index")
             if not isinstance(target_instance, int):
                 fail(f"{where}: prefill 决策缺整数 prefill_instance_index")
@@ -1594,6 +1638,205 @@ class WatermarkScan:
                 for _ in range(count):
                     replay.cplog.add_evict(
                         tick, instance if instance is not None else -1, 0)
+
+    # ------------------------------------------------------ joint 重放 --
+    def _joint_prefill(self, replay, decision, tick, session_id,
+                       token_row) -> None:
+        """R12：joint prefill 行重放——工作副本语义按动作分流。
+
+        copy/recompute/remote-read 跨实例：home 侧基础驻留转 base 记账
+        （源不扣减、不低估）；工作副本 = 迁移字节（copy）/0（recompute/
+        remote-read）起步，再按动作口径增长到工作上下文（remote-read
+        仅 input 增量；其余 prefill_context）。recompute@home 的缺失
+        后缀物化（R13，无传输记录）由"增长到完整上下文"自然覆盖。
+        stay：走通用恢复/增长（suffix 池恢复 + 全上下文增长）。"""
+        action = decision["joint_action"]
+        target = decision.get("prefill_instance_index")
+        # 终审-中2：joint 行与通用路径同级容错——缺整数实例索引即账本
+        # 破损（此前产出 {None: ...} 假实例桶）。
+        if not isinstance(target, int):
+            fail(f"joint prefill 决策缺整数 prefill_instance_index"
+                 f"（session={session_id!r}, got {target!r}）")
+        history_tokens = token_row["history_tokens_before"]
+        prefill_context = token_row["prefill_context_tokens"]
+        session = replay._session(session_id)
+        if action == "stay":
+            session.instance = target
+            replay.report.actions["joint_stay_prefill"] = (
+                replay.report.actions.get("joint_stay_prefill", 0) + 1)
+            replay.apply_grow(tick, session_id, target, prefill_context,
+                              "prefill_grow")
+            return
+        # 跨实例工作动作：基础驻留转 base（home 低估缺口修复的核心）。
+        if session.instance is not None and session.instance != target:
+            replay.stash_base(session_id)
+        session.instance = target
+        for transfer in decision.get("history_transfers") or ():
+            kind = transfer.get("kind")
+            # 四审-低7：同 merge 段——缺失即 raise，不静默归零。
+            nbytes = transfer.get("total_bytes")
+            if not isinstance(nbytes, int) or nbytes < 0:
+                fail(f"joint history transfer total_bytes 必须为非负整数"
+                     f"（session={session_id!r}, kind={kind!r}, "
+                     f"got {nbytes!r}）")
+            if kind == "local_hit" or not nbytes:
+                continue
+            if kind == "remote_load":
+                replay._apply(tick, target, nbytes)
+                session.bytes += nbytes
+                replay.report.actions["restore_remote_add"] += 1
+            elif kind == "noc_migrate":
+                # copy 前缀：源端保留（base 记账），目标端增副本。
+                replay._apply(tick, target, nbytes)
+                session.bytes += nbytes
+                replay.report.actions["joint_working_copy_add"] = (
+                    replay.report.actions.get("joint_working_copy_add", 0)
+                    + 1)
+            else:
+                # 终审-中2：未知 kind 且有字节 → fail-closed（不得静默
+                # 丢弃账本字节）。
+                fail(f"joint history transfer 出现未知 kind={kind!r}"
+                     f"（session={session_id!r}, bytes={nbytes}）——"
+                     f"joint 重放词表未覆盖，拒绝静默丢弃")
+        if action == "remote-read":
+            grow_tokens = max(0, prefill_context - history_tokens)
+        else:
+            grow_tokens = prefill_context
+        desired = replay._expected_bytes(grow_tokens)
+        if desired > session.bytes:
+            replay._apply(tick, target, desired - session.bytes)
+            session.bytes = desired
+        session.tokens = prefill_context
+        replay.report.actions["prefill_grow"] += 1
+
+    def _joint_decode(self, replay, decision, tick, session_id, token_row,
+                      joint_action) -> None:
+        """R12：joint decode 行——remote-read 工作副本增长基 = input+decode
+        （= final − history）；其余动作 = final_context。P==D 恒同实例。"""
+        target = decision.get("decode_instance_index")
+        session = replay._session(session_id)
+        session.instance = target
+        if joint_action == "remote-read":
+            grow_tokens = max(
+                0, token_row["final_context_tokens"]
+                - token_row["history_tokens_before"])
+        else:
+            grow_tokens = token_row["final_context_tokens"]
+        replay.apply_grow(tick, session_id, target, grow_tokens,
+                          "decode_grow")
+
+    def _joint_completion(self, replay, decision, tick, session_id,
+                          token_row, joint_action) -> None:
+        """R12：joint completion 行——merge 流 + 工作副本释放 + base 恢复。
+
+        merge_transfers：noc 增量回传（+home）、池写回（无本地变化）、
+        home_merge_base_degrade 自降级（home 侧 base 扣减）。工作副本
+        判定（K3）：优先读完成行显式披露的 ``joint_working_copy``（merge
+        前 working_kind 真值；REMOTE 基/跨实例 recompute 无 stash 但确有
+        执行端副本须释放，stay / recompute@home / 新会话本地提交是单驻
+        留不得释放）；字段缺省（旧日志）回退 origin_home 启发式。home
+        侧结算（K2）：基础字节从未离开 home（stash_base 不扣占用账），
+        完成时只**并入增量**——不得再加 base，否则逐轮复利双计。"""
+        session = replay._session(session_id)
+        merge_home = (
+            session.base_instance
+            if session.base_instance is not None
+            else decision.get("origin_home_instance"))
+        # 终审-中1/中2：merge 流预分类（stay 早退前执行——校验不得被
+        # 无工作副本行绕过）。判别：传输摘要恒含 session_id——等于本行
+        # 会话 = 自身流（增量 noc 回 home / 自降级 / 自身增量池写回，均
+        # 无第三方账效果）；不等于 = home 侧空间准备的第三方 victim 逐出
+        # （home_merge_capacity，victim=其它会话，经 apply_evict 入账）。
+        home_add = 0
+        degrade_bytes = 0
+        third_party_evictions = []
+        for transfer in decision.get("merge_transfers") or ():
+            kind = transfer.get("kind")
+            # 四审-低7：缺失字段不得 or 0 静默归零（与"非非负整数即
+            # raise"的声称一致——None 同样 raise）。
+            nbytes = transfer.get("total_bytes")
+            if not isinstance(nbytes, int) or nbytes < 0:
+                fail(f"joint merge transfer total_bytes 必须为非负整数"
+                     f"（session={session_id!r}, kind={kind!r}, "
+                     f"got {nbytes!r}）")
+            if kind == "noc_migrate":
+                home_add += nbytes
+            elif kind == "remote_store":
+                if transfer.get("reason") == "home_merge_base_degrade":
+                    degrade_bytes += nbytes
+                elif transfer.get("session_id") == session_id:
+                    pass  # 自身增量池写回（REMOTE 结算）：无本地变化
+                else:
+                    victim = transfer.get("session_id")
+                    if victim is None or merge_home is None:
+                        fail(f"joint merge 逐出传输无法归类（session="
+                             f"{session_id!r}, transfer={transfer!r}）——"
+                             f"缺 victim session_id 或 merge home")
+                    third_party_evictions.append((victim, nbytes))
+            elif kind in ("local_hit", "remote_load"):
+                continue
+            else:
+                fail(f"joint merge transfer 出现未知 kind={kind!r}"
+                     f"（session={session_id!r}, bytes={nbytes}）——"
+                     f"joint 重放词表未覆盖，拒绝静默丢弃")
+        for victim_session, nbytes in third_party_evictions:
+            if nbytes:
+                replay.apply_evict(
+                    {"session": victim_session, "tick": tick,
+                     "bytes": nbytes, "instance": merge_home},
+                    f"joint_merge:{session_id}")
+        explicit_working_copy = decision.get("joint_working_copy")
+        if explicit_working_copy is not None:
+            had_working_copy = bool(explicit_working_copy)
+        else:
+            origin_home = decision.get("origin_home_instance")
+            had_working_copy = (
+                session.base_instance is not None
+                or (session.instance is not None
+                    and origin_home is not None
+                    and origin_home != session.instance))
+        if not had_working_copy:
+            # stay / recompute@home / 新会话本地提交：单驻留不动。
+            session.tokens = token_row["final_context_tokens"]
+            return
+        # 执行端工作副本释放（primary 全量；REMOTE 基/跨实例 recompute
+        # 无 stash 但同样释放）。
+        if session.instance is not None and session.bytes:
+            replay._apply(tick, session.instance, -session.bytes)
+            replay.report.actions["joint_working_release"] = (
+                replay.report.actions.get("joint_working_release", 0) + 1)
+            replay.report.actions["joint_working_release_bytes"] = (
+                replay.report.actions.get(
+                    "joint_working_release_bytes", 0) + session.bytes)
+        session.bytes = 0
+        session.instance = None
+        if session.base_instance is None:
+            # K3：REMOTE 基会话——基础历史在池 backing、无 home 驻留可
+            # 恢复；增量整份写池（merge_transfers 只有池写回，无
+            # noc_migrate，home_add == 0），会话回到无驻留态。
+            session.tokens = token_row["final_context_tokens"]
+            replay.report.actions["joint_merge_settle"] = (
+                replay.report.actions.get("joint_merge_settle", 0) + 1)
+            return
+        # home 侧 base：自降级扣减（真实离开 home）+ 增量并入（base 从未
+        # 离开，不得重复加回——K2）。
+        base_instance = session.base_instance
+        base_bytes = max(0, session.base_bytes - degrade_bytes)
+        if degrade_bytes:
+            replay._apply(tick, base_instance, -degrade_bytes,
+                          evict_bytes=degrade_bytes)
+            replay.report.actions["joint_merge_base_degrade"] = (
+                replay.report.actions.get("joint_merge_base_degrade", 0) + 1)
+        if home_add:
+            replay._apply(tick, base_instance, home_add)
+        if base_bytes > 0 or home_add > 0:
+            session.instance = base_instance
+            session.bytes = base_bytes + home_add
+        session.base_instance = None
+        session.base_bytes = 0
+        session.tokens = token_row["final_context_tokens"]
+        replay.report.actions["joint_merge_settle"] = (
+            replay.report.actions.get("joint_merge_settle", 0) + 1)
 
     def finish(self) -> WatermarkReplay:
         tokens = self.tokens

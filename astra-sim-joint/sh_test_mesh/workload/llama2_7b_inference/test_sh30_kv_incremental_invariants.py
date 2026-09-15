@@ -40,6 +40,13 @@ def _manager(strict_invariants: bool) -> KVCacheManager:
 
 class IncrementalInvariantTests(unittest.TestCase):
     def test_incremental_and_strict_mutations_stay_equivalent(self) -> None:
+        """F4-c 改写（kimi 复审，2026-09-14）：本用例原驱动跨实例
+        ``move_request_capacity_reservation(0→1)``——joint 仓 M3 钉死
+        decode 于 prefill 实例（红线 #4：跨实例预约移动 fail-closed），
+        该驱动面已从合同中移除。语义意图（增量/严格不变量在**全部合法
+        变更面**上等价）保留：跨实例轮换改走 copy 动作（尾部
+        prepare@copy + merge_back），同实例生命周期覆盖
+        move/move_prefill_to_decode 的同实例分支。"""
         fast = _manager(False)
         strict = _manager(True)
 
@@ -87,12 +94,12 @@ class IncrementalInvariantTests(unittest.TestCase):
         invoke(
             "move_request_capacity_reservation",
             request_id="request",
-            target_instance_index=1,
+            target_instance_index=0,  # M3 钉死：同实例 no-op（跨实例 raise）
         )
         invoke(
             "move_prefill_to_decode",
             session_id="session",
-            target_instance_index=1,
+            target_instance_index=0,
             trigger_request_id="request",
             reservation_request_id="request",
         )
@@ -100,7 +107,7 @@ class IncrementalInvariantTests(unittest.TestCase):
         invoke(
             "expand_decode",
             session_id="session",
-            instance_index=1,
+            instance_index=0,
             final_context_tokens=5,
             trigger_request_id="request",
         )
@@ -129,7 +136,7 @@ class IncrementalInvariantTests(unittest.TestCase):
         invoke(
             "prepare_prefill",
             session_id="session",
-            target_instance_index=1,
+            target_instance_index=0,
             history_tokens=5,
             trigger_request_id="next",
         )

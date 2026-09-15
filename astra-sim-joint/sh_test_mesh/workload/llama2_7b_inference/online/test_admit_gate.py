@@ -61,9 +61,15 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler.hardware = hardware
     scheduler.model = model
     scheduler._decode_task_load_cache = {}
-    # 改法D 状态（__init__ 同款初值）。
+    # 改法D 状态（__init__ 同款初值）。N6+F3+M2（2026-09-14 kimi 复审）：
+    # 重试键改为 KV 纪元 ⊕ 失败候选集（选中 ∪ applicable 实例，冻结于
+    # 失败时刻）纪元的 (kv, ((inst, epoch), ...)) 形态；夹具装配两实例。
+    from online.sh30_online_scheduler import _OnlineInstanceState
+    scheduler.instances = [_OnlineInstanceState(index=0),
+                           _OnlineInstanceState(index=1)]
     scheduler._kv_ledger_epoch = 0
     scheduler._admit_attempt_epoch = {}
+    scheduler._admission_failure_state = {}
     scheduler._admit_gate_verify = False
     scheduler.pending_admissions = deque()
     return scheduler
@@ -135,12 +141,20 @@ class AdmitGateLedgerEpochTest(unittest.TestCase):
         self.scheduler = _make_scheduler()
 
     def _stub(self, results):
-        """results: request_id -> bool（缺省 False）；记录调用序列。"""
+        """results: request_id -> bool（缺省 False）；记录调用序列。失败
+        路径同步留 _last_admit_failure_key（生产语义：失败候选集纪元键，
+        两实例候选集）。"""
         calls = []
 
         def fake_try_admit(runtime, now_ns):
             calls.append(runtime.request_id)
-            return results.get(runtime.request_id, False)
+            if results.get(runtime.request_id, False):
+                return True
+            self.scheduler._last_admit_failure_key = (
+                self.scheduler._kv_ledger_epoch,
+                ((0, self.scheduler.instances[0].ledger_epoch),
+                 (1, self.scheduler.instances[1].ledger_epoch)))
+            return False
 
         self.scheduler._try_admit_request = fake_try_admit
         return calls
@@ -151,28 +165,68 @@ class AdmitGateLedgerEpochTest(unittest.TestCase):
         self.assertEqual(self.scheduler._kv_ledger_epoch, 1)
 
     def test_skip_when_epoch_unchanged(self):
-        """上次失败纪元 == 当前纪元 → 跳过重试（打桩被调即失败）。"""
+        """上次失败键 == 当前键（KV 纪元与候选集纪元均未变）→ 跳过
+        重试（打桩被调即失败）。"""
         r0 = _make_runtime("r0")
         self.scheduler.pending_admissions.append(r0)
         self.scheduler._kv_ledger_epoch = 5
-        self.scheduler._admit_attempt_epoch["r0"] = 5
+        self.scheduler._admit_attempt_epoch["r0"] = (5, ((0, 0), (1, 0)))
         calls = self._stub({})
         self.scheduler._admit_waiting_requests(0)
         self.assertEqual(calls, [])
         self.assertEqual(list(self.scheduler.pending_admissions), [r0])
 
-    def test_retry_after_epoch_bump_and_record(self):
-        """纪元变化 → 放行重试；失败记录新纪元，随后同纪元再跳过。"""
+    def test_instance_epoch_alone_reopens_gate(self):
+        """N6 核心场景：KV 纪元未变但失败**选中**实例的负载纪元迁移 →
+        重开重试门（argmin 换选时机；旧纯 KV 纪元门会错跳过）。"""
         r0 = _make_runtime("r0")
         self.scheduler.pending_admissions.append(r0)
-        self.scheduler._kv_ledger_epoch = 1
-        self.scheduler._admit_attempt_epoch["r0"] = 0
+        self.scheduler._kv_ledger_epoch = 5
+        self.scheduler._admit_attempt_epoch["r0"] = (5, ((0, 0), (1, 0)))
+        self.scheduler.instances[0].ledger_epoch = 1  # 选中实例负载迁移
         calls = self._stub({})
         self.scheduler._admit_waiting_requests(0)
         self.assertEqual(calls, ["r0"])
-        self.assertEqual(self.scheduler._admit_attempt_epoch["r0"], 1)
+        self.assertEqual(
+            self.scheduler._admit_attempt_epoch["r0"], (5, ((0, 1), (1, 0))))
+        # 键稳定后再次 pass：跳过（无自旋）。
+        self.scheduler._admit_waiting_requests(0)
+        self.assertEqual(calls, ["r0"])
+
+    def test_candidate_instance_epoch_alone_reopens_gate(self):
+        """M2 核心场景（kimi 复审）：KV 纪元与选中实例纪元均未变，但
+        失败候选集内**未选中**实例负载迁移（argmin 可能翻转到该可行
+        候选）→ 必须重开重试门；旧"仅选中实例"键会错跳过（时机损失 +
+        SH_ADMIT_GATE_VERIFY 影子断言被合法击穿）。"""
+        r0 = _make_runtime("r0")
+        self.scheduler.pending_admissions.append(r0)
+        self.scheduler._kv_ledger_epoch = 5
+        self.scheduler._admit_attempt_epoch["r0"] = (5, ((0, 0), (1, 0)))
+        self.scheduler.instances[1].ledger_epoch = 2  # 候选实例负载迁移
+        calls = self._stub({})
+        self.scheduler._admit_waiting_requests(0)
+        self.assertEqual(calls, ["r0"])
+        self.assertEqual(
+            self.scheduler._admit_attempt_epoch["r0"], (5, ((0, 0), (1, 2))))
+        # 候选集外实例（不在键内）迁移不重开：键不含实例 2 语义由
+        # _current_retry_key 的冻结集保证（此处两实例全在集内，稳定
+        # 后再跑一次验证无自旋）。
+        self.scheduler._admit_waiting_requests(0)
+        self.assertEqual(calls, ["r0"])
+
+    def test_retry_after_epoch_bump_and_record(self):
+        """KV 纪元变化 → 放行重试；失败记录新键，随后同键再跳过。"""
+        r0 = _make_runtime("r0")
+        self.scheduler.pending_admissions.append(r0)
+        self.scheduler._kv_ledger_epoch = 1
+        self.scheduler._admit_attempt_epoch["r0"] = (0, ((0, 0), (1, 0)))
+        calls = self._stub({})
+        self.scheduler._admit_waiting_requests(0)
+        self.assertEqual(calls, ["r0"])
+        self.assertEqual(
+            self.scheduler._admit_attempt_epoch["r0"], (1, ((0, 0), (1, 0))))
         self.assertEqual(list(self.scheduler.pending_admissions), [r0])
-        # 同纪元第二个 pass：跳过（无新调用）。
+        # 同键第二个 pass：跳过（无新调用）。
         self.scheduler._admit_waiting_requests(0)
         self.assertEqual(calls, ["r0"])
 
@@ -181,7 +235,7 @@ class AdmitGateLedgerEpochTest(unittest.TestCase):
         r0 = _make_runtime("r0")
         self.scheduler.pending_admissions.append(r0)
         self.scheduler._kv_ledger_epoch = 1
-        self.scheduler._admit_attempt_epoch["r0"] = 0
+        self.scheduler._admit_attempt_epoch["r0"] = (0, ((0, 0), (1, 0)))
         self._stub({"r0": True})
         self.scheduler._admit_waiting_requests(0)
         self.assertEqual(list(self.scheduler.pending_admissions), [])
@@ -189,13 +243,13 @@ class AdmitGateLedgerEpochTest(unittest.TestCase):
         self.assertEqual(self.scheduler._admit_attempt_epoch, {})
 
     def test_blocked_fifo_order_preserved(self):
-        """混合纪元的 blocked 批重排后 FIFO 顺序不变。"""
+        """混合键的 blocked 批重排后 FIFO 顺序不变。"""
         r0, r1, r2 = (_make_runtime(i) for i in ("r0", "r1", "r2"))
         for r in (r0, r1, r2):
             self.scheduler.pending_admissions.append(r)
         self.scheduler._kv_ledger_epoch = 2
-        self.scheduler._admit_attempt_epoch["r0"] = 2  # 跳过
-        self.scheduler._admit_attempt_epoch["r1"] = 0  # 重试（失败）
+        self.scheduler._admit_attempt_epoch["r0"] = (2, ((0, 0), (1, 0)))  # 跳过
+        self.scheduler._admit_attempt_epoch["r1"] = (0, ((0, 0), (1, 0)))  # 重试（失败）
         # r2 无记录 → 重试（失败）
         calls = self._stub({})
         self.scheduler._admit_waiting_requests(0)
@@ -209,12 +263,13 @@ class AdmitGateLedgerEpochTest(unittest.TestCase):
         r0 = _make_runtime("r0")
         self.scheduler.pending_admissions.append(r0)
         self.scheduler._kv_ledger_epoch = 3
-        self.scheduler._admit_attempt_epoch["r0"] = 3
+        self.scheduler._admit_attempt_epoch["r0"] = (3, ((0, 0), (1, 0)))
         self.scheduler._admit_gate_verify = True
         calls = self._stub({"r0": False})
         self.scheduler._admit_waiting_requests(0)
         self.assertEqual(calls, ["r0"])  # 完整评估（零收益、全检查）
-        self.assertEqual(self.scheduler._admit_attempt_epoch["r0"], 3)
+        self.assertEqual(
+            self.scheduler._admit_attempt_epoch["r0"], (3, ((0, 0), (1, 0))))
         self.assertEqual(list(self.scheduler.pending_admissions), [r0])
         # 违例形态：门判跳过的重试居然成功 → RuntimeError。
         self.scheduler.pending_admissions = deque([r0])

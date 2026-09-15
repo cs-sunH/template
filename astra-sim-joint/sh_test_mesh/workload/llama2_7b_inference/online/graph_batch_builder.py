@@ -432,20 +432,39 @@ class GraphBatchBuilder:
         self.batch_first_step = False
 
     def _collect(self, marker: dict) -> None:
+        # R6-2（2026-09-14）：逐秩边审计**代码内默认常开**（SH_EDGE_AUDIT=0
+        # 显式关闭）。O(E)/批只读校验：每条 parent 边的 from/to 必须是本
+        # rank 自身 id 空间内 from ≤ to 的既有节点（悬挂/前向引用立即带
+        # 节点名 fail-closed）——把 D3 类静默错连提前到 Python 侧。跨
+        # rank 的 id 串用（id 数值碰撞于两个计数器空间）由 R5 的结构性
+        # 重建 + source_ranks 断言承担，本审计不重复覆盖。
+        audit_enabled = os.environ.get("SH_EDGE_AUDIT", "1") != "0"
         for rank, builder in self.builders.items():
             node_mark, edge_mark = marker[rank]
-            nodes = builder.nodes
             edges = builder.edges
             # 正常路径的 marker 为 0，直接 extend 避免临时 slice；非零
             # marker 仅保留本次新增尾部。所有 _mark() 都在同一发射调用内
             # 被单次 _collect() 消费，故旧前缀已在先前批次交付，可立即
             # clear 释放对节点/边 dict 的最后一层 builder 引用。
-            if len(nodes) > node_mark:
+            if len(nodes := builder.nodes) > node_mark:
                 self.batch["_touched_ranks"].add(int(rank))
             self.batch["nodes"].extend(
                 nodes if node_mark == 0 else nodes[node_mark:])
             self.batch["parent_edges"].extend(
                 edges if edge_mark == 0 else edges[edge_mark:])
+            if audit_enabled and edge_mark < len(edges):
+                next_id = builder.next_id
+                for edge in edges[edge_mark:]:
+                    source, target = edge["from"], edge["to"]
+                    if not (
+                        isinstance(source, int) and 0 <= source < next_id
+                        and isinstance(target, int) and 0 <= target < next_id
+                        and source <= target
+                    ):
+                        raise RuntimeError(
+                            "edge audit failure on rank {}: {} (ids must "
+                            "reference existing earlier nodes, from <= to; "
+                            "next_id={})".format(rank, edge, next_id))
             nodes.clear()
             edges.clear()
 
@@ -899,10 +918,14 @@ class GraphBatchBuilder:
     def emit_completion_batch(self, request_plan: dict) -> dict:
         """completion 批（DECODE_COMPLETION/REQUEST_COMPLETE 边界）：
         completion_evictions + 下一 turn interval gate 的依赖登记。
-        返回空成员（无 watch）。"""
+        R11（2026-09-14）：merge 流存在时返回 merge 尾标记节点表
+        （{"merge_done_members": {rank: id}, "has_merge": bool}）——调度器
+        据此注册 merge-done watch（到达重锚 merge_done）并把下一轮
+        interval gate 前递依赖挂到标记上；无 merge 流返回 has_merge=False
+        （行为与改造前一致）。"""
         self._set_context(request_plan, "completion", 1)
         marker = self._mark()
-        self._emit_completion(request_plan)
+        merge_info = self._emit_completion(request_plan)
         self._collect(marker)
         # M4 核销即删（2026-08-23）：completion 批是本请求图发射的终点
         # （seg2 块末在 _emit_completion 内消费、action 序号此后无读者，
@@ -910,7 +933,7 @@ class GraphBatchBuilder:
         # 完成后即死重，当场弹出（下一 turn 是不同 request_id）。
         self._block_ends.pop(request_plan["request_id"], None)
         self._action_seq.pop(request_plan["request_id"], None)
-        return {}
+        return merge_info
 
     def _set_context(self, request_plan: dict, stage: str,
                      generation: int) -> None:
@@ -1030,8 +1053,10 @@ class GraphBatchBuilder:
           持久 (rank,id) 解析）；
         - 跨边缘 rank：复用 _emit_transfer_trigger 的 1B p2p 中继模式
           （store 边缘 arm 后发 1B；restore 边缘收 1B，回迁链链其后）——
-          桥拒绝跨 rank 直边，1B p2p 是协议内唯一合法载体。S3 仅 REMOTE
-          全量回迁（可跨实例）可达跨缘；PARTIAL 钉扎同实例同 rank 必同缘。
+          桥拒绝跨 rank 直边，1B p2p 是协议内唯一合法载体。R1' 去钉扎
+          （2026-09-14）后 REMOTE 全量回迁与 **PARTIAL 跨实例 copy 的
+          后缀池恢复**均可达跨缘（后缀 store 在 home 边缘、restore 在
+          执行实例边缘；1B 中继路径两用）。
 
         store 早已物理完成时补边即刻满足（懒处理，无需判在飞）。消费即
         清：该会话首次回迁的池读已排序于全部在飞 store 之后，后续回迁读
@@ -1081,6 +1106,120 @@ class GraphBatchBuilder:
         for rank, store_ids in same_edge_arms.items():
             for node_id in store_ids:
                 self.builders[rank].arm_dependency(node_id)
+
+    def _rebuild_interval_gate_on_target(
+        self, pending_gate, request_plan: dict,
+    ):
+        """R5：把跨实例的 interval gate 结构性重建到本轮 prefill 实例。
+
+        每相对位 rank 对：源 rank arm 原 gate 后发 1B p2p（源 gate 触发
+        后启动）→ 目标 rank 收 1B → 目标 rank 发射重建 timer 节点
+        （runtime_ns=0，仅依赖该 recv）。返回源实例 = prefill 实例的新
+        PendingHistoryGate，五个消费点（history_evictions 触发门 /
+        no-transfer arm / local_hit arm / partial 恢复 arm / noc 源端
+        触发）全部按同实例语义转正。孤儿 timer 节点 O(跨实例轮次 ×
+        TP)、runtime_ns=0，可忽略。"""
+        source_group = self.group_by_index[
+            pending_gate.source_instance_index]
+        prefill_group_ranks = self.group_by_index[
+            request_plan["prefill_instance_index"]].ranks
+        if len(source_group.ranks) != len(prefill_group_ranks):
+            raise RuntimeError(
+                "cross-instance gate rebuild requires equal TP sizes")
+        prefix = _prefix_of(request_plan)
+        following_request = self.config.request_queue[
+            request_plan["queue_index"]]
+        interval = following_request.inter_request_interval_ns
+        if interval is None:
+            raise RuntimeError("later request lost its inter-request interval")
+        # K5（kimi 复审，2026-09-14）：interval + hbm_wait_ns 为任意 ns
+        # 粒度，而 timer_gate 的离线同构校验要求整 µs（% 1000 != 0 即
+        # raise）——跨实例轮换 + 非零准入等待（恰为 R5/R2 目标工况）会
+        # 确定性崩溃。对齐 turn-0 先例（本文件 arrival gate）做 µs 下
+        # 取整：duration 不进节点（runtime_ns=0、不存储），仅驱动校验
+        # 与 0 跳过，下取整对既有通过路径零影响。
+        duration = interval + request_plan.get("hbm_wait_ns", 0)
+        duration -= duration % 1000
+        rebuilt_gates = []
+        for relative_index, (source_rank, target_rank) in enumerate(
+                zip(source_group.ranks, prefill_group_ranks)):
+            source_gate = pending_gate.timer_gates[relative_index]
+            if source_gate is None:
+                raise RuntimeError(
+                    "cross-instance gate rebuild found a missing source "
+                    "gate node (rank {})".format(source_rank))
+            relay_tag = self.tag_allocator.take()
+            self.builders[source_rank].set_context(
+                request_plan["request_id"], "prefill", 0)
+            self.builders[source_rank].arm_dependency(source_gate)
+            self.builders[source_rank].comm_send(
+                f"{prefix}_gate_relay_s{source_rank}_r{target_rank}",
+                src=source_rank,
+                dst=target_rank,
+                comm_size=1,
+                comm_tag=relay_tag,
+            )
+            self.builders[target_rank].set_context(
+                request_plan["request_id"], "prefill", 0)
+            self.builders[target_rank].comm_recv(
+                f"{prefix}_gate_relay_s{source_rank}_r{target_rank}",
+                src=source_rank,
+                dst=target_rank,
+                comm_size=1,
+                comm_tag=relay_tag,
+            )
+            recv_node_id = self.builders[target_rank].previous_id
+            rebuilt_gates.append(self.builders[target_rank].timer_gate(
+                f"{prefix}_interval_gate_rebuilt_rank{target_rank}",
+                duration,
+                after_node_id=recv_node_id,
+            ))
+        return PendingHistoryGate(
+            source_instance_index=request_plan["prefill_instance_index"],
+            timer_gates=tuple(rebuilt_gates),
+            location=pending_gate.location,
+        )
+
+    def emit_eviction_side_branch(self, transfers, tick: int) -> None:
+        """R2/D7（2026-09-14）：准入事务失败路径上**已提交**逐出的图侧
+        发射（旁路支链、无触发门——与 prefill_evictions 的发射形态同构；
+        失败请求不入队，逐出是合法容量释放，其池写必须进图，否则 C++
+        水位盲区 + pending store 不登记）。"""
+        transfers = tuple(transfers or ())
+        if not transfers:
+            return
+        marker = self._mark()
+        first = transfers[0]
+        context_plan = {
+            "request_id": first.trigger_request_id,
+            "session_id": first.session_id,
+        }
+        self._set_context(context_plan, "prefill", 0)
+        action_state = self._action_seq.setdefault(
+            first.trigger_request_id, [0])
+
+        def emit_failed_admission_evictions() -> None:
+            for transfer in transfers:
+                action_name = (
+                    f"evict_{sanitize_node_prefix(transfer.trigger_request_id)}"
+                    f"_action{action_state[0]:03d}_"
+                    f"{sanitize_node_prefix(transfer.session_id)}_{transfer.kind}"
+                )
+                record = _emit_kv_transfer(
+                    config=self.config,
+                    builders=self.builders,
+                    group_by_index=self.group_by_index,
+                    tag_allocator=self.tag_allocator,
+                    transfer=transfer,
+                    action_name=action_name,
+                )
+                record["sequence_stage"] = "failed_admission_evictions"
+                record["action_sequence"] = action_state[0]
+                action_state[0] += 1
+                self._register_store_tails(transfer, record)
+
+        self._emit_side_branch(emit_failed_admission_evictions)
+        self._collect(marker)
 
     def _emit_admission_actions(self, request_plan: dict) -> None:
         """turn-gates / history / prefill 准入动作的在线发射
@@ -1173,6 +1312,26 @@ class GraphBatchBuilder:
                     "arrival/history gate")
             self.pending_request_by_session.pop(request_plan["session_id"],
                                                 None)
+            # R5（D3，2026-09-14）：跨实例轮换的 interval gate 重建。上轮
+            # gate 节点在源执行实例的 rank id 空间；本轮 prefill 实例不同
+            # 时直接 arm 会形成跨实例悬空依赖（id 数值在目标空间碰撞 =
+            # 静默错连；不碰撞 = C++ 拒绝跨 rank 边，冒烟尺度起即不稳）。
+            # 重建 = 目标实例 ranks 上的结构性 timer 节点（duration 沿用
+            # 原值、runtime_ns=0——时序因果由 C++ arrival calendar 承载，
+            # 重建只迁移结构依赖），逐相对位经 1B p2p 中继依赖源 gate。
+            # 同实例路径逐字节不变；保留 source_ranks == prefill_ranks
+            # 断言作 backstop。
+            if (pending_gate.source_instance_index
+                    != request_plan["prefill_instance_index"]):
+                pending_gate = self._rebuild_interval_gate_on_target(
+                    pending_gate, request_plan)
+            else:
+                source_group = self.group_by_index[
+                    pending_gate.source_instance_index]
+                if source_group.ranks != prefill_group.ranks:
+                    raise RuntimeError(
+                        "interval gate ranks do not match the Prefill "
+                        "instance ranks (backstop assertion)")
         # sh_3.0 裁决（登记合同⑦/§13，两模式统一）：pending-gate location
         # 是 writer 侧的派生缓存（历史静态实现曾用全局 KV 因果预排序
         # 保持与 planner 一致）；当前在线路径以 kv_manager 权威账本/图依赖为准，
@@ -1433,9 +1592,27 @@ class GraphBatchBuilder:
         # 的 seg2 块末；store 尾部登记入 pending_store_tails——下一轮对本
         # 会话的池读/回迁经前递补边等待写入完成（合并成本进入下一轮
         # 数据等待；所有动作/八组合一致处理）。
-        for transfer in request_plan.get("merge_transfers") or ():
+        merge_transfers = list(request_plan.get("merge_transfers") or ())
+        for transfer in merge_transfers:
             record = emit_transfer(transfer, "merge_transfers")
             self._register_store_tails(transfer, record)
+        # R11(ii)：merge 尾标记（每 decode rank 1 个小 COMP 节点，链在
+        # 本 rank 的 merge 传输链之后）——下一轮 interval gate 的前递
+        # 依赖（消除"下一轮物理消费尚未落地的 KV"）与 merge-done watch
+        # 的成员锚点。
+        merge_done_members = {}
+        if merge_transfers:
+            # 标记节点用 watch 命名空间上下文（batch_train_merge_<rid> /
+            # prefill / 0——C++ 提交预检要求 watch 成员节点的
+            # request/stage/generation 与注册一致，哨兵标记同款）。
+            watch_context_id = (
+                "batch_train_merge_" + request_plan["request_id"])
+            for rank in decode_group.ranks:
+                self.builders[rank].set_context(
+                    watch_context_id, "prefill", 0)
+                self.builders[rank].comp(
+                    f"{prefix}_merge_done_rank{rank}", 1, 1)
+                merge_done_members[rank] = self.builders[rank].previous_id
 
         for transfer in request_plan["completion_evictions"]:
             emit_transfer(transfer, "completion_evictions")
@@ -1459,15 +1636,26 @@ class GraphBatchBuilder:
             if interval is None:
                 raise RuntimeError(
                     "later request lost its inter-request interval")
+            # R11(ii)：下一轮 interval gate 前递依赖 merge 尾标记（本会话
+            # 增量落地之前下一轮不得物理消费）；无 merge 流时保持 seg2
+            # 块末（与改造前一致）。
+            gate_anchor_by_rank = (
+                merge_done_members if merge_done_members else
+                {rank: decode_completion_nodes[relative_index]
+                 for relative_index, rank in enumerate(decode_group.ranks)}
+            )
             timers = tuple(
                 builders[rank].timer_gate(
                     f"q{following['queue_index']:04d}_"
                     f"{sanitize_node_prefix(following['request_id'])}_"
                     f"history_rank{rank}_interval_gate",
-                    interval + following.get("hbm_wait_ns", 0),
-                    after_node_id=decode_completion_nodes[relative_index],
+                    # §9-低6：同 K5 族——interval + hbm_wait 任意 ns 粒度
+                    # 须 µs 下取整（timer_gate 离线同构校验；现行输入恰在
+                    # µs 网格上惰性通过，非 µs 对齐输入会确定性崩溃）。
+                    (interval + following.get("hbm_wait_ns", 0)) // 1000 * 1000,
+                    after_node_id=gate_anchor_by_rank[rank],
                 )
-                for relative_index, rank in enumerate(decode_group.ranks)
+                for rank in decode_group.ranks
             )
             completion_location = request_plan.get(
                 "kv_location_after_completion")
@@ -1496,6 +1684,10 @@ class GraphBatchBuilder:
             # 维持，不发任何传输。残余：终结完成之后才被逐出的"永不再
             # 来"会话条目驻留至 run 结束（O(会话数) 上界，无正确性影响）。
             self.pending_store_tails.pop(request_plan["session_id"], None)
+        return {
+            "merge_done_members": merge_done_members,
+            "has_merge": bool(merge_done_members),
+        }
 
     # ------------------------------------------------------------- 属性 --
 

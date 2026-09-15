@@ -22,6 +22,7 @@ from face_scheduler import (  # noqa: E402
     FaceRooflineEstimate,
     InstanceTaskLoadSnapshot,
     KVAllocator,
+    KVCapacityError,
     KVCacheManager,
     KVTransfer,
     KVTransferShard,
@@ -758,13 +759,16 @@ class FaceSchedulerTests(unittest.TestCase):
             KVCacheManager.PARTIAL_HBM_REMOTE)
 
     def test_ensure_capacity_records_deep_gap_events_before_failing(self) -> None:
-        # D4 (2026-09-05): 逐无可循且结构不可行（需求 > 空实例容量）→
-        # fail-closed raise 前逐 rank 记入 deep_gap_events，raise 消息带
-        # 计数。手算：空实例每 rank 剩余 = 200 - 20(权重) = 180 < 400。
+        # D4 (2026-09-05) + K6 (2026-09-14 kimi 复审)：逐无可循且结构不可行
+        # （需求 > 空实例容量）→ fail-closed raise 携带逐 rank 缺口记录
+        # （deep_gap_records）；raise 时**不落** deep_gap_events 台账（joint
+        # 下容量类失败有多条可恢复捕获路径，落账 = 确认终态时经
+        # commit_deep_gap_records 提交）。手算：空实例每 rank 剩余 =
+        # 200 - 20(权重) = 180 < 400。
         _, _, _, manager = self._tiny_kv_manager(
             capacity_bytes=200,
         )
-        with self.assertRaisesRegex(ValueError, "deep_gap_events=2"):
+        with self.assertRaises(ValueError) as ctx:
             manager._ensure_capacity(
                 0,
                 (400, 400),
@@ -772,19 +776,26 @@ class FaceSchedulerTests(unittest.TestCase):
                 reason="deep_gap_probe",
                 trigger_request_id="deep_gap_trigger",
             )
+        self.assertIsInstance(ctx.exception, KVCapacityError)
+        records = ctx.exception.deep_gap_records
+        self.assertEqual(len(records), 2)
+        self.assertEqual([record["rank"] for record in records], [0, 1])
+        for record in records:
+            self.assertEqual(record["instance_index"], 0)
+            self.assertEqual(record["phase"], "prefill")
+            self.assertEqual(record["reason"], "deep_gap_probe")
+            self.assertEqual(record["trigger_request_id"], "deep_gap_trigger")
+            self.assertEqual(record["remaining_bytes"], 180)
+            self.assertEqual(record["required_bytes"], 400)
+            self.assertEqual(record["gap_bytes"], 220)
+        # 可恢复路径不落账；确认终态提交后台账与旧口径逐字段一致。
+        self.assertEqual(manager.deep_gap_events, [])
+        manager.commit_deep_gap_records(records)
         self.assertEqual(len(manager.deep_gap_events), 2)
         self.assertEqual(
             [event["rank"] for event in manager.deep_gap_events],
             [0, 1],
         )
-        for event in manager.deep_gap_events:
-            self.assertEqual(event["instance_index"], 0)
-            self.assertEqual(event["phase"], "prefill")
-            self.assertEqual(event["reason"], "deep_gap_probe")
-            self.assertEqual(event["trigger_request_id"], "deep_gap_trigger")
-            self.assertEqual(event["remaining_bytes"], 180)
-            self.assertEqual(event["required_bytes"], 400)
-            self.assertEqual(event["gap_bytes"], 220)
 
     def test_mark_complete_records_next_request_type(self) -> None:
         # The type passed to mark_complete lands on the session state; it is

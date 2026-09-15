@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 # --------------------------------------------------------------------------
@@ -130,6 +131,30 @@ def _write_jsonl(path: str, rows: list) -> None:
             output.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def dump_joint_kv_ledgers(scheduler, path: str) -> None:
+    """R4/K6 台账侧车落盘（merge_degrade + deep_gap）。
+
+    终审-中4：由 main 的 try/finally 全路径调用（RED run 异常退出也落
+    终态缺口现场——deep_gap 落账 = run 终止的 K6 语义）。四审-低8：
+    原子写（tmp + os.replace）——满盘/SIGKILL 半截文件触发面消除。
+    诊断通道尽力而为：落盘自身失败只打印栈、不得改写主路径退出语义。
+    """
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as sink:
+            json.dump({
+                "merge_degrade_events": [
+                    dict(event) for event in
+                    scheduler.kv_manager.merge_degrade_events],
+                "deep_gap_events": [
+                    dict(event) for event in
+                    scheduler.kv_manager.deep_gap_events],
+            }, sink, indent=1, sort_keys=True)
+        os.replace(tmp_path, path)
+    except Exception:  # noqa: BLE001 -- 诊断通道不得阻断主异常路径
+        traceback.print_exc()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_3.0 online decision service")
     parser.add_argument("--bridge-dir", required=True,
@@ -228,15 +253,25 @@ def main(argv=None) -> int:
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     server = BridgeServer(
         args.bridge_dir, canonical_request_producer=True)
-    result = server.serve_forever(
-        scheduler.on_decision_batch,
-        on_commit_ack=scheduler.on_commit_ack,
-    )
-    if result != 0:
-        raise RuntimeError("serve_forever returned {}".format(result))
+    # 终审-中4（kimi 三审）+ 四审-低3/低8：joint 台账侧车改 **try/finally
+    # 全路径落盘**（K6 语义"deep_gap 落账 = run 终止"——RED run 经异常
+    # 退出也须落终态缺口现场）；落盘函数为模块级（可单测固化）且
+    # **原子写**（tmp + os.replace——半截 JSON 属响亮失败而非静默，此处
+    # 再消除触发面）。
+    _ledgers_path = os.path.join(
+        args.bridge_dir, "joint_kv_ledgers.json")
+    try:
+        result = server.serve_forever(
+            scheduler.on_decision_batch,
+            on_commit_ack=scheduler.on_commit_ack,
+        )
+        if result != 0:
+            raise RuntimeError("serve_forever returned {}".format(result))
 
-    # 运行结束校验(fail-closed):
-    scheduler.verify_run_end()
+        # 运行结束校验(fail-closed):
+        scheduler.verify_run_end()
+    finally:
+        dump_joint_kv_ledgers(scheduler, _ledgers_path)
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)——M3 起已在 build_graph_batch 逐行流式
     # 写出,此处不再结束一次性写出。
@@ -316,6 +351,8 @@ def main(argv=None) -> int:
     server.discard_per_request_stats()
 
     # online_decision_log / train_ledger 已由 _JsonlSink 逐行落盘(M3)。
+    # joint 台账侧车已改 serve/verify 的 try/finally 全路径落盘（终审-
+    # 中4：RED run 异常退出也落终态缺口现场），此处不再重复 dump。
     if args.sensing:
         # 阶段 3:分层账本导出(结束总账核对与差异报告输入;感知关闭的
         # 正式跑不经过这里)。B3:sensing_query_log 已流式落盘,不再结束

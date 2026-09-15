@@ -112,25 +112,41 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
 * **home（§2.1）**：每 session 持 `home_instance`（首轮发射建立）；
   异地执行（copy/recompute/remote-read）与逐出**都不改变 home**。
 * **执行与增长（§3.1）**：新 KV（prefill 输入 + 实际 decode）在执行
-  instance 产生；准入只预约已知输入（history+input），decode 按列车
-  核销的实际消费**因果增长**（每次增长经同一 T+E 释放机制准备空间；
-  不提前按真实最终 decode 长度预约——`final_context_tokens` 不进任何
-  决策输入）。
+  instance 产生；准入预约**动作感知足迹**（R1'：stay/copy/recompute
+  按 history+input 整份、remote-read 仅 input 增量——单源
+  `joint_reservation_context_tokens` 贯穿可行性/预约/物理可行性三处；
+  无 PARTIAL 驻留钉扎：容量只影响所需字节与驱逐等待计价，不做候选
+  掩码），decode 按列车核销的实际消费**因果增长**（每次增长经同一
+  T+E 释放机制准备空间；容量不足时进入**停滞/唤醒**（R14）：会话
+  暂缓后续列车参与，容量释放（KV 纪元 ⊕ 实例纪元重试键）后唤醒，
+  等待如实计入 E2E，全停滞死锁由守卫显式 fail-closed；不提前按真实
+  最终 decode 长度预约——`final_context_tokens` 不进任何决策输入）。
 * **合并（§2.2/§3.2）**：`merge_back` 在完成处理时把新增量归并回
   origin_home——基础 LOCAL 的增量前缀经 NoC 回传（home 侧空间经 T+E
-  真实准备，不认为写回免费）；基础 PARTIAL 的前缀部分回传 + 后缀部分
-  写回池 backing；基础 REMOTE 的整份增量写回池。执行端工作副本（含
-  copy 的历史复份/重算历史复份）释放，不自动形成永久第二份历史；恰好
-  归并一次（`mark_complete` 拒绝未合并的工作副本——service_done 位于
-  merge_done 之后）。
+  真实准备；容量不足时本会话基础前缀逐层**自降级**（R4：受限 victim
+  视图经 layer_policy 的自我释放独立事务——不经 victim 池、不触碰
+  其他会话；k=0 兜底落入 REMOTE 归并，永不失败；降级事件入
+  `merge_degrade_events` 台账））；基础 PARTIAL 的前缀部分回传 +
+  后缀部分写回池 backing；基础 REMOTE 的整份增量写回池。执行端工作
+  副本（含 copy 的历史复份）释放，不自动形成永久第二份历史；恰好
+  归并一次由 `last_merged_request_id` 版本键断言保证（`mark_complete`
+  拒绝未合并的工作副本——service_done 位于 merge_done 之后，**到达
+  时序同样重锚 merge_done**（R11）：下一轮 alarm = merge 尾标记完成
+  + interval，下一轮 interval gate 前递依赖 merge 尾标记节点）。
 * **动作语义（§2.2 表）**：stay=本地命中/部分恢复；copy=基础历史复制
-  为工作副本（前缀 NoC + 缺失后缀池恢复）；recompute=目标重算必要历史
-  （物理 prefill 工作折入 history token，span 基从 0 起步）；remote-
-  read=基础历史留 home，执行端仅驻留新增量 KV。
+  为工作副本（前缀 NoC + 缺失后缀池恢复）；recompute=**只重算缺失
+  区间**（R13：@驻留目标复用权威前缀、仅物化缺失后缀层（span 基 =
+  H，recompute@home 与 stay 同构本地提交、merge 零流量）；@异地/
+  REMOTE 基础整份重算（span 基 = 0））；remote-read=基础历史留
+  home，执行端仅驻留新增量 KV——**适用性边界（N1(a) 裁定）**：要求
+  基础历史全层驻留（LOCAL）；PARTIAL 的池后缀无"前缀 home + 后缀
+  池"混合读流原语（后端能力边界，非 joint 理论排除），PARTIAL 会话
+  跨实例服务走 copy。
 * **逐出（§4/§5.6）**：T 定类别/对象序（`eviction_class_order`），E
   定层数（`LayerEvictionPolicy.plan_release`，只读计划、提交前复核）；
   逐 rank 缺口检查（不用实例汇总掩盖单 rank 超容）；deep-gap 台账
-  fail-closed 沿用基底 D4。
+  fail-closed 沿用基底 D4（准入/merge/decode 语境按 N3' 类型化
+  `KVCapacityError` 分别转延迟/自降级/停滞，合同类异常原样上抛）。
 
 ## 3. 状态披露（《设计方案》§5.6/§8：已设计/已实现/已验证分开陈述）
 
@@ -138,13 +154,13 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
 | --- | --- | --- |
 | T 开关（typed/lru） | 已实现＋单测验证 | 类别严格序、满足即停、未知类别 fallback 披露 |
 | E：minimal_layer_groups / legacy_half | 已实现＋单测验证 | legacy 与基底逐字节等价（既有测试回归通过） |
-| E：adaptive（k_hide） | **公式＋计划已实现、已单测验证（解析例 1/17/25）；运行期事件递推预测器未实现** | 当前 r_j/c_j 为均匀层解析模型（池速率/roofline 派生 + 在线输入均值）；正式预测器的共享资源逐事件递推（§5.2 末段）为后续项 |
-| J：选择与代价模型 | 已实现＋单测验证 | 解析近似代价（关键路径合成、聚合链路除数、因果时域估计）；无 oracle（`RequestView` 结构性不接受 decode_length/final_context_tokens） |
-| home/merge 账本事务 | 已实现＋单测验证 | 增量恰好归并一次、无双份驻留、home 保持 |
-| remote-read 执行流 | **v1 已实现（保守口径）；逐迭代 credit 交错流未实现** | v1 = drain 边界合成读流（home→exec 真实 NoC 字节流，总量=剩余步数×全上下文 KV，列车 readiness barrier 门控列车体）——读不与计算重叠，保守方向 |
-| merge 物理流 | 已实现 | 完成批发射真实回传/池写回流；下一轮数据准备经 store-tail 前递补偿等待（合并成本进入下一轮数据等待；全部动作/八组合一致处理） |
+| E：adaptive（k_hide） | **公式＋计划已实现、已单测验证（解析例 1/17/25）；运行期事件递推预测器未实现** | 当前 r_j/c_j 为均匀层解析模型（r_j 按池端口仲裁份额后的有效速率（P1，R15-3）+ roofline 派生 + 在线输入均值）；正式预测器的共享资源逐事件递推（§5.2 末段）为后续项 |
+| J：选择与代价模型 | 已实现＋单测验证 | 解析近似代价（关键路径合成、因果时域估计）；**在线反馈通道已接线（R15，2026-09-14）**：链路流登记表按逐 shard 全路径登记/完成事件注销（F-B 并集瓶颈除数）、池端口仲裁份额（含 E 内核 r_j，P1）、ServiceFactors EWMA（P3 α=1−exp(−Δt/τ) 时间衰减；transfer 因子保留接口位——节点级传输完成遥测未交付，传输争用在线修正由除数通道承担；样本纯度排除 joiner 迁移/partial 恢复/copy 门控传输/remote-read 读流列车——复审 M5）；decode 负载标定在线化（N12：session 均值 → run 均值 → 冷启动 1，全 trace 均值常数不再进决策输入；估计器版本入快照缓存失效键——复审 M3）；merge 段增量计价（复审 K4：input + 因果 decode 增长，不随基础历史膨胀；REMOTE 基走池端口口径——自查 C）；准入重试键 = KV 纪元 ⊕ 失败候选集纪元（复审 M2，R2.5 口径）；无 oracle（`RequestView` 结构性不接受 decode_length/final_context_tokens） |
+| home/merge 账本事务 | 已实现＋单测验证 | 增量恰好归并一次（版本键断言）、无双份驻留、home 保持；R4 自降级 + R11 service_done 重锚 merge_done；容量缺口台账落账边界 = 确认终态（复审 K6：可恢复失败随 `KVCapacityError.deep_gap_records` 携带，死锁守卫/降级耗尽才提交；run 末导 `joint_kv_ledgers.json` 侧车含 merge_degrade/deep_gap 两台账）；decode 停滞死锁守卫逃逸条件覆盖全部事件源（pending_decode_ready、在途 merge watch、到达堆、未到达请求——EOF 终态全停滞才触发，复审 K1 + 自查 A）；逐列车 decode 增长逐出三路进图（旁路支链 + rid#decode 流登记，自查 D——池写不再免费） |
+| remote-read 执行流 | **v1 已实现（保守口径）；逐迭代 credit 交错流未实现** | v1 = drain 边界合成读流（home→exec 真实 NoC 字节流，总量=剩余步数×全上下文 KV，列车 readiness barrier 门控列车体）——读不与计算重叠，保守方向；计价基数含 input + 在线 decode 增长（N11，因果可见；执行侧终态上下文为后端真值不进决策）；适用性要求基础 LOCAL（N1(a)，见上"动作语义"） |
+| merge 物理流 | 已实现 | 完成批发射真实回传/池写回流 + merge 尾标记节点（watch 送达后重锚下一轮到达）；下一轮数据准备经 store-tail 前递补偿等待（合并成本进入下一轮数据等待；全部动作/八组合一致处理） |
 | 逐层恢复与 prefill 重叠 | 未实现（列车级恢复门保守化，沿基底口径） | §5.1 的逐层交错恢复为后续项；k_hide 目标在保守执行下仍约束保留层数 |
-| SLO 水印对 joint 的口径 | 已登记（部分覆盖） | slo_tools 三工具已登记 astra-sim-joint（S3 基线映射 + joint_admission 审计行跳过；九步后处理全 ok、hbm 三件产物落盘）；joint 专属事件（merge 回传/工作副本释放）未入水印重放词表——home 低估/执行端高估，逐 rank 判决需 kv_delta_journal 权威层（本仓暂不产出，同 S3）；见 PROVENANCE 偏差 SLO-JOINT-CALIBER |
+| SLO 水印对 joint 的口径 | 已登记（joint 词表已扩，R12） | slo_tools 三工具已登记 astra-sim-joint；水印重放词表已扩 joint 专属事件（merge 增量回传/池写回/home_merge_base_degrade 自降级/跨实例工作副本释放——SessionState base/working 双驻留记账；决策行携带 joint_action/history_transfers/重算口径字段；完成行显式披露 `joint_working_copy` 真值——复审 K3；home 侧结算只并入增量、base 不双计——复审 K2），"home 低估/执行端高估"口径缺口消除；决策日志重放仍为上界口径（逐 rank 判决需 kv_delta_journal 权威层，本仓暂不产出，同 S3） |
 | 三机制消融/外部对照实验 | 未运行 | 本次交付为仓库构建＋单元级验证；仿真规模实验按另行登记的有限计划进行（§8 第 6 步） |
 
 ## 4. 快速开始（构建与运行入口沿用基底）
@@ -195,8 +211,11 @@ bash sh_test_mesh/run_scripts/clean_test_records.sh && bash sh_test_mesh/run_scr
 cd sh_test_mesh/workload/llama2_7b_inference
 python3 -m pytest joint/ test_face_scheduler.py \
     test_sh30_kv_incremental_invariants.py online/ -q
-# 交付基线：152 passed + 7 subtests（含基底守恒/结构测试的 joint 语义
-# 更新版；绑定已退役 SH30_ABLATION 语义的 test_ablation_switch.py 已删）。
+# 交付基线：289 passed + 1 skipped + 7 subtests（含基底守恒/结构测试的
+# joint 语义更新版、kimi 复审+终审+四审修复批 test_joint_review2_fixes.py
+# 31 用例；
+# 绑定已退役 SH30_ABLATION 语义的 test_ablation_switch.py 已删。全仓口径
+# 另含 slo_tools 三文件收集错误——基底固有，与本仓改动无关）。
 ```
 
 定向验收覆盖（`joint/test_joint_mechanisms.py` 对应《设计方案》§8 表）：
@@ -210,9 +229,13 @@ python3 -m pytest joint/ test_face_scheduler.py \
 legacy_half、#10 typed/affinity-first/adaptive、#11 typed/affinity-first/
 minimal_layer_groups、#12/#13 remote-off 正交臂）；行为矩阵：joint 组
 选点 10/4/6/1 vs load-first 组 12/6/2/1（J 联合选择真实改变选点），
-load-first/none 系真实触发 6 次跨实例 copy + 6 次增量 merge 回传流；
-affinity-first 恒 stay（home 优先与联合选择的最优重合）。运行产物在
-仓外 /tmp（仓内不留冒烟残留）。
+load-first/none 系真实触发 7 次跨实例 copy + 7 次增量 merge 回传流
+（R15/K4 计价修复后决策序列快照，修复前为 6/6）；
+affinity-first 恒 stay（home 优先与联合选择的最优重合）。**冒烟矩阵已
+脚本化**：`sh_test_mesh/run_scripts/joint_smoke_matrix.sh`（2s 窗 10
+配置；产物落仓外持久目录 `/home/sunhao/joint_smoke_evidence/<combo>/`
+全套留存——run.log/决策日志/env 快照/退出码，复审可独立复验；
+PROVENANCE §7-14/§9）。
 
 ## 7. 硬件概念（沿用 sh_3.0 口径）
 

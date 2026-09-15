@@ -85,7 +85,12 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler.p_chunk = PREFILL_CHUNK_SIZE
     scheduler.hardware = hardware
     scheduler.model = model
-    scheduler.average_decode_length = 10.0
+    # N12（R15-4）甄别改写：average_decode_length 标定常数 → 在线因果
+    # 估计器（无观测样本时冷启动缺省 10 token，数值与旧常数路径一致，
+    # 既有期望值全部保持）。
+    from joint.joint_cost_model import CausalHorizonEstimator
+    scheduler._joint_horizon = CausalHorizonEstimator(
+        cold_start_default_tokens=10)
     scheduler._prefill_task_cache = {}
     # 改法A（decode 估算全参 memo）：_task_load_snapshot 的 active_decode 段
     # 改读 _decode_task_load_ns_cached，脚手架同步装配其缓存字典。

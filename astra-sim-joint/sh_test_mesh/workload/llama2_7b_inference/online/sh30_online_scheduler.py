@@ -93,6 +93,8 @@ for _path in (_ONLINE_DIR, _WORKLOAD_DIR):
 from face_scheduler import (  # noqa: E402
     FaceInstanceSpec,
     KVCacheManager,
+    KVCapacityError,
+    KVPhysicalInfeasibleError,
     edge_free_instance_mask,
     edge_instance_mask,
     build_instances,
@@ -127,6 +129,39 @@ from online.graph_batch_builder import (  # noqa: E402
 _TASK_LOAD_CACHE_CAPACITY = 4096
 
 
+class _PoolPortRegistry:
+    """R15-3：片外池边缘端口的在途流登记表（键 = edge rank 端口）。
+
+    机制与链路登记（LinkFlowRegistry）同族：remote_store/remote_load
+    发射时登记占用端口，完成事件（drain/completion/merge-watch 交付）
+    注销；除数 = 实例各端口最大在途数 + 候选自身 1。供 J 计价的池路径
+    与 E 内核 r_j（P1）共用同一份额视图。
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[int, int] = {}
+        self._owners: dict[str, list[int]] = {}
+
+    def register(self, edge_rank: int, *, owner: str) -> None:
+        self._counts[edge_rank] = self._counts.get(edge_rank, 0) + 1
+        self._owners.setdefault(owner, []).append(edge_rank)
+
+    def release_owner(self, owner: str) -> int:
+        edges = self._owners.pop(owner, None)
+        if not edges:
+            return 0
+        for edge_rank in edges:
+            count = self._counts.get(edge_rank, 0) - 1
+            if count > 0:
+                self._counts[edge_rank] = count
+            else:
+                self._counts.pop(edge_rank, None)
+        return len(edges)
+
+    def count(self, edge_rank: int) -> int:
+        return self._counts.get(edge_rank, 0)
+
+
 def _bounded_task_load_memo(cache: dict, key, compute, *, capacity: int) -> int:
     """确定性 FIFO 的精确 Roofline memo。
 
@@ -159,7 +194,8 @@ class _OnlineInstanceState:
                  "pending_decode_ready", "in_flight_train", "finalized_trains",
                  "iteration_count", "train_seq", "last_arrival_ns",
                  "ledger_epoch", "snapshot_epoch", "snapshot_cache",
-                 "first_step_remainder")
+                 "snapshot_horizon_version",
+                 "first_step_remainder", "last_train_finalize_tick")
 
     def __init__(self, *, index: int):
         self.index = index
@@ -182,8 +218,17 @@ class _OnlineInstanceState:
         self.ledger_epoch = 0
         self.snapshot_epoch = -1        # 缓存快照所属纪元（-1 = 未缓存）
         self.snapshot_cache = None      # 上次快照（冻结 dataclass，可复用）
+        # M3（kimi 复审）：缓存快照所属的在线时域估计器版本——快照的
+        # decode 分量经 CausalHorizonEstimator.estimate 是隐藏输入，估计
+        # 器更新（observe_completed）不 bump 实例纪元；漏查会让缓存跨
+        # 估计器版本陈旧复用，SH_SNAPSHOT_VERIFY 影子断言假阳性。
+        self.snapshot_horizon_version = -1
         # ---- WP9 首步批拆分（2026-08-26）：两段式发射的余量批挂起 ----
         self.first_step_remainder = None  # 待发射余量批 train_plan（None=无）
+        # R14（2026-09-14）：上一列车核销 tick——ServiceFactors 纯样本的
+        # 服务段起点（列车 k 的纯服务时长 = 核销_k − max(发射_k, 核销_{k-1})，
+        # 排除列车前排队的污染）。
+        self.last_train_finalize_tick = None
 
 
 class _OnlineRequestRuntime:
@@ -224,7 +269,9 @@ class _OnlineRequestRuntime:
         # ---- joint 三机制字段（设计方案 §2/§6） ----
         "joint_action", "origin_home_instance", "history_transfers",
         "merge_transfers", "joint_prefill_work", "joint_span_base_context",
-        "joint_input_tokens", "joint_cost_ns",
+        "joint_input_tokens", "joint_cost_ns", "joint_working_copy",
+        # ---- R14（2026-09-14）：decode 增长停滞/唤醒 ----
+        "decode_stalled", "stall_wake_key", "stall_reason", "stall_gap_records",
     )
 
     def __init__(self, record: dict, p_chunk: int = 512) -> None:
@@ -246,6 +293,14 @@ class _OnlineRequestRuntime:
         self.joint_span_base_context = self.history_tokens_before
         self.joint_input_tokens = self.prefill_length
         self.joint_cost_ns = None
+        # R14：decode 增长停滞态（False = 正常；停滞会话暂缓后续列车
+        # 参与，容量释放（纪元 bump）后唤醒重试）。
+        self.decode_stalled = False
+        self.stall_wake_key = None
+        self.stall_reason = None
+        # K6：停滞携带的容量缺口记录（KVCapacityError.deep_gap_records）；
+        # 停滞是可恢复路径不落账，仅在死锁守卫确认终态时提交台账。
+        self.stall_gap_records = ()
         self.origin_home_instance = None
         self.history_transfers = ()
         self.merge_transfers = ()
@@ -393,14 +448,24 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             config.hardware, specs, require_equal_size=True)
         # joint：T（category_mode）与 E（layer_policy）注入 KV 账本；
         # 池速率来自硬件配置 remote-memory（E 的 r_j 估计与 J 的池路径
-        # 计费共用；1 GB/s == 1 B/ns）。
+        # 计价共用；1 GB/s == 1 B/ns）。红线 2（R6-4，2026-09-14）：
+        # 配置缺 remote-memory 段即拒绝启动——静默 1.0 GB/s 回退会把池
+        # 路径计价错数量级（与 N10 自述失实同族教训），warning 不足以免
+        # 静默；带宽/时延齐全性进启动校验。
         remote_memory = getattr(config, "remote_memory", None)
-        pool_bandwidth_gbps = (
-            float(remote_memory.remote_mem_bw_gbps)
-            if remote_memory is not None else None)
-        pool_latency_ns = (
-            int(remote_memory.remote_mem_latency_ns)
-            if remote_memory is not None else None)
+        if remote_memory is None:
+            raise ValueError(
+                "joint requires the remote-memory configuration section "
+                "(bandwidth/latency); a missing section fails closed instead "
+                "of silently falling back to a 1.0 GB/s pool rate")
+        pool_bandwidth_gbps = float(remote_memory.remote_mem_bw_gbps)
+        pool_latency_ns = int(remote_memory.remote_mem_latency_ns)
+        # ---- R15 在线反馈通道（2026-09-14 接线，N10 修复）----
+        # 链路流登记表（F-B 逐 shard 全路径）+ 池端口份额表：发射时点
+        # 登记、完成事件（drain/completion/merge-watch）注销，决策时刻
+        # 快照因果可见；池端口份额同时注入 E 内核（P1）与 J 计价。
+        self._joint_flows = LinkFlowRegistry()
+        self._pool_ports = _PoolPortRegistry()
         self.kv_manager = KVCacheManager(
             self.topology,
             config.model,
@@ -408,19 +473,25 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             layer_policy=self.joint_config.layer_policy,
             pool_bandwidth_gbps=pool_bandwidth_gbps,
             pool_latency_ns=pool_latency_ns,
+            pool_divisor_fn=self._pool_port_divisor,
         )
+        self._instance_edge_ports = {
+            instance.index: tuple(sorted({
+                self.kv_manager.nearest_edge(rank)
+                for rank in instance.ranks}))
+            for instance in self.topology.instances
+        }
         # joint J 组件（§6/§13.2）：硬件速率、链路流登记表、在线因子、
         # 因果时域估计器（无 oracle：decode_length/final_context_tokens
-        # 不进任何决策输入）。
+        # 不进任何决策输入）。pool_port_gbps 直取配置值（红线 2 已在上方
+        # fail-closed 校验存在性，无 1.0 静默回退）。
         self._joint_rates = JointHardwareRates.from_gbps(
             noc_link_gbps=config.hardware.d2d_bandwidth_gbps,
-            pool_port_gbps=pool_bandwidth_gbps
-            if pool_bandwidth_gbps is not None else 1.0,
+            pool_port_gbps=pool_bandwidth_gbps,
             local_hbm_gbps=config.hardware.local_hbm_bandwidth_gbps,
             d2d_latency_ns=int(config.hardware.d2d_latency_ns),
             pool_latency_ns=int(pool_latency_ns or 0),
         )
-        self._joint_flows = LinkFlowRegistry()
         self._joint_factors = ServiceFactors()
         self.edge_free_mask = edge_free_instance_mask(
             self.topology, self.kv_manager.edge_ranks)
@@ -430,14 +501,16 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             _OnlineInstanceState(index=i)
             for i in range(len(self.topology.instances))
         ]
-        # 合同⑨：average_decode_length = 物化期标定常数（离线同一推导
-        # sum(decode)/len，与 --print-shell-config 交叉核对）；禁止在线
-        # 从已到达请求算增量 mean（用户裁决 2026-08-15）。joint 因果时域
-        # 的冷启动缺省取该标定常数（物理来源 = 物化期统计，冻结常数）。
-        self.average_decode_length = config.source_average_decode_length
+        # N12（R15-4，2026-09-14）：decode 负载标定在线化——active_decode
+        # 剩余估计与 horizon 冷启动全部由 CausalHorizonEstimator 因果供给
+        # （session 已完成均值 → run 已完成均值 → 冷启动 1 token 物理常数
+        # + "乐观可能"披露）。全 trace decode 均值常数不再进入任何决策
+        # 输入（总纲 §13.1/§13.2 明文；本条推翻 2026-08-15"禁止在线增量
+        # mean"裁决在 joint 语境的适用——其语境是 sh 基底工程常数与在线/
+        # 离线对拍纪律，joint 中该常数已成研究方法决策输入）。离线蓝本
+        # 保留 config.source_average_decode_length 仅作对拍锚（不消费）。
         self._joint_horizon = CausalHorizonEstimator(
-            cold_start_default_tokens=max(
-                1, int(self.average_decode_length)))
+            cold_start_default_tokens=1)
         self.hardware = config.hardware
         self.model = config.model
         self._prefill_task_cache = {}
@@ -479,6 +552,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
         self.arrival_heap = []
         self._sequence = 0
+        # 自查 A：已到达请求数（runtimes 槽位完成后置 None，无法从槽位
+        # 区分"未到达"与"已完成"——死锁守卫判"未来到达存在"用本计数）。
+        self._arrived_request_count = 0
         # offline: face_scheduler.py 的 pending_admissions FIFO。
         self.pending_admissions = deque()
         # 改法D：KV 账本纪元重试门（face capacity_epoch 的调度器全局版——
@@ -489,6 +565,16 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 纪元未变则该条目本批跳过重试（重试必返同样的 False）。
         self._kv_ledger_epoch = 0
         self._admit_attempt_epoch = {}
+        # R2（2026-09-14）：准入失败折叠计数（D5/P4——同一请求同一失败
+        # 分类：首条全表 + 后续紧凑计数行，防"延迟 × 纪元重试"乘积下
+        # 失败日志体积逼近成功日志）。
+        self._admission_failure_state: dict[str, dict] = {}
+        # R11（2026-09-14）：merge 尾 watch id → 待排下一轮 alarm（到达
+        # 重锚 merge_done + interval；service_done 合同落地）。
+        self._pending_merge_alarms: dict[str, dict] = {}
+        # R14：停滞会话登记（instance_index -> set[runtime]），唤醒 pass
+        # O(停滞数) 扫描（正常路径零成本）。
+        self._stalled_by_instance: dict[int, set] = {}
         # 影子验证开关（SH_ADMIT_GATE_VERIFY=1）：门跳过的条目仍完整评估
         # 并断言必返 False——验证跑零收益、全检查；不设或非"1"则正常运行。
         self._admit_gate_verify = (
@@ -532,6 +618,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         成员移出 active_decode → 推进 prefill chunk），再处理 drain/
         完成/到达，最后冻结并发射各空闲实例的下一列车。"""
         tick = delta["tick"]
+        # ---- R11（2026-09-14）：merge 尾 watch 交付 → 排下一轮 alarm。 ----
+        # service_done 合同（设计方案 §2.3）：下一轮到达 = merge_done +
+        # interval（此前锚 compute_done，thinktime < merge 时长时 merge
+        # 成本逃出会话 E2E、J 异地动作边际收益被系统性高估——N2 修复）。
+        # watch id 走 batch_train_merge_ 前缀（基类 _settle_completions 对
+        # batch_train_ 命名空间跳过请求核销；本变体在哨兵路由前拦截）。
+        merge_done_ids = []
         # ---- completion 批（offline: face_scheduler.py）----
         drained = []
         completed_now = []
@@ -539,6 +632,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         for group in delta["completed_groups"]:
             stage = group["stage"]
             request_id = group["request_id"]
+            if request_id.startswith("batch_train_merge_"):
+                merge_done_ids.append(request_id)
+                continue
             if request_id.startswith("batch_train_"):
                 sentinel_trains.append(request_id)
                 continue
@@ -564,6 +660,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             train_id for train_id in sentinel_trains
             if not self._consume_first_step_wakeup(train_id)
         ]
+        for watch_id in merge_done_ids:
+            self._on_merge_done(watch_id, tick)
         self._finalize_completed_trains(
             drained, completed_now, sentinel_trains, tick)
         for request_id in drained:
@@ -616,12 +714,20 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     # 该列车首个信号到达：核销（账本推进恰一次），残余
                     # 信号（drain/exit 标记跨 tick fire）登记待收。
                     iterations = train["iterations"]
+                    # R15-2（2026-09-14）：ServiceFactors 纯样本采集——
+                    # 纯服务段 = 核销 tick − max(发射 tick, 上次核销 tick)
+                    # （排除列车前排队污染）；基数 = 本列车 roofline 闭式
+                    # 账本（chunk 负载 + 逐 decode span 单步负载）。混合
+                    # 列车（chunk + decode / 含 joiner 迁移）样本不可因果
+                    # 分离，跳过（纯度约束：排队/传输不得入分子）。
+                    self._observe_service_factors(state, train, tick)
                     for request_id, participation in train["members"]:
                         runtime = self.runtime_by_request_id[request_id]
                         runtime.decode_tokens_consumed += participation
                         runtime.current_decode_token += participation
                         # joint（§3.1）：decode KV 按实际消费进展因果增长
-                        # （写入前经 T+E 真实释放准备空间）。
+                        # （写入前经 T+E 真实释放准备空间；R14：容量类
+                        # 失败转停滞/唤醒，不再 fail-closed）。
                         self._joint_grow_decode(runtime, instance_index)
                     for request_id in train["exit_set"]:
                         runtime = self.runtime_by_request_id[request_id]
@@ -653,7 +759,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                                 instance_size=instance_size,
                                 chunk_tokens=chunk_tokens,
                                 context_tokens=(
-                                    runtime.history_tokens_before
+                                    runtime.joint_span_base_context
                                     + processed_before + chunk_tokens)))
                         processed_before += chunk_tokens
                         runtime.prefill_tokens_completed += chunk_tokens
@@ -663,6 +769,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                             finalized_chunk_load_ns)
                     state.iteration_count += iterations
                     state.in_flight_train = None
+                    state.last_train_finalize_tick = tick
                     # M4 核销即删（2026-08-23）：列车核销后其 train_id→
                     # 实例索引条目即死重（哨兵条目已在信号路由处弹出，
                     # 此 pop 对其为幂等 no-op；全仓 grep 证实核销后无读者）。
@@ -713,6 +820,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 break
         members = []
         for runtime in state.active_decode:
+            if runtime.decode_stalled:
+                # R14（2026-09-14）：停滞成员暂缓列车参与（KV 增长已
+                # 停滞；让行共存成员，避免队头阻塞）；唤醒后在下一列车
+                # 边界回归。停滞成员必有剩余 token（consumed 只经列车
+                # 推进），不存在"停滞且已完成"的悬挂态。
+                continue
             remaining = (
                 runtime.decode_length - runtime.decode_tokens_consumed)
             if remaining <= 0:
@@ -748,7 +861,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         if qp_head is not None:
             work = qp_head.prefill_tokens_to_process
             completed = qp_head.prefill_tokens_completed
-            history = qp_head.history_tokens_before
+            # R13：span 上下文基 = 动作口径（跨实例 recompute 从 0 物化
+            # 工作副本；其余动作 = 真实历史基数）。
+            history = qp_head.joint_span_base_context
             for _ in range(iterations):
                 chunk_tokens = min(self.p_chunk, work - completed)
                 if chunk_tokens <= 0:
@@ -876,6 +991,29 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             joiner_plan["prefill_drain_block_ends"] = dict(
                 runtime.drain_block_ends or {})
             joiner_plans.append(joiner_plan)
+        # R15-2：因子样本纯度标记（joiner 迁移/partial 后缀恢复门会向
+        # 列车 span 混入传输段，含任一者的列车不进 ServiceFactors 样本）。
+        plan["emit_tick"] = tick
+        plan["had_joiners"] = bool(joiner_runtimes)
+        head_runtime = (
+            self.runtime_by_request_id.get(plan.get("head_request_id"))
+            if plan.get("head_request_id") else None)
+        plan["suffix_gated"] = bool(
+            plan.get("head_first_chunk")
+            and head_runtime is not None
+            and head_runtime.history_location_before is not None
+            and head_runtime.history_location_before.location
+            == "partial_hbm_remote")
+        # M5（kimi 复审）：首 chunk 门控 NoC 传输（copy 前缀/REMOTE 池
+        # 恢复）同样向列车 span 混入传输段——与 partial 后缀恢复门同款
+        # 纯度排除（local_hit 无传输不计；remote-read 无历史传输、其
+        # 读流门控 decode 列车，在 decode 分支按成员动作排除）。
+        plan["history_transfer_gated"] = bool(
+            plan.get("head_first_chunk")
+            and head_runtime is not None
+            and any(
+                transfer.kind != "local_hit" and transfer.total_bytes > 0
+                for transfer in (head_runtime.history_transfers or ())))
         stage = "decode" if (plan["members"] or joiner_runtimes) else "prefill"
         prefill_start_member = None
         first_chunk_member = None
@@ -1145,6 +1283,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "request arrival was delivered more than once")
         runtime.estimated_arrival_ns = tick
+        self._arrived_request_count += 1
         self.pending_admissions.append(runtime)
         self._retry = True
 
@@ -1156,6 +1295,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         COMPLETION watch 由列车 exit 标记承载。"""
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.prefill_instance_index]
+        # R15-1：准入相在途流注销（历史迁移/逐出支链在 drain 边界视作
+        # 完成——其消费栅栏（readiness barrier → 列车体）已物理通过）。
+        self._release_transfer_flows(request_id)
         # drain 记实际 prefill 工作量（recompute 单口径 ==
         # request.prefill_length；离线 chunk 累计的整段等价）。
         runtime.prompt_tokens_processed = runtime.prefill_tokens_to_process
@@ -1238,6 +1380,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             + decode_growth_evictions)
         self.kv_manager.release_request_capacity_reservation(runtime.request_id)
         self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 5/9（release_request_capacity_reservation）
+        # R15-1：decode 相在途流登记（drain 边界逐出/迁移 + remote 读流；
+        # 完成边界注销）。
+        self._register_transfer_flows(
+            runtime.prefill_evictions + runtime.decode_evictions
+            + ((runtime.prefill_decode_transfer,)
+               if runtime.prefill_decode_transfer is not None else ()),
+            owner=request_id + "#decode")
         # 拼 batch 改造（§3.2 KV 就绪栅栏）：drain 决策（decode 实例选择
         # ＝固定同实例/KV 迁移规划）在此完成，成员进入 pending_decode_
         # ready，待加入 decode 实例的下一列车（迁移随加入列车发射，物理
@@ -1257,12 +1406,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _complete_requests(self, completed_now, tick: int):
         """offline: :3986-4042 decode 完成分支 + completion_order 批
         （下一 turn arrival 排程 :4000-4006 + mark_complete :4016-4020 +
-        快照 :4032-4042），段 3 发射 + 下一次
-        session arrival 排程（离线 push_event 在线改为 future alarm，
-        时刻 = 完成边界 tick + interval）。
+        快照 :4032-4042）。
 
         拼 batch 改造：active_decode 移除已移至 _finalize_completed_trains
         （退出迭代在列车内先验已知，物理完成时刻 = exit 标记节点完成时刻）。
+
+        R11（N2，2026-09-14）：service_done 合同落地——下一轮到达 alarm
+        重锚 **merge_done** + interval（merge 尾标记节点 watch 完成回调
+        进调度器再排 alarm；无 merge 流的 stay/recompute@home 本地提交
+        保持 compute_done + interval 不变）。同时下一轮 interval gate
+        前递依赖 merge 尾标记（图依赖侧在构图器 _emit_completion），
+        消除"下一轮物理消费尚未落地的 KV"。E2E 真实拉长为预期行为
+        （合并成本进主 E2E，§2.3）。
         """
         # offline: :4008-4012 completion_order 排序
         completion_order = sorted(
@@ -1273,45 +1428,39 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 self.runtime_by_request_id[request_id].queue_index,
             ),
         )
-        # offline: :3986-3999 decode 完成分支（成员移除 + 完成时刻 +
-        # 下一次 arrival 排程）。移除已移至列车核销；此处记完成事实与
-        # future alarm。
+        # offline: :3986-3999 decode 完成分支。下一轮 alarm 的排程判定
+        # 推迟：merge 流存在与否在 merge 事务（下一循环）后才可知。
+        completion_facts = []
         for request_id in completion_order:
             runtime = self.runtime_by_request_id[request_id]
             runtime.completed = True
             runtime.completion_ns = tick  # 基类侧字段由 log_decision 行携带
             self.completed_requests += 1
             following = self.next_request[request_id]
+            interval = None
             if following is not None:
                 interval = self.config.request_queue[
                     following.queue_index].inter_request_interval_ns
                 if interval is None:
                     raise RuntimeError(
                         "validated later request lost its interval")
-                # offline: face_scheduler.py push_event(now + interval, 1,
-                # "arrival", following) -> 在线 future alarm（alarm 时刻语义
-                # 不变：完成 tick + interval）。
-                self._batch["future_alarms"].append({
-                    "arrival_world_ns": tick + interval,
-                    "envelope": {
-                        "request_id": following.request_id,
-                        "session_id": following.session_id,
-                        "turn_index": following.turn_index,
-                        "prefill_length": following.prefill_length,
-                        "decode_length": following.decode_length,
-                        "inter_request_interval_ns": interval,
-                    },
-                })
+            completion_facts.append((request_id, following, interval))
         # joint（§2.2/§2.3/§3.2）：compute_done 后、mark_complete 前执行
         # merge 事务——新增量归并回 origin_home（home 侧空间经 T+E 真实
-        # 准备；目标工作副本释放）。service_done 边界包含合并成本：merge
-        # 传输随 completion 批发射、REQUEST_COMPLETE watch 由其尾门承载。
-        # 完成时已观测的 decode 长度/输入长度入在线估计器（实际结算，
-        # 非决策 oracle）。
-        for request_id in completion_order:
+        # 准备 + R4 分层自降级；目标工作副本释放）。完成时已观测的
+        # decode 长度/输入长度入在线估计器（实际结算，非决策 oracle）。
+        for request_id, following, interval in completion_facts:
             runtime = self.runtime_by_request_id[request_id]
             new_tokens = (
                 runtime.joint_input_tokens + runtime.decode_length)
+            # K2/K3 配套（kimi 复审）：完成行显式披露"执行端工作副本"
+            # 真值（merge 前的 working_kind）——水印重放不再从 origin_home
+            # 启发式重建（REMOTE 基 + 执行端恰等于 home 的组合会误判）。
+            session_state = self.kv_manager._sessions.get(
+                runtime.session_id)
+            runtime.joint_working_copy = bool(
+                session_state is not None
+                and session_state.working_kind is not None)
             runtime.merge_transfers = self.kv_manager.merge_back(
                 session_id=runtime.session_id,
                 trigger_request_id=runtime.request_id,
@@ -1324,6 +1473,35 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 runtime.session_id, runtime.decode_length)
             self.kv_manager.observe_completed_input(
                 runtime.session_id, runtime.joint_input_tokens)
+            # R14 完成清理：停滞态会话完成时退出停滞登记（其 exit 物理
+            # 完成不依赖 KV 增长追平）。
+            if runtime.decode_stalled:
+                stalled = self._stalled_by_instance.get(
+                    runtime.decode_instance_index)
+                if stalled is not None:
+                    stalled.discard(runtime)
+                    if not stalled:
+                        self._stalled_by_instance.pop(
+                            runtime.decode_instance_index, None)
+                runtime.decode_stalled = False
+            # R15-1：decode 相在途流注销（完成边界）。
+            self._release_transfer_flows(request_id + "#decode")
+            if following is None:
+                continue
+            if not runtime.merge_transfers:
+                # stay / recompute@home 本地提交：无 merge 流，到达 =
+                # compute_done + interval（与基底逐字节同口径）。
+                self._batch["future_alarms"].append({
+                    "arrival_world_ns": tick + interval,
+                    "envelope": {
+                        "request_id": following.request_id,
+                        "session_id": following.session_id,
+                        "turn_index": following.turn_index,
+                        "prefill_length": following.prefill_length,
+                        "decode_length": following.decode_length,
+                        "inter_request_interval_ns": interval,
+                    },
+                })
         # offline: :4016-4020 先全部 mark_complete
         # typed eviction：在线 runtime 是 manifest 派生账本（无 FaceRequest
         # 字段），完成请求自身的 next_trigger_type 经
@@ -1352,12 +1530,48 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 runtime.completion_evictions)
         # offline: :4032-4042 完成快照 + completion 批（合同①）：
         # completion_evictions + 下一 turn interval gate 依赖登记。
+        facts_by_id = {
+            request_id: (following, interval)
+            for request_id, following, interval in completion_facts}
         for request_id in completion_order:
             runtime = self.runtime_by_request_id[request_id]
             snapshot = self.kv_manager.session_snapshot(runtime.session_id)
             runtime.kv_location_after_completion = snapshot.location
             runtime.kv_instance_after_completion = snapshot.instance_index
-            self.graph.emit_completion_batch(runtime.plan_dict())
+            completion_result = self.graph.emit_completion_batch(
+                runtime.plan_dict())
+            following, _interval = facts_by_id[request_id]
+            if (following is not None and runtime.merge_transfers):
+                # R11(i)：merge 尾标记 watch——完成回调经 PREFILL_DRAIN
+                # 通道送达（batch_train_merge_ 前缀在 run_variant_policy
+                # 拦截为 _on_merge_done：排 alarm + 注销 merge 流）。
+                members = completion_result.get("merge_done_members")
+                if not members:
+                    raise RuntimeError(
+                        "merge transfers were emitted without merge-done "
+                        "marker nodes (request {})".format(request_id))
+                watch_id = "batch_train_merge_" + request_id
+                self._batch["watches"].append({
+                    "request_id": watch_id,
+                    "stage": STAGE_PREFILL,
+                    "generation": 0,
+                    "members": members,
+                    "statuses": ["Success", "Skipped"],
+                })
+                self._pending_merge_alarms[watch_id] = {
+                    "request_id": request_id,
+                    "interval": _interval,
+                    "envelope": {
+                        "request_id": following.request_id,
+                        "session_id": following.session_id,
+                        "turn_index": following.turn_index,
+                        "prefill_length": following.prefill_length,
+                        "decode_length": following.decode_length,
+                        "inter_request_interval_ns": _interval,
+                    },
+                }
+                self._register_transfer_flows(
+                    runtime.merge_transfers, owner=request_id + "#merge")
             # 阶段 3 感知账本：completed-unreconciled 核销（基类
             # _settle_completions 已在策略前完成；此处为决策日志）。
             self.log_decision(
@@ -1379,6 +1593,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         for transfer in runtime.merge_transfers],
                     "joint_action": runtime.joint_action,
                     "origin_home_instance": runtime.origin_home_instance,
+                    # K2/K3 配套：工作副本真值（merge 前 working_kind）。
+                    "joint_working_copy": bool(
+                        getattr(runtime, "joint_working_copy", False)),
                 },
             )
             following = self.next_request[request_id]
@@ -1436,43 +1653,86 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _admit_pass(self, tick: int) -> None:
         """offline: face_scheduler.py（admit_waiting_requests +
         start_ready_iterations 的排队/发射部分；直接 Roofline 计时删除）。
-        拼 batch 改造：发射部分 = _plan_and_emit_trains（列车化）。"""
+        拼 batch 改造：发射部分 = _plan_and_emit_trains（列车化）。
+
+        R14：每交付先跑唤醒 pass（停滞会话的纪元键变化即重试，无停滞
+        O(1)）+ 死锁守卫（全停滞显式 fail-closed，N8）。"""
         self._retry = False
+        self._wake_stalled_decodes(tick)
+        self._check_decode_deadlock()
         self._admit_waiting_requests(tick)
         self._plan_and_emit_trains(tick)
 
     def _admit_waiting_requests(self, now_ns: int) -> None:
         """offline: face_scheduler.py admit_waiting_requests，
-        逐行对应（blocked FIFO 重排语义保留）+ 改法D 纪元重试门。"""
+        逐行对应（blocked FIFO 重排语义保留）+ 改法D 纪元重试门。
+
+        N6+F3 重试键修复（2026-09-14，M2 复审修订）：joint 下 False 的
+        语义是"J **选中**的 (instance, action) 容量不可行"，而 J 的选择
+        依赖 task loads——负载迁移 bump 实例纪元但不 bump KV 纪元，纯
+        KV 纪元门会把本可换选的请求跳过（时机损失 + SH_ADMIT_GATE_
+        VERIFY 影子断言被合法击穿）。键改为 KV 纪元 ⊕ **失败候选集**
+        （选中实例 ∪ applicable 候选实例，冻结于失败时刻）的实例纪元
+        ——候选集内任一实例负载迁移都可能翻转 argmin 到可行候选；严禁
+        粗化为全实例纪元之或（F3：实例纪元是列车事件粒度的高频信号，
+        全挂会让重试门恒翻转、每次重试跑全候选成本模型、深尾部墙钟爆
+        炸；冻结候选集只含本次判定相关的实例）。KV 纪元已覆盖全部容量
+        释放（容量 False 翻 True 的必要条件），实例纪元只补负载迁移带
+        来的换选时机。"""
         blocked = deque()
         while self.pending_admissions:
             runtime = self.pending_admissions.popleft()
             rid = runtime.request_id
-            if (not self._admit_gate_verify
-                    and self._admit_attempt_epoch.get(rid)
-                    == self._kv_ledger_epoch):
-                # 改法D：上次失败以来 KV 账本未变 → False 判据输入未变，
-                # 重试必返同样的 False，跳过（FIFO 位置不变）。
+            last_key = self._admit_attempt_epoch.get(rid)
+            skip = (
+                last_key is not None
+                and not self._admit_gate_verify
+                and last_key == self._current_retry_key(last_key))
+            if skip:
+                # 键未变 → 容量未释放且选中实例负载未迁移，重试必返
+                # 同样的 False，跳过（FIFO 位置不变）。
                 blocked.append(runtime)
                 continue
-            if (self._admit_gate_verify
-                    and self._admit_attempt_epoch.get(rid)
-                    == self._kv_ledger_epoch):
-                # 影子断言：门判跳过 ≡ 重试必返 False。
+            if (self._admit_gate_verify and last_key is not None
+                    and last_key == self._current_retry_key(last_key)):
+                # 影子断言：门判跳过 ≡ 重试必返 False（失败路径已在
+                # _try_admit_request 内留 _last_admit_failure_key）。
                 if self._try_admit_request(runtime, now_ns):
                     raise RuntimeError(
                         "admit gate equivalence violated: request {} was "
-                        "admitted on a skipped retry (kv epoch {})".format(
-                            rid, self._kv_ledger_epoch))
-                self._admit_attempt_epoch[rid] = self._kv_ledger_epoch
+                        "admitted on a skipped retry (key {})".format(
+                            rid, last_key))
+                self._record_admit_failure_key(rid)
                 blocked.append(runtime)
                 continue
             if not self._try_admit_request(runtime, now_ns):
-                self._admit_attempt_epoch[rid] = self._kv_ledger_epoch
+                self._record_admit_failure_key(rid)
                 blocked.append(runtime)
             else:
                 self._admit_attempt_epoch.pop(rid, None)  # 成功即清除（有界）
+                self._admission_failure_state.pop(rid, None)
         self.pending_admissions.extend(blocked)
+
+    def _record_admit_failure_key(self, rid: str) -> None:
+        """失败返回后记录重试键（_try_admit_request 留下的
+        _last_admit_failure_key；缺省回退 = (当前 KV 纪元, ((0, 实例 0
+        纪元),))——仅打桩/异常路径，语义为"多开一次门"，无正确性影响）。"""
+        self._admit_attempt_epoch[rid] = getattr(
+            self, "_last_admit_failure_key", None) or (
+                self._kv_ledger_epoch,
+                ((0, self.instances[0].ledger_epoch),))
+
+    def _current_retry_key(self, last_key):
+        """重试键求值：KV 纪元 ⊕ last_key 记录的失败候选集实例纪元。
+
+        last_key = (kv_epoch_at_failure, ((instance, epoch_at_failure),
+        ...))——候选集冻结于失败时刻（选中实例 ∪ applicable 候选，M2）；
+        当前键 = (当前 KV 纪元, 同一实例集的纪元现值)。与上次失败键
+        整体相等 = 无新信息（容量未释放且候选集内无负载迁移、argmin
+        不会翻转）。"""
+        return (self._kv_ledger_epoch,
+                tuple((index, self.instances[index].ledger_epoch)
+                      for index, _ in last_key[1]))
 
     def _select_prefill_instance(self, snapshots, candidate_mask) -> int:
         """负载均衡选点（SH30_ABLATION 消融门已随该开关退役删除；
@@ -1484,29 +1744,377 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _joint_working_context(self, runtime) -> int:
         """工作副本/基础会话的当前应覆盖 token 数（因果：只含已到达输入
         与已实际完成的 decode）。remote-read 的工作副本仅承载新增量；
-        其余动作覆盖完整上下文。"""
+        跨实例 recompute 自 0 物化（工作上下文 = 已物化 token 数）；
+        其余动作（含 R13 的 recompute@home——缺失后缀是**层**物化，不
+        增加 token 上下文）覆盖完整上下文。"""
         if runtime.joint_action == "remote-read":
             return runtime.joint_input_tokens + runtime.decode_tokens_consumed
-        return (runtime.joint_span_base_context
-                + runtime.joint_prefill_work
+        if (runtime.joint_action == "recompute"
+                and runtime.joint_span_base_context == 0):
+            return (runtime.joint_prefill_work
+                    + runtime.decode_tokens_consumed)
+        return (runtime.history_tokens_before
+                + runtime.joint_input_tokens
                 + runtime.decode_tokens_consumed)
 
     def _joint_grow_decode(self, runtime, instance_index: int) -> None:
         """逐列车 decode 因果增长（§3.1：写入前准备资源，不提前按真实
         最终长度预约）。列车核销推进 decode_tokens_consumed 后调用；
-        增量经 _expand_local_session → _ensure_capacity（T+E）真实逐出。"""
+        增量经 _expand_local_session → _ensure_capacity（T+E）真实逐出。
+
+        R14（M1(a) 裁定，2026-09-14）：容量类失败不再 fail-closed——
+        会话进入 stalled 态（暂缓后续列车参与、等待如实计入 E2E，
+        与基线背压语义同构、八组合同一合同可比）；唤醒复用 R2 纪元键
+        （KV 纪元 ⊕ 实例纪元，F3 粒度），容量释放（逐出/完成）必有
+        新信息、无自旋。审计按 stall/wake 事件计（非每 tick 轮询）。
+
+        自查 D（2026-09-15，D7 盲区）：增长逐出（成功/停滞两路）此前
+        只做 sync 簿记、从不进图——池写物理流成 C++ 水位盲区 + pending
+        store 不登记，且 R15 在途流漏登记（除数低估并发池写）。基底
+        的一次性增长经 runtime.decode_evictions 随 joiner 列车进图，
+        joint 因果化后该路径消失。修法 = 旁路支链发射（与 R2 准入失败
+        路径同构：无触发门、合法容量释放）+ 流登记挂 rid#decode
+        owner（完成边界统一注销）。"""
         target_context = self._joint_working_context(runtime)
         session = self.kv_manager._sessions.get(runtime.session_id)
         if session is None or session.context_tokens == target_context:
             return
-        evictions = self.kv_manager.expand_decode(
-            session_id=runtime.session_id,
-            instance_index=instance_index,
-            final_context_tokens=target_context,
-            trigger_request_id=runtime.request_id,
-        )
+        try:
+            evictions = self.kv_manager.expand_decode(
+                session_id=runtime.session_id,
+                instance_index=instance_index,
+                final_context_tokens=target_context,
+                trigger_request_id=runtime.request_id,
+            )
+        except KVCapacityError as exc:
+            if exc.evictions:
+                # D7 清账：raise 前已提交的逐出入图（旁路支链）+ 流
+                # 登记 + 纪元 bump。
+                self._bump_kv_ledger_epoch()
+                self.graph.sync_pending_history_after_evictions(exc.evictions)
+                self._emit_eviction_only_nodes(
+                    exc.evictions,
+                    self._batch["tick"] if self._batch else 0)
+                self._register_transfer_flows(
+                    exc.evictions, owner=runtime.request_id + "#decode")
+            self._enter_decode_stall(
+                runtime, instance_index, str(exc),
+                gap_records=exc.deep_gap_records)
+            return
+        # 纪元 bump 无条件：expand 即使零逐出也已推进上下文账本。
         self._bump_kv_ledger_epoch()
-        self.graph.sync_pending_history_after_evictions(evictions)
+        if evictions:
+            self.graph.sync_pending_history_after_evictions(evictions)
+            # 自查 D：增长的已提交逐出进图（旁路支链）+ 流登记。
+            self._emit_eviction_only_nodes(
+                evictions, self._batch["tick"] if self._batch else 0)
+            self._register_transfer_flows(
+                evictions, owner=runtime.request_id + "#decode")
+
+    def _wake_key(self, instance_index: int) -> tuple:
+        """R2/R14 共用重试键：KV 纪元 ⊕ 指定实例纪元（F3 粒度红线：
+        只挂失败相关实例，严禁粗化为全实例纪元之或——实例纪元是列车
+        事件粒度的高频信号，全挂会让重试门恒翻转、深尾部墙钟爆炸）。"""
+        return (self._kv_ledger_epoch,
+                self.instances[instance_index].ledger_epoch)
+
+    def _enter_decode_stall(
+        self, runtime, instance_index: int, reason: str,
+        *, gap_records: tuple = (),
+    ) -> None:
+        if runtime.decode_stalled:
+            runtime.stall_wake_key = self._wake_key(instance_index)
+            runtime.stall_gap_records = tuple(gap_records)
+            return
+        runtime.decode_stalled = True
+        runtime.stall_reason = reason
+        runtime.stall_wake_key = self._wake_key(instance_index)
+        runtime.stall_gap_records = tuple(gap_records)
+        self._stalled_by_instance.setdefault(instance_index, set()).add(
+            runtime)
+        self.log_decision(
+            {"kind": "joint_decode_stall", "request_id": runtime.request_id,
+             "priority": 0},
+            self._batch["tick"] if self._batch else 0,
+            decision={
+                "instance_index": instance_index,
+                "session_id": runtime.session_id,
+                "target_context_tokens": self._joint_working_context(runtime),
+                "reason": reason,
+            },
+        )
+        # 停滞成员本列车已不参与后续列车规划——当前在飞列车核销后由
+        # _wake_stalled_decodes 在纪元变化时唤醒；全停滞死锁由
+        # _check_decode_deadlock 守卫显式 fail-closed（N8：宁要有诊断
+        # 信息的 abort，不要静默永久挂起）。
+
+    def _wake_stalled_decodes(self, tick: int) -> None:
+        """R14 唤醒 pass（每交付调用；无停滞时 O(1)）。
+
+        唤醒必有新信息：仅重试唤醒键（KV 纪元 ⊕ 实例纪元）已变的停滞
+        会话；键不变 = 无容量释放且无负载迁移，重试必返同样失败（无
+        自旋）。审计行按 wake 事件计。"""
+        if not self._stalled_by_instance:
+            return
+        for instance_index in sorted(self._stalled_by_instance):
+            stalled = self._stalled_by_instance.get(instance_index)
+            if not stalled:
+                continue
+            state = self.instances[instance_index]
+            for runtime in sorted(stalled, key=lambda item: item.request_id):
+                key = self._wake_key(instance_index)
+                if runtime.stall_wake_key == key:
+                    continue
+                runtime.stall_wake_key = key
+                target_context = self._joint_working_context(runtime)
+                session = self.kv_manager._sessions.get(runtime.session_id)
+                if session is None or session.context_tokens == target_context:
+                    self._exit_decode_stall(runtime, instance_index, tick)
+                    continue
+                try:
+                    evictions = self.kv_manager.expand_decode(
+                        session_id=runtime.session_id,
+                        instance_index=instance_index,
+                        final_context_tokens=target_context,
+                        trigger_request_id=runtime.request_id,
+                    )
+                except KVCapacityError as exc:
+                    runtime.stall_reason = str(exc)
+                    runtime.stall_gap_records = exc.deep_gap_records
+                    if exc.evictions:
+                        # D7 清账（自查 D 同款）：唤醒重试的已提交逐出
+                        # 进图 + 流登记 + 纪元 bump。
+                        self._bump_kv_ledger_epoch()
+                        self.graph.sync_pending_history_after_evictions(
+                            exc.evictions)
+                        self._emit_eviction_only_nodes(exc.evictions, tick)
+                        self._register_transfer_flows(
+                            exc.evictions, owner=runtime.request_id + "#decode")
+                    continue
+                if evictions:
+                    self._bump_kv_ledger_epoch()
+                    self.graph.sync_pending_history_after_evictions(evictions)
+                    # 自查 D 同款：唤醒增长的逐出进图 + 流登记。
+                    self._emit_eviction_only_nodes(evictions, tick)
+                    self._register_transfer_flows(
+                        evictions, owner=runtime.request_id + "#decode")
+                self._exit_decode_stall(runtime, instance_index, tick)
+                # 唤醒后本实例有新工作——刷新 frontier 让列车规划接手。
+                self._refresh_frontier(state)
+
+    def _exit_decode_stall(
+        self, runtime, instance_index: int, tick: int,
+    ) -> None:
+        runtime.decode_stalled = False
+        runtime.stall_wake_key = None
+        stalled = self._stalled_by_instance.get(instance_index)
+        if stalled is not None:
+            stalled.discard(runtime)
+            if not stalled:
+                self._stalled_by_instance.pop(instance_index, None)
+        self.log_decision(
+            {"kind": "joint_decode_wake", "request_id": runtime.request_id,
+             "priority": 0},
+            tick,
+            decision={
+                "instance_index": instance_index,
+                "session_id": runtime.session_id,
+                "stall_reason": runtime.stall_reason,
+            },
+        )
+        runtime.stall_reason = None
+
+    def _check_decode_deadlock(self) -> None:
+        """N8 死锁守卫：活跃全停滞 ∧ 无 qp 工作 ∧ 无在飞列车 → 显式
+        fail-closed 上报（deep_gap 同类现场：实例/rank/停滞会话清单）。
+
+        触发条件 = 系统不再有任何可推进事件源：停滞会话等容量、容量
+        只能由逐出（inactive，已在失败尝试中耗尽）或活跃完成（停滞中
+        不可达）释放——纪元永不再 bump，等待是永久的。宁要有诊断信息
+        的 abort，不要静默挂起。
+
+        K1（kimi 复审，2026-09-14）：逃逸条件必须含 pending_decode_
+        ready——drain 到站的请求先落该队列、待业务规划阶段（_plan_and_
+        emit_trains）才加入 decode 列车；其 decode 空间已在 drain 边界
+        事务内落账（预约/迁移，非加入时分配），加入不会因容量失败。
+        "最后一个未停滞请求刚 drain、其余全停滞"的窗口里它是唯一的
+        推进事件源（列车发射 → in_flight_train），漏查会把合法 run 误
+        判为死锁。
+
+        自查 A（2026-09-15，K1 补全）：三类**跨 tick 事件源**同样必须
+        逃逸——(a) _pending_merge_alarms 非空（merge 尾 watch 是真实图
+        节点，C++ 必有交付 → _on_merge_done → 下一轮 alarm → 到达 →
+        准入逐出可释放容量；_complete_requests 与 _admit_pass 同 tick
+        先后执行，完成批刚注册 watch 的窗口里守卫必见非空）；(b)
+        arrival_heap 非空（已见到达待 drain）；(c) manifest 尚有未到达
+        请求（_arrived_request_count < len(runtimes) 即 C++ 侧已排
+        alarm——未来到达 → 新准入 → 逐出释放；runtimes 槽位完成后置
+        None，不得按槽位判）。守卫只在 EOF 终态（无任何未来事件源）
+        的全停滞才触发。"""
+        if not any(state.active_decode for state in self.instances):
+            return
+        for state in self.instances:
+            if state.in_flight_train is not None:
+                return
+            if state.pending_decode_ready:
+                return
+            for runtime in state.qp:
+                if runtime.remaining_chunks > 0:
+                    return
+        if self._pending_merge_alarms:
+            return
+        if self.arrival_heap:
+            return
+        # 未来到达存在（runtimes 槽位完成后置 None，用到达计数判）：
+        # _arrived_request_count < len(runtimes) 即 manifest 尚有请求
+        # 未到达（C++ 侧已排 alarm → 事件源在途）。
+        if self._arrived_request_count < len(self.runtimes):
+            return
+        for state in self.instances:
+            for runtime in state.active_decode:
+                if not runtime.decode_stalled:
+                    return
+        stalled_detail = {
+            state.index: sorted(
+                runtime.request_id
+                for runtime in state.active_decode
+                if runtime.decode_stalled)
+            for state in self.instances if state.active_decode
+        }
+        # K6：停滞是可恢复路径、此前不落 deep_gap 台账；守卫判死即确认
+        # 不可恢复——此刻提交各停滞会话**最近一次**缺口记录（每次停滞
+        # 覆盖，无复利），台账恢复"落账 = run 终止"语义。
+        terminal_records = []
+        for state in self.instances:
+            for runtime in state.active_decode:
+                if runtime.decode_stalled and runtime.stall_gap_records:
+                    self.kv_manager.commit_deep_gap_records(
+                        runtime.stall_gap_records)
+                    terminal_records.extend(runtime.stall_gap_records)
+        raise RuntimeError(
+            "joint decode-growth deadlock: every active decode session is "
+            "stalled with no queued prefill work and no in-flight train -- "
+            "no event source can ever release capacity (design sec.3.3 "
+            "invariant 7). stalled={}; deep_gap_records={!r}".format(
+                stalled_detail, terminal_records))
+
+    def _on_merge_done(self, watch_id: str, tick: int) -> None:
+        """R11：merge 尾 watch 交付 → 下一轮 alarm 重锚 merge_done + 间隔
+        （service_done 合同）；同时注销该请求的 merge 在途流（R15）。"""
+        pending = self._pending_merge_alarms.pop(watch_id, None)
+        if pending is None:
+            raise RuntimeError(
+                "merge-done watch {} delivered without a pending alarm".format(
+                    watch_id))
+        request_id = pending["request_id"]
+        self._batch["future_alarms"].append({
+            "arrival_world_ns": tick + pending["interval"],
+            "envelope": pending["envelope"],
+        })
+        self._release_transfer_flows(request_id + "#merge")
+
+    # ------------------------------------------------------ R15 流登记 --
+
+    def _register_transfer_flows(self, transfers, *, owner: str) -> None:
+        """R15-1/F-B：发射时点登记在途流——逐 shard 完整链路序列（TP
+        并行全路径，非代表对）+ 池端口占用（remote_store/remote_load 的
+        edge 端口）。注销由完成事件驱动（drain/completion/merge-watch），
+        决策时刻快照因果可见。"""
+        for transfer in transfers or ():
+            if transfer.kind == "local_hit":
+                continue
+            for shard in transfer.shards:
+                self._joint_flows.register_path(
+                    shard.noc_path, owner=owner)
+                if shard.edge_rank is not None:
+                    self._pool_ports.register(shard.edge_rank, owner=owner)
+
+    def _release_transfer_flows(self, owner: str) -> None:
+        self._joint_flows.release_owner(owner)
+        self._pool_ports.release_owner(owner)
+
+    def _pool_port_divisor(self, instance_index: int) -> int:
+        """实例各池端口最大在途数 + 自身 1（R15-3；E 内核 r_j 与 J 池
+        路径计价共用）。"""
+        edges = self._instance_edge_ports.get(instance_index, ())
+        if not edges:
+            return 1
+        return max(1, max(self._pool_ports.count(edge) for edge in edges) + 1)
+
+    def _observe_service_factors(self, state, train, tick: int) -> None:
+        """R15-2：列车核销时采集 ServiceFactors 纯样本（P3 α 公式）。
+
+        样本纯净性：只收**纯列车**（无 joiner 迁移、无 chunk×decode 混合
+        ——两段不可因果分离）的服务段实测 = 核销 tick − max(发射 tick,
+        上次核销 tick)（排除列车前排队的污染，排队在 target_wait 段计
+        价）；基数 = 同内容 roofline 闭式账本。transfer 因子保留接口位
+        （节点级传输完成遥测未交付，updates=0 披露；传输争用的在线修正
+        由链路/端口除数通道承担）。"""
+        emit_tick = train.get("emit_tick")
+        if emit_tick is None:
+            return
+        start = max(emit_tick, state.last_train_finalize_tick or emit_tick)
+        span_ns = tick - start
+        if span_ns <= 0:
+            return
+        chunk_records = train.get("prefill_chunk_tokens") or ()
+        member_parts = train.get("members") or []
+        instance_size = self.topology.instance(state.index).size
+        # 纯 decode 列车（无 chunk、无 joiner——迁移会混入传输段；M5：
+        # remote-read 成员的逐列车门控读流同样混入传输段，一并排除）。
+        if (not chunk_records and member_parts
+                and not train.get("had_joiners")):
+            base_ns = 0
+            for request_id, participation in member_parts:
+                runtime = self.runtime_by_request_id.get(request_id)
+                if runtime is None:
+                    return
+                if runtime.joint_action == "remote-read":
+                    return
+                context0 = runtime.prefill_context_tokens
+                consumed = runtime.decode_tokens_consumed
+                for step in range(1, participation + 1):
+                    base_ns += self._decode_step_load_ns(
+                        instance_size, context0 + consumed + step)
+            if base_ns > 0:
+                self._joint_factors.observe_decode(
+                    actual_ns=span_ns, base_ns=base_ns,
+                    service_ns=span_ns, tick_ns=tick)
+            return
+        # 纯 prefill 列车（无 decode 成员、无 joiner；含 partial 后缀
+        # 恢复门或 copy/REMOTE 首 chunk 门控 NoC 传输的列车混入传输段，
+        # 跳过——纯度约束）。
+        if (chunk_records and not member_parts
+                and not train.get("had_joiners")
+                and not train.get("suffix_gated")
+                and not train.get("history_transfer_gated")):
+            head_runtime = self.runtime_by_request_id.get(
+                chunk_records[0][0])
+            if head_runtime is None:
+                return
+            base_ns = 0
+            processed = head_runtime.prefill_tokens_completed
+            for _, chunk_tokens in chunk_records:
+                base_ns += self._prefill_chunk_task_load_ns(
+                    instance_size=instance_size,
+                    chunk_tokens=chunk_tokens,
+                    context_tokens=(
+                        head_runtime.joint_span_base_context
+                        + processed + chunk_tokens))
+                processed += chunk_tokens
+            if base_ns > 0:
+                self._joint_factors.observe_prefill(
+                    actual_ns=span_ns, base_ns=base_ns,
+                    service_ns=span_ns, tick_ns=tick)
+
+    def _decode_step_load_ns(self, instance_size: int, context: int) -> int:
+        """单 decode 步的 roofline 负载（average=1/generated=0 的单步口径）。"""
+        return self._decode_task_load_ns_cached(
+            instance_size=instance_size,
+            current_context_tokens=context,
+            generated_tokens=0,
+            average_decode_length=1.0,
+            running_step_fraction_remaining=1.0)
 
     def _joint_session_view(self, session_id: str) -> SessionKVView:
         """session KV 的决策时点只读视图（跨实例执行期间描述**基础历史**：
@@ -1554,11 +2162,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             missing_bytes_by_tp_rank=missing)
 
     def _joint_cost_model(self, now_ns: int) -> JointCostModel:
-        """决策时点构造代价模型（只读快照；无资源副作用）。"""
+        """决策时点构造代价模型（只读快照；无资源副作用）。
+
+        R3'/R15（2026-09-14）：负载视图补 reclaimable（驱逐等待定价区分
+        逐出可解/深缺口）；route_paths_fn 给全部 TP 并行 shard 路径
+        （F-B 并集除数）；pool_divisor_fn 给池端口仲裁份额（P1 同源）。"""
         loads = {}
         for state in self.instances:
             snapshot = self._task_load_snapshot(state, now_ns)
             remaining = self.kv_manager._effective_remaining_by_tp_rank(
+                state.index)
+            reclaimable = self.kv_manager._instance_reclaimable_capacity_by_tp_rank(
                 state.index)
             loads[state.index] = InstanceLoadView(
                 instance_index=state.index,
@@ -1567,6 +2181,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 active_decode_task_load_ns=(
                     snapshot.active_decode_task_load_ns),
                 hbm_remaining_bytes_by_tp_rank=tuple(remaining),
+                reclaimable_bytes_by_tp_rank=tuple(reclaimable),
             )
 
         def route(source_instance: int, target_instance: int):
@@ -1580,6 +2195,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             path = deterministic_xy_route(
                 self.hardware, source_rank, target_rank)
             return path, max(0, len(path) - 1)
+
+        def route_paths(source_instance: int, target_instance: int):
+            # F-B：候选自身 TP 并行流的全部 shard 路径（相对位配对）。
+            from face_scheduler import deterministic_xy_route
+            source_group = self.topology.instance(source_instance)
+            target_group = self.topology.instance(target_instance)
+            paths = []
+            for source_rank, target_rank in zip(
+                    source_group.ranks, target_group.ranks):
+                paths.append(deterministic_xy_route(
+                    self.hardware, source_rank, target_rank))
+            return paths
 
         prefill_ns_per_token = float(
             estimate_prefill_task_load_ns(
@@ -1602,6 +2229,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             model_layers=self.model.layers,
             instance_tp_size=self.topology.instances[0].size,
             route_fn=route,
+            route_paths_fn=route_paths,
+            pool_divisor_fn=self._pool_port_divisor,
         )
 
     def _joint_remote_read_stream(self, runtime, exec_instance: int):
@@ -1663,7 +2292,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         边缘/距离掩码——HBM 只影响动作计价中的驱逐等待，不做准入过滤），
         联合/顺序选择 instance × stay/recompute/copy/remote-read；选择后
         物化（预约已知输入 + prepare_prefill 动作 + 入队）。决策输入无
-        oracle：runtime.final_context_tokens / decode_length 不进视图。"""
+        oracle：runtime.final_context_tokens / decode_length 不进视图。
+
+        R2（2026-09-14）准入事务化：预约+prepare 为一个事务——全部
+        runtime 字段改写移到事务成功之后（D7：失败请求零残留，预约账
+        本/双纪元/runtime 字段不被污染）；容量类失败（KVCapacityError，
+        N3' 类型化）按三态分类（P5-a：对任一 (instance, action) 组合判
+        物理可行性——存在任一组合物理可行 → 暂时不可行 return False
+        接通纪元门；全部组合不可行 → 结构性 fail-closed 带逐 rank 缺
+        口）；失败也落盘（D5）+ 同分类折叠计数（防日志体积乘积爆炸）。
+        合同类异常（重复预约/context 收缩等）不被延迟路径吞掉（负例
+        单测钉死）。"""
         if runtime.estimated_arrival_ns is None:
             raise RuntimeError("request cannot be admitted before arrival")
 
@@ -1692,6 +2331,64 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         )
         chosen = record.chosen
         selected = chosen.instance_index
+
+        # ---- 事务段：reserve + prepare（失败零残留，D7）。 ----
+        try:
+            admission_evictions = self.kv_manager.reserve_request_capacity(
+                request_id=runtime.request_id,
+                session_id=runtime.session_id,
+                instance_index=selected,
+                final_context_tokens=(
+                    session_view.history_tokens
+                    + runtime.joint_input_tokens),
+                action=chosen.action,
+            )
+            (runtime.history_location_before,
+             history_transfers,
+             prepare_evictions) = self.kv_manager.prepare_prefill(
+                session_id=runtime.session_id,
+                target_instance_index=selected,
+                history_tokens=session_view.history_tokens,
+                trigger_request_id=runtime.request_id,
+                reservation_request_id=runtime.request_id,
+                action=chosen.action,
+            )
+        except KVCapacityError as exc:
+            # D7 清账：raise 前已提交的逐出保留（合法释放）但必须补
+            # 纪元 bump + 图侧同步；预约未登记（reserve 失败）或已
+            # 释放（prepare 失败时事务回滚由 kv_manager 内部保证——
+            # reserve 成功而 prepare 失败的容量类回退在下面统一处理）。
+            if exc.evictions:
+                self._bump_kv_ledger_epoch()
+                self.graph.sync_pending_history_after_evictions(exc.evictions)
+                self._emit_eviction_only_nodes(exc.evictions, now_ns)
+            self._release_orphan_reservation(runtime.request_id)
+            self._log_admission_failure(
+                runtime, now_ns, record, str(exc), "capacity_deferred")
+            # N6+F3+M2（kimi 复审）：失败键 = KV 纪元 ⊕ **失败候选集**
+            # 实例（选中实例 ∪ 本次候选表中 applicable 实例，冻结于失败
+            # 时刻）的纪元。规格 R2.5 原文"上次判定不可行的选中/失败候
+            # 选集内实例"——只挂选中实例时，任一未选候选实例的负载迁移
+            # （argmin 翻转到可行候选）不重开重试门：生产模式损失换选
+            # 时机，SH_ADMIT_GATE_VERIFY 影子断言被合法击穿（假阳性
+            # abort）。F3 红线仍守：键只含失败候选集（冻结集合、非全
+            # 实例之或）。_admit_waiting_requests 在 False 返回后读取。
+            candidate_instances = {
+                candidate.instance_index
+                for candidate in record.candidates
+                if candidate.applicable}
+            candidate_instances.add(selected)
+            self._last_admit_failure_key = (
+                self._kv_ledger_epoch,
+                tuple((index, self.instances[index].ledger_epoch)
+                      for index in sorted(candidate_instances)))
+            return False
+        # 事务成功：统一补纪元 + 图侧同步（预约/prepare 两处逐出）。
+        self._bump_kv_ledger_epoch()
+        self.graph.sync_pending_history_after_evictions(
+            admission_evictions + prepare_evictions)
+
+        # ---- 事务成功段：runtime 字段落账本（D7 重排）+ R13 重算口径。 ----
         snapshots = tuple(
             self._task_load_snapshot(state, now_ns)
             for state in self.instances)
@@ -1704,41 +2401,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         runtime.admission_time_ns = now_ns
         runtime.hbm_wait_ns = now_ns - runtime.estimated_arrival_ns
         runtime.origin_home_instance = session_view.home_instance
-
-        # recompute：物理 prefill 工作折入必要历史（§2.2 表；span 基置 0
-        # ——工作副本从 0 物化），remaining_chunks 随之改写。
-        if chosen.action == "recompute":
-            runtime.joint_prefill_work = (
-                session_view.history_tokens
-                + runtime.joint_input_tokens)
-            runtime.joint_span_base_context = 0
-            runtime.remaining_chunks = math.ceil(
-                runtime.joint_prefill_work / self.p_chunk)
-
-        # 预约已知输入 KV（prefill 上下文 = 已知 history+input；不预约
-        # 真实未来 decode 长度——decode 按实际进展因果增长，§3.1）。
-        admission_evictions = self.kv_manager.reserve_request_capacity(
-            request_id=runtime.request_id,
-            session_id=runtime.session_id,
-            instance_index=selected,
-            final_context_tokens=(
-                session_view.history_tokens
-                + runtime.joint_input_tokens),
-        )
-        self._bump_kv_ledger_epoch()
-        self.graph.sync_pending_history_after_evictions(admission_evictions)
-        (runtime.history_location_before,
-         history_transfers,
-         prepare_evictions) = self.kv_manager.prepare_prefill(
-            session_id=runtime.session_id,
-            target_instance_index=selected,
-            history_tokens=session_view.history_tokens,
-            trigger_request_id=runtime.request_id,
-            reservation_request_id=runtime.request_id,
-            action=chosen.action,
-        )
-        self._bump_kv_ledger_epoch()
-        self.graph.sync_pending_history_after_evictions(prepare_evictions)
         runtime.history_transfers = history_transfers
         runtime.history_transfer = (
             history_transfers[0] if history_transfers else None)
@@ -1750,7 +2412,42 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 transfer.total_bytes
                 for transfer in history_transfers
                 if transfer.kind != "local_hit")
-        # joint 决策日志（§7：origin_home/execution/action/成本分解）。
+
+        # R13（N7(b)，2026-09-14）：recompute 只重算**缺失区间**——
+        # 驻留目标（home，LOCAL/PARTIAL 前缀复用）仅池后缀层折算 token
+        # （ceil(H×(L−prefix)/L)，LOCAL 为 0），span 基 = H；异地/REMOTE
+        # 基础整份重算，span 基 = 0。prefill_tokens_to_process 同步改写
+        # ——_plan_train 的 chunk 工作量来源（此前漏改，recompute 带
+        # H>0 会在列车规划撞 "ran out of work" 死端）。
+        if chosen.action == "recompute":
+            resident_here = (
+                session_view.resident_instance == selected
+                and session_view.location in (
+                    "local_hbm", "partial_hbm_remote"))
+            if resident_here:
+                history_tokens = session_view.history_tokens
+                prefix = session_view.resident_prefix_layers
+                layers = self.model.layers
+                missing_equiv = (
+                    (history_tokens * (layers - prefix) + layers - 1)
+                    // layers if prefix < layers else 0)
+                runtime.joint_span_base_context = history_tokens
+            else:
+                missing_equiv = session_view.history_tokens
+                runtime.joint_span_base_context = 0
+            runtime.joint_prefill_work = (
+                missing_equiv + runtime.joint_input_tokens)
+            runtime.prefill_tokens_to_process = runtime.joint_prefill_work
+            runtime.remaining_chunks = math.ceil(
+                runtime.joint_prefill_work / self.p_chunk)
+
+        # R15-1：准入相在途流登记（历史迁移 + 逐出支链；drain 边界注销）。
+        self._register_transfer_flows(
+            runtime.history_evictions + tuple(runtime.history_transfers),
+            owner=runtime.request_id)
+
+        # joint 决策日志（§7：origin_home/execution/action/成本分解；
+        # R15 披露：链路/端口争用覆盖与在线因子状态）。
         self.log_decision(
             {"kind": "joint_admission", "request_id": runtime.request_id,
              "priority": 0},
@@ -1767,6 +2464,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "layer_policy": self.joint_config.layer_policy,
                 "remote_enabled": self.joint_config.remote_enabled,
                 "instance_rule_note": record.instance_rule_note,
+                "contention_coverage": (
+                    "link_flows+pool_ports" if (
+                        self._joint_flows.has_registrations
+                        or self._pool_ports._counts) else "cold_start"),
+                "service_factors": self._joint_factors.as_dict(),
                 "candidates": [
                     {
                         "instance_index": candidate.instance_index,
@@ -1775,6 +2477,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         "cost_ns": candidate.cost_ns,
                         "inapplicable_reason":
                             candidate.inapplicable_reason,
+                        # M6（kimi 复审）：notes 随候选落决策日志——
+                        # R3'.3 的 deep_gap_unresolved 等注记须可检索
+                        # （§9 验收"可检索"口径），此前只进内存不落盘。
+                        # notes 载于 breakdown（不适用候选无 breakdown）。
+                        "notes": list(candidate.breakdown.notes)
+                        if candidate.breakdown is not None else [],
                     }
                     for candidate in record.candidates
                 ],
@@ -1793,6 +2501,153 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             {"type": "prefill_qp", "instance_index": selected})
         self._emit_admission(runtime, now_ns)
         return True
+
+    def _release_orphan_reservation(self, request_id: str) -> None:
+        """R2 清账：事务失败路径上若预约已登记（reserve 成功、prepare
+        容量失败），释放之——失败请求零残留（D7）。
+
+        守卫语义（kimi 复审注记）：部分物化预约（extra shards 非空）
+        不是容量失败回退的合法形态——prepare 容量路径要么全未物化
+        （_ensure_capacity 首次 raise 于任何 _add_local_shards 之前），
+        要么已物化即事务成功；当前实现该守卫不可达，作为防御性
+        fail-closed 保留（若未来 prepare 改为增量物化，此处是第一道
+        报警线，不得静默释放）。"""
+        reservation = self.kv_manager._reservations.get(request_id)
+        if reservation is None:
+            return
+        extra = self.kv_manager._reservation_extra_shards(reservation)
+        if any(extra):
+            # 预约已部分物化说明 prepare 已推进到改写会话——该状态不
+            # 属于容量失败回退的合法形态，交由 fail-closed 上报。
+            raise RuntimeError(
+                "admission rollback found a partially materialized "
+                "reservation for request {}".format(request_id))
+        self.kv_manager.release_request_capacity_reservation(request_id)
+        self._bump_kv_ledger_epoch()
+
+    def _emit_eviction_only_nodes(self, evictions, tick: int) -> None:
+        """D7/R2：失败路径上已提交逐出的图侧发射（旁路支链、无触发门
+        ——与 prefill_evictions 同构）。逐出是合法的容量释放，其池写
+        必须进图（否则 C++ 水位盲区 + pending store 不登记）。"""
+        if not evictions:
+            return
+        self.graph.emit_eviction_side_branch(
+            [transfer for transfer in evictions], tick)
+
+    def _classify_physical_feasibility(
+        self, runtime, session_view,
+    ) -> tuple[bool, list[str]]:
+        """P5-a 三态分类：对全部 (instance, action) 组合判物理可行性
+        （request_hbm_eventually_feasible_instances，动作感知口径）。
+
+        M1（kimi 复审，2026-09-14）：按**适用动作集合**过滤（规格 R2.4
+        "逐实例按其适用动作集合的 footprint 逐一判"）——remote-read 仅
+        在 remote on 且基础驻留 LOCAL 时参与判定（N1(a)：PARTIAL 后缀
+        在 home 不可直读；remote-off 为正交消融）。否则其 input-only
+        足迹几乎恒可行，把结构性不可行掩盖为暂时不可行，丢失
+        KVPhysicalInfeasibleError 的逐 rank 缺口诊断。
+        返回 (structural_infeasible, per_instance_detail)。"""
+        final_context = (
+            session_view.history_tokens + runtime.joint_input_tokens)
+        detail = []
+        any_feasible = False
+        remote_allowed = (
+            self.joint_config.remote_enabled
+            and session_view.location == "local_hbm")
+        for action in ("stay", "recompute", "copy", "remote-read"):
+            if action == "remote-read" and not remote_allowed:
+                continue
+            feasible = self.kv_manager.request_hbm_eventually_feasible_instances(
+                session_id=runtime.session_id,
+                final_context_tokens=final_context,
+                action=action,
+            )
+            for instance_index, ok in enumerate(feasible):
+                if ok:
+                    any_feasible = True
+                    detail.append(
+                        "instance {} x {} physically feasible".format(
+                            instance_index, action))
+        return (not any_feasible), detail
+
+    def _log_admission_failure(
+        self, runtime, now_ns, record, reason: str, failure_class: str,
+    ) -> None:
+        """R2.6（D5/P4）：失败也落盘——首条失败分类带全候选表；同请求
+        同分类的后续失败折叠为紧凑计数行（防深尾部"延迟 × 纪元重试"
+        乘积下失败日志体积逼近成功日志）。"""
+        state = self._admission_failure_state.get(runtime.request_id)
+        if state is not None and state["class"] == failure_class:
+            state["count"] += 1
+            self.log_decision(
+                {"kind": "joint_admission_wait",
+                 "request_id": runtime.request_id, "priority": 0},
+                now_ns,
+                decision={
+                    "failure_class": failure_class,
+                    "attempt_count": state["count"],
+                    "reason": reason,
+                },
+            )
+            return
+        self._admission_failure_state[runtime.request_id] = {
+            "class": failure_class, "count": 1}
+        session_view = self._joint_session_view(runtime.session_id)
+        structural, detail = self._classify_physical_feasibility(
+            runtime, session_view)
+        self.log_decision(
+            {"kind": "joint_admission_failed",
+             "request_id": runtime.request_id, "priority": 0},
+            now_ns,
+            decision={
+                "failure_class": failure_class,
+                "reason": reason,
+                "structural_infeasible": structural,
+                "feasibility_detail": detail[:16],
+                "chosen_instance": record.chosen.instance_index,
+                "chosen_action": record.chosen.action,
+                "candidates": [
+                    {
+                        "instance_index": candidate.instance_index,
+                        "action": candidate.action,
+                        "applicable": candidate.applicable,
+                        "cost_ns": candidate.cost_ns,
+                        "inapplicable_reason":
+                            candidate.inapplicable_reason,
+                        # M6（kimi 复审）：notes 随候选落决策日志——
+                        # R3'.3 的 deep_gap_unresolved 等注记须可检索
+                        # （§9 验收"可检索"口径），此前只进内存不落盘。
+                        # notes 载于 breakdown（不适用候选无 breakdown）。
+                        "notes": list(candidate.breakdown.notes)
+                        if candidate.breakdown is not None else [],
+                    }
+                    for candidate in record.candidates
+                ],
+            },
+        )
+        if structural:
+            # P5-a：全部 (instance, action) 组合物理不可行——结构性
+            # fail-closed（设计方案 §3.3-7：显式报告带逐 rank 缺口）。
+            final_shards = kv_cache_shard_bytes_for_tokens(
+                self.model,
+                session_view.history_tokens
+                + runtime.joint_input_tokens,
+                self.kv_manager.tp_degree)
+            gaps = []
+            for instance in self.topology.instances:
+                for rank, shard_bytes in zip(instance.ranks, final_shards):
+                    capacity = (
+                        self.kv_manager._rank_states[rank].capacity_bytes
+                        - self.kv_manager._rank_states[rank].model_weight_bytes)
+                    if shard_bytes > capacity:
+                        gaps.append(
+                            "rank {}: needs {} > free {}".format(
+                                rank, shard_bytes, capacity))
+            raise KVPhysicalInfeasibleError(
+                "request {} final KV fits no (instance, action) "
+                "combination; per-rank gaps: {}".format(
+                    runtime.request_id,
+                    "; ".join(gaps) if gaps else "aggregate capacity"))
     def _emit_admission(self, runtime, tick: int) -> None:
         """准入动作发射 + 决策/账本记录（拼 batch 改造，2026-08-22：
         PREFILL_DRAIN watch 不再在此注册——移至覆盖其最后 chunk 的列车
@@ -1842,6 +2697,15 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "history_transfer": (
                     _transfer_summary(runtime.history_transfer)
                     if runtime.history_transfer else None),
+                # R12（2026-09-14）：水印重放的 joint 专属字段——动作/全
+                # 部历史迁移/重算口径（多动作多区间传输无法由单数字段
+                # reconstruct）。
+                "joint_action": runtime.joint_action,
+                "joint_span_base_context": runtime.joint_span_base_context,
+                "joint_prefill_work": runtime.joint_prefill_work,
+                "history_transfers": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.history_transfers],
                 "history_evictions": [
                     _transfer_summary(transfer)
                     for transfer in runtime.history_evictions],
@@ -1876,6 +2740,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "prefill_decode_transfer": (
                     _transfer_summary(runtime.prefill_decode_transfer)
                     if runtime.prefill_decode_transfer else None),
+                "joint_action": runtime.joint_action,
                 "decode_evictions": [
                     _transfer_summary(transfer)
                     for transfer in runtime.decode_evictions],
@@ -1931,7 +2796,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             prefill_chunk_spans；原"在飞段全量剩余 × fraction=1.0"的
             不可分假设作废，改为列车级冻结量）；
           - active_decode：estimate_decode_remaining_task_load_ns 逐请求
-            （标定常数 average_decode_length；generated_tokens =
+            （N12 在线化后 average_decode_length = CausalHorizonEstimator
+            因果估计（session→run→冷启动 1 token），非全 trace 常数；
+            generated_tokens =
             decode_tokens_consumed 闭式迭代级剩余量、current_context_
             tokens = prefill_ctx + consumed——原 generated=0/fraction=1.0
             的"active 段不可分"假设作废；当前在飞迭代仍整计一次
@@ -1953,6 +2820,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """
         if (state.snapshot_cache is not None
                 and state.snapshot_epoch == state.ledger_epoch
+                and state.snapshot_horizon_version
+                == self._joint_horizon.version
                 and not self._snapshot_verify):
             return state.snapshot_cache
         snapshot = self._compute_task_load_snapshot(state)
@@ -1964,7 +2833,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     "reference while-loop computation for instance {} "
                     "(epoch {})".format(state.index, state.ledger_epoch))
             if (state.snapshot_cache is not None
-                    and state.snapshot_epoch == state.ledger_epoch):
+                    and state.snapshot_epoch == state.ledger_epoch
+                    and state.snapshot_horizon_version
+                    == self._joint_horizon.version):
                 if state.snapshot_cache != snapshot:
                     raise RuntimeError(
                         "task-load snapshot epoch cache diverged for "
@@ -1973,6 +2844,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 return state.snapshot_cache
         state.snapshot_cache = snapshot
         state.snapshot_epoch = state.ledger_epoch
+        state.snapshot_horizon_version = self._joint_horizon.version
         return snapshot
 
     def _compute_task_load_snapshot(self, state):
@@ -2008,16 +2880,22 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     chunk_tokens=chunk_tokens,
                     context_tokens=context_tokens)
             queued_load_ns -= running_prefill_load_ns
-        # active_decode（offline: :3665-3684；迭代级闭式剩余量折算）
+        # active_decode（offline: :3665-3684；迭代级闭式剩余量折算）。
+        # N12（R15-4，2026-09-14）：decode 剩余标定在线化——逐成员用
+        # CausalHorizonEstimator（session 均值 → run 均值 → 冷启动 1），
+        # 全 trace decode 均值常数不再进入负载视图（决策输入零未来
+        # 信息，总纲 §13.1/§13.2；J-off load-first 臂同口径）。
         active_decode_load_ns = 0
         for runtime in state.active_decode:
+            estimated_decode, _source = self._joint_horizon.estimate(
+                runtime.session_id)
             active_decode_load_ns += self._decode_task_load_ns_cached(
                 instance_size=instance_size,
                 current_context_tokens=(
                     runtime.prefill_context_tokens
                     + runtime.decode_tokens_consumed),
                 generated_tokens=runtime.decode_tokens_consumed,
-                average_decode_length=self.average_decode_length,
+                average_decode_length=float(estimated_decode),
                 running_step_fraction_remaining=1.0,
             )
         from face_scheduler import InstanceTaskLoadSnapshot
@@ -2045,7 +2923,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             while remaining_tokens > 0:
                 chunk_tokens = min(self.p_chunk, remaining_tokens)
                 context_tokens = (
-                    runtime.history_tokens_before + processed + chunk_tokens)
+                    runtime.joint_span_base_context
+                    + processed + chunk_tokens)
                 queued_load_ns += self._prefill_chunk_task_load_ns(
                     instance_size=instance_size, chunk_tokens=chunk_tokens,
                     context_tokens=context_tokens)
@@ -2062,16 +2941,22 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                     chunk_tokens=chunk_tokens,
                     context_tokens=context_tokens)
             queued_load_ns -= running_prefill_load_ns
-        # active_decode（offline: :3665-3684；迭代级闭式剩余量折算）
+        # active_decode（offline: :3665-3684；迭代级闭式剩余量折算）。
+        # N12（R15-4，2026-09-14）：decode 剩余标定在线化——逐成员用
+        # CausalHorizonEstimator（session 均值 → run 均值 → 冷启动 1），
+        # 全 trace decode 均值常数不再进入负载视图（决策输入零未来
+        # 信息，总纲 §13.1/§13.2；J-off load-first 臂同口径）。
         active_decode_load_ns = 0
         for runtime in state.active_decode:
+            estimated_decode, _source = self._joint_horizon.estimate(
+                runtime.session_id)
             active_decode_load_ns += self._decode_task_load_ns_cached(
                 instance_size=instance_size,
                 current_context_tokens=(
                     runtime.prefill_context_tokens
                     + runtime.decode_tokens_consumed),
                 generated_tokens=runtime.decode_tokens_consumed,
-                average_decode_length=self.average_decode_length,
+                average_decode_length=float(estimated_decode),
                 running_step_fraction_remaining=1.0,
             )
         from face_scheduler import InstanceTaskLoadSnapshot
@@ -2097,7 +2982,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         while remaining_tokens > 0:
             chunk_tokens = min(self.p_chunk, remaining_tokens)
             context_tokens = (
-                runtime.history_tokens_before + processed + chunk_tokens)
+                runtime.joint_span_base_context
+                + processed + chunk_tokens)
             total_ns += self._prefill_chunk_task_load_ns(
                 instance_size=instance_size, chunk_tokens=chunk_tokens,
                 context_tokens=context_tokens)
@@ -2171,6 +3057,22 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "run ended with non-empty ready frontier: {!r}".format(
                     sorted(self._ready_frontier)))
+        if self._pending_merge_alarms:
+            # R11：merge 尾 watch 必须在 EOF 前交付（标记是真实图节点，
+            # C++ 处理后必有交付）；残留即 watch 通道破损。
+            raise RuntimeError(
+                "run ended with undelivered merge-done watches: {}".format(
+                    sorted(self._pending_merge_alarms)[:5]))
+        if self._stalled_by_instance:
+            # R14：停滞会话残留（EOF 边界——唤醒 pass 与死锁守卫的兜底
+            # 报错；到这里的停滞 = 守卫条件外的事件源缺失，显式上报）。
+            stalled_ids = sorted(
+                runtime.request_id
+                for stalled in self._stalled_by_instance.values()
+                for runtime in stalled)
+            raise RuntimeError(
+                "run ended with stalled decode sessions: {}".format(
+                    stalled_ids[:5]))
         if self._admit_attempt_epoch:
             raise RuntimeError(
                 "strategy run ended with stale admit attempt epochs: "
