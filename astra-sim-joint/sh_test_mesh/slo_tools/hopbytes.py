@@ -342,6 +342,11 @@ def collect_joint(record: dict, acc: dict, per_request: dict) -> None:
     行 shards 为空，逐条采集自然零贡献；decode/completion 分支同 S3
     （prefill_decode_transfer 单笔、completion_evictions；completion
     的 merge_transfers 维持 relevant_kinds 过滤外不消费的既有口径）。
+    R17（2026-09-16）新增 kind=kv_eviction 决策行：decode 增长/准入失败
+    逐出的池写流从 decision.evictions[].shards 采集（跳数按实际路由——
+    本批 96gib 实测 noc_hops=2：源秩在网格内部、池端口在边界列；施工
+    前推断 {0,1} 已被运行证伪，kimi 终审 P1 订正 2026-09-17），
+    语义同 decode_evictions（此前逐出池写流不落决策行、系统性漏计）。
     """
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
@@ -355,10 +360,11 @@ def collect_joint(record: dict, acc: dict, per_request: dict) -> None:
         else:
             _accumulate_shard_transfers(decision.get("history_transfer"),
                                         request_id, acc, per_request)
-        for field in ("history_evictions", "prefill_evictions"):
-            for entry in decision.get(field) or []:
-                _accumulate_shard_transfers(entry, request_id, acc,
-                                            per_request)
+        # prefill_evictions 不读取：joint 下结构性恒空死通道（准入 R1'
+        # 预约覆盖 prefill 全动作足迹、drain expand gap≡0，2026-09-16
+        # 三方裁决）——旧 joint 日志该字段恒空，移除零行为差。
+        for entry in decision.get("history_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
     elif kind == "decode":
         _accumulate_shard_transfers(decision.get("prefill_decode_transfer"),
                                     request_id, acc, per_request)
@@ -366,6 +372,9 @@ def collect_joint(record: dict, acc: dict, per_request: dict) -> None:
             _accumulate_shard_transfers(entry, request_id, acc, per_request)
     elif kind == "completion":
         for entry in decision.get("completion_evictions") or []:
+            _accumulate_shard_transfers(entry, request_id, acc, per_request)
+    elif kind == "kv_eviction":
+        for entry in decision.get("evictions") or []:
             _accumulate_shard_transfers(entry, request_id, acc, per_request)
 
 
@@ -408,12 +417,15 @@ REPO_HOP_SOURCES: dict[str, dict] = {
     "astra-sim-joint": {
         "collector": collect_joint,
         "granularity": "shard(noc_path)",
-        "notes": "2026-09-14 登记 + R16-7（2026-09-15）：joint 决策日志"
-                 "为 S3 超集——prefill 分支优先消费复数 "
+        "notes": "2026-09-14 登记 + R16-7（2026-09-15）+ R17（2026-09-16）："
+                 "joint 决策日志为 S3 超集——prefill 分支优先消费复数 "
                  "history_transfers 列表（copy@PARTIAL 复合两笔逐条"
                  "采集；旧产物无复数字段回退单数口径）；新增 kind="
                  "joint_admission 审计行与 completion 的 merge_transfers"
-                 " 均携带 shards，relevant_kinds 过滤外的不消费；hop 覆盖"
+                 " 均携带 shards，relevant_kinds 过滤外的不消费；R17 起"
+                 "消费 kind=kv_eviction 决策行 evictions[].shards（decode "
+                 "增长/准入失败逐出池写流，跳数按实际路由（本批实测 "
+                 "noc_hops=2））；hop 覆盖"
                  "口径同 S3（count/fallback 语义）",
     },
 }

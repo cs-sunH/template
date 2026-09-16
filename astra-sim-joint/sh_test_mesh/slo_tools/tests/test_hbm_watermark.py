@@ -60,12 +60,15 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
                   token_requests: list[dict], bucket_ns=10,
                   bucket_null: bool = False, npu_bytes: int = 1000,
                   row_budget: int = 5_000_000,
-                  model_rows: bool = False) -> Path:
+                  model_rows: bool = False, layers: int = 1,
+                  hidden_size: int = 50, bytes_per_elem: int = 1) -> Path:
     """落一个最小可重放 run_dir；返回 run_dir。
 
     records 为 online_decision_log.jsonl 的行（dict）；token_requests 为
     manifest.json 的 requests 数组成员。model_rows=True 时 trace_config
     追加 ffn_size/num_heads/vocab_size/mlp_variant 行（三口径剖面用）。
+    layers/hidden_size/bytes_per_elem 可覆写（R17 joint 切片用
+    32/4096/2 → coef=524,288 B/token 对齐在盘真实 run）。
     """
     results = run_dir / "results"
     results.mkdir(parents=True, exist_ok=True)
@@ -97,10 +100,10 @@ def write_fixture(run_dir: Path, *, repo_variant: str, records: list[dict],
         } for index, entry in enumerate(token_requests)]}),
         encoding="utf-8")
     config_rows = (
-        "config,layers,1,,,,synthetic\n"
-        "config,hidden_size,50,,,,synthetic\n"
+        f"config,layers,{layers},,,,synthetic\n"
+        f"config,hidden_size,{hidden_size},,,,synthetic\n"
         "config,num_heads,2,,,,synthetic\n"
-        "config,bytes_per_elem,1,,,,synthetic\n")
+        f"config,bytes_per_elem,{bytes_per_elem},,,,synthetic\n")
     if model_rows:
         config_rows += (
             "config,ffn_size,8,,,,synthetic\n"
@@ -1368,6 +1371,357 @@ class EvictBytesCoverageTests(unittest.TestCase):
         with (run_dir / "instances.csv").open(newline="") as handle:
             row = next(csv.DictReader(handle))
         self.assertEqual(row["evict_bytes"], "NA")
+
+
+# ---------------------------------------------------------------------------
+# R17（2026-09-16）golden：tracelab_session_000411 生命周期最小化切片。
+#
+# 素材抽自在盘真实 run（experiment/0914/4instance/runs/astra-sim-joint/
+# full/results/online_decision_log.jsonl，96,189 行）＋该 run 的
+# manifest.json token 事实：turn10（驻留建立）→ 四次披露逐出（他人
+# prefill 行 history_evictions，victim=session_000411，合计
+# 57,365,397,504 B）→ turn11/turn12 池恢复（remote_load 工作副本）。
+# 真实缺口：披露逐出之间的静默段 [7,9) 与 [2,5)（10,623,221,760 B =
+# 5 层 × 2,124,644,352 B/层）不落盘——旧日志重放把幻影 bytes 结转到
+# turn12 prefill（remote_load 后 tracked=144,288,874,496 > 目标
+# 133,984,419,840 静默保留）并在 tick=19310999728506072 的 decode_grow
+# 爆"增长为负"（目标 134,913,982,464 < 跟踪 144,288,874,496）。
+# 本切片手工注入两根 kind=kv_eviction 决策行（模拟 R17 仿真侧修复后
+# 形态，条目带 R17-1d 新键 resident_prefix_layers_before/after），静默
+# 段按层扣回——重放应零异常闭合。
+#
+# 切片缩减（保真度注记）：seq 35561 的 history_evictions 还含
+# session_000143 victim 条目（该会话在切片内无更早生命周期行，逐出
+# 未跟踪会话会先炸）——剔除；他人 stay-prefill 行的 history_transfers
+# （local_hit，watermark 对 stay 行不消费）与 prefill_decode_transfer
+# （joint 映射 decode_move=None 不消费）同样剔除以压缩夹具。关键数字
+# （57,365,397,504 披露合计、10,623,221,760 静默、144,288,874,496 vs
+# 134,913,982,464、coef=524,288）全部保真。
+# ---------------------------------------------------------------------------
+
+# joint 切片 trace_config：layers=32, hidden=4096, bytes_per_elem=2
+# → coef = 2*32*4096*2 = 524,288 B/token（与真实 run 的 f(tokens) 对齐）。
+JOINT411_COEF = 524288
+# 逐出时点每层字节 = f(129,678)/32 = 67,988,619,264/32（turn10 终态）。
+JOINT411_LAYER_BYTES = 2124644352
+
+S411 = "tracelab_session_000411"
+S333 = "tracelab_session_333"
+S143 = "tracelab_session_143"
+
+
+def _evict_entry(session_id: str, layer_start: int, layer_end: int,
+                 total_bytes: int, reason: str, *, phase: str = "history",
+                 prefix_before: int | None = None,
+                 prefix_after: int | None = None) -> dict:
+    """逐出条目（真实日志形态：4 shard，total_bytes 为 4 倍数）。"""
+    entry = {"kind": "remote_store", "reason": reason, "phase": phase,
+             "session_id": session_id, "layer_start": layer_start,
+             "layer_end": layer_end, "total_bytes": total_bytes,
+             "shards": [{"bytes": total_bytes // 4, "noc_hops": 0,
+                         "noc_path": [16], "source_rank": 16,
+                         "target_rank": 16}] * 4}
+    if prefix_before is not None:
+        # R17-1d 新序列化键（旧日志无——披露条目不带，注入条目带）。
+        entry["resident_prefix_layers_before"] = prefix_before
+        entry["resident_prefix_layers_after"] = prefix_after
+    return entry
+
+
+def _kv_eviction_row(seq: int, tick: int, request_id: str,
+                     entry: dict) -> dict:
+    """注入的 kind=kv_eviction 决策行（R17 仿真侧修复后形态）。"""
+    return {"kind": "kv_eviction", "request_id": request_id,
+            "priority": 0, "seq": seq, "tick": tick,
+            "decision": {"evictions": [entry]}}
+
+
+def joint_411_token_requests() -> list[dict]:
+    """真实 run manifest.json 的 token 事实（逐字段抄录）。"""
+    return [
+        token_row(f"{S411}_request_000010", S411, 124958, 127293, 129678),
+        token_row(f"{S333}_request_000011", S333, 374835, 504811, 511104),
+        token_row(f"{S333}_request_000012", S333, 511104, 517844, 518335),
+        token_row(f"{S333}_request_000018", S333, 529359, 544129, 547231),
+        token_row(f"{S143}_request_000290", S143, 745128, 745407, 745434),
+        token_row(f"{S411}_request_000011", S411, 129678, 254376, 254947),
+        token_row(f"{S411}_request_000012", S411, 254947, 255555, 257328),
+    ]
+
+
+def joint_411_records(*, drop_kv: str | None = None,
+                      corrupt_prefix_before: int | None = None,
+                      with_kv: bool = True) -> list[dict]:
+    """切片决策行（tick/bytes 逐字段抄自真实日志；seq 重排为切片序）。"""
+    seq = 0
+
+    def nxt() -> int:
+        nonlocal seq
+        seq += 1
+        return seq
+
+    def audit(request_id: str, tick: int) -> dict:
+        return {"kind": "joint_admission", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"admission_time_ns": tick,
+                             "candidates": []}}
+
+    def prefill(request_id: str, tick: int, instance: int,
+                action: str, *, evictions: list[dict] | None = None,
+                transfers: list[dict] | None = None,
+                discarded: int = 0) -> dict:
+        return {"kind": "prefill", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {
+                    "prefill_instance_index": instance,
+                    "joint_action": action,
+                    "history_tokens_discarded": discarded,
+                    "history_evictions": evictions or [],
+                    # R17-2a 后 joint 映射不再读取 prefill_evictions——
+                    # 字段在场（旧日志形态）但零行为差。
+                    "prefill_evictions": [],
+                    "history_transfers": transfers or [],
+                    "history_transfer_bytes": 0,
+                    "history_source_instance_index": None}}
+
+    def decode(request_id: str, tick: int, instance: int,
+               action: str) -> dict:
+        return {"kind": "decode", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"decode_instance_index": instance,
+                             "joint_action": action,
+                             "decode_evictions": []}}
+
+    def completion(request_id: str, tick: int, action: str,
+                   *, working_copy: bool, home: int | None,
+                   location: str, merges: list[dict] | None = None) -> dict:
+        return {"kind": "completion", "request_id": request_id,
+                "priority": 0, "seq": nxt(), "tick": tick,
+                "decision": {"joint_action": action,
+                             "joint_working_copy": working_copy,
+                             "origin_home_instance": home,
+                             "kv_location_after_completion": location,
+                             "merge_transfers": merges or [],
+                             "completion_evictions": []}}
+
+    def remote_load(total: int, reason: str) -> dict:
+        return {"kind": "remote_load", "reason": reason, "phase": "history",
+                "session_id": S411, "layer_start": 0, "layer_end": 32,
+                "total_bytes": total,
+                "shards": [{"bytes": total // 4} for _ in range(4)]}
+
+    def pool_store(total: int) -> dict:
+        return {"kind": "remote_store", "reason": "merge_increment_pool_store",
+                "phase": "completion", "session_id": S411,
+                "layer_start": 0, "layer_end": 32, "total_bytes": total,
+                "shards": [{"bytes": total // 4} for _ in range(4)]}
+
+    # 静默段注入条目（R17-1d 新键：before/after 显式披露；tick 落在披露
+    # #2（18875809191471704）与 #3（18876212627993193）之间，单调）。
+    kv_a_before = 5 if corrupt_prefix_before is None \
+        else corrupt_prefix_before
+
+    records = [
+        # -- turn10：session_000411 home 驻留建立（stay，local_hit [0,32)
+        #    65,513,979,904 信息量；终态 f(129,678)=67,988,619,264）。
+        audit(f"{S411}_request_000010", 18761909404184225),
+        prefill(f"{S411}_request_000010", 18761909404184225, 0, "stay",
+                transfers=[{"kind": "local_hit",
+                            "reason": "history_local_reuse",
+                            "phase": "history", "session_id": S411,
+                            "layer_start": 0, "layer_end": 32,
+                            "total_bytes": 65513979904, "shards": []}]),
+        decode(f"{S411}_request_000010", 18761910200091720, 0, "stay"),
+        completion(f"{S411}_request_000010", 18761961073255981, "stay",
+                   working_copy=False, home=0, location="local_hbm"),
+        # -- 披露逐出 #1：[9,32) = 48,866,820,096（他人 prefill 行）。
+        prefill(f"{S333}_request_000011", 18875314303521902, 0, "stay",
+                evictions=[_evict_entry(S411, 9, 32, 23 * JOINT411_LAYER_BYTES,
+                                        "request_admission_capacity_"
+                                        "suffix_half")]),
+        decode(f"{S333}_request_000011", 18875450304339222, 0, "stay"),
+        completion(f"{S333}_request_000011", 18875725479471704, "stay",
+                   working_copy=False, home=0, location="local_hbm"),
+        # -- 披露逐出 #2：[5,7) = 4,249,288,704。
+        prefill(f"{S333}_request_000012", 18875809191471704, 0, "stay",
+                evictions=[_evict_entry(S411, 5, 7, 2 * JOINT411_LAYER_BYTES,
+                                        "request_admission_capacity_"
+                                        "suffix_half")]),
+        decode(f"{S333}_request_000012", 18875817457114317, 0, "stay"),
+        completion(f"{S333}_request_000012", 18875839335583669, "stay",
+                   working_copy=False, home=0, location="local_hbm"),
+    ]
+    if with_kv and drop_kv != "a":
+        records.append(_kv_eviction_row(
+            nxt(), 18875900000000000, f"{S333}_request_000015",
+            _evict_entry(S411, 7, 9, 2 * JOINT411_LAYER_BYTES,
+                         "decode_growth_capacity_suffix_half",
+                         prefix_before=kv_a_before, prefix_after=5)))
+    if with_kv and drop_kv != "b":
+        records.append(_kv_eviction_row(
+            nxt(), 18876000000000000, f"{S333}_request_000017",
+            _evict_entry(S411, 2, 5, 3 * JOINT411_LAYER_BYTES,
+                         "admission_failure_capacity_suffix_half",
+                         prefix_before=5, prefix_after=2)))
+    records.extend([
+        # -- 披露逐出 #3：[1,2) = 2,124,644,352（真实行还含 session_000143
+        #    victim 条目，切片内该会话无跟踪态——剔除，见类注记）。
+        prefill(f"{S333}_request_000018", 18876212627993193, 0, "stay",
+                evictions=[_evict_entry(S411, 1, 2, JOINT411_LAYER_BYTES,
+                                        "request_admission_capacity_"
+                                        "suffix_half")]),
+        decode(f"{S333}_request_000018", 18876231497333192, 0, "stay"),
+        completion(f"{S333}_request_000018", 18876376810949872, "stay",
+                   working_copy=False, home=0, location="local_hbm"),
+        # -- 披露逐出 #4：[0,1) = 2,124,644,352（full_fallback；同行还有
+        #    session_000333 的 [27,32) = 51,606,077,440，保真保留）。
+        prefill(f"{S143}_request_000290", 18878632243660262, 0, "stay",
+                evictions=[
+                    _evict_entry(S411, 0, 1, JOINT411_LAYER_BYTES,
+                                 "request_admission_capacity_full_fallback"),
+                    _evict_entry(S333, 27, 32, 51606077440,
+                                 "request_admission_capacity_suffix_half")]),
+        decode(f"{S143}_request_000290", 18878632896545399, 0, "stay"),
+        completion(f"{S143}_request_000290", 18878634603614922, "stay",
+                   working_copy=False, home=0, location="local_hbm"),
+        # -- turn11：池恢复工作副本（copy→实例 2，remote_load
+        #    67,988,619,264 = 32 层全量；完成后 remote_memory 结算、增量
+        #    写池 65,677,033,472）。
+        audit(f"{S411}_request_000011", 19310813084255981),
+        prefill(f"{S411}_request_000011", 19310813084255981, 2, "copy",
+                transfers=[remote_load(67988619264,
+                                       "history_pool_restore_working_copy")]),
+        decode(f"{S411}_request_000011", 19310871486054290, 2, "copy"),
+        completion(f"{S411}_request_000011", 19310884578874328, "copy",
+                   working_copy=True, home=0, location="remote_memory",
+                   merges=[pool_store(65677033472)]),
+        # -- turn12：池恢复回 home（copy→实例 0，remote_load
+        #    133,665,652,736；原失败点 = 本轮 decode tick
+        #    19310999728506072 的 decode_grow 增长为负）。
+        audit(f"{S411}_request_000012", 19310999022999956),
+        prefill(f"{S411}_request_000012", 19310999022999956, 0, "copy",
+                transfers=[remote_load(133665652736,
+                                       "history_pool_restore_working_copy")]),
+        decode(f"{S411}_request_000012", 19310999728506072, 0, "copy"),
+        completion(f"{S411}_request_000012", 19311045548518466, "copy",
+                   working_copy=True, home=0, location="remote_memory",
+                   merges=[pool_store(1248329728)]),
+    ])
+    return records
+
+
+def run_joint_411(tag: str, **builder_kwargs) -> tuple[
+        subprocess.CompletedProcess, dict]:
+    run_dir = make_run_dir(tag)
+    write_fixture(run_dir, repo_variant="astra-sim-joint",
+                  records=joint_411_records(**builder_kwargs),
+                  token_requests=joint_411_token_requests(),
+                  layers=32, hidden_size=4096, bytes_per_elem=2,
+                  npu_bytes=1 << 40)
+    proc = run_tool(run_dir)
+    summary_path = run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text()) \
+        if summary_path.exists() else {}
+    return proc, summary
+
+
+class JointSession411GoldenTests(unittest.TestCase):
+    """R17 golden：session_000411 生命周期切片（重放闭合/水位精确/敏感
+    性 fail-closed）。"""
+
+    def test_replay_closes_and_watermark_exact(self):
+        """断言①：原失败点（tick=19310999728506072 decode_grow）不再爆，
+        重放零异常闭合；断言②：水位终值/峰值/逐出账精确断言。"""
+        proc, summary = run_joint_411("j411g")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(summary["trust_tier"], "upper_bound_only")
+        self.assertEqual(summary["coef_bytes_per_token"], JOINT411_COEF)
+        # 零异常：anomalies 全零（无 bytes/source/kind/location 错配）。
+        self.assertEqual({k: v for k, v in summary["anomalies"].items()
+                          if v}, {})
+        # session_000411 生命周期闭合：终态无驻留（turn12 remote_memory
+        # 结算），实例 2 工作副本释放后归零。
+        self.assertEqual(summary["instances"]["2"]
+                         ["residual_occupancy_bytes"], 0)
+        self.assertEqual(summary["instances"]["2"]
+                         ["peak_occupancy_bytes"], 133665652736)
+        # 实例 0 终值 = 残留三方（000411=0；000333=f(547231)−[27,32)；
+        # 000143=f(745434)）：
+        #   286,906,646,528 − 51,606,077,440 + 390,822,100,992。
+        self.assertEqual(summary["instances"]["0"]
+                         ["residual_occupancy_bytes"], 626122670080)
+        # 实例 0 峰值 = turn12 decode 后（000411 工作副本
+        # f(257,328)=134,913,982,464 叠加残留 626,122,670,080）。
+        self.assertEqual(summary["instances"]["0"]
+                         ["peak_occupancy_bytes"], 761036652544)
+        # 逐出账：披露 4 条（57,365,397,504）+ 注入 2 条（10,623,221,760）
+        # + session_000333 victim 1 条（51,606,077,440）。
+        self.assertEqual(summary["total_evict_events"], 7)
+        self.assertEqual(summary["total_evict_bytes"], 119594696704)
+        # R17-2d 哨兵：kv_eviction 逐条计数 + reason 分桶随 summary 落盘。
+        self.assertEqual(summary["actions"]["evict_entries_kv_eviction"], 2)
+        self.assertEqual(summary["actions"][
+            "evict_reason_kv_eviction:"
+            "decode_growth_capacity_suffix_half"], 1)
+        self.assertEqual(summary["actions"][
+            "evict_reason_kv_eviction:"
+            "admission_failure_capacity_suffix_half"], 1)
+
+    def test_sensitivity_dropping_either_kv_eviction_row_fails(self):
+        """断言③（敏感性）：挖空任一根注入 kv_eviction 行 → 幻影 bytes
+        结转到 turn12 prefill（remote_load 后 tracked > 目标）→
+        R17-3 prefill_shrink fail-closed（非静默），判据不是空转。"""
+        for drop in ("a", "b"):
+            with self.subTest(drop=drop):
+                proc, _ = run_joint_411(f"j411s{drop}", drop_kv=drop)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("prefill_shrink", proc.stderr)
+
+    def test_kv_eviction_prefix_mismatch_fails_closed(self):
+        """R17-4 连锁不变量：注入条目 resident_prefix_layers_before 与
+        跟踪前缀不符（披露 #2 后应=5，条目谎报 7）→ fail-closed。"""
+        proc, _ = run_joint_411("j411p", corrupt_prefix_before=7)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("逐出前缀不符", proc.stderr)
+
+    def test_kv_eviction_tick_regression_fails_closed(self):
+        """R17-2b 次序纪律：第二根 kv_eviction 行 tick 早于第一根（仍晚于
+        前一决策行）→ 分支自行承担的 tick 单调检查 fail-closed（消息含
+        kind=kv_eviction 与两侧 tick），不得绕过主循环判罚语义。"""
+        run_dir = make_run_dir("j411t")
+        records = []
+        for record in joint_411_records():
+            if record.get("kind") == "kv_eviction" \
+                    and record["tick"] == 18876000000000000:
+                record = dict(record)
+                record["tick"] = 18875850000000000  # 回退到第一根之前
+            records.append(record)
+        write_fixture(run_dir, repo_variant="astra-sim-joint",
+                      records=records,
+                      token_requests=joint_411_token_requests(),
+                      layers=32, hidden_size=4096, bytes_per_elem=2,
+                      npu_bytes=1 << 40)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("tick 回退", proc.stderr)
+        self.assertIn("kv_eviction", proc.stderr)
+
+    def test_prefill_history_tokens_discarded_rejected(self):
+        """R17-3：history_tokens_discarded > 0（丢弃历史词表）显式拒收。"""
+        run_dir = make_run_dir("j411d")
+        records = joint_411_records()
+        for record in records:
+            if record["request_id"] == f"{S411}_request_000010" \
+                    and record["kind"] == "prefill":
+                record["decision"]["history_tokens_discarded"] = 7
+        write_fixture(run_dir, repo_variant="astra-sim-joint",
+                      records=records,
+                      token_requests=joint_411_token_requests(),
+                      layers=32, hidden_size=4096, bytes_per_elem=2,
+                      npu_bytes=1 << 40)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("history_tokens_discarded", proc.stderr)
 
 
 if __name__ == "__main__":

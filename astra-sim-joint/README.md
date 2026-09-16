@@ -168,6 +168,7 @@ COMPUTE_DONE → MERGE_WAIT/MERGING → COMMITTED → SERVICE_DONE` 的账本
 | merge 物理流 | 已实现 | 完成批发射真实回传/池写回流 + merge 尾标记节点（watch 送达后重锚下一轮到达）；下一轮数据准备经 store-tail 前递补偿等待（合并成本进入下一轮数据等待；全部动作/八组合一致处理） |
 | 逐层恢复与 prefill 重叠 | 未实现（列车级恢复门保守化，沿基底口径） | §5.1 的逐层交错恢复为后续项；k_hide 目标在保守执行下仍约束保留层数 |
 | SLO 水印对 joint 的口径 | 已登记（joint 词表已扩，R12） | slo_tools 三工具已登记 astra-sim-joint；水印重放词表已扩 joint 专属事件（merge 增量回传/池写回/home_merge_base_degrade 自降级/跨实例工作副本释放——SessionState base/working 双驻留记账；决策行携带 joint_action/history_transfers/重算口径字段；完成行显式披露 `joint_working_copy` 真值——复审 K3；home 侧结算只并入增量、base 不双计——复审 K2），"home 低估/执行端高估"口径缺口消除；决策日志重放仍为上界口径（逐 rank 判决需 kv_delta_journal 权威层，本仓暂不产出，同 S3） |
+| 容量逐出的决策日志披露（R17，2026-09-17） | 已实现＋单测验证 | 旁路逐出咽喉点（`_emit_eviction_only_nodes`）在图发射后同 tick 落 `kind=kv_eviction` 决策行（decision.evictions 携带 `_transfer_summary` 条目）——覆盖 decode 增长逐出（成功/停滞/唤醒三路）与准入失败已提交逐出（潜伏位点：当批零触发——reserve 的 feasible 预检拦截在先 + prepare 受 R1' 预约不变量覆盖，R17-7 探针实证）；`prefill_evictions` 为结构性恒空死通道（准入预约覆盖全动作足迹，drain expand gap≡0），注释+单测钉死不新增空字段载运；转移摘要补序列化 `resident_prefix_layers_before/after` 与 `source_instance_index`（连锁不变量免重建 + victim 归位，R17-1d）；tick 守护 = 断言 `_batch` 在场（N4）。工具侧配套：hbm_watermark 主循环 kind 门前拦截 kv_eviction（自担 tick 单调 + 逐条 `apply_evict` + 非空率哨兵）+ `_joint_prefill` fail-early 对称校验（prefill_shrink/discarded>0 fail-closed）+ (primary, base) 二元组前缀连锁不变量（R17-2/3/4）；hopbytes `collect_joint` 消费 kv_eviction 池写流（此前通道 2/3 系统性漏计）并移除 prefill_evictions 死读。历史 run 决策日志定格缺失、离线不可重建——水印三件套与可信 hopbytes 需带本修复重仿真（第三次错误处置，方案 v4） |
 | 三机制消融/外部对照实验 | 未运行 | 本次交付为仓库构建＋单元级验证；仿真规模实验按另行登记的有限计划进行（§8 第 6 步） |
 
 ## 4. 快速开始（构建与运行入口沿用基底）
@@ -220,21 +221,25 @@ python3 -m pytest tests/ slo_tools/tests/ workload/llama2_7b_inference \
     --ignore=slo_tools/tests/test_driver_parity.py \
     --ignore=slo_tools/tests/test_golden_g1g4.py \
     --ignore=slo_tools/tests/test_slo_contract.py -q
-# 交付基线：311 passed + 1 skipped + 7 subtests（R16 批起 = 289 基线 +
-# test_joint_review3_fixes.py 22 用例：copy@PARTIAL 复合两笔物化/守卫/
-# 计价闭式（含 L∤inc 公式钉死）/图构建复合发射/水印重放/merge 回归/
-# copy@home×PARTIAL 退化负例/序列回归/日志形状 + hopbytes 复合采集；
-# 绑定已退役 SH30_ABLATION 语义的 test_ablation_switch.py 已删）。
+# 交付基线：321 passed + 1 skipped + 9 subtests（R17 批起 = 311 基线 +
+# test_joint_review3_fixes.py 27 用例（R16 批 22 + R17-5a 4 用例：通道 2
+# kv_eviction 行落盘一致性/通道 3 潜伏位点接线/通道 1 恒空谱系显式化/
+# tick 守护；kimi 终审 P3 迁入 hopbytes kv_eviction 采集用例 1）+
+# test_hbm_watermark.py JointSession411GoldenTests 5 用例
+#（session_000411 生命周期切片重放闭合/精确水位/挖空敏感性 + 前缀不符/
+# tick 回退/discarded 拒收 fail 路径）；hopbytes kv_eviction 采集用例经 kimi 终审 P3
+# 自 slo_tools/tests/test_slo_contract.py（--ignore 面）迁入上处基线车道。
 # 口径订正（外部审查处置批 2026-09-15；三轮深审再订正分解式）：此前
 # 此栏把全树计数配给了 workload/llama2_7b_inference 四目标窄命令
 # （该命令实收 229 = 本仓目标面 joint/+根两 test 文件+online/）；
-# 全树实收 312 = 目标面 229 + slo_tools 可收集 34 + sh_test_mesh/
-# tests 49 → 311 passed + 1 skipped（skip = slo_tools test_hbm_
-# watermark.py:1086 phase2 journal fixture 缺失）。slo_tools 三文件
+# 全树实收 = 目标面 + slo_tools 可收集 + sh_test_mesh/
+# tests → R17 批 320 passed + 1 skipped（skip = slo_tools test_hbm_
+# watermark.py phase2 journal fixture 缺失）。slo_tools 三文件
 # （driver_parity/golden_g1g4/slo_contract）从 sh_test_mesh 根收集
 # 即 ImportError（伴生模块 synthetic.py 在其目录内、不在 sys.path；
 # 目录内可收集 80 项）——基底固有的调用目录依赖，与本仓改动无关，
-# --ignore 排除。
+# --ignore 排除（目录内直跑时 driver_parity 2 失败 + slo_contract 1
+# 失败为 HEAD 先在，git stash 还原基线复跑坐实，与 R17 无关）。
 ```
 
 定向验收覆盖（`joint/test_joint_mechanisms.py` 对应《设计方案》§8 表）：

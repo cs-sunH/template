@@ -213,9 +213,18 @@ def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
         victim_instance = None
     time_ns = entry.get("time_ns")
     eff_tick = time_ns if isinstance(time_ns, int) and time_ns >= 0 else tick
+    # R17-4：层区间与新序列化键（resident_prefix_layers_before/after，
+    # 仿真侧 R17-1d 新增；旧日志无此键 → None）透传给 apply_evict 的
+    # 驻留前缀校验；非 joint 仓不消费这些键。
     return {"type": "evict", "tick": eff_tick, "session": victim_session,
             "bytes": nbytes, "instance": victim_instance,
-            "kind": entry.get("kind"), "reason": entry.get("reason")}
+            "kind": entry.get("kind"), "reason": entry.get("reason"),
+            "layer_start": entry.get("layer_start"),
+            "layer_end": entry.get("layer_end"),
+            "resident_prefix_layers_before":
+                entry.get("resident_prefix_layers_before"),
+            "resident_prefix_layers_after":
+                entry.get("resident_prefix_layers_after")}
 
 
 def _collect_eviction_lists(record: dict, mapping: dict, where: str) -> list:
@@ -467,7 +476,10 @@ REPO_VARIANTS: dict[str, dict] = {
         "eviction_lists": (
             ("completion", "completion_evictions", _scalar_bytes),
             ("prefill", "history_evictions", _scalar_bytes),
-            ("prefill", "prefill_evictions", _scalar_bytes),
+            # R17-2a（2026-09-16）：prefill_evictions 不读取——joint 下该
+            # 字段结构性恒空（准入 R1' 预约覆盖 prefill 全动作足迹、drain
+            # expand gap≡0，2026-09-16 三方裁决）；旧 joint 日志该字段恒空，
+            # 移除零行为差（sh_1.0 的同名字段不受影响）。
             ("decode", "decode_evictions", _scalar_bytes),
         ),
         "restore": {"bytes_path": ["history_transfer_bytes"],
@@ -1225,10 +1237,15 @@ class SessionState:
     instance/bytes 此时描述执行端工作副本），消除 joint 专属事件
     （merge 回传/池写回/工作副本释放）不在词表时的"home 低估、执行端
     高估"系统性偏差。
+
+    R17-4（2026-09-16，joint）：(primary, base) 二元组驻留前缀跟踪——
+    prefix_layers/base_prefix_layers = 驻留层前缀 [0, n) 的层数（None=
+    未知）；prefill 行成功处理后建立，逐出条目逐条校验推进（连锁不变
+    量，前缀未知而逐出到场 = fail-closed，宁爆不漏）。
     """
 
     __slots__ = ("instance", "bytes", "tokens", "base_instance",
-                 "base_bytes")
+                 "base_bytes", "prefix_layers", "base_prefix_layers")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
@@ -1236,6 +1253,8 @@ class SessionState:
         self.tokens: int = 0
         self.base_instance: Optional[int] = None
         self.base_bytes: int = 0
+        self.prefix_layers: Optional[int] = None
+        self.base_prefix_layers: Optional[int] = None
 
 
 class ReplayReport:
@@ -1251,6 +1270,9 @@ class ReplayReport:
             "silent_eviction_bytes": 0,
             "restore_prefix_reconciled": 0,
             "restore_prefix_reconcile_bytes": 0,
+            # R17-2d 哨兵：kv_eviction 决策行逐条计数（reason 分桶键
+            # evict_reason_kv_eviction:<reason> 动态写入）。
+            "evict_entries_kv_eviction": 0,
         }
         self.anomalies = {
             "restore_bytes_mismatch": 0, "restore_source_mismatch": 0,
@@ -1311,19 +1333,102 @@ class WatermarkReplay:
 
     def stash_base(self, session_id: str) -> None:
         """R12（joint）：跨实例工作副本建立时把 home 侧基础驻留转 base
-        记账——primary 的 instance/bytes 此后描述执行端工作副本。"""
+        记账——primary 的 instance/bytes 此后描述执行端工作副本。
+
+        R17-4：驻留前缀随字节一并转入 base_prefix_layers；primary 前缀
+        置 None（未知），由工作副本行的 history_transfers 区间/增长重建。"""
         session = self._session(session_id)
         if session.base_instance is not None:
             fail(f"joint base stash on already-stashed session "
                  f"{session_id!r}——重复建立工作副本，账本与重放不一致")
         session.base_instance = session.instance
         session.base_bytes = session.bytes
+        session.base_prefix_layers = session.prefix_layers
         session.instance = None
         session.bytes = 0
         session.tokens = 0
+        session.prefix_layers = None
 
     def _expected_bytes(self, tokens: int) -> int:
         return self.coef * tokens
+
+    # -- R17-4：(primary, base) 驻留前缀连锁不变量（joint） ----------------
+
+    def _advance_resident_prefix(self, session_id: str, session: SessionState,
+                                 entry: dict, where: str,
+                                 base: bool = False) -> None:
+        """逐出条目驱动的驻留前缀推进（joint 连锁不变量，fail-closed）。
+
+        条目带 resident_prefix_layers_before/after（仿真侧 R17-1d 新增
+        序列化键）→ 断言 before == 当前跟踪前缀后推进到 after；旧日志无
+        该键 → 回退 layer_end 规则（before=上一前缀、after=layer_start，
+        不另立断言）。跟踪前缀未知（None）而逐出条目到场 = fail-closed
+        （真阳性，宁爆不漏）。base=True 时作用于 base 前缀
+        （home_merge_base_degrade 自降级——降级离开的是 home 侧基础驻
+        留，不是 primary 工作副本）。非 joint 仓不适用（直接返回）。
+        """
+        if not self.mapping.get("joint"):
+            return
+        before = entry.get("resident_prefix_layers_before")
+        after = entry.get("resident_prefix_layers_after")
+        tracked = session.base_prefix_layers if base else session.prefix_layers
+        label = "base_prefix_layers" if base else "prefix_layers"
+        if before is not None or after is not None:
+            if not isinstance(before, int) or isinstance(before, bool) \
+                    or not isinstance(after, int) or isinstance(after, bool) \
+                    or before < 0 or after < 0 or after > before:
+                fail(f"{where}: 会话 {session_id!r} 逐出条目 "
+                     f"resident_prefix_layers_before/after 结构非法"
+                     f"（before={before!r}, after={after!r}, "
+                     f"kind={entry.get('kind')!r}）——fail-closed")
+            if tracked is None:
+                fail(f"{where}: 会话 {session_id!r} 的 {label} 未知（None）"
+                     f"而逐出条目已到场（kind={entry.get('kind')!r}, "
+                     f"reason={entry.get('reason')!r}）——驻留前缀连锁"
+                     f"断裂，宁爆不漏")
+            if tracked != before:
+                fail(f"{where}: 会话 {session_id!r} 逐出前缀不符（{label} "
+                     f"跟踪 {tracked} != 条目 before={before}, kind="
+                     f"{entry.get('kind')!r}）——账本与重放不一致")
+            if base:
+                session.base_prefix_layers = after
+            else:
+                session.prefix_layers = after
+            return
+        layer_start = entry.get("layer_start")
+        if layer_start is None:
+            # bytes-only 条目（无层区间）：前缀不变，由调用方在 bytes 归零
+            # 时清零。
+            return
+        if not isinstance(layer_start, int) or isinstance(layer_start, bool) \
+                or layer_start < 0:
+            fail(f"{where}: 会话 {session_id!r} 逐出条目 layer_start 非"
+                 f"非负整数（{layer_start!r}）——fail-closed")
+        if tracked is None:
+            fail(f"{where}: 会话 {session_id!r} 的 {label} 未知（None）而"
+                 f"逐出条目已到场（kind={entry.get('kind')!r}）——驻留"
+                 f"前缀连锁断裂，宁爆不漏")
+        if base:
+            session.base_prefix_layers = layer_start
+        else:
+            session.prefix_layers = layer_start
+
+    def _establish_prefill_prefix(self, session: SessionState,
+                                  decision: dict) -> None:
+        """本会话 prefill 行成功处理后建立 primary 驻留前缀。
+
+        行内 history_transfers 带层区间 → 按区间建立（最大 layer_end——
+        copy@PARTIAL 的 noc 前缀段 + remote 后缀段合并即全覆盖）；否则
+        := 全层数（model_layers，watermark_prepare 注入 mapping）。"""
+        prefix: Optional[int] = None
+        for transfer in decision.get("history_transfers") or ():
+            end = transfer.get("layer_end")
+            if isinstance(end, int) and not isinstance(end, bool) and end >= 0:
+                if prefix is None or end > prefix:
+                    prefix = end
+        if prefix is None:
+            prefix = self.mapping.get("model_layers")
+        session.prefix_layers = prefix
 
     # -- 动作 ------------------------------------------------------------
 
@@ -1347,12 +1452,19 @@ class WatermarkReplay:
                  f"（tick={action['tick']}）——账本与重放不一致")
         if action["bytes"] < session.bytes:
             self.report.actions["partial_evictions"] += 1  # 分层部分逐出（S3 等）
+        # R17-4：驻留前缀连锁校验（joint；条目带 R17-1d 新键则断言 before，
+        # 旧日志回退 layer_start 规则；前缀未知即 fail-closed）。
+        self._advance_resident_prefix(
+            action["session"], session, action,
+            f"tick={action['tick']} trigger={trigger}")
         self._apply(action["tick"], session.instance, -action["bytes"],
                     evict_bytes=action["bytes"])
         session.bytes -= action["bytes"]
         if session.bytes == 0:
             session.instance = None
             session.tokens = 0
+            if self.mapping.get("joint"):
+                session.prefix_layers = 0
         self.report.actions["evictions"] += 1
         self.report.actions["evict_bytes"] += action["bytes"]
 
@@ -1511,6 +1623,24 @@ class WatermarkReplay:
         elif location == "partial_hbm_remote":
             # 分层部分去向：留下/离开比例账本未落——保留 bytes（上界），
             # 显式计数，不臆造比例。
+            # R17-4：驻留前缀已知且层数可得时，按前缀字节比例反推本地
+            # 留存层数并做整性断言（非整层数 = 账本与重放不一致）。
+            total_layers = self.mapping.get("model_layers")
+            if session.prefix_layers is not None and total_layers \
+                    and session.tokens > 0 and session.bytes > 0:
+                full = self._expected_bytes(session.tokens)
+                per_layer, rem = divmod(full, total_layers)
+                if rem or per_layer <= 0:
+                    fail(f"partial_hbm_remote 层数反推失败（会话 "
+                         f"{session_id!r}: f(tokens)={full} 不能被 "
+                         f"layers={total_layers} 整除，tick={tick}）——"
+                         f"fail-closed")
+                layers_local, rem2 = divmod(session.bytes, per_layer)
+                if rem2:
+                    fail(f"partial_hbm_remote 留存 bytes 非整层数（会话 "
+                         f"{session_id!r}: {session.bytes} 对每层 "
+                         f"{per_layer} 余 {rem2}，tick={tick}）——fail-closed")
+                session.prefix_layers = layers_local
             self.report.actions["own_relocation_partial_unknown"] += 1
         # local_hbm：保留，无事。
 
@@ -1552,6 +1682,42 @@ class WatermarkScan:
             return
         if not isinstance(request_id, str) or not request_id:
             fail(f"{where}: 决策记录缺 request_id")
+        if kind == "kv_eviction" and mapping.get("joint"):
+            # R17-2b（2026-09-16）：decode 增长逐出/准入失败逐出的
+            # kv_eviction 决策行——账本行（非审计行），必须在 kind 门之前
+            # 分流（否则按未知 kind fail-closed）。同请求允许多根（不经
+            # seen_kinds 去重）；触发请求在飞，不查 token manifest；
+            # request_id 校验复用主循环（kv_eviction 行必带触发请求 id）；
+            # 分支自行承担 tick 单调检查（复用 last_tick 推进与回退判罚
+            # 语义，不绕过次序纪律）。
+            decision = record.get("decision") or {}
+            entries = decision.get("evictions")
+            if entries is None:
+                entries = []
+            if not isinstance(entries, list):
+                fail(f"{where}: evictions 必须是数组")
+            tick = record.get("tick")
+            if not isinstance(tick, int) or tick < 0:
+                fail(f"{where}: 缺非负整数 tick")
+            if tick < self.last_tick:
+                fail(f"{where}: tick 回退（{tick} < {self.last_tick}，"
+                     f"kind=kv_eviction）——文件顺序与时间顺序不一致，"
+                     f"无法安全重放")
+            self.last_tick = tick
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    fail(f"{where}: evictions 成员必须是对象")
+                action = _evict_action(tick, entry, _scalar_bytes, where)
+                replay.apply_evict(action, request_id)
+                # R17-2d 哨兵：逐条计数 + 按 reason 分桶（随 summary.actions
+                # 落盘）。
+                replay.report.actions["evict_entries_kv_eviction"] = (
+                    replay.report.actions.get("evict_entries_kv_eviction", 0)
+                    + 1)
+                bucket = f"evict_reason_kv_eviction:{action.get('reason')}"
+                replay.report.actions[bucket] = (
+                    replay.report.actions.get(bucket, 0) + 1)
+            return
         if kind not in ("prefill", "decode", "completion"):
             fail(f"{where}: 未知 kind={kind!r}")
         key = (request_id, kind)
@@ -1659,6 +1825,13 @@ class WatermarkScan:
                  f"（session={session_id!r}, got {target!r}）")
         history_tokens = token_row["history_tokens_before"]
         prefill_context = token_row["prefill_context_tokens"]
+        # R17-3（2026-09-16）：fail-early——丢弃历史词元的未演练词表显式
+        # 拒收（重放无此语义，静默吞掉会系统性漏记被丢弃的驻留）。
+        discarded = decision.get("history_tokens_discarded")
+        if isinstance(discarded, int) and discarded > 0:
+            fail(f"joint prefill 行 history_tokens_discarded={discarded} > 0"
+                 f"（session={session_id!r}, tick={tick}）——丢弃历史词元"
+                 f"属未演练词表，显式拒收（fail-closed）")
         session = replay._session(session_id)
         if action == "stay":
             session.instance = target
@@ -1666,6 +1839,8 @@ class WatermarkScan:
                 replay.report.actions.get("joint_stay_prefill", 0) + 1)
             replay.apply_grow(tick, session_id, target, prefill_context,
                               "prefill_grow")
+            # R17-4：stay 单驻留——前缀按行内区间/全层数重建。
+            replay._establish_prefill_prefix(session, decision)
             return
         # 跨实例工作动作：基础驻留转 base（home 低估缺口修复的核心）。
         if session.instance is not None and session.instance != target:
@@ -1703,10 +1878,21 @@ class WatermarkScan:
         else:
             grow_tokens = prefill_context
         desired = replay._expected_bytes(grow_tokens)
+        # R17-3（2026-09-16）：对称校验——增长语义只增不减（与 decode_grow
+        # 的 apply_grow 负增长 fail 同构）；缩小时静默保留旧值会把逐出缺口
+        # 的幻影 bytes 结转下去，必须在产生点 fail-early。
+        if desired < session.bytes:
+            fail(f"prefill_shrink：joint prefill 增长为负（会话 "
+                 f"{session_id!r}: desired={desired} < session.bytes="
+                 f"{session.bytes}, tick={tick}）——上下文不允许收缩，"
+                 f"重放口径与账本不一致")
         if desired > session.bytes:
             replay._apply(tick, target, desired - session.bytes)
             session.bytes = desired
         session.tokens = prefill_context
+        # R17-4：跨实例工作副本行——primary 前缀按 history_transfers 区间
+        # （noc 前缀段 + remote 后缀段的并）/全层数重建。
+        replay._establish_prefill_prefix(session, decision)
         replay.report.actions["prefill_grow"] += 1
 
     def _joint_decode(self, replay, decision, tick, session_id, token_row,
@@ -1749,6 +1935,7 @@ class WatermarkScan:
         # （home_merge_capacity，victim=其它会话，经 apply_evict 入账）。
         home_add = 0
         degrade_bytes = 0
+        degrade_entries = []
         third_party_evictions = []
         for transfer in decision.get("merge_transfers") or ():
             kind = transfer.get("kind")
@@ -1764,6 +1951,7 @@ class WatermarkScan:
             elif kind == "remote_store":
                 if transfer.get("reason") == "home_merge_base_degrade":
                     degrade_bytes += nbytes
+                    degrade_entries.append(transfer)
                 elif transfer.get("session_id") == session_id:
                     pass  # 自身增量池写回（REMOTE 结算）：无本地变化
                 else:
@@ -1772,18 +1960,29 @@ class WatermarkScan:
                         fail(f"joint merge 逐出传输无法归类（session="
                              f"{session_id!r}, transfer={transfer!r}）——"
                              f"缺 victim session_id 或 merge home")
-                    third_party_evictions.append((victim, nbytes))
+                    third_party_evictions.append(transfer)
             elif kind in ("local_hit", "remote_load"):
                 continue
             else:
                 fail(f"joint merge transfer 出现未知 kind={kind!r}"
                      f"（session={session_id!r}, bytes={nbytes}）——"
                      f"joint 重放词表未覆盖，拒绝静默丢弃")
-        for victim_session, nbytes in third_party_evictions:
+        for transfer in third_party_evictions:
+            nbytes = transfer["total_bytes"]
             if nbytes:
+                # R17-4：层区间/R17-1d 新键透传（home_merge_capacity 的
+                # victim 逐出同受驻留前缀连锁校验约束）。
                 replay.apply_evict(
-                    {"session": victim_session, "tick": tick,
-                     "bytes": nbytes, "instance": merge_home},
+                    {"session": transfer.get("session_id"), "tick": tick,
+                     "bytes": nbytes, "instance": merge_home,
+                     "kind": transfer.get("kind"),
+                     "reason": transfer.get("reason"),
+                     "layer_start": transfer.get("layer_start"),
+                     "layer_end": transfer.get("layer_end"),
+                     "resident_prefix_layers_before":
+                         transfer.get("resident_prefix_layers_before"),
+                     "resident_prefix_layers_after":
+                         transfer.get("resident_prefix_layers_after")},
                     f"joint_merge:{session_id}")
         explicit_working_copy = decision.get("joint_working_copy")
         if explicit_working_copy is not None:
@@ -1810,6 +2009,10 @@ class WatermarkScan:
                     "joint_working_release_bytes", 0) + session.bytes)
         session.bytes = 0
         session.instance = None
+        # R17-4：primary 前缀随工作副本释放清零——kv_location_after_
+        # completion == "remote_memory" 时 primary 前缀必为零（清零实现，
+        # 与 bytes 清零同构，不与既有断言冲突）。
+        session.prefix_layers = 0
         if session.base_instance is None:
             # K3：REMOTE 基会话——基础历史在池 backing、无 home 驻留可
             # 恢复；增量整份写池（merge_transfers 只有池写回，无
@@ -1821,6 +2024,13 @@ class WatermarkScan:
         # home 侧 base：自降级扣减（真实离开 home）+ 增量并入（base 从未
         # 离开，不得重复加回——K2）。
         base_instance = session.base_instance
+        # R17-4：home_merge_base_degrade 条目作用于 base 前缀（不是
+        # primary——降级离开的是 home 侧基础驻留）；前缀未知而降级到场
+        # 同样 fail-closed（宁爆不漏）。
+        for transfer in degrade_entries:
+            replay._advance_resident_prefix(
+                session_id, session, transfer,
+                f"tick={tick} joint_merge_base_degrade", base=True)
         base_bytes = max(0, session.base_bytes - degrade_bytes)
         if degrade_bytes:
             replay._apply(tick, base_instance, -degrade_bytes,
@@ -1832,8 +2042,11 @@ class WatermarkScan:
         if base_bytes > 0 or home_add > 0:
             session.instance = base_instance
             session.bytes = base_bytes + home_add
+        # R17-4：base 归位 primary——前缀随字节并回（可能经自降级缩减）。
+        session.prefix_layers = session.base_prefix_layers
         session.base_instance = None
         session.base_bytes = 0
+        session.base_prefix_layers = None
         session.tokens = token_row["final_context_tokens"]
         replay.report.actions["joint_merge_settle"] = (
             replay.report.actions.get("joint_merge_settle", 0) + 1)
@@ -2194,6 +2407,11 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
     config = trace["values"]
     coef = 2 * config["layers"] * config["hidden_size"] * \
         config["bytes_per_elem"]
+    # R17-4：模型层数随 mapping 下发（joint 驻留前缀跟踪的"全层数"基准；
+    # REPO_VARIANTS 是模块级登记表，注入进副本、不动全局。A4 driver 经
+    # prep["mapping"] 复用，无需改签名）。
+    mapping = dict(mapping)
+    mapping["model_layers"] = config["layers"]
 
     # 容量链：profile → hardware bytes/NPU × npus/instance；任一环缺失
     # → capacity=NA，违规检查降级为峰值记录（不编造）。

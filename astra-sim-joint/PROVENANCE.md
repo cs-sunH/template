@@ -728,3 +728,74 @@ K5 报告中"重建 gate 为何带 duration"的疑问一并答复（duration 不
      ⑤ P2 时间线裁定落档：审查方读取时刻为真（mtime 19:20:39 落
      其窗口），原"查无实据"过强、"推定"升级为实锤并行落盘时间
      线（见改写后 P2 条）。
+
+## 12. R17 修复批（第三次错误：静默逐出通道裁决与披露补全，2026-09-17）
+
+处置输入：《joint错误的分析报告03.md》+《joint第三次错误报告文档.md》
++《joint第三次错误解决方案.md》（v4 定稿 → v4.1 施工批回写，git
+88cde60 纳管）。核心事实：hbm_watermark 对 4i session_000411 报
+decode_grow 负增长 FAIL-CLOSED（重放 144,288,874,496 vs 目标
+134,913,982,464，tick 19310999728506072），根因 = 容量逐出三通道中
+两条物理进图但决策日志零落点（披露缺口；仿真本体与 violation 判定
+不受影响）。
+
+- **通道裁决（R17-7 探针 9/9 PASS 实证，/tmp/r17_probe）**：
+  通道 1 expand_prefill = 结构性恒空死通道（R1' 预约覆盖全动作足迹
+  ⟹ drain gap≡0；谱系测试 S3 早钉死预期空）；通道 2 expand_decode
+  （逐列车/唤醒两路，reason=decode_growth_capacity）= 真凶主通道
+  （管理器级 3 条逐出复现 + active 守卫验证；在盘 4i 四次 stall 把
+  可逐空间刮至 22,528 B）；通道 3 准入失败 exc.evictions = **当批
+  零触发**（v4.1 精化：reserve 的 feasible 预检拦截在先——在盘
+  4i 33 + 6i 1 条失败全为"was reserved on an infeasible instance"
+  形态、零条 ensure-raise；prepare 五个 _ensure_capacity 调用点
+  全携预约排除 ⟹ gap≡0）——潜伏位点，R17-1b 咽喉点覆盖保留。
+- **修复面（纯披露，决策逻辑零改动）**：
+  - R17-1b：`_emit_eviction_only_nodes`（sh30_online_scheduler.py）
+    签名加 trigger_request_id，图发射后同 tick 落 `kind=kv_eviction`
+    决策行（decision.evictions = _transfer_summary 列表）；五个
+    调用点（2a 失败/成功 :1802/:1816、2b 失败/成功 :1898/:1909、
+    通道 3 :2377）全覆盖。
+  - R17-1b tick 守护（kimi N4）：`_require_batch_tick` 断言式取批
+    tick（删 `else 0` 虚构回退——落日志后 0 会破坏重放全序单调）。
+  - R17-1d：`_transfer_summary` 补序列化 resident_prefix_layers_
+    before/after + source_instance_index（KVTransfer 本携、此前
+    丢弃；读者忽略未知键，旧日志零行为差）。
+  - R17-1a'：死通道钉死（:338 初始化 + prefill 行字段 + gbb 死
+    发射块三处注释；不新增空字段载运——"字段存在≠字段被填"反
+    模式）。
+  - R17-2a/2b/2d（hbm_watermark）：joint 词表删 prefill_evictions
+    死行；主循环 kind 门前拦截 kv_eviction 分支（自担 tick 单调
+    + 逐条 apply_evict + 非空率哨兵）；R17-3 _joint_prefill
+    fail-early（prefill_shrink / discarded>0 fail-closed）；R17-4
+    SessionState (primary, base) 二元组前缀连锁不变量。
+  - R17-2c（hopbytes）：collect_joint 新增 kv_eviction 分支（通道
+    2/3 池写流此前系统性漏计）+ 删 prefill_evictions 死读。
+- **测试**：R17-5a 四用例（通道 2 行落盘一致性/通道 3 潜伏位点
+  接线/通道 1 恒空谱系显式化/tick 守护）入 test_joint_review3_fixes.py
+  （22 → 26）；R17-5b session_000411 golden 切片重放 + hopbytes
+  采集用例（见对应测试文件）；夹具判据 4 = stress-96gib × **150s 窗**
+  （施工批勘误：10s 窗 270 请求填不满 96 GiB、判据 2/4 双空转；150s
+  窗 = 在盘 L3 档同口径）链内 SLO 软标记升级硬门 + 非空门（kv_eviction
+  行 ≥1，首跑实测 1 条；kimi B1/B2/SR-8）。**决策一致红线粗校（96gib
+  ×150s 对照在盘 R16 同档）**：1918 prefill / 18 stall / 15 failed /
+  196 wait / 15 行 23 条披露逐出全部逐位一致，唯一差异 = kv_eviction
+  新增披露——纯披露零决策漂移的运行级证据。全树基线 320 passed +
+  1 skipped + 9 subtests（driver_parity 2 + slo_contract 1 目录内
+  失败为 HEAD 先在，git stash 还原基线复跑坐实）。
+- **历史数据**：第三轮 22 臂 + 0914 双拓扑决策日志定格缺失，水印
+  三件套与可信 hopbytes 离线不可重建——需带本修复重仿真（22 臂
+  现场目录不在本机在盘，寻档前置）；hopbytes 数字引用冻结至重跑批。
+- **遗留移交（方案 §8）**：R18 计量批（通道 3 流登记 parity——
+  登记点+注销点配对 + 决策漂移 A/B）；gbb 唯一漏斗机制级强化；
+  sh30_ledger_reconcile:58-60 陈旧地雷登记不修。
+- **kimi 终审钉正随批（2026-09-17，P1-P4）**：P1 hopbytes 两处
+  "noc_hops∈{0,1}" 文档串被本批运行证伪（96gib 实测 kv_eviction
+  条目 6 shard 全部 noc_hops=2——源秩在网格内部、池端口在边界列），
+  改"实际跳数（本批实测 2）"，方案 v4.1 D3-2 同源句一并订正；
+  P2 夹具头注"28gib 零逐出"订正为"旧词表零披露逐出"（R17 起通道 2
+  亦披露，10s 窗 28gib 实测 1 条 kv_eviction）；P3 hopbytes kv_eviction
+  采集用例自 test_slo_contract.py（--ignore 面）迁入
+  test_joint_review3_fixes.py 基线车道（进 320→321 门禁）；P4 留档：
+  _enter_decode_stall 的 stall 审计行仍留 `else 0` 回退——stall 行
+  是审计行不进重放、虚构 0 无害，N4 断言守护正确限定于账本行
+  （kv_eviction/joint_decode_stall 中仅前者重放消费）。

@@ -1004,6 +1004,209 @@ class HopbytesCompositeCollectionTest(unittest.TestCase):
         hopbytes.collect_joint(record, acc, per)
         self.assertEqual(acc["hop_bytes_total"], 50)
 
+    def test_kv_eviction_collected_and_dead_prefill_evictions_ignored(self):
+        """R17-2c（kimi 终审 P3 迁入基线车道，2026-09-17）：
+        kind=kv_eviction 决策行 evictions[].shards 入账（decode 增长/
+        准入失败逐出池写流，语义同 decode_evictions；跳数按实际路由——
+        本批 96gib 实测 noc_hops=2）；collect_joint 的 prefill_evictions
+        为结构性恒空死通道（准入 R1' 预约覆盖 prefill 全动作足迹、drain
+        expand gap≡0，三方裁决）已移除读取，history_evictions 照常消费。
+        原置于 slo_tools/tests/test_slo_contract.py（--ignore 面，仅目录
+        内直跑生效）——迁入后进 320 门禁。"""
+        acc, per = self._acc(), {}
+        record = {"kind": "kv_eviction", "request_id": "r0", "tick": 5,
+                  "decision": {"evictions": [{
+                      "shards": [
+                          {"bytes": 1024, "noc_hops": 1,
+                           "noc_path": [8, 9]},
+                          {"bytes": 512, "noc_hops": 0,
+                           "noc_path": [10]},
+                          {"bytes": 256, "noc_path": [4, 5, 6]}]}]}}
+        hopbytes.collect_joint(record, acc, per)
+        # 1024*1 + 512*0 + 256*2 = 1536；0 跳贡献零 hop_bytes、缺显式
+        # noc_hops 由 noc_path 推导（len-1，同 _shard_hops 语义）。
+        self.assertEqual(acc["hop_bytes_total"], 1536)
+        self.assertEqual(acc["bytes_with_hops"], 1792)
+        self.assertEqual(acc["actions_with_hops"], 3)
+        self.assertEqual(per["r0"]["hop_bytes"], 1536)
+        # prefill_evictions 即使非空也不入账（死通道移除钉子）；
+        # history_evictions 消费如常（100*2=200）。
+        record2 = {"kind": "prefill", "request_id": "r1", "tick": 6,
+                   "decision": {
+                       "prefill_evictions": [{
+                           "shards": [{"bytes": 900, "noc_hops": 1}]}],
+                       "history_evictions": [{
+                           "shards": [{"bytes": 100, "noc_hops": 2}]}]}}
+        hopbytes.collect_joint(record2, acc, per)
+        self.assertEqual(acc["hop_bytes_total"], 1736)
+        self.assertEqual(acc["bytes_with_hops"], 1892)
+        self.assertEqual(per["r1"]["hop_bytes"], 200)
+
+
+# ================================================= R17-1b 咽喉点披露 ==
+
+
+class KvEvictionChokePointLogTest(unittest.TestCase):
+    """R17-5a：容量逐出咽喉点决策日志（kind=kv_eviction）四用例。
+
+    R17-7 探针（2026-09-17）管理器级三通道裁决的单测显式化：
+      通道 1（expand_prefill）结构性恒空——R1' 预约不变量；
+      通道 2（expand_decode）真凶主通道——kv_eviction 行落盘且
+      victim/区间/字节/前缀字段与 KVCacheManager 逐出一致；
+      通道 3（准入失败 exc.evictions）当批零触发（feasible 预检
+      拦截 + 预约不变量双重覆盖；在盘 4i 33+6i 1 条失败全为预检
+      拦截形态）——潜伏位点，本类以直调咽喉点验证披露接线。
+    tick 守护（kimi N4）：_batch 不在场 = 生命周期破损，断言式熔断。
+    """
+
+    def _pressure_manager(self):
+        """3 个 complete victim + active grower 的容量压力构造。
+
+        容量（每 rank）= 4 × seed(100 tok) 整份字节——与 R17-7 探针
+        同口径；typed/minimal 与 _manager() 缺省一致。
+        """
+        from face_scheduler import FaceModel, KVCacheManager
+        from joint.test_joint_fixes import _tiny_hardware
+        from joint.test_joint_mechanisms import _two_instance_topology
+        model = FaceModel(
+            layers=4, hidden_size=16, ffn_size=32, num_heads=4,
+            vocab_size=32, bytes_per_elem=2, mlp_variant="swiglu")
+        per_seed = kv_cache_shard_bytes_for_tokens(model, 100, 2)[0]
+        return KVCacheManager(
+            _two_instance_topology(_tiny_hardware(4 * per_seed)), model,
+            category_mode="typed", layer_policy="minimal_layer_groups")
+
+    def _seed_victims(self, kv):
+        for i, name in enumerate(("v1", "v2", "v3")):
+            _seed(kv, name, 0, 100, (i + 1) * 10, "human")
+
+    def _scheduler(self, kv, tick=777):
+        from online.sh30_online_scheduler import Sh30OnlineScheduler
+        scheduler = Sh30OnlineScheduler.__new__(Sh30OnlineScheduler)
+        scheduler.kv_manager = kv
+        scheduler._kv_ledger_epoch = 0
+        scheduler._stalled_by_instance = {}
+        scheduler._batch = {"tick": tick, "assignments": []}
+        scheduler.online_log_count = 0
+        scheduler.decision_log_sink = None
+        scheduler.online_log_rows = []
+        graph_emitted = []
+        scheduler.graph = SimpleNamespace(
+            emit_eviction_side_branch=(
+                lambda transfers, tick: graph_emitted.append(
+                    (tuple(transfers), tick))),
+            sync_pending_history_after_evictions=lambda evictions: None,
+        )
+        # 计价流登记面属 R18 计量批（方案 §7 红线：流登记不在本批）。
+        scheduler._register_transfer_flows = lambda transfers, owner: None
+        return scheduler, graph_emitted
+
+    def _grower_runtime(self, consumed=250):
+        """stay 动作 grower：working = history(0)+input(50)+consumed。"""
+        return SimpleNamespace(
+            session_id="sG", request_id="rG", joint_action="stay",
+            history_tokens_before=0, joint_input_tokens=50,
+            decode_tokens_consumed=consumed,
+            joint_span_base_context=None, joint_prefill_work=0,
+            decode_stalled=False)
+
+    def test_channel2_decode_growth_emits_kv_eviction_row(self):
+        """① 通道 2：逐列车增长逐出 → kv_eviction 行 + 图发射同点同刻，
+        字段与 KVCacheManager 一致（victim/区间/前缀/R17-1d 新键）。"""
+        kv = self._pressure_manager()
+        self._seed_victims(kv)
+        kv.prepare_prefill(
+            session_id="sG", target_instance_index=0, history_tokens=0,
+            trigger_request_id="rG")
+        kv.expand_prefill(
+            session_id="sG", instance_index=0, context_tokens=50,
+            trigger_request_id="rG")
+        scheduler, emitted = self._scheduler(kv)
+        scheduler._joint_grow_decode(self._grower_runtime(), 0)
+        rows = [row for row in scheduler.online_log_rows
+                if row["kind"] == "kv_eviction"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["request_id"], "rG")
+        self.assertEqual(row["tick"], 777)     # 逐出精确 tick = 批次 tick
+        entries = row["decision"]["evictions"]
+        self.assertTrue(entries)
+        victims = {entry["session_id"] for entry in entries}
+        self.assertTrue(victims <= {"v1", "v2", "v3"})
+        for entry in entries:
+            self.assertTrue(entry["reason"].startswith(
+                "decode_growth_capacity"))
+            self.assertGreater(entry["total_bytes"], 0)
+            # R17-1d 新键：前缀迁移自证 + victim 归位。
+            self.assertIn("resident_prefix_layers_before", entry)
+            self.assertIn("resident_prefix_layers_after", entry)
+            self.assertIn("source_instance_index", entry)
+            self.assertEqual(entry["source_instance_index"], 0)
+            snapshot = kv.session_snapshot(entry["session_id"])
+            self.assertEqual(
+                entry["resident_prefix_layers_after"],
+                snapshot.resident_prefix_layers)
+        # 披露与物理同点同刻：图侧旁路支链同 tick、同一批 transfers。
+        self.assertEqual(len(emitted), 1)
+        emitted_transfers, emitted_tick = emitted[0]
+        self.assertEqual(emitted_tick, 777)
+        self.assertEqual(
+            [t.session_id for t in emitted_transfers],
+            [e["session_id"] for e in entries])
+
+    def test_channel3_latent_site_wiring_logs_row(self):
+        """② 通道 3 潜伏位点：exc.evictions 非空的假想形态走咽喉点，
+        行落盘接线成立（当批结构不可达，R17-7 探针 C 实证）。"""
+        kv = _manager()
+        _seed(kv, "s1", 0, 10, 10, "human")
+        transfer = kv._evict_suffix(
+            kv._sessions["s1"], phase="history", reason="probe_admit_fail",
+            trigger_request_id="rX")
+        scheduler, emitted = self._scheduler(kv, tick=999)
+        scheduler._emit_eviction_only_nodes(
+            (transfer,), 999, trigger_request_id="rX")
+        rows = [row for row in scheduler.online_log_rows
+                if row["kind"] == "kv_eviction"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["request_id"], "rX")
+        self.assertEqual(rows[0]["tick"], 999)
+        entry = rows[0]["decision"]["evictions"][0]
+        self.assertEqual(entry["session_id"], "s1")
+        # reason 携带逐层策略后缀（如 _suffix_half），前缀匹配。
+        self.assertTrue(entry["reason"].startswith("probe_admit_fail"))
+        self.assertEqual(len(emitted), 1)
+
+    def test_channel1_prefill_growth_structurally_empty(self):
+        """③ 通道 1 谱系钉死显式化：压力下准入逐出非空（前提成立），
+        drain expand_prefill 恒空（R1' 预约不变量，gap≡0）。"""
+        kv = self._pressure_manager()
+        self._seed_victims(kv)
+        final_tokens = 200
+        admission_evictions = kv.reserve_request_capacity(
+            request_id="rA", session_id="sA", instance_index=0,
+            final_context_tokens=final_tokens, action="recompute")
+        kv.prepare_prefill(
+            session_id="sA", target_instance_index=0, history_tokens=0,
+            trigger_request_id="rA", reservation_request_id="rA",
+            action="recompute")
+        drain_evictions = kv.expand_prefill(
+            session_id="sA", instance_index=0, context_tokens=final_tokens,
+            trigger_request_id="rA", reservation_request_id="rA")
+        self.assertTrue(admission_evictions)   # 压力前提：预约路径有逐出
+        self.assertEqual(drain_evictions, ())  # 死通道：结构性恒空
+
+    def test_require_batch_tick_asserts_when_batch_missing(self):
+        """④ tick 守护（kimi N4）：_batch 缺失 = 生命周期破损，
+        断言式熔断（原 `else 0` 虚构回退会破坏重放全序单调）。"""
+        kv = _manager()
+        scheduler, _ = self._scheduler(kv)
+        scheduler._batch = None
+        with self.assertRaises(AssertionError):
+            scheduler._require_batch_tick()
+        # 在场时返回批次 tick。
+        scheduler._batch = {"tick": 42}
+        self.assertEqual(scheduler._require_batch_tick(), 42)
+
 
 if __name__ == "__main__":
     unittest.main()

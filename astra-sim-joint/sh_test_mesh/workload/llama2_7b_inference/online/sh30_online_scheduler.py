@@ -335,6 +335,13 @@ class _OnlineRequestRuntime:
         self.history_location_before = None
         self.history_transfer = None
         self.history_evictions = ()
+        # R17-1a'（2026-09-17 死通道钉死）：结构性恒空——准入 R1' 预约
+        # （joint_reservation_context_tokens，face_scheduler.py 单源）覆盖
+        # prefill 全动作足迹（stay/copy/recompute=history+input 整份、
+        # remote-read=input），drain 时 delta ≤ 自有预约 ⟹ gap≡0 ⟹
+        # _ensure_capacity 提前空返；2026-09-16 三方裁决（kimi 通道归因
+        # + 本方代码级证实 + R17-7 探针 A2 运行级复现）。字段保留仅为
+        # prefill 行 schema 稳定（见 _emit_admission 的同名空字段注释）。
         self.prefill_evictions = ()
         self.prefill_decode_transfer = None
         self.decode_evictions = ()
@@ -1793,8 +1800,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 self._bump_kv_ledger_epoch()
                 self.graph.sync_pending_history_after_evictions(exc.evictions)
                 self._emit_eviction_only_nodes(
-                    exc.evictions,
-                    self._batch["tick"] if self._batch else 0)
+                    exc.evictions, self._require_batch_tick(),
+                    trigger_request_id=runtime.request_id)
                 self._register_transfer_flows(
                     exc.evictions, owner=runtime.request_id + "#decode")
             self._enter_decode_stall(
@@ -1807,7 +1814,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self.graph.sync_pending_history_after_evictions(evictions)
             # 自查 D：增长的已提交逐出进图（旁路支链）+ 流登记。
             self._emit_eviction_only_nodes(
-                evictions, self._batch["tick"] if self._batch else 0)
+                evictions, self._require_batch_tick(),
+                trigger_request_id=runtime.request_id)
             self._register_transfer_flows(
                 evictions, owner=runtime.request_id + "#decode")
 
@@ -1887,15 +1895,20 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                         self._bump_kv_ledger_epoch()
                         self.graph.sync_pending_history_after_evictions(
                             exc.evictions)
-                        self._emit_eviction_only_nodes(exc.evictions, tick)
+                        self._emit_eviction_only_nodes(
+                            exc.evictions, tick,
+                            trigger_request_id=runtime.request_id)
                         self._register_transfer_flows(
-                            exc.evictions, owner=runtime.request_id + "#decode")
+                            exc.evictions,
+                            owner=runtime.request_id + "#decode")
                     continue
                 if evictions:
                     self._bump_kv_ledger_epoch()
                     self.graph.sync_pending_history_after_evictions(evictions)
                     # 自查 D 同款：唤醒增长的逐出进图 + 流登记。
-                    self._emit_eviction_only_nodes(evictions, tick)
+                    self._emit_eviction_only_nodes(
+                        evictions, tick,
+                        trigger_request_id=runtime.request_id)
                     self._register_transfer_flows(
                         evictions, owner=runtime.request_id + "#decode")
                 self._exit_decode_stall(runtime, instance_index, tick)
@@ -2361,7 +2374,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             if exc.evictions:
                 self._bump_kv_ledger_epoch()
                 self.graph.sync_pending_history_after_evictions(exc.evictions)
-                self._emit_eviction_only_nodes(exc.evictions, now_ns)
+                self._emit_eviction_only_nodes(
+                    exc.evictions, now_ns,
+                    trigger_request_id=runtime.request_id)
             self._release_orphan_reservation(runtime.request_id)
             self._log_admission_failure(
                 runtime, now_ns, record, str(exc), "capacity_deferred")
@@ -2525,14 +2540,48 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self.kv_manager.release_request_capacity_reservation(request_id)
         self._bump_kv_ledger_epoch()
 
-    def _emit_eviction_only_nodes(self, evictions, tick: int) -> None:
-        """D7/R2：失败路径上已提交逐出的图侧发射（旁路支链、无触发门
-        ——与 prefill_evictions 同构）。逐出是合法的容量释放，其池写
-        必须进图（否则 C++ 水位盲区 + pending store 不登记）。"""
+    def _require_batch_tick(self) -> int:
+        """R17-1b tick 守护（kimi N4，2026-09-17）：容量逐出日志行的
+        tick 必须取自在场批次——_batch 由基类生命周期重建
+        （online_scheduler_base.py 初始化置 None / _start_batch 先于
+        策略处理重建），策略处理路径恒在场；原 `if self._batch else 0`
+        的 0 回退是虚构防御，落日志后会破坏全序单调（hbm_watermark
+        重放侧 tick 回退即 fail-closed）。改为断言式：不在场 = 生命
+        周期破损，当场 fail-closed 早爆。"""
+        assert self._batch is not None, (
+            "eviction-side log emitted outside an active batch "
+            "(scheduler lifecycle violation)")
+        return self._batch["tick"]
+
+    def _emit_eviction_only_nodes(
+        self, evictions, tick: int, *, trigger_request_id: str) -> None:
+        """D7/R2：旁路逐出的图侧发射 + 决策日志披露（R17-1b 咽喉点）。
+
+        图侧：旁路支链、无触发门——与 prefill_evictions 同构；逐出是
+        合法的容量释放，其池写必须进图（否则 C++ 水位盲区 + pending
+        store 不登记）。
+        R17-1b（2026-09-17）：同一咽喉点补决策日志行（kind=kv_eviction，
+        逐出精确 tick）——此前通道 2（decode 增长逐出，成功/停滞两路）
+        与通道 3（准入失败已提交逐出；R17-7 探针实证当批零触发、属
+        潜伏位点）物理进图但决策日志零落点，hbm_watermark 重放对
+        "victim 部分层逐出→池化→全层池恢复"链路系统性失明（第三次
+        错误，session_000411 受害链）。五个现存调用点一次全覆盖；
+        未来任何失败路径走旁路发射即自动带日志——"每个执行点都有
+        日志落点"的制度化（机制级强化项见方案 §8-C3）。日志行在图
+        发射成功之后落（披露忠实于已发生的物理事实）。行不入
+        joint_audit_kinds、不经 seen_kinds 去重（同请求可多行）；
+        trigger_request_id 供重放侧 request_id 校验复用。"""
         if not evictions:
             return
         self.graph.emit_eviction_side_branch(
             [transfer for transfer in evictions], tick)
+        self.log_decision(
+            {"kind": "kv_eviction", "request_id": trigger_request_id,
+             "priority": 0},
+            tick,
+            decision={"evictions": [
+                _transfer_summary(transfer) for transfer in evictions]},
+        )
 
     def _classify_physical_feasibility(
         self, runtime, session_view,
@@ -2709,6 +2758,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "history_evictions": [
                     _transfer_summary(transfer)
                     for transfer in runtime.history_evictions],
+                # R17-1a'：结构性恒空死通道（准入 R1' 预约覆盖全动作足迹，
+                # drain expand gap≡0；2026-09-16 三方裁决 + R17-7 探针
+                # A2）。保留空字段仅为 schema 稳定；不在此复制"字段存在≠
+                # 字段被填"反模式——容量逐出的披露走 kind=kv_eviction
+                # 咽喉点行（_emit_eviction_only_nodes）。
                 "prefill_evictions": [
                     _transfer_summary(transfer)
                     for transfer in runtime.prefill_evictions],
@@ -3088,7 +3142,15 @@ def _transfer_summary(transfer):
     noc_path——路由信息在决策时点完全可知。摘要按 sh_1.0 同构补落
     shard 级路由字段（bytes/noc_hops/noc_path；noc_hops = len
     (noc_path)-1，slo_tools/hopbytes.py 优先读显式 noc_hops），只加
-    字段不改路由；该字段进 ON/OFF 与 B0 基线对拍剥离清单。"""
+    字段不改路由；该字段进 ON/OFF 与 B0 基线对拍剥离清单。
+
+    R17-1d（2026-09-17）：补序列化 KVTransfer 本就携带、此前被丢弃的
+    resident_prefix_layers_before/after（逐出区间连锁不变量免重建——
+    每条逐出自证前后驻留前缀）与 source_instance_index（victim 归位
+    校验）。前缀字段语义按行 kind 分读（kimi C1）：eviction 条目 =
+    primary 前缀迁移；merge_transfers 的 home_merge_base_degrade =
+    base 前缀迁移；history_transfers = primary 前缀建立。读者忽略
+    未知键，旧日志零行为差。"""
     if transfer is None:
         return None
     return {
@@ -3099,6 +3161,11 @@ def _transfer_summary(transfer):
         "total_bytes": transfer.total_bytes,
         "layer_start": transfer.layer_start,
         "layer_end": transfer.layer_end,
+        "resident_prefix_layers_before":
+            transfer.resident_prefix_layers_before,
+        "resident_prefix_layers_after":
+            transfer.resident_prefix_layers_after,
+        "source_instance_index": transfer.source_instance_index,
         "shards": [
             {
                 "source_rank": shard.source_rank,

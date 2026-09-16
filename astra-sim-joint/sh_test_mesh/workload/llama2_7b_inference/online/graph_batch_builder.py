@@ -1454,7 +1454,14 @@ class GraphBatchBuilder:
         #      无触发门；fork 时可能存在主链 armed 依赖（turn-0 arrival
         #      gate 的 arm_timer_gate——R16-5 订正：local_hit 在通用循环
         #      先 continue、不 arm，原"local_hit 的 arm"表述失实），由
-        #      _emit_side_branch 的 stash-and-clear 保真留给主链屏障消费）----
+        #      _emit_side_branch 的 stash-and-clear 保真留给主链屏障消费）
+        #      ----
+        # R17-1a'（2026-09-17 死通道钉死）：joint 下本发射块条件恒假
+        # ——prefill_evictions 结构性恒空（准入 R1' 预约覆盖全动作足迹、
+        # drain expand gap≡0；2026-09-16 三方裁决），读但永不触发（净
+        # 效果=死块）。保留不删（R16 §8 红线：删死只删实参/保守），本
+        # 注释消除下一个"伪消费者"式误读；非 joint 调用面若未来启用该
+        # 字段，此处语义照旧。
         if request_plan["prefill_evictions"]:
             def emit_prefill_evictions() -> None:
                 for transfer in request_plan["prefill_evictions"]:

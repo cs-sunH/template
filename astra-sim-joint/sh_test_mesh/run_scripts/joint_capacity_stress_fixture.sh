@@ -30,6 +30,31 @@
 #      2026-09-15：此前"两台账空"硬门禁使缺省 28gib 档必然 FAIL，与
 #      夹具自身的 RED→GREEN 目标自相矛盾）。中量程参考：150s ×
 #      stress-128gib 档 merge_degrade 披露值亦为 0。
+#   4) R17 判据 4（仅 stress-96gib 有逐出档生效；其他档跳过并披露）：
+#      链内 SLO 管线软标记升级为硬门 + 非空门（kimi B1，方案 v4 §5c）——
+#      runner P3 块（run_online_strategy.sh）缺省 warn 档链内已跑
+#      run_slo_postprocess.sh（SR-8 定谳：mtime 铁证 slo 日志早于
+#      run.log 73ms），本判据不新增调用，只把链内结果升级为夹具硬门：
+#      a) run_dir 无 slo_postprocess.FAIL（SLO 管线 rc=0，含
+#         hbm_watermark 对 kv_eviction 新 kind 的消费）；
+#      b) hbm 三件套存在（slo_hbm_intervals / plot_series /
+#         watermark_instances）；
+#      c) 非空门：决策日志 kind=kv_eviction 行 ≥1（R17-1b 披露面；该档
+#         修复前在盘实测 23 条披露逐出 + 18 stall + 15 failed——28gib
+#         缺省档旧词表零披露逐出会使本判据空转假全绿（kimi 终审 P2
+#         措辞订正 2026-09-17：R17 起通道 2 亦披露，10s 窗 28gib 实测
+#         1 条 kv_eviction、非空门虽会过但披露面远薄于 96gib×150s），
+#         故判据 4 绑定 96gib 档；压力带窄
+#         注记：44gib rc=134 崩溃、128gib 两台账皆净，可用窗口居中）。
+#         **窗长勘误（R17 施工批实证，2026-09-17）：判据 4 需 150s 窗**
+#         （第一参数 150000000000）——10s 窗负载填不满 96 GiB/rank，
+#         实测 270 请求零逐出零 PARTIAL×copy 命中（判据 2/4 双空转）；
+#         150s 窗 = 在盘 L3 档同口径（1918 请求，修复后 run 复现
+#         23 披露逐出条目 + 18 stall + 15 failed 逐位一致 + kv_eviction
+#         新增披露 ≥1；R17 首跑实测 1 条）。
+#      R17-1b/2b 同批时序约束（kimi B2）：水印对未知 kind 在 kind 门
+#      fail-closed，故判据 4 只有在仿真侧与工具侧改动同批落地后才可
+#      启用（缺一即本判据必红）。
 # 边界：SIGKILL 不还原 trace_config（不可捕获信号；沿 joint_smoke_matrix.sh
 #   §9-低4 登记）；裸仓终检 clean_test_records.sh 兜底。
 # 前置：C++ 二进制已构建（README §4）；源 CSV =
@@ -125,23 +150,26 @@ env JOINT_ABLATION_COMBO="${COMBO}" SH_RUNTIME_RC_DIR="${RC_DIR}" \
 mv "${RUNNER_LOG}" "${RUN_DIR}/run.log" 2>/dev/null || true
 echo "${rc}" > "${RUN_DIR}/exit_code"
 
-# ---- 判据 2/3：决策日志与台账侧车。----
+# ---- 判据 2/3/4：决策日志、台账侧车与链内 SLO 结果。----
 MODEL_LAYERS=$(awk -F',' '$2 == "layers" {print $3}' "${BACKUP}" | tr -d ' \r')
 judge_rc=0
-python3 - "${RUN_DIR}" "${MODEL_LAYERS}" <<'PYEOF' || judge_rc=$?
+python3 - "${RUN_DIR}" "${MODEL_LAYERS}" "${PROFILE}" <<'PYEOF' || judge_rc=$?
 import json
 import sys
 from pathlib import Path
 
-run_dir, layers = Path(sys.argv[1]), int(sys.argv[2])
+run_dir, layers, profile = (
+    Path(sys.argv[1]), int(sys.argv[2]), sys.argv[3])
 log = run_dir / "results" / "online_decision_log.jsonl"
-hits, copies = 0, 0
+hits, copies, kv_eviction_rows = 0, 0, 0
 if log.is_file():
     for line in log.open(encoding="utf-8"):
         try:
             record = json.loads(line)
         except ValueError:
             continue
+        if record.get("kind") == "kv_eviction":
+            kv_eviction_rows += 1
         decision = record.get("decision") or {}
         if record.get("kind") != "prefill":
             continue
@@ -163,6 +191,26 @@ if sidecar_present:
     degrade = ledgers.get("merge_degrade_events")
     deep = ledgers.get("deep_gap_events")
 degrade_count = len(degrade) if isinstance(degrade, list) else degrade
+# ---- 判据 4（R17）：仅 stress-96gib 有逐出档生效（28gib 零逐出会
+# 空转假全绿——kimi B1 非空门因此绑定有逐出档）。----
+slo_fail = run_dir / "slo_postprocess.FAIL"
+hbm_triple = [
+    (run_dir / name).is_file()
+    for name in ("slo_hbm_intervals.csv", "slo_hbm_plot_series.csv",
+                 "slo_hbm_watermark_instances.csv")]
+judge4_active = profile == "stress-96gib"
+judge4 = {
+    "active": judge4_active,
+    "profile": profile,
+    "slo_postprocess_fail_present": slo_fail.is_file(),
+    "hbm_triple_present": all(hbm_triple),
+    "kv_eviction_rows": kv_eviction_rows,
+    "nonempty_gate": (
+        kv_eviction_rows >= 1 if judge4_active else None),
+}
+judge4_ok = (
+    (not slo_fail.is_file() and all(hbm_triple) and kv_eviction_rows >= 1)
+    if judge4_active else True)
 summary = {
     "partial_copy_hits": hits,
     "copy_prefill_rows": copies,
@@ -177,20 +225,22 @@ summary = {
                   "2026-09-15)",
     },
     "deep_gap_events": deep,
+    "judge4_kv_eviction_disclosure": judge4,
 }
 (run_dir / "judge_summary.json").write_text(
     json.dumps(summary, indent=1) + "\n", encoding="utf-8")
 print(json.dumps(summary))
-# 硬门禁 = 命中>0 且侧车在且 deep_gap 空；merge_degrade 仅落盘披露
-# （kimi P1）。侧车缺失 = fail-closed（三轮深审补强：此前缺失时判据 3
-# 空转通过——None 恒过，证据链断裂应 FAIL）。
-sys.exit(0 if (hits > 0 and sidecar_present and not deep) else 2)
+# 硬门禁 = 命中>0 且侧车在且 deep_gap 空 +（启用时）判据 4 全过；
+# merge_degrade 仅落盘披露（kimi P1）。侧车缺失 = fail-closed（三轮
+# 深审补强：此前缺失时判据 3 空转通过——None 恒过，证据链断裂应 FAIL）。
+sys.exit(0 if (hits > 0 and sidecar_present and not deep and judge4_ok)
+         else 2)
 PYEOF
 
 echo "[stress-fixture] combo=${COMBO} profile=${PROFILE} window=${WINDOW_NS}"
 echo "[stress-fixture] run exit=${rc}; judge exit=${judge_rc}"
 if [[ ${rc} -eq 0 && ${judge_rc} -eq 0 ]]; then
-  echo "[stress-fixture] PASS（GREEN + PARTIAL×copy>0 + deep_gap 空；merge_degrade 披露见 ${RUN_DIR}/judge_summary.json）"
+  echo "[stress-fixture] PASS（GREEN + PARTIAL×copy>0 + deep_gap 空；merge_degrade/judge4 披露见 ${RUN_DIR}/judge_summary.json）"
   exit 0
 fi
 echo "[stress-fixture] FAIL——tail run.log:" >&2
