@@ -102,7 +102,7 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
     }
     this->comm_groups.clear();
     // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
+    this->hw_resource = new HardwareResource(sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     this->sys = sys;
@@ -194,25 +194,6 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
             "node {}",
             node_id);
         std::exit(EXIT_FAILURE);
-    }
-}
-
-void Workload::record_network_bandwidth(uint64_t node_id,
-                                        Tick execution_time) {
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        auto& online_stat = online_statistics_state_or_fail(node_id);
-        if (execution_time > 0 && online_stat.comm_size.has_value()) {
-            online_stat.network_bandwidth =
-                static_cast<double>(online_stat.comm_size.value()) /
-                execution_time;
-        }
-        return;
-    }
-    auto& op_stat = stats->get_operator_statistics(node_id);
-    if (execution_time > 0 && op_stat.comm_size.has_value()) {
-        op_stat.network_bandwidth =
-            static_cast<double>(op_stat.comm_size.value()) / execution_time;
     }
 }
 
@@ -407,11 +388,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
     // TODO: someway to identify this metadata node is a pytorch pg node
-    if (true) {
-        issue_pytorch_pg_metadata(node);
-    } else {
-        throw std::runtime_error("Unknown metadata node type");
-    }
+    issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
 
@@ -426,9 +403,9 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
         // already converted them into nanoseconds
         runtime = node.compute.runtime_ns;
     }
-    if (node.is_cpu_op) {
-        hw_resource->tics_cpu_ops += runtime;
-    } else {
+    // CPU ops are excluded from the GPU busy-tick accumulator (the old
+    // sibling tics_cpu_ops counter was write-only and was removed).
+    if (!node.is_cpu_op) {
         hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
@@ -490,7 +467,6 @@ void Workload::issue_local_hbm_kv_restore(
         static_cast<double>(tensor_size) / sys->local_mem_bw;
     const uint64_t runtime = std::max<uint64_t>(
         1, static_cast<uint64_t>(std::ceil(elapsed_seconds * 1e9)));
-    hw_resource->tics_hbm_dma_ops += runtime;
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
@@ -502,7 +478,6 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     if (node.is_cpu_op) {
         throw std::runtime_error("Roofline is only available for GPU nodes");
-        return;
     }
 
     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
@@ -531,6 +506,23 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     double operational_intensity = num_ops / tensor_size;
     double perf = sys->roofline->get_perf(operational_intensity);
+    // Degenerate-roofline guard (fail-fast at the production site):
+    // num_ops == 0 makes perf == min(bandwidth*0, peak_perf) == 0, and a
+    // zero peak-perf/local-mem-bw (missing config keys) pins perf to 0 as
+    // well. Division by that perf would yield 0/0 = NaN or x/0 = inf, which
+    // then spreads three ways: the static_cast<uint64_t> below is UB, the
+    // static path pollutes per-node statistics, and the online compact path
+    // aborts at its isfinite gate. Reject the node instead.
+    if (node_num_ops == 0 || !std::isfinite(perf) || perf <= 0.0) {
+        delete wlhd;
+        throw std::runtime_error(
+            "Roofline comp node has degenerate performance: num_ops=" +
+            std::to_string(node_num_ops) +
+            " tensor_size=" + std::to_string(node_tensor_size) +
+            " perf=" + std::to_string(perf) +
+            " (check num_ops in the workload and peak-perf/local-mem-bw in "
+            "the system config)");
+    }
     double compute_elapsed_time = num_ops / perf;  // sec
     if (sys->local_mem_latency > 0) {
         const double compute_only_elapsed_time = num_ops / sys->peak_perf;
@@ -589,10 +581,9 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     } else {
         // 中-4③: the HBM-model-closed fallback must keep the same is_cpu_op
         // discrimination as the other four repos (face :339-343 semantics)
-        // instead of blanket-attributing to tics_gpu_ops.
-        if (node.is_cpu_op) {
-            hw_resource->tics_cpu_ops += runtime;
-        } else {
+        // instead of blanket-attributing to tics_gpu_ops (the old sibling
+        // tics_cpu_ops counter was write-only and was removed).
+        if (!node.is_cpu_op) {
             hw_resource->tics_gpu_ops += runtime;
         }
         sys->register_event(this, EventType::General, wlhd, runtime);
@@ -601,11 +592,9 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
-        online_stat.operation_intensity = operational_intensity;
         online_stat.compute_utilization = perf / sys->peak_perf;
         online_stat.memory_utilization =
             (perf / operational_intensity) / sys->local_mem_bw;
-        online_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
                 ->debug("operation_intensity={}, perf={}, elapsed_time={} "
@@ -671,15 +660,6 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // Keep comm_size on the live NodeStore record in compact service mode:
-    // terminal bandwidth accounting still consumes it, but no global
-    // Statistics per-node hash-table entry is needed.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
-    }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
     const auto comm_priority = node.coll.priority;  // default 0u
@@ -742,13 +722,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     sim_request snd_req;
@@ -785,13 +758,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         throw std::runtime_error("Recv node should be issued by the receiver");
     }
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     sim_request rcv_req;
@@ -957,30 +923,6 @@ void Workload::finish_general_node(uint64_t node_id, EventType event) {
         }
     }
 
-    // Calculate network bandwidth for point-to-point communications
-    if (event == EventType::PacketSent ||
-        event == EventType::PacketReceived) {
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-            !stats->online_history_preserved()) {
-            const auto& online_stat = online_statistics_state_or_fail(node_id);
-            if (!online_stat.completed ||
-                online_stat.end_time ==
-                    ExecutionDriven::OnlineStatisticsState::kInvalidTick) {
-                workload_logger_->critical(
-                    "p2p bandwidth requested before compact online completion "
-                    "for node {}",
-                    node_id);
-                std::exit(EXIT_FAILURE);
-            }
-            record_network_bandwidth(
-                node_id, online_stat.end_time - online_stat.start_time);
-        } else {
-            const auto& op_stat = stats->get_operator_statistics(node_id);
-            record_network_bandwidth(
-                node_id, op_stat.end_time - op_stat.start_time);
-        }
-    }
-
     if (this->sys->track_local_mem) {
         this->local_mem_usage_tracker->recordEnd(node,
                                                  Sys::boostedTick());
@@ -1083,7 +1025,6 @@ void Workload::call(EventType event, CallData* data) {
         collective_comm_node_id_map.erase(node_id_it);
         collective_comm_wrapper_map.erase(wrapper_it);
 
-        hw_resource->tics_gpu_comms += int_data->execution_time;
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.
@@ -1136,9 +1077,6 @@ void Workload::call(EventType event, CallData* data) {
                     sys->id, node->id(), Sys::boostedTick());
             }
         }
-
-        // Calculate network bandwidth
-        record_network_bandwidth(node_id, int_data->execution_time);
 
         if (this->sys->track_local_mem) {
             this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());

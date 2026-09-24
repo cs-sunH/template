@@ -80,18 +80,6 @@ int Topology::get_npus_count() const noexcept {
     return npus_count;
 }
 
-int Topology::get_links_count() const noexcept {
-    assert(devices_count > 0);
-    assert(devices.size() == static_cast<size_t>(devices_count));
-
-    auto links_count = 0;
-    for (const auto& device : devices) {
-        links_count += device->get_links_count();
-    }
-
-    return links_count;
-}
-
 int Topology::get_dims_count() const noexcept {
     assert(dims_count > 0);
 

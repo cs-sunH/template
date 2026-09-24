@@ -35,6 +35,8 @@ from face_scheduler import (  # noqa: E402
     KVCapacityError,
     KVCacheManager,
     kv_cache_shard_bytes_for_tokens,
+    kv_cache_shard_bytes_for_layer_range,
+    model_weight_shard_bytes_by_tp_rank,
 )
 from joint.test_joint_mechanisms import (  # noqa: E402
     _seed,
@@ -125,6 +127,114 @@ class FootprintSingleSourceTest(unittest.TestCase):
         self.assertEqual(remote, (True, True))
 
 
+class PartialRemoteReadReservationTest(unittest.TestCase):
+    """PARTIAL remote-read reserves both its restored suffix and new input."""
+
+    @staticmethod
+    def _manager_with_target_free_bytes(target_free_per_rank):
+        model = _tiny_model(4)
+        weight_shards = model_weight_shard_bytes_by_tp_rank(model, 2)
+        hog_shards = kv_cache_shard_bytes_for_tokens(model, 10, 2)
+        if len(set(weight_shards)) != 1 or len(set(hog_shards)) != 1:
+            raise AssertionError("tiny fixture is expected to have equal TP ranks")
+        capacity = weight_shards[0] + target_free_per_rank + hog_shards[0]
+        kv = _manager(capacity_bytes=capacity)
+        _make_partial(kv, tokens=20)
+        _seed(kv, "target_hog", 1, 10, 10, "human")
+        kv._sessions["target_hog"].active = True
+        remaining = tuple(s.remaining_bytes for s in kv.hbm_snapshots(1))
+        if remaining != (target_free_per_rank, target_free_per_rank):
+            raise AssertionError(
+                f"fixture target free bytes differ: {remaining!r}")
+        return kv
+
+    def test_partial_remote_read_rejects_suffix_plus_input_overcommit(self):
+        # Per rank: R=1792, restored suffix S=1280, input I=1024.
+        # Each component fits independently, but their sum does not.
+        kv = self._manager_with_target_free_bytes(1792)
+        suffix = kv_cache_shard_bytes_for_layer_range(
+            kv.model, 20, kv.tp_degree, layer_start=2, layer_end=4)
+        input_shards = kv_cache_shard_bytes_for_tokens(
+            kv.model, 8, kv.tp_degree)
+        self.assertEqual(suffix, (1280, 1280))
+        self.assertEqual(input_shards, (1024, 1024))
+        self.assertEqual(
+            tuple(s.remaining_bytes for s in kv.hbm_snapshots(1)),
+            (1792, 1792))
+
+        self.assertEqual(
+            kv.request_hbm_feasible_instances(
+                session_id="s", final_context_tokens=28,
+                action="remote-read"),
+            (True, False))
+        # With other sessions gone, an input of 8 tokens fits on both devices;
+        # an input of 16 plus the PARTIAL suffix does not fit on the remote one.
+        self.assertEqual(
+            kv.request_hbm_eventually_feasible_instances(
+                session_id="s", final_context_tokens=28,
+                action="remote-read"),
+            (True, True))
+        self.assertEqual(
+            kv.request_hbm_eventually_feasible_instances(
+                session_id="s", final_context_tokens=36,
+                action="remote-read"),
+            (True, False))
+        with self.assertRaises(KVCapacityError):
+            kv.reserve_request_capacity(
+                request_id="remote_partial", session_id="s",
+                instance_index=1, final_context_tokens=28,
+                action="remote-read")
+        self.assertNotIn("remote_partial", kv._reservations)
+        self.assertEqual(kv._sessions["s"].location, kv.PARTIAL_HBM_REMOTE)
+        self.assertIsNone(kv._sessions["s"].working_kind)
+
+    def test_partial_remote_read_materialization_consumes_suffix_reservation(self):
+        # Exactly enough target capacity for S+I (2304 B per rank).
+        kv = self._manager_with_target_free_bytes(2304)
+        suffix = kv_cache_shard_bytes_for_layer_range(
+            kv.model, 20, kv.tp_degree, layer_start=2, layer_end=4)
+        input_shards = kv_cache_shard_bytes_for_tokens(
+            kv.model, 8, kv.tp_degree)
+        request_id = "remote_partial_ok"
+
+        self.assertEqual(
+            kv.request_hbm_feasible_instances(
+                session_id="s", final_context_tokens=28,
+                action="remote-read"),
+            (True, True))
+        kv.reserve_request_capacity(
+            request_id=request_id, session_id="s", instance_index=1,
+            final_context_tokens=28, action="remote-read")
+        reservation = kv._reservations[request_id]
+        # Keep the existing input-token basis metadata intact; the history
+        # suffix is a separately validated, per-rank reservation component.
+        self.assertEqual(reservation.final_context_tokens, 8)
+        self.assertEqual(reservation.final_shard_bytes, input_shards)
+        self.assertEqual(reservation.action, "remote-read")
+        self.assertEqual(reservation.suffix_history_tokens, 20)
+        self.assertEqual(reservation.suffix_start_layer, 2)
+        self.assertEqual(
+            kv._reservation_extra_shards(reservation), (2304, 2304))
+
+        kv.prepare_prefill(
+            session_id="s", target_instance_index=1,
+            history_tokens=20, trigger_request_id=request_id,
+            reservation_request_id=request_id, action="remote-read")
+        self.assertEqual(kv._sessions["s"].shard_bytes, suffix)
+        self.assertEqual(
+            kv._reservation_extra_shards(reservation), (1024, 1024))
+        self.assertEqual(kv.instance_effective_remaining_capacity_bytes(1), 0)
+
+        kv.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=8,
+            trigger_request_id=request_id,
+            reservation_request_id=request_id)
+        self.assertEqual(kv._reservation_extra_shards(reservation), (0, 0))
+        kv.release_request_capacity_reservation(request_id)
+        self.assertNotIn(request_id, kv._reservations)
+        kv.assert_final_state()
+
+
 class RecomputeAtHomeSemanticsTest(unittest.TestCase):
     """R13/N9：recompute@home = 驻留前缀保持权威 + 缺失后缀物化。"""
 
@@ -176,18 +286,29 @@ class RecomputeAtHomeSemanticsTest(unittest.TestCase):
         transfers = kv.merge_back(
             session_id="s", trigger_request_id="t1", new_tokens=3)
         merged = kv.session_snapshot("s")
-        self.assertEqual(merged.instance_index, 0)
+        # merge v2（2026-09-17 需求②）：recompute 执行端恒持并集 →
+        # 反向零字节翻转——零传输、终态 LOCAL@exec、home 迁移 exec。
+        self.assertEqual(transfers, ())
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.location, kv.LOCAL_HBM)
         self.assertEqual(merged.context_tokens, 13)
-        self.assertTrue(all(t.kind != "local_hit" for t in transfers))
+        # K8（2026-09-23）：原随附 all(kind != "local_hit") 对上方已钉
+        # 空元组恒真——删除（空集断言由 assertEqual(transfers, ()) 承载）。
 
 
-class MergeSelfDegradeTest(unittest.TestCase):
-    """R4：merge home 容量不足 → 基础前缀自降级（红线 1 独立事务）。"""
+class MergeV2CapacityFallbackTest(unittest.TestCase):
+    """merge v2（2026-09-17 裁定④）：R4 自降级/k=0 池归并兜底退役——
+    copy/recompute 反向零字节翻转无需任何空间准备（并集已在胜者侧），
+    home 灌满活跃占用也照常成功；空间准备仅 remote-read 两方向存在
+    （双向二选一兜底＋双侧深缺口 fail-closed 见
+    test_face_scheduler.MergeV2CapacityTests）。金样留档（改造前口径，
+    git 9a95e06）：home 满 → 基础前缀自降级落 merge_degrade_events、
+    终态 PARTIAL@home。"""
 
-    def test_degrade_settles_partial_with_event_ledger(self):
-        # home 灌满活跃占用 → merge 空间不足 → 基础前缀自降级（红线 1
-        # 独立事务）→ 降级事件落账、结算落在降级后的 PARTIAL 前缀。
-        # tiny model：128 B/token/rank；权重 11,392 B/rank。
+    def test_copy_flip_needs_no_home_capacity(self):
+        # home 灌满活跃占用（不可逐）——copy 零字节翻转照常成功（无空间
+        # 准备、无自降级事件——台账冻结恒空）。
         kv = _manager(capacity_bytes=51_328)
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
@@ -200,14 +321,14 @@ class MergeSelfDegradeTest(unittest.TestCase):
             trigger_request_id="t1")
         transfers = kv.merge_back(
             session_id="s", trigger_request_id="t1", new_tokens=4)
-        self.assertTrue(kv.merge_degrade_events, "自降级事件必须落账")
-        reasons = {t.reason for t in transfers}
-        self.assertIn("home_merge_base_degrade", reasons)
+        self.assertEqual(transfers, ())
+        self.assertEqual(kv.merge_degrade_events, [])
         merged = kv.session_snapshot("s")
-        # 降级后结算：home 侧 PARTIAL（前缀 < 全层），非幻影全层驻留。
-        self.assertEqual(merged.location, kv.PARTIAL_HBM_REMOTE)
-        self.assertEqual(merged.instance_index, 0)
-        self.assertLess(merged.resident_prefix_layers, 4)
+        # 零字节翻转终态：全层 LOCAL@exec、home 迁移、home 侧基础释放。
+        self.assertEqual(merged.location, kv.LOCAL_HBM)
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.resident_prefix_layers, 4)
         kv.mark_complete("s", 20, "human")
 
     def test_duplicate_merge_fails_closed(self):
@@ -216,6 +337,9 @@ class MergeSelfDegradeTest(unittest.TestCase):
         kv.prepare_prefill(
             session_id="s", target_instance_index=1,
             history_tokens=10, trigger_request_id="t1", action="copy")
+        kv.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=13,
+            trigger_request_id="t1")
         kv.merge_back(session_id="s", trigger_request_id="t1", new_tokens=3)
         with self.assertRaises(RuntimeError):
             kv.merge_back(

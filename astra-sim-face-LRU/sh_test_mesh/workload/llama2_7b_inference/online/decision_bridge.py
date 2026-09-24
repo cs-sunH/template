@@ -177,8 +177,9 @@ class BridgeServer:
     # ------------------------------------------------------------- helpers --
 
     def stats(self):
-        """阶段 6 §9.1:桥接通道分项汇总(Python 视角)。含每 request 服务
-        时间行列表(per_request),供 online_stats.jsonl 合并。"""
+        """阶段 6 §9.1:桥接通道分项计数器汇总(Python 视角,仅 4 个
+        计数器)。每 request 服务时间行不经此接口——由 per_request_stats()
+        流式接口提供,online_service 在合并 online_stats.jsonl 时消费。"""
         return dict(self._stats)
 
     def per_request_stats(self):

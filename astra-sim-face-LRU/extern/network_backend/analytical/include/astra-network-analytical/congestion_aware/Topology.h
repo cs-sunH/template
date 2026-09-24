@@ -63,13 +63,6 @@ class Topology {
     [[nodiscard]] int get_devices_count() const noexcept;
 
     /**
-     * Get the number of directed links in the topology.
-     *
-     * @return number of directed links
-     */
-    [[nodiscard]] int get_links_count() const noexcept;
-
-    /**
      * Get the number of network dimensions.
      *
      * @return number of network dimensions

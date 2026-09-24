@@ -21,7 +21,6 @@ StreamBaseline::StreamBaseline(Sys* owner,
     this->dataset = dataset;
     this->priority = priority;
     steps_finished = 0;
-    initial_data_size = phases_to_go.front().initial_data_size;
 }
 
 void StreamBaseline::init() {

@@ -9,6 +9,7 @@ LICENSE file in the root directory of this source tree.
 #include <cassert>
 #include <iostream>
 #include <iterator>
+#include <stdexcept>
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
@@ -23,8 +24,17 @@ GeneralComplexTopology::GeneralComplexTopology(
     std::vector<int> dimension_size,
     std::vector<CollectiveImpl*> collective_impl) {
     int offset = 1;
+    if (collective_impl.empty()) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires at least one collective "
+            "implementation");
+    }
+    if (collective_impl.size() > dimension_size.size()) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires at most one collective "
+            "implementation per topology dimension");
+    }
     uint64_t last_dim = collective_impl.size() - 1;
-    assert(collective_impl.size() <= dimension_size.size());
     for (uint64_t dim = 0; dim < collective_impl.size(); dim++) {
         if (collective_impl[dim]->type == CollectiveImplType::Ring ||
             collective_impl[dim]->type == CollectiveImplType::Direct ||

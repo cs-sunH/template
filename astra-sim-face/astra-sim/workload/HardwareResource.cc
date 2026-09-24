@@ -120,9 +120,6 @@ bool HardwareResource::is_available(
                 if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
                     return true;
                 }
-                if (num_in_flight_gpu_comm_ops == 0) {
-                    return true;
-                }
                 return false;
             }
         }

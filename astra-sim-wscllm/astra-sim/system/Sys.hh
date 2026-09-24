@@ -49,7 +49,6 @@ class Sys : public Callable {
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
         void notify_stream_removed(int vnet, Tick running_time);
-        std::vector<double> get_average_latency_per_dimension();
 
         Sys* sys;
         int max_running_streams;
@@ -57,8 +56,6 @@ class Sys : public Callable {
         int queue_threshold;
         std::map<int, int> running_streams;
         std::map<int, std::list<BaseStream*>::iterator> stream_pointer;
-        std::vector<Tick> latency_per_dimension;
-        std::vector<double> total_chunks_per_dimension;
         std::vector<uint64_t> total_active_chunks_per_dimension;
         std::map<int, int> queue_id_to_dimension;
         std::vector<UsageTracker> usage;
@@ -135,8 +132,6 @@ class Sys : public Callable {
     // Communicator Group Support
     // -----------------------------------------------
     LogicalTopology* get_logical_topology(ComType comm_type);
-    std::vector<CollectiveImpl*> get_collective_implementation(
-        ComType comm_type);
     //---------------------------------------------------------------------------
 
     // Collective Communication Primitives
@@ -344,7 +339,7 @@ class Sys : public Callable {
 
     // for supporting LIFO
     std::list<BaseStream*> ready_list;
-    SchedulingPolicy scheduling_policy;
+    SchedulingPolicy scheduling_policy = SchedulingPolicy::FIFO;
     int first_phase_streams;
     int total_running_streams;
     std::map<int, std::list<BaseStream*>> active_Streams;
@@ -377,7 +372,8 @@ class Sys : public Callable {
     int num_streams;
     static uint8_t* dummy_data;
     std::map<std::string, LogicalTopology*> logical_topologies;
-    CollectiveOptimization collectiveOptimization;
+    CollectiveOptimization collectiveOptimization =
+        CollectiveOptimization::Baseline;
     Tick last_scheduled_collective;
 
     // statistics

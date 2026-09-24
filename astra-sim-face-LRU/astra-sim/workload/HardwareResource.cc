@@ -23,10 +23,8 @@ bool is_local_hbm_kv_restore(
 }  // namespace
 
 HardwareResource::HardwareResource(
-    uint32_t num_npus, int sys_id,
-    const ExecutionDriven::ExecutionMode execution_mode)
+    int sys_id, const ExecutionDriven::ExecutionMode execution_mode)
     : sys_id(sys_id),
-      num_npus(num_npus),
       retain_node_ids_(execution_mode ==
                        ExecutionDriven::ExecutionMode::Static),
       num_in_flight_cpu_ops(0),
@@ -143,9 +141,6 @@ bool HardwareResource::is_available(
                 return true;
             } else {
                 if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
-                    return true;
-                }
-                if (num_in_flight_gpu_comm_ops == 0) {
                     return true;
                 }
                 return false;
@@ -286,16 +281,4 @@ bool HardwareResource::is_available(const ExecutionDriven::NodeView& node) const
         return true;
     }
     return num_in_flight_gpu_comm_ops == 0;
-}
-
-void HardwareResource::report() {
-    cout << "num_cpu_ops: " << num_cpu_ops << endl;
-    cout << "num_gpu_ops: " << num_gpu_ops << endl;
-    cout << "num_gpu_comms: " << num_gpu_comms << endl;
-    cout << "num_hbm_dma_ops: " << num_hbm_dma_ops << endl;
-
-    cout << "tics_cpu_ops: " << tics_cpu_ops << endl;
-    cout << "tics_gpu_ops: " << tics_gpu_ops << endl;
-    cout << "tics_gpu_comms: " << tics_gpu_comms << endl;
-    cout << "tics_hbm_dma_ops: " << tics_hbm_dma_ops << endl;
 }

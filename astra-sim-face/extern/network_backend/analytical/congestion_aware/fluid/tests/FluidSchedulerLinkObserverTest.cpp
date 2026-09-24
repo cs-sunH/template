@@ -253,21 +253,22 @@ void run_equivalence_test() {
             "delayed start leaves no active flow or route membership");
 
     LegacyObserver legacy(2, 5);
-    const auto full_rate =
-        static_cast<long double>(1ULL << 30) / 1'000'000'000.0L;
+    // SI identity: 1 GB/s = 1 B/ns, matching bw_GBps_to_Bpns and the two
+    // Link capacities above (1.0 and 0.5 B/ns).
+    const auto full_rate = 1.0L;
     legacy.integrate(3, {full_rate / 2.0L, full_rate / 2.0L});
     legacy.integrate(11, {full_rate, full_rate / 2.0L});
-    legacy.integrate(19, {full_rate / 2.0L, full_rate / 2.0L});
+    legacy.integrate(20, {full_rate / 2.0L, full_rate / 2.0L});
 
     std::vector<Record> observed;
     scheduler.link_observer_visit_buckets(append_record, &observed);
     const auto expected = legacy.records();
     const std::vector<Record> hand_checked{
-        {0, 0, 3}, {0, 1, 2}, {1, 0, 6}, {1, 1, 3},
-        {2, 0, 3}, {2, 1, 3}, {3, 0, 2}, {3, 1, 2}};
+        {0, 0, 3}, {0, 1, 2}, {1, 0, 5}, {1, 1, 3},
+        {2, 0, 3}, {2, 1, 2}, {3, 0, 3}, {3, 1, 3}};
     require(same_records(observed, expected), "streaming/legacy record equivalence");
     require(same_records(observed, hand_checked), "fractional carry bucket values");
-    require(scheduler.link_observer_window_ns() == 19, "last observer window");
+    require(scheduler.link_observer_window_ns() == 20, "last observer window");
 
     const auto& totals = scheduler.link_observer_totals();
     require(totals.size() == 2, "equivalence total count");

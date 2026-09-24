@@ -32,7 +32,10 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
                      "We will find a way to avoid this issue in the future.");
         std::exit(1);
     }
-    this->id = id;
+}
+
+CustomAlgorithm::~CustomAlgorithm() {
+    delete et_feeder;
 }
 
 int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {

@@ -81,19 +81,6 @@ def row_digest(row: list[str]) -> str:
     return hashlib.sha256(",".join(row).encode("utf-8")).hexdigest()
 
 
-def fnv1a64(data: bytes) -> int:
-    """FNV-1a 64 over raw bytes (provenance gate digest).
-
-    Byte-for-byte identical to the C++ reader implementation
-    (WindowedTraceReader.cc): offset basis 14695981039346656037, prime
-    1099511628211, per byte h = (h ^ byte) * prime, all mod 2^64.
-    """
-    h = 14695981039346656037
-    for byte in data:
-        h = ((h ^ byte) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return h
-
-
 def fnv1a64_cont(h: int, data: bytes) -> int:
     """FNV-1a 64 continuation over one chunk of raw bytes."""
     for byte in data:

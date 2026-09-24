@@ -19,7 +19,7 @@ class MemMovRequest : public Callable, public SharedBusStat {
     MemMovRequest(int request_num,
                   Sys* sys,
                   LogGP* loggp,
-                  int size,
+                  uint64_t size,
                   int latency,
                   Callable* callable,
                   bool processed,
@@ -32,7 +32,7 @@ class MemMovRequest : public Callable, public SharedBusStat {
 
     static int id;
     int my_id;
-    int size;
+    uint64_t size;
     int latency;
     Callable* callable;
     bool processed;

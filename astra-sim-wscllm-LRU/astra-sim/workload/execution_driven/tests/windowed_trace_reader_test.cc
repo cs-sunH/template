@@ -57,7 +57,7 @@ simulation, no baseline artifacts touched:
           normal path gate passes.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-wscllm-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
     AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
 *******************************************************************************/
@@ -643,8 +643,6 @@ void test_calendar_out_of_order_turn0() {
         "session_1,0,session_1_request_0,100,50,100,,d",
         "session_2,0,session_2_request_0,100,50,300,,d",
     });
-    expect(true, "fixture written");  // silence unused-warning style checks
-
     EventQueue eq;
     DecisionMailbox mailbox;
     ServiceCoordinator svc;
@@ -1062,7 +1060,11 @@ void test_gate_trips_on_delayed_submission() {
         ServiceCoordinator svc2;
         RequestIngress ingress2;
         ingress2.bind(&eq2, &mailbox2, &svc2);
-        WindowedTraceReader reader2(csv, ingress2, 128);
+        // Unbounded window (max_arrival_ns default 0): both rows (1000/2000)
+        // submit -- a real control arm, not one emptied by out-of-range
+        // rejection (an explicit 128 here used to reject both rows and made
+        // the gate assertions below trivially true).
+        WindowedTraceReader reader2(csv, ingress2);
         reader2.pump();
         ingress2.drain_commands();
         while (!eq2.finished()) {

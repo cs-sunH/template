@@ -14,9 +14,6 @@ FullyConnected::FullyConnected(const int npus_count, const Bandwidth bandwidth, 
     assert(bandwidth > 0);
     assert(latency >= 0);
 
-    // set topology type
-    basic_topology_type = TopologyBuildingBlock::FullyConnected;
-
     // fully-connect every src-dest pairs
     for (auto src = 0; src < npus_count; src++) {
         for (auto dest = 0; dest < npus_count; dest++) {

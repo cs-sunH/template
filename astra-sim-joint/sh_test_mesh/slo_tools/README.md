@@ -1,9 +1,12 @@
 # slo_tools —— SLO 离线后处理工具集（WP3/WP4/WP5/WP7 + Hop-Bytes）
 
-四仓同名同构（本目录四个仓逐字节相同；逐仓语义差异全部收在脚本内的
-REPO_VARIANTS / REPO_HOP_SOURCES 表，按 run_dir 自动识别 repo_variant）。
-唯一 sanctioned 例外：tests/run_golden_live.py（见"测试运行法"节的
-仓族适配边界声明，2026-08-28 主控裁决）。
+共享工具保留逐仓变体识别；joint 仓的 `load_imbalance.py`、`domain_metrics.py`
+及其测试已有 joint 专属修订，不能再按四仓逐字节相同处理。其余逐仓语义
+由脚本内的 REPO_VARIANTS / REPO_HOP_SOURCES 表按 run_dir 识别。
+原 sanctioned 例外 tests/run_golden_live.py 已
+删除——2026-09-23 P11 死依赖清除：其硬依赖仓外 /tmp/slo_wps/
+set_trace_pointer.py，golden live 流程不可运行，golden 语义由
+tests/test_golden_g1g4.py 离线承担；见"测试运行法"节）。
 纯离线、纯标准库、只读输入；不注册仿真事件、不反向参与调度。
 
 ## cpp.log 回退顺序（归档兼容，P1/2026-08-28）
@@ -49,8 +52,9 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 
 ## 与 slo_params_manifest.json 的关系
 
-`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，四仓
-逐字节相同）。当前所有 `value=null`（B4 批次按 derivation_program 引用的
+`slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1；2026-09-23
+P11 死键清除起本仓删除 10 个零消费者 campaign 档案键——五仓逐字节相同冻结
+待主控统一同步后恢复，删除键清单见 manifest `_note`）。当前所有 `value=null`（B4 批次按 derivation_program 引用的
 主规格条款推导后填充）。**所有依赖参数的命令 fail-closed**：遇 null/缺失
 即退出码 2 并指明参数名与推导条款，绝不内置示例值。`bucket_percentiles`
 填充后 value 结构为 `{"percentiles":[...], "prefill_edges_tokens":[...],
@@ -71,13 +75,67 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 | `slo_stats.py warmup` | WP3 | request_metrics.csv + manifest | slo_warmup.json：剔除前缀前后 P99 E2E 对比（窗口/门限=manifest warmup_window/warmup_change_threshold） |
 | `slo_stats.py normalized` | WP3 | 多个 run_dir | slo_normalized.csv：Normalized Time/TPS（0-1，对齐比较组内 max；对齐 FACE/WSC-LLM 展示口径） |
 | `slo_stats.py scan-export` | WP3 | `--point RUN_DIR=λ`（可重复）+ 可选 `--t-isolated` | slo_scan_export.csv：λ、violation_rate、tput、goodput=tput×(1−violation_rate)；**drain 完备断言 input==completed 不过则拒绝出表** |
-| `load_imbalance.py` | WP7 | results/online_decision_log.jsonl + results/train_ledger.jsonl + manifest(imbalance_bucket_ns) | slo_load_imbalance.csv + stderr JSON：逐请求 (instance, admission→drain) → 各 instance 积压时序 → 时间平均 CV（总体标准差）与 Max/Mean；不做账本 dump |
+| `load_imbalance.py` | WP7 | results/online_decision_log.jsonl + results/train_ledger.jsonl + manifest(imbalance_bucket_ns) | slo_load_imbalance.csv + stderr JSON：joint 以 `completion.tick` 作实际完成端点，train_ledger exits 仅核对成员与实例；缺 completion 拒绝输出。历史非 joint run 的终点仍为列车发射时刻代理，标注 `legacy_train_ledger_emit`。逐请求区间生成各实例时间平均 CV（总体标准差）与 Max/Mean；不做账本 dump |
 | `restore_decomposition.py` | WP5 | cpp.log（**full 档**：type=memory_anchor + type=request） | slo_restore_decomposition.csv：restore_start=min(锚点)/restore_complete=max(锚点)（按 subject_id=queue_index 逐请求归属）→ §3.2 固定公式三段+hidden_ratio；无锚点请求四推导字段全 NA+计数 |
 | `kv_cache_adapter.py` | WP4 | results/online_decision_log.jsonl + per-request manifest | cache_events.csv（action_id,request_id,start_ns,end_ns,bytes,source,target,cause）+ kv_hit_states.csv（full/partial/miss/no_history/not_supported + 证据列）+ 命中率双分母；`--reconcile` 与 native 逐项对账（以 native 为准，不一致 exit≠0） |
 | `hopbytes.py` | — | results/online_decision_log.jsonl | slo_hopbytes_total.csv + slo_hopbytes_per_request.csv：Hop-Bytes=Σ bytes×noc_hops（只聚合产物中真实携带 hops 字段的记录；无覆盖仓输出 coverage=0 并标注 TODO_*） |
+| `domain_metrics.py`（C16，joint 专属条件步） | WP6b | results/online_decision_log.jsonl（joint_admission/completion 行，C5 schema）+ per-request/plan manifest + trace_config.csv + hardware json + manifest(domain_delta_adm_ns/domain_delta_sensitivity_multipliers) | slo_domain_requests.csv（三口径逐请求：D_feed/D_econ(δ=0)/实际选择 + 边界对拍 + H/I/F 静态参考组件）+ slo_domain_instances.csv（逐 (请求,实例)：双域同图数据/内外等值线差值/方向/瓶颈段/配额域派生 0/1 列与 port_* port_snapshot 实测值）+ slo_domain_summary.json（四动作计数 recompute elected/forced 分列、|D|/hop 分位/方向半径方差/约束不满足原因、预测/实测差、δ∈{σ̂,2σ̂,4σ̂} 离线敏感性重定价（A3'：δ_adm=0 空转对拍臂已撤销）、home 迁移轨迹（completion 披露 + kv_delta_journal 结算权威层——sidecar 第四键已序列化并由本工具四层分级消费，F3 2026-09-22）、ε/δ 口径登记与叙事纪律注释）；**无 joint_admission 行的 run 完全静默跳过**（四仓共链零扰动） |
 
 `slo_common.py` 为共享框架（manifest 装载、request_metrics.csv 冻结列序
 校验、NA 语义、nearest-rank 分位、repo_variant 自动识别），不含逐仓语义。
+
+joint run 的 `trace_config.csv.snapshot` 与 `hardware_config.json.snapshot`
+由运行入口归档。`domain_metrics.py` 推导 ρ 时按显式 CLI 参数、run 快照、
+run 内旧命名副本的次序读取；缺 run 本地证据则 ρ 为 NA 并告警，不回退当前
+checkout 的配置，以免历史结果随仓内配置变动而漂移。
+
+## domain_metrics.py —— 局部统一内存域三口径（C16/WP6b，2026-09-22；joint）
+
+设计文档《joint机制改造方案_局部统一内存域》§5.1-§5.3 的测量工具化：
+三类观测**必须分开**（F13）——D_feed（预测供给，remote-read 候选
+applicable 的实例集，逐成员标注本地参考与性能容忍度）/ D_econ（预测经济，
+C_alt* = min 遍历**全部实例的适用非 remote 动作（必含 copy）**，
+D_econ = {e: C_remote(e) ≤ C_alt*+δ}；同位置动作比较另报、口径单列）/
+实际选择与 measured（在线只有最终 (e,a)；四动作计数 recompute 仅 elected、
+forced(no_history/quota_deferred/evicted_permanent 三成因，K7-① 扩枚举)
+单列，§19.2 两口径不得混报；独立同
+状态 measured 集合不在本产物=C4b 受控测量，如实标 NA 不与预测混合）。
+派生：|D|、hop 分位、方向分布（分方向半径方差）、瓶颈资源（breakdown
+六段 argmax）、约束不满足原因、预测/实测差异；双域同图数据（D_econ
+等值线 vs 配额准入域——**两域之差即配额作用量**；N6 口径消歧：
+quota_admissible/quota_admissible_remote 列 = **配额前结构域**（候选
+applicable ∨ quota_ 前缀不可行理由派生，"移除配额后结构可行"），
+实际配额准入域 = remote_applicable/applicable 列，配额前成本等值线
+输入 = remote_cost_pre_quota_ns 列，run 级配额作用量 =
+quota_counterfactual_flips（K7/P2-11 2026-09-23：C11 后
+inapplicable_reason 可导出，恒 NA 的 WP3 前注记废止；port_snapshot/
+flow_snapshot 实测值 C11 已接通——quota-on 臂有数值、off 态 NA 保持，
+"仍为 C5 冻结 NA 占位"系过时表述 N13 订正）；内等值线（C_remote=C_stay_ref）/外等值线（C_remote=C_alt*）
+逐 (请求,实例) 导出。边界对拍纪律：d≤ρ 锚点**仅历史扫描项平价**；
+remote/copy 分界**不设单变量理论线**（V_copy≈[H+I+b_c−F]+/V_remote≈
+[I+b_r−F]+ 仅容量静态参考，b_c/b_r 未随 schema 披露 → 锚点 NA、组件
+H/I/F 分列）；**无 n\* = d′/(d−ρ) 式**；对拍是诊断不是验收（偏差本身
+是模型诊断结果）。δ 主臂 = manifest `domain_delta_adm_ns`（0，与在线
+δ_adm 终冻同值同域 ns）；敏感性臂 `domain_delta_sensitivity_multipliers`
+（{1,2,4}×σ̂）为 A3' 强制修订——撤销 δ=0 空转对拍臂，σ̂ 三级链（观测
+|pred−measured| p50 → 冷启动 merge 腿量级锚点）见 estimate_sigma_hat。
+预测 `joint_cost_ns` 的终点是 merge_done：有 merge 流时与决策日志的
+`merge_done.tick` 配对；无 merge 流时用 `completion.tick`，服务响应时延
+另列。completion 披露了 merge 字节而缺 merge_done 行时，实测误差为 NA
+并告警，避免把提前的 service_done 当作结算终点压低 σ̂。
+home 迁移轨迹：completion 行（决策时刻）+ kv_delta_journal（结算时刻，
+两源不混）——journal 已随 run 末 ledger 侧车序列化（`kv_delta_journal`
+第四键，F3 2026-09-22 修复批），本工具按四层可信度分级消费：
+settlement_full_join > settlement_partial_join > settlement_empty >
+decision_log_only（certified 层的 checksum 证书本仓不产出，tier_note
+如实降级不冒认；seq 链断裂 fail-closed——生产端逐键独立导出，单键
+失败落 `kv_delta_journal_export_error` 哨兵、其余键不受连坐，消费端
+识别哨兵/顶层非对象/键值非列表（值级 schema 损坏，H7 值级贯彻）均
+按 decision_log_only 层 + 明示注记处理，A12'
+2026-09-22 复审批）。叙事纪律内置：饱和下域由
+配额关闭而非 argmin 涌现，"涌现域"表述限定配额界内；域是解释与可选
+准入分析对象，不裁剪任何动作/实例候选。非 joint run 完全静默跳过
+（字节对拍契约零扰动）。
 
 ## 逐仓映射要点（证据见脚本内注释与 REPO_VARIANTS）
 
@@ -115,7 +173,8 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 ## 测试运行法
 
 ```bash
-# 仓根目录执行（两法等价，114 例当前全过；仅标准库）
+# 仓根目录执行（2026-09-24 实测 discover 171 例、1 skipped；仅标准库）
+# 单文件命令用于定位，discover 汇总整个 tests/ 目录。
 python3 sh_test_mesh/slo_tools/tests/test_slo_contract.py      # T0 契约
 python3 sh_test_mesh/slo_tools/tests/test_golden_g1g4.py       # T2 golden 骨架
 python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -v
@@ -124,22 +183,19 @@ python3 sh_test_mesh/slo_tools/tests/test_driver_parity.py     # A4 driver 对�
 ```
 
 T2 golden（G1 单请求无竞争 / G2 双请求排队 / G3 session 两轮 / G4 restore
-三段）用合成 request_metrics/manifest/anchor 样本断言手算值；仿真侧 live
-版为 `tests/run_golden_live.py`，手动触发跑真仿真断言。
+三段）用合成 request_metrics/manifest/anchor 样本断言手算值
+（`tests/test_golden_g1g4.py` 离线承担全部 golden 语义）。
 
-**run_golden_live.py 仓族适配边界（sanctioned 例外，2026-08-28 主控裁决；
-不删除——T2 是《各指标测试建议.md》验收清单必备层；暂不合并——脚手架层
-差异，合并的假绿/假红风险不抵收益）**。三版各自适配的队列格式：
-face+wscllm = 8 列 recompute 队列 + canonical sidecar；sh_1.0+sh_2.0 =
-仓自适应（sh_1.0 8 列 + 15 列 sidecar / sh_2.0 9 列 + 10 列 digest）；
-sh_3.0 = 原生 9 列（含 next_trigger_type）。边界：
+**golden live runner 退役（2026-09-23 P11 死依赖清除）**：原
+`tests/run_golden_live.py` 硬依赖仓外 `/tmp/slo_wps/set_trace_pointer.py`
+（不存在），live 流程不可运行——文件已删除、其 2026-08-28 sanctioned
+例外裁决随之失效（登记开关清单）。原仓族适配边界中**仍然有效**的约束：
 
-* **允许仓族差异**：队列格式构造、sidecar 命名/join、场景驱动脚手架
-  （build/run/CLI 形态）；
 * **必须四仓一致**：G1-G4 各场景的断言语义与期望值推导口径——如 G1 的
   e2e=queue+prefill+gap+decode 整数恒等、G2 的 queue_ns≈占位者 prefill、
   G3 的外生等待（human/tool interval）扣除方式与 request_type 透传、
-  G4 的 restore 三段和=总时长与锚点 min/max 归属。改这些断言时四仓
+  G4 的 restore 三段和=总时长与锚点 min/max 归属（现约束对象为
+  test_golden_g1g4.py 的合成样本断言）。改这些断言时四仓
   必须同步评审，防止某仓的期望值推导悄然漂移。
 
 ## hbm_watermark.py —— WP8 补充主数据源：离线 HBM KV 水位线重建（B2 线5；P1 四层可信度改造 2026-08-30）
@@ -246,9 +302,8 @@ prefill_context_tokens/final_context_tokens/history_tokens_before），以及
   不一致、重复决策、负占用、逐出对象不在跟踪态、逐出 bytes 超跟踪值、
   增长为负 → 退出码 2。软异常（source/kind/bytes 对账不符）计数入 JSON 不
   中断。
-* **测试**：`tests/test_hbm_watermark.py`（34 例：手算桶时序/峰值/均值/
+* **测试**：`tests/test_hbm_watermark.py`（39 例：手算桶时序/峰值/均值/
   逐出/违规计数、四仓语义各一例、fail-closed 六例、列序冻结、四层 tier
   判定（含"聚合过单 rank 超"锚定用例）、三口径锚定数值、stats 多桶长
   不变、RLE 无损恢复、行预算/B_eff、真 journal 对拍）；运行法同上
   （`python3 sh_test_mesh/slo_tools/tests/test_hbm_watermark.py`）。
-

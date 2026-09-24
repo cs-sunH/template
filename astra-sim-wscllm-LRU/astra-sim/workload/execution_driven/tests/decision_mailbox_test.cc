@@ -20,7 +20,7 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-wscllm-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 Exit code 0 on ALL PASS.

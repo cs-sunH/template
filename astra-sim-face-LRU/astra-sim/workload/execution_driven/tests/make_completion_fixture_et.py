@@ -33,8 +33,9 @@ them identically.
 
 The generated/ directory is gitignored by design (byte-equivalence gates);
 rerun this script to regenerate the fixture trace. The expectation
-(54 ranks x 3 nodes = 162 completions) is asserted by
-completion_observer_fixture_main.cc.
+(npus * 4 + 26 = 242 completions at 54 ranks: the invalid/comp/coll/
+hbm-restore quad on every rank plus the remote FIFO node on the 26 edge
+ranks) is asserted by completion_observer_fixture_main.cc.
 """
 
 import hashlib

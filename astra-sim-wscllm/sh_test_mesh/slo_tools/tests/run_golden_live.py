@@ -14,7 +14,7 @@ request_metrics.csv / online_decision_log / train_ledger / kv_cache_adapter
   G2 同刻突发排队（请求数 > 实例数）：溢出请求 queue_ns>0 且
      queue_ns≈占位者 prefill；分解和恒等；load_imbalance.py 输出与
      独立手算重建（admission=prefill tick、instance=decode_instance、
-     drain=train_ledger drains tick、桶长=manifest）一致。
+     drain=train_ledger exits tick、桶长=manifest）一致。
   G3 单 session 两轮 human/tool：T_session = turn0.e2e + interval +
      turn1.e2e（到达=父完成+interval 闭环恒等）；request_type 逐行透传；
      第二轮 kv_hit_state 由 decision history_action 手推并与

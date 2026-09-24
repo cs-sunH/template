@@ -15,7 +15,6 @@ namespace AstraSim {
 // Therefore, set some enumerations to define bypassing rules.
 enum class BypassRule {
     NO_BYPASS = 0,
-    BYPASS_PERNODE_CUSTOM,  // Bypass priority 1. below. Start with looking at global custom algorithm. No current usecase.
     BYPASS_ALL_CUSTOM, // Bypass priority 1 and 2. below. Look only at native algorithm.
 };
 

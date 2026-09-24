@@ -21,20 +21,20 @@ Cases:
   F. Same-time physical FIFO remains exact with the inline-first EventList:
      callback-appended events run after already queued events in the same pass.
 
-Build (from template/astra-sim-wscllm):
-  g++ -std=c++17 -I extern/network_backend/analytical/include \
-      -I extern/network_backend/analytical/include/astra-network-analytical \
-      astra-sim/workload/execution_driven/tests/event_queue_deferred_test.cc \
-      extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
-      extern/network_backend/analytical/common/event-queue/EventList.cpp \
-      extern/network_backend/analytical/common/event-queue/Event.cpp \
-      extern/network_backend/analytical/common/NetworkFunction.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidScheduler.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidFlow.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidLinkState.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Link.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Device.cpp \
-      -o /tmp/eq_test && /tmp/eq_test
+Build: registered in the CMake build (M12②) as target
+  AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest in
+  astra-sim/network_frontend/analytical/CMakeLists.txt (same shared-source +
+  execution_driven recipe as the sibling fixtures; the backend EventQueue and
+  FluidScheduler sources the old manual g++ line listed individually are
+  provided by the linked Analytical_Congestion_Aware static library).
+  Configure per README §2 (the build/astra_analytical aggregation with
+  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON), then:
+    cmake --build build/astra_analytical/build_congestion_aware \
+          --target AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest -j
+    build/astra_analytical/build_congestion_aware/bin/\
+AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+  (the binary is emitted to <build-tree>/bin/ via the targets'
+  RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
 #include <cassert>

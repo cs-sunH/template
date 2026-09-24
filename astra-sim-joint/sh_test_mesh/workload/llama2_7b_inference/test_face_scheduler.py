@@ -26,6 +26,7 @@ from face_scheduler import (  # noqa: E402
     KVCacheManager,
     KVTransfer,
     KVTransferShard,
+    KV_DELTA_JOURNAL_FIELDS,
     PREFILL_CHUNK_SIZE,
     WeightedInstanceGraph,
     attention_heads_by_tp_rank,
@@ -914,7 +915,8 @@ class FaceSchedulerTests(unittest.TestCase):
 
         manager.mark_complete("session", 20)
         # joint（§2.2）：跨实例 = copy 工作副本——基础历史保留 home 实例
-        # 0，执行端 1 持工作副本；merge_back 后增量归并回 home。
+        # 0，执行端 1 持工作副本；merge_back v2 零字节翻转后权威驻留
+        # 翻转到执行端（少并多，home := exec）。
         before, transfers, evictions = manager.prepare_prefill(
             session_id="session",
             target_instance_index=1,
@@ -952,8 +954,9 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(working.instance_index, 1)
         self.assertEqual(working.working_kind, "copy")
         self.assertEqual(working.home_instance, 0)
-        # compute_done 后合并：新增量（这里 0 token）归并回 home、工作
-        # 副本释放——home 权威恢复，无双份驻留。
+        # compute_done 后合并 v2（少并多，2026-09-17）：copy 的 exec 侧
+        # 恒持并集 ⊇ home 侧 → 零字节翻转——无传输、home 侧基础释放、
+        # home 迁移到 exec；无双份驻留。
         merge_transfers = manager.merge_back(
             session_id="session",
             trigger_request_id="noc_copy",
@@ -962,12 +965,24 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(merge_transfers, ())
         merged = manager.session_snapshot("session")
         self.assertEqual(merged.location, KVCacheManager.LOCAL_HBM)
-        self.assertEqual(merged.instance_index, 0)
+        self.assertEqual(merged.instance_index, 1)
         self.assertIsNone(merged.working_kind)
-        self.assertEqual(merged.home_instance, 0)
+        self.assertEqual(merged.home_instance, 1)
         self.assertEqual(
             tuple(snapshot.kv_cache_bytes for snapshot in manager.hbm_snapshots()),
-            (20, 20, 0, 0),
+            (0, 0, 20, 20),
+        )
+        self.assertEqual(
+            manager.last_merge_outcome,
+            {
+                "session_id": "session",
+                "direction": "reverse",
+                "zero_byte_flip": True,
+                "winner_instance": 1,
+                "loser_instance": 0,
+                "transferred_bytes": 0,
+                "home_flipped": True,
+            },
         )
 
         manager.mark_complete("session", 30)
@@ -1081,7 +1096,9 @@ class FaceSchedulerTests(unittest.TestCase):
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
+        # P11 死键清除回归钉（2026-09-23）：local-mem-capacity-bytes
+        # 写入链已退役（C++ 零读者），system.json 不再含该键。
+        self.assertNotIn("local-mem-capacity-bytes", system_raw)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
         self.assertEqual(system_raw["remote-mem-latency"], 100)
         self.assertEqual(system_raw["peak-perf"], 261.12)
@@ -1760,6 +1777,1072 @@ class FaceSchedulerTests(unittest.TestCase):
 
 
 
+
+
+def _merge_v2_manager(
+    *,
+    capacity_bytes: int = 2000,
+    layers: int = 4,
+) -> tuple[FaceModel, KVCacheManager]:
+    """merge v2 真值表 fixture：2×2 mesh、双 2-rank 实例。
+
+    每层每 token 每 rank 4B（全层 16B/token/rank），逐字节可手算。
+    """
+    hardware = FaceHardware(
+        mesh_rows=2,
+        mesh_cols=2,
+        local_hbm_capacity_bytes=capacity_bytes,
+        local_hbm_bandwidth_gbps=1.0,
+        d2d_bandwidth_gbps=2.0,
+        peak_perf_tflops=1.0,
+        d2d_latency_ns=0,
+        local_hbm_latency_ns=0,
+    )
+    model = FaceModel(
+        layers=layers,
+        hidden_size=4,
+        ffn_size=4,
+        num_heads=2,
+        vocab_size=4,
+        bytes_per_elem=1,
+        mlp_variant="gelu",
+    )
+    topology = build_instances(
+        hardware,
+        (
+            FaceInstanceSpec("ins0", "1", (0, 1)),
+            FaceInstanceSpec("ins1", "2", (2, 3)),
+        ),
+    )
+    return model, KVCacheManager(topology, model)
+
+
+def _seed_completed_session(
+    manager: KVCacheManager,
+    *,
+    session_id: str,
+    instance_index: int,
+    context_tokens: int,
+) -> None:
+    before, transfers, evictions = manager.prepare_prefill(
+        session_id=session_id,
+        target_instance_index=instance_index,
+        history_tokens=0,
+        trigger_request_id=f"{session_id}_seed",
+    )
+    assert before is None and not transfers and not evictions
+    manager.expand_prefill(
+        session_id=session_id,
+        instance_index=instance_index,
+        context_tokens=context_tokens,
+        trigger_request_id=f"{session_id}_seed",
+    )
+    manager.mark_complete(session_id, context_tokens)
+
+
+def _kv_snapshot_bytes(
+    manager: KVCacheManager,
+    instance_index: int,
+) -> tuple[int, ...]:
+    return tuple(
+        snapshot.kv_cache_bytes
+        for snapshot in manager.hbm_snapshots(instance_index)
+    )
+
+
+class MergeV2DirectionTests(unittest.TestCase):
+    """merge v2（少并多，2026-09-17 用户裁定）方向真值表与披露契约。
+
+    每方向断言：传输字节/层区间/reason、败者释放、胜者终态全层 LOCAL、
+    home 迁移（I7）、守恒（context/total/shard 按合并后全量）、
+    ``last_merge_outcome`` 披露快照、I6（本会话零 remote_store）。
+    """
+
+    def test_remote_read_local_base_forward_matches_v1_increment_bytes(self):
+        # B(=kv(10)) ≥ I(=kv(5)) → 前向：W 搬 home。前向腿逐字节与旧 v1
+        # 增量腿一致（LOCAL 基两口径恒等的回归锚）：bytes == kv(new)。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        _, transfers, evictions = manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+        # LOCAL 基不变锚：零化起算、无传输无逐出。
+        self.assertEqual(transfers, ())
+        self.assertEqual(evictions, ())
+        session = manager.session_snapshot("s")
+        self.assertEqual(session.shard_bytes, (0, 0))
+        self.assertEqual(session.context_tokens, 0)
+        self.assertEqual(session.working_kind, "remote-read")
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(len(merge_transfers), 1)
+        noc = merge_transfers[0]
+        self.assertEqual(noc.kind, "noc_migrate")
+        self.assertEqual(noc.reason, "merge_working_copy_to_home")
+        self.assertEqual(noc.source_instance_index, 1)
+        self.assertEqual(noc.target_instance_index, 0)
+        self.assertEqual((noc.layer_start, noc.layer_end), (0, 4))
+        expected_increment = kv_cache_shard_bytes_for_tokens(model, 5, 2)
+        self.assertEqual(
+            tuple(shard.bytes for shard in noc.shards), expected_increment)
+        self.assertEqual(noc.total_bytes, sum(expected_increment))
+        # I6：本会话零池写。
+        self.assertFalse(any(
+            t.kind == "remote_store" and t.session_id == "s"
+            for t in merge_transfers))
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(merged.instance_index, 0)
+        self.assertEqual(merged.home_instance, 0)  # home 不迁移
+        self.assertIsNone(merged.working_kind)
+        self.assertEqual(merged.context_tokens, 15)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 15, 2))
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (240, 240))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (0, 0))
+        self.assertEqual(
+            manager.last_merge_outcome,
+            {
+                "session_id": "s",
+                "direction": "forward",
+                "zero_byte_flip": False,
+                "winner_instance": 0,
+                "loser_instance": 1,
+                "transferred_bytes": 160,
+                "home_flipped": False,
+            },
+        )
+
+    def test_remote_read_local_base_reverse_moves_base_and_flips_home(self):
+        # B(=kv(5)=80) < I(=kv(10)=160) → 翻转：B 搬 exec（home→exec）、
+        # home 释放、home 迁移到 exec、终态 LOCAL@exec。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=5)
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=5,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=10,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=10)
+
+        self.assertEqual(len(merge_transfers), 1)
+        noc = merge_transfers[0]
+        self.assertEqual(noc.kind, "noc_migrate")
+        self.assertEqual(noc.reason, "merge_base_to_exec")
+        self.assertEqual(noc.source_instance_index, 0)
+        self.assertEqual(noc.target_instance_index, 1)
+        self.assertEqual((noc.layer_start, noc.layer_end), (0, 4))
+        expected_base = kv_cache_shard_bytes_for_tokens(model, 5, 2)
+        self.assertEqual(
+            tuple(shard.bytes for shard in noc.shards), expected_base)
+        self.assertEqual(noc.total_bytes, sum(expected_base))
+        self.assertFalse(any(
+            t.kind == "remote_store" and t.session_id == "s"
+            for t in merge_transfers))
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)  # home 迁移到 exec
+        self.assertIsNone(merged.working_kind)
+        self.assertEqual(merged.context_tokens, 15)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 15, 2))
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (0, 0))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (240, 240))
+        self.assertEqual(
+            manager.last_merge_outcome,
+            {
+                "session_id": "s",
+                "direction": "reverse",
+                "zero_byte_flip": False,
+                "winner_instance": 1,
+                "loser_instance": 0,
+                "transferred_bytes": 160,
+                "home_flipped": True,
+            },
+        )
+
+    def _prepare_partial_hybrid(
+        self,
+        manager: KVCacheManager,
+        *,
+        layer_start: int,
+        history_tokens: int,
+        increment_tokens: int,
+    ) -> None:
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0,
+            context_tokens=history_tokens)
+        manager._evict_suffix(
+            manager._sessions["s"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="fixture",
+            layer_start=layer_start,
+        )
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=history_tokens,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=increment_tokens,
+            trigger_request_id="r1")
+
+    def test_remote_read_partial_hybrid_forward_uses_shard_truth(self):
+        # 混合形态（p=3）：H(=kv(20)@[0,3)=240) ≥ S+I(=80+80=160) → 前向。
+        # 前向腿逐 rank 字节必须取 shard_bytes 真值（S+I=160），而非从
+        # context_tokens(=增量 5，80) 派生——D1 两口径分离锚。
+        model, manager = _merge_v2_manager()
+        self._prepare_partial_hybrid(
+            manager, layer_start=3, history_tokens=20, increment_tokens=5)
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(len(merge_transfers), 1)
+        noc = merge_transfers[0]
+        self.assertEqual(noc.kind, "noc_migrate")
+        self.assertEqual(noc.reason, "merge_working_copy_to_home")
+        self.assertEqual(noc.source_instance_index, 1)
+        self.assertEqual(noc.target_instance_index, 0)
+        self.assertEqual(
+            tuple(shard.bytes for shard in noc.shards), (160, 160))
+        self.assertEqual(noc.total_bytes, 320)
+        self.assertNotEqual(
+            tuple(shard.bytes for shard in noc.shards),
+            kv_cache_shard_bytes_for_tokens(model, 5, 2),
+        )
+        self.assertFalse(any(
+            t.kind == "remote_store" and t.session_id == "s"
+            for t in merge_transfers))
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 0)
+        self.assertEqual(merged.home_instance, 0)
+        self.assertEqual(merged.context_tokens, 25)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 25, 2))
+        # home 终态 = H + W = 240 + 160 = 400 = kv(25)。
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (400, 400))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (0, 0))
+        self.assertEqual(manager.last_merge_outcome["direction"], "forward")
+        self.assertFalse(manager.last_merge_outcome["home_flipped"])
+        self.assertEqual(manager.last_merge_outcome["transferred_bytes"], 320)
+
+    def test_remote_read_partial_hybrid_reverse_moves_home_prefix(self):
+        # 混合形态（p=2 对半）：H(=160) < S+I(=160+80=240) → 翻转搬 H。
+        model, manager = _merge_v2_manager()
+        self._prepare_partial_hybrid(
+            manager, layer_start=2, history_tokens=20, increment_tokens=5)
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(len(merge_transfers), 1)
+        noc = merge_transfers[0]
+        self.assertEqual(noc.reason, "merge_base_to_exec")
+        self.assertEqual(noc.source_instance_index, 0)
+        self.assertEqual(noc.target_instance_index, 1)
+        self.assertEqual((noc.layer_start, noc.layer_end), (0, 2))
+        expected_home_prefix = kv_cache_shard_bytes_for_layer_range(
+            model, 20, 2, layer_start=0, layer_end=2)
+        self.assertEqual(
+            tuple(shard.bytes for shard in noc.shards), expected_home_prefix)
+        self.assertFalse(any(
+            t.kind == "remote_store" and t.session_id == "s"
+            for t in merge_transfers))
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.context_tokens, 25)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 25, 2))
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (0, 0))
+        # exec 终态 = S+I + H = 240 + 160 = 400 = kv(25)。
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (400, 400))
+        outcome = manager.last_merge_outcome
+        self.assertEqual(outcome["direction"], "reverse")
+        self.assertFalse(outcome["zero_byte_flip"])
+        self.assertTrue(outcome["home_flipped"])
+        self.assertEqual(outcome["transferred_bytes"], 320)
+
+    def test_copy_partial_base_merges_as_zero_byte_flip(self):
+        # copy：exec 恒持并集 ⊇ home 侧 → 零字节翻转（无传输、home 释放）。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        manager._evict_suffix(
+            manager._sessions["s"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="fixture",
+        )
+        _, transfers, _ = manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="r1",
+            action="copy",
+        )
+        # 两腿：前缀 NoC [0,p) + 后缀池恢复 [p,L)。
+        self.assertEqual(
+            [(t.kind, t.layer_start, t.layer_end) for t in transfers],
+            [("noc_migrate", 0, 2), ("remote_load", 2, 4)],
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=15,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(merge_transfers, ())
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.context_tokens, 15)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 15, 2))
+        # home 侧基础前缀（80/rank）释放；exec 并集（240/rank）转正。
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (0, 0))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (240, 240))
+        self.assertEqual(
+            manager.last_merge_outcome,
+            {
+                "session_id": "s",
+                "direction": "reverse",
+                "zero_byte_flip": True,
+                "winner_instance": 1,
+                "loser_instance": 0,
+                "transferred_bytes": 0,
+                "home_flipped": True,
+            },
+        )
+
+    def test_recompute_at_remote_instance_merges_as_zero_byte_flip(self):
+        # recompute@异地（LOCAL 基）：重算复份＋增量 ⊇ home 基础 → 零字节
+        # 翻转（merge_transfers 为空、home 侧释放、home := exec）。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        _, transfers, evictions = manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="r1",
+            action="recompute",
+        )
+        self.assertEqual((transfers, evictions), ((), ()))
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=15,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(merge_transfers, ())
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.context_tokens, 15)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 15, 2))
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (0, 0))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (240, 240))
+        outcome = manager.last_merge_outcome
+        self.assertEqual(outcome["direction"], "reverse")
+        self.assertTrue(outcome["zero_byte_flip"])
+        self.assertEqual(outcome["transferred_bytes"], 0)
+        self.assertTrue(outcome["home_flipped"])
+
+    def test_remote_base_copy_and_recompute_merge_in_place(self):
+        # REMOTE 基（无主，裁定③）：in_place——零传输零池写、home := exec、
+        # 终态 LOCAL@exec。copy（池恢复全量）与 recompute（重算全量）两形。
+        for action in ("copy", "recompute"):
+            with self.subTest(action=action):
+                model, manager = _merge_v2_manager()
+                _seed_completed_session(
+                    manager, session_id="s", instance_index=0,
+                    context_tokens=10)
+                manager._evict_session(
+                    manager._sessions["s"],
+                    phase="completion",
+                    reason="fixture_remote",
+                    trigger_request_id="fixture",
+                )
+                self.assertEqual(
+                    manager.session_snapshot("s").location,
+                    KVCacheManager.REMOTE_MEMORY,
+                )
+                _, transfers, _ = manager.prepare_prefill(
+                    session_id="s",
+                    target_instance_index=1,
+                    history_tokens=10,
+                    trigger_request_id="r1",
+                    action=action,
+                )
+                if action == "copy":
+                    self.assertEqual(
+                        [(t.kind, t.layer_start, t.layer_end)
+                         for t in transfers],
+                        [("remote_load", 0, 4)],
+                    )
+                else:
+                    self.assertEqual(transfers, ())
+                manager.expand_prefill(
+                    session_id="s", instance_index=1, context_tokens=15,
+                    trigger_request_id="r1")
+
+                merge_transfers = manager.merge_back(
+                    session_id="s", trigger_request_id="r1", new_tokens=5)
+
+                self.assertEqual(merge_transfers, ())
+                merged = manager.session_snapshot("s")
+                self.assertEqual(merged.location, KVCacheManager.LOCAL_HBM)
+                self.assertEqual(merged.instance_index, 1)
+                self.assertEqual(merged.home_instance, 1)
+                self.assertIsNone(merged.working_kind)
+                self.assertEqual(merged.context_tokens, 15)
+                self.assertEqual(
+                    merged.shard_bytes,
+                    kv_cache_shard_bytes_for_tokens(model, 15, 2),
+                )
+                self.assertEqual(_kv_snapshot_bytes(manager, 0), (0, 0))
+                self.assertEqual(_kv_snapshot_bytes(manager, 1), (240, 240))
+                self.assertEqual(
+                    manager.last_merge_outcome,
+                    {
+                        "session_id": "s",
+                        "direction": "in_place",
+                        "zero_byte_flip": False,
+                        "winner_instance": 1,
+                        "loser_instance": 0,
+                        "transferred_bytes": 0,
+                        "home_flipped": True,
+                    },
+                )
+
+    def test_stay_merge_sets_outcome_and_version_key_blocks_duplicates(self):
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=0,
+            history_tokens=10,
+            trigger_request_id="stay_r",
+        )
+        self.assertIsNone(manager.last_merge_outcome)
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="stay_r", new_tokens=5)
+        self.assertEqual(merge_transfers, ())
+        self.assertEqual(
+            manager.last_merge_outcome,
+            {
+                "session_id": "s",
+                "direction": "stay",
+                "zero_byte_flip": False,
+                "winner_instance": None,
+                "loser_instance": None,
+                "transferred_bytes": 0,
+                "home_flipped": False,
+            },
+        )
+        # 版本键（恰好一次）：同请求重复 merge = 合同类违规。
+        with self.assertRaisesRegex(
+                RuntimeError, "duplicate merge transaction"):
+            manager.merge_back(
+                session_id="s", trigger_request_id="stay_r", new_tokens=5)
+        # stay 后会话仍在 home，无任何字节/形态变化。
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 0)
+        self.assertEqual(merged.home_instance, 0)
+        self.assertEqual(
+            merged.shard_bytes, kv_cache_shard_bytes_for_tokens(model, 10, 2))
+
+    def test_remote_read_rejects_exec_equal_to_resident_instance(self):
+        _, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        with self.assertRaisesRegex(RuntimeError, "exec == resident"):
+            manager.prepare_prefill(
+                session_id="s",
+                target_instance_index=0,
+                history_tokens=10,
+                trigger_request_id="r1",
+                action="remote-read",
+            )
+
+
+class MergeV2CapacityTests(unittest.TestCase):
+    """方向回退兜底与双侧深缺口（I8 统一逐出；合同变更 2026-09-17）。
+
+    单层模型（layers=1，权重 20B/rank、2B/token/rank、容量 200B/rank）
+    ——单层无 PARTIAL，逐出只剩整会话外迁，手算口径简单。
+    """
+
+    @staticmethod
+    def _tiny_manager() -> KVCacheManager:
+        # 复用 FaceSchedulerTests 的单层微型模型（权重 20B/rank、
+        # 2B/token/rank、容量 200B/rank）——手算口径与既有用例同源。
+        return FaceSchedulerTests._tiny_kv_manager(
+            capacity_bytes=200, layers=1)[3]
+
+    def test_forward_capacity_failure_falls_back_to_reverse(self):
+        # home(0) 被活跃 blocker 占满 → 前向 KVCapacityError → 改试反向
+        # （exec 容纳 B）成功：翻转搬 B、home 迁移到 exec。
+        manager = self._tiny_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        # blocker：活跃（未完成）不可逐 → ins0 剩余 = 200-20-20-160 = 0。
+        FaceSchedulerTests._seed_local_session(
+            manager, session_id="blocker", instance_index=0,
+            context_tokens=80, completion_ns=None)
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (180, 180))
+        manager.prepare_prefill(
+            session_id="s", target_instance_index=1, history_tokens=10,
+            trigger_request_id="r1", action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        self.assertEqual(len(merge_transfers), 1)
+        noc = merge_transfers[0]
+        self.assertEqual(noc.reason, "merge_base_to_exec")
+        self.assertEqual(noc.source_instance_index, 0)
+        self.assertEqual(noc.target_instance_index, 1)
+        self.assertEqual(tuple(shard.bytes for shard in noc.shards), (20, 20))
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 1)
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.context_tokens, 15)
+        # home 仅剩 blocker；exec = I + B = 10 + 20 = 30 = kv(15)。
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (160, 160))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (30, 30))
+        outcome = manager.last_merge_outcome
+        self.assertEqual(outcome["direction"], "reverse")
+        self.assertFalse(outcome["zero_byte_flip"])
+        self.assertTrue(outcome["home_flipped"])
+        self.assertEqual(manager.deep_gap_events, [])
+
+    def test_dual_sided_deep_gap_fails_closed_and_commits_records(self):
+        # 双侧均被活跃 blocker 占满 → 双向都 KVCapacityError → RuntimeError
+        #（消息含逐 rank 缺口），两个 exc 的 deep_gap_records 都落账。
+        manager = self._tiny_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        FaceSchedulerTests._seed_local_session(
+            manager, session_id="blocker_home", instance_index=0,
+            context_tokens=80, completion_ns=None)
+        FaceSchedulerTests._seed_local_session(
+            manager, session_id="blocker_exec", instance_index=1,
+            context_tokens=80, completion_ns=None)
+        manager.prepare_prefill(
+            session_id="s", target_instance_index=1, history_tokens=10,
+            trigger_request_id="r1", action="remote-read",
+        )
+        # exec 剩余 20，增量 10 放得下（剩余 10）；反向需 B=20 > 10 失败。
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+
+        with self.assertRaisesRegex(RuntimeError, "dual-sided deep gap"):
+            manager.merge_back(
+                session_id="s", trigger_request_id="r1", new_tokens=5)
+        records = manager.deep_gap_events
+        # 前向@ins0（ranks 0,1）+ 反向@ins1（ranks 2,3）各 2 条。
+        self.assertEqual(len(records), 4)
+        self.assertEqual(
+            sorted(record["rank"] for record in records), [0, 1, 2, 3])
+        by_instance = {
+            record["instance_index"] for record in records}
+        self.assertEqual(by_instance, {0, 1})
+        for record in records:
+            self.assertEqual(record["phase"], "completion")
+            self.assertEqual(record["reason"], "merge_winner_capacity")
+        # fail-closed：未结算（版本键未消耗、无 outcome）。
+        self.assertIsNone(manager.last_merge_outcome)
+        self.assertIsNone(manager._sessions["s"].last_merged_request_id)
+
+    def test_forward_unified_eviction_victims_are_disclosed_not_self(self):
+        # I6 精确口径：统一逐出 victim 的 remote_store 允许出现在返回值
+        #（session_id ≠ 本会话）；本会话的 remote_store 不得出现。
+        manager = self._tiny_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        # filler：已完成可逐 → 前向空间准备触发统一逐出（整会话外迁）。
+        FaceSchedulerTests._seed_local_session(
+            manager, session_id="filler", instance_index=0,
+            context_tokens=80, completion_ns=10)
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (180, 180))
+        manager.prepare_prefill(
+            session_id="s", target_instance_index=1, history_tokens=10,
+            trigger_request_id="r1", action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        victim_stores = [
+            t for t in merge_transfers
+            if t.kind == "remote_store"
+        ]
+        self.assertEqual(len(victim_stores), 1)
+        self.assertEqual(victim_stores[0].session_id, "filler")
+        self.assertEqual(
+            manager.session_snapshot("filler").location,
+            KVCacheManager.REMOTE_MEMORY,
+        )
+        self.assertFalse(any(
+            t.kind == "remote_store" and t.session_id == "s"
+            for t in merge_transfers))
+        self.assertEqual(
+            [t.kind for t in merge_transfers if t.session_id == "s"],
+            ["noc_migrate"],
+        )
+        merged = manager.session_snapshot("s")
+        self.assertEqual(merged.instance_index, 0)
+        self.assertEqual(merged.home_instance, 0)
+        self.assertEqual(merged.context_tokens, 15)
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (30, 30))
+        self.assertEqual(manager.deep_gap_events, [])
+
+
+class PrepareRemoteReadHybridTests(unittest.TestCase):
+    """prepare_prefill remote-read 分支：LOCAL 基不变锚 + PARTIAL 混合形态。"""
+
+    def test_partial_base_restores_suffix_as_hot_kv(self):
+        # 混合形态：remote_load [p,L) + shard_bytes == 后缀 S + base 快照 p
+        # + context_tokens = 0（增量口径）。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=20)
+        manager._evict_suffix(
+            manager._sessions["s"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="fixture",
+            layer_start=3,
+        )
+        partial = manager.session_snapshot("s")
+        self.assertEqual(partial.location, KVCacheManager.PARTIAL_HBM_REMOTE)
+        self.assertEqual(partial.resident_prefix_layers, 3)
+
+        before, transfers, evictions = manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=20,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+
+        self.assertEqual(evictions, ())
+        self.assertEqual(len(transfers), 1)
+        load = transfers[0]
+        self.assertEqual(load.kind, "remote_load")
+        self.assertEqual(
+            load.reason, "history_suffix_pool_restore_working_copy")
+        self.assertEqual(load.target_instance_index, 1)
+        self.assertEqual((load.layer_start, load.layer_end), (3, 4))
+        expected_suffix = kv_cache_shard_bytes_for_layer_range(
+            model, 20, 2, layer_start=3, layer_end=4)
+        self.assertEqual(
+            tuple(shard.bytes for shard in load.shards), expected_suffix)
+        self.assertTrue(all(
+            shard.edge_rank in manager.edge_ranks
+            and shard.source_rank == shard.edge_rank
+            for shard in load.shards))
+        # 工作副本：后缀物化入账（热 KV），context = 增量口径 0。
+        session = manager._sessions["s"]
+        self.assertEqual(session.shard_bytes, expected_suffix)
+        self.assertEqual(session.total_bytes, sum(expected_suffix))
+        self.assertEqual(session.context_tokens, 0)
+        self.assertEqual(session.working_kind, "remote-read")
+        self.assertEqual(session.location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(session.instance_index, 1)
+        self.assertEqual(session.resident_prefix_layers, 4)
+        # base 快照（分支前执行）：PARTIAL p=3。
+        self.assertEqual(session.base_location,
+                         KVCacheManager.PARTIAL_HBM_REMOTE)
+        self.assertEqual(session.base_history_tokens, 20)
+        self.assertEqual(session.base_resident_prefix_layers, 3)
+        self.assertEqual(session.home_instance, 0)
+        # 物理账：home 前缀 + exec 后缀。
+        self.assertEqual(_kv_snapshot_bytes(manager, 0), (240, 240))
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (80, 80))
+        snapshot = manager.session_snapshot("s")
+        self.assertEqual(snapshot.local_shard_bytes, expected_suffix)
+        self.assertEqual(snapshot.rank_bytes, ((2, 80), (3, 80)))
+
+    def test_local_base_zeroes_working_copy_unchanged_anchor(self):
+        # LOCAL 基：逐字节不变（零化：shard=0/total=0/context=0、无传输）。
+        _, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        _, transfers, evictions = manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+        self.assertEqual(transfers, ())
+        self.assertEqual(evictions, ())
+        session = manager._sessions["s"]
+        self.assertEqual(session.shard_bytes, (0, 0))
+        self.assertEqual(session.total_bytes, 0)
+        self.assertEqual(session.context_tokens, 0)
+        self.assertEqual(session.base_location, KVCacheManager.LOCAL_HBM)
+        self.assertEqual(session.base_resident_prefix_layers, 4)
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (0, 0))
+
+    def test_hybrid_expand_grows_increment_and_keeps_frozen_suffix(self):
+        # 混合形态 expand：context = 增量口径，shard = S + kv(增量)——
+        # delta 恰为增量增长（D1 两口径分离）。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=20)
+        manager._evict_suffix(
+            manager._sessions["s"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="fixture",
+            layer_start=2,
+        )
+        manager.prepare_prefill(
+            session_id="s", target_instance_index=1, history_tokens=20,
+            trigger_request_id="r1", action="remote-read",
+        )
+        evictions = manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+        self.assertEqual(evictions, ())
+        session = manager._sessions["s"]
+        expected_suffix = kv_cache_shard_bytes_for_layer_range(
+            model, 20, 2, layer_start=2, layer_end=4)
+        expected_increment = kv_cache_shard_bytes_for_tokens(model, 5, 2)
+        self.assertEqual(
+            session.shard_bytes,
+            tuple(
+                suffix + increment
+                for suffix, increment in zip(
+                    expected_suffix, expected_increment)
+            ),
+        )
+        self.assertEqual(session.context_tokens, 5)
+        self.assertEqual(_kv_snapshot_bytes(manager, 1), (240, 240))
+        # 不变量全量审计（strict 口径）在混合形态下保持一致。
+        manager._check_invariants()
+
+
+class I10ActiveProtectionTest(unittest.TestCase):
+    """I10 显式断言（kimi 收尾批 2026-09-17）：混合形态在飞工作副本
+    （含准入相恢复的热后缀 S）不受统一 T+E 逐出——victim 资格 fail-closed
+    （face_scheduler `_evict_suffix` 的 active 守卫）。混合形态下 S 被误逐
+    = 前缀读流失效，本不变量首次成为正确性依赖（方案 §4.1 I10）。"""
+
+    def test_active_hybrid_working_copy_not_evictable(self):
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=20)
+        manager._evict_suffix(
+            manager._sessions["s"],
+            phase="completion",
+            reason="fixture_partial",
+            trigger_request_id="fixture",
+            layer_start=3,
+        )
+        manager.prepare_prefill(
+            session_id="s", target_instance_index=1,
+            history_tokens=20, trigger_request_id="r1",
+            action="remote-read")
+        session = manager._sessions["s"]
+        self.assertTrue(session.active)
+        self.assertGreater(sum(session.shard_bytes), 0)  # 热后缀 S 在账
+        # 直接对在飞工作副本触发统一逐出 → fail-closed raise（victim
+        # 资格硬保护，非容量类可恢复失败）。
+        with self.assertRaises(RuntimeError) as ctx:
+            manager._evict_suffix(
+                session, phase="decode", reason="probe_evict_active",
+                trigger_request_id="probe", layer_start=2)
+        self.assertIn(
+            "only completed inactive sessions may be evicted",
+            str(ctx.exception))
+        # 经 _ensure_capacity 亦不得静默驱逐活跃混合会话：需求超出可用
+        # （活跃会话非合法 victim）→ KVCapacityError，工作副本原样在账。
+        with self.assertRaises(KVCapacityError):
+            manager._ensure_capacity(
+                1, tuple(b + 1 << 40 for b in session.shard_bytes),
+                phase="decode", reason="probe_capacity_active",
+                trigger_request_id="probe")
+        self.assertEqual(
+            manager._sessions["s"].shard_bytes, session.shard_bytes)
+        self.assertTrue(manager._sessions["s"].active)
+
+
+class KVDeltaJournalExportTests(unittest.TestCase):
+    """C14 kv_delta_journal 序列化导出接口（F3：§20.3/§22.7-1 移交收口）。
+
+    字段完整：导出行字段面 = KV_DELTA_JOURNAL_FIELDS 冻结口径（C14
+    _append_kv_delta_row 的构造序，不发明新字段）。字节守恒：导出的
+    transferred/两侧 retained 字节与结算真值逐位一致（与 merge 返回的
+    KVTransfer total_bytes、last_merge_outcome 披露快照对账）。
+    """
+
+    def test_forward_merge_export_fields_and_byte_conservation(self):
+        # 前向（W=kv(5) ≤ B=kv(10)）：导出行与结算真值逐位对账。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="r1",
+            action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="s", instance_index=1, context_tokens=5,
+            trigger_request_id="r1")
+        merge_transfers = manager.merge_back(
+            session_id="s", trigger_request_id="r1", new_tokens=5)
+
+        rows = manager.kv_delta_journal_rows()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        # 字段完整：键集与构造序 = C14 冻结口径。
+        self.assertEqual(tuple(row), KV_DELTA_JOURNAL_FIELDS)
+        self.assertEqual(
+            set(row), {
+                "seq", "session_id", "trigger_request_id", "working_kind",
+                "direction", "zero_byte_flip", "winner_instance",
+                "loser_instance", "home_before", "home_after",
+                "home_migration", "transferred_bytes",
+                "home_side_retained_bytes", "exec_side_retained_bytes",
+                "new_tokens", "staging_return_bytes"})
+        self.assertEqual(row["seq"], 0)
+        self.assertEqual(row["session_id"], "s")
+        self.assertEqual(row["trigger_request_id"], "r1")
+        self.assertEqual(row["working_kind"], "remote-read")
+        self.assertEqual(row["direction"], "forward")
+        self.assertFalse(row["zero_byte_flip"])
+        self.assertEqual(row["winner_instance"], 0)
+        self.assertEqual(row["loser_instance"], 1)
+        self.assertEqual(row["home_before"], 0)
+        self.assertEqual(row["home_after"], 0)
+        self.assertFalse(row["home_migration"])
+        # 字节守恒：传输字节 ≡ merge 返回传输的 total_bytes ≡ 披露快照。
+        transferred_total = sum(t.total_bytes for t in merge_transfers)
+        self.assertEqual(row["transferred_bytes"], transferred_total)
+        self.assertEqual(
+            row["transferred_bytes"],
+            manager.last_merge_outcome["transferred_bytes"])
+        # 两侧实际保留量 = 结算时刻账本真值（home 基 B=kv(10)、exec
+        # 工作副本 W=kv(5)；remote-read 无 copy journal → journal 残量
+        # 口径不适用，取 base 前缀推导值）。
+        self.assertEqual(
+            row["home_side_retained_bytes"],
+            sum(kv_cache_shard_bytes_for_tokens(model, 10, 2)))
+        self.assertEqual(
+            row["exec_side_retained_bytes"],
+            sum(kv_cache_shard_bytes_for_tokens(model, 5, 2)))
+        self.assertEqual(row["new_tokens"], 5)
+        self.assertEqual(row["staging_return_bytes"], 0)  # F14 恒 0 披露位
+        # find 访问器与导出行同源（最新命中）。
+        self.assertEqual(manager.kv_delta_find("r1"), row)
+
+    def test_stay_row_seq_chain_and_frozen_copy_semantics(self):
+        # stay 早退本地提交也恰一行（行存在 ⇔ 结算完成）；两行 seq 链
+        # 0/1；导出为冻结事实的拷贝——消费方改写不回写账本。
+        model, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=0,
+            history_tokens=10,
+            trigger_request_id="stay_r",
+        )
+        manager.merge_back(
+            session_id="s", trigger_request_id="stay_r", new_tokens=5)
+
+        rows = manager.kv_delta_journal_rows()
+        self.assertEqual([row["seq"] for row in rows], [0])
+        stay = rows[0]
+        self.assertEqual(stay["direction"], "stay")
+        self.assertEqual(stay["transferred_bytes"], 0)
+        self.assertEqual(stay["winner_instance"], None)
+        self.assertEqual(stay["home_before"], 0)
+        # A12'：stay 无胜者 ⇒ home 不变——home_after = home_before
+        # （原 None 会被消费端当独立 home 计入集合，乒乓指标假阳性）。
+        self.assertEqual(stay["home_after"], 0)
+        self.assertFalse(stay["home_migration"])
+        self.assertEqual(
+            stay["home_side_retained_bytes"],
+            sum(kv_cache_shard_bytes_for_tokens(model, 10, 2)))
+        self.assertEqual(stay["exec_side_retained_bytes"], 0)
+
+        # 第二次结算（另一会话的 forward）→ seq 链单调推进。
+        _seed_completed_session(
+            manager, session_id="t", instance_index=0, context_tokens=10)
+        manager.prepare_prefill(
+            session_id="t",
+            target_instance_index=1,
+            history_tokens=10,
+            trigger_request_id="t_r1",
+            action="remote-read",
+        )
+        manager.expand_prefill(
+            session_id="t", instance_index=1, context_tokens=5,
+            trigger_request_id="t_r1")
+        manager.merge_back(
+            session_id="t", trigger_request_id="t_r1", new_tokens=5)
+        rows = manager.kv_delta_journal_rows()
+        self.assertEqual([row["seq"] for row in rows], [0, 1])
+        self.assertEqual([row["direction"] for row in rows],
+                         ["stay", "forward"])
+
+        # 冻结拷贝语义：改写导出行不回写账本；重复导出逐位一致。
+        rows[0]["transferred_bytes"] = -1
+        rows[1]["direction"] = "tampered"
+        fresh = manager.kv_delta_journal_rows()
+        self.assertEqual(fresh[0]["transferred_bytes"], 0)
+        self.assertEqual(fresh[1]["direction"], "forward")
+        self.assertIsNot(fresh[0], manager.kv_delta_journal[0])
+
+    def test_export_fails_closed_on_field_drift_and_seq_break(self):
+        # 字段集漂移/seq 断链 = 账本破损（构造面唯一入口保证不变量，
+        # 到达即破损）→ 导出 fail-closed，不得静默降级。
+        _, manager = _merge_v2_manager()
+        _seed_completed_session(
+            manager, session_id="s", instance_index=0, context_tokens=10)
+        manager.prepare_prefill(
+            session_id="s",
+            target_instance_index=0,
+            history_tokens=10,
+            trigger_request_id="stay_r",
+        )
+        manager.merge_back(
+            session_id="s", trigger_request_id="stay_r", new_tokens=5)
+        # 注入破损行（模拟账本被外力改写）。
+        manager.kv_delta_journal[0]["extra_field"] = 1
+        with self.assertRaisesRegex(RuntimeError, "field set drifted"):
+            manager.kv_delta_journal_rows()
+        del manager.kv_delta_journal[0]["extra_field"]
+        manager.kv_delta_journal[0]["seq"] = 7  # seq 断链
+        with self.assertRaisesRegex(RuntimeError, "seq chain broken"):
+            manager.kv_delta_journal_rows()
+
+    def test_dump_sidecar_per_key_sentinel(self):
+        # A12'：dump_joint_kv_ledgers 逐键独立导出——kv_delta_journal_
+        # rows() 抛（字段漂移/seq 链 fail-closed）⇒ 哨兵键
+        # kv_delta_journal_export_error 落盘、其余三键不受连坐（旧行
+        # 为：兜底 except 吞成 sidecar 整体失落 + 消费端误判零结算）。
+        import importlib
+        online_dir = str(Path(__file__).resolve().parent / "online")
+        # A14'（H9，2026-09-22 第三轮复审）：运行时插路径/动态导入在
+        # finally 回收（sys.modules 残留 + 路径序滞留会让跨目录收集
+        # 的 pytest 会话命中缓存、错载兄弟仓同名 online_service 模块）。
+        saved_path = list(sys.path)
+        try:
+            if online_dir not in sys.path:
+                sys.path.insert(0, online_dir)
+            online_service = importlib.import_module("online_service")
+            _, manager = _merge_v2_manager()
+            _seed_completed_session(
+                manager, session_id="s", instance_index=0,
+                context_tokens=10)
+            manager.prepare_prefill(
+                session_id="s",
+                target_instance_index=0,
+                history_tokens=10,
+                trigger_request_id="stay_r",
+            )
+            manager.merge_back(
+                session_id="s", trigger_request_id="stay_r", new_tokens=5)
+            # 注入字段集漂移（导出 fail-closed 的触发器）。
+            manager.kv_delta_journal[0]["extra_field"] = 1
+            scheduler = SimpleNamespace(kv_manager=manager)
+            with tempfile.TemporaryDirectory() as tmp:
+                path = str(Path(tmp) / "joint_kv_ledgers.json")
+                online_service.dump_joint_kv_ledgers(scheduler, path)
+                payload = json.loads(
+                    Path(path).read_text(encoding="utf-8"))
+            self.assertNotIn("kv_delta_journal", payload)
+            self.assertIn("kv_delta_journal_export_error", payload)
+            self.assertIn(
+                "RuntimeError", payload["kv_delta_journal_export_error"])
+            # 其余键不受连坐。
+            self.assertIn("deep_gap_events", payload)
+            self.assertIn("copy_handoff_events", payload)
+            self.assertIn("merge_degrade_events", payload)
+        finally:
+            sys.path[:] = saved_path
+            sys.modules.pop("online_service", None)
+
+    def test_empty_journal_exports_empty_tuple(self):
+        # 零结算 manager：导出 = 空元组（GREEN run 亦保留的披露通道）。
+        _, manager = _merge_v2_manager()
+        self.assertEqual(manager.kv_delta_journal_rows(), ())
+        self.assertIsNone(manager.kv_delta_find("any"))
+
+    def test_kv_delta_index_tracks_latest_and_matches_scan(self):
+        # O5：_kv_delta_index 与账本同源——重复 trigger 取最新命中，且
+        # 与线性反扫全量一致（原热路径 reversed() 扫描的 O(1) 化）。
+        _, manager = _merge_v2_manager()
+        for index in range(8):
+            manager._append_kv_delta_row(
+                session_id="s",
+                trigger_request_id="dup" if index % 2 == 0 else f"r{index}",
+                working_kind=None,
+                direction="in_place",
+                zero_byte_flip=False,
+                winner_instance=None,
+                loser_instance=None,
+                home_before=0,
+                transferred_bytes=index,
+                home_side_retained_bytes=0,
+                exec_side_retained_bytes=0,
+                new_tokens=0,
+            )
+        for row in manager.kv_delta_journal:
+            self.assertIs(
+                manager.kv_delta_find(row["trigger_request_id"]),
+                manager._kv_delta_index[row["trigger_request_id"]])
+        latest = max(
+            (row for row in manager.kv_delta_journal
+             if row["trigger_request_id"] == "dup"),
+            key=lambda row: row["seq"])
+        self.assertIs(manager.kv_delta_find("dup"), latest)
+        self.assertEqual(manager.kv_delta_find("dup")["transferred_bytes"], 6)
 
 
 if __name__ == "__main__":

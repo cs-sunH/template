@@ -57,10 +57,6 @@ class ConfigResolverTests(unittest.TestCase):
             self.hardware.remote_memory_npu_selection,
             self.source["remote-memory"]["npu-selection"],
         )
-        self.assertEqual(
-            self.hardware.remote_memory_logical_pool,
-            self.source["remote-memory"]["logical-pool"],
-        )
         self.assertEqual(self.hardware.peak_perf_tflops, self.source["compute"]["peak-perf-tflops"])
         self.assertEqual(self.hardware.metadata["selected-capacity-profile"], self.profile_name)
         self.assertEqual(self.hardware.metadata["selected-capacity-note"], self.profile["note"])
@@ -78,7 +74,6 @@ class ConfigResolverTests(unittest.TestCase):
             system = json.loads(paths.system.read_text(encoding="utf-8"))
             self.assertEqual(system["local-mem-bw"], self.source["local-hbm"]["bandwidth-gbps"])
             self.assertEqual(system["local-mem-latency"], self.source["local-hbm"]["latency-ns"])
-            self.assertEqual(system["local-mem-capacity-bytes"], self.profile["bytes"])
             self.assertEqual(system["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(system["peak-perf"], self.source["compute"]["peak-perf-tflops"])
             self.assertEqual(system["hbm-kv-restore-bandwidth-sharing"], 1)
@@ -88,7 +83,6 @@ class ConfigResolverTests(unittest.TestCase):
             self.assertEqual(remote["memory-type"], "PER_NPU_MEMORY_EXPANSION")
             self.assertEqual(remote["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(remote["remote-mem-latency"], self.source["remote-memory"]["latency-ns"])
-            self.assertEqual(remote["logical-pool"], self.source["remote-memory"]["logical-pool"])
             self.assertNotIn("npu-selection", remote)
             expected_boundary = [
                 row * self.hardware.mesh_cols + column
@@ -137,7 +131,6 @@ class ConfigResolverTests(unittest.TestCase):
             "peak-perf-note",
             "local-mem-bw",
             "local-mem-latency",
-            "local-mem-capacity-bytes",
             "local-mem-capacity-note",
             "remote-mem-bw",
         }

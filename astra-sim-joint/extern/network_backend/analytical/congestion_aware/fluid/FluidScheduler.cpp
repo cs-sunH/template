@@ -42,7 +42,6 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
       total_completed_flows(0),
       max_active_flows(max_active_flows),
       max_route_memberships(max_route_memberships),
-      link_state_epoch_(0),
       progress_report_event_interval(progress_report_event_interval),
       scheduler_event_count(0),
       dirty_batch_count(0),
@@ -367,7 +366,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
     active_route_memberships += new_memberships;
     total_started_flows += pending_starts.size();
     pending_starts.clear();
-    ++link_state_epoch_;  // Phase-7 §10.2: membership added to link_states
 
     recalculate_dirty_rates(now);
     maybe_rebuild_completion_heap();
@@ -531,7 +529,6 @@ void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
         ++flow.rate_version;
         schedule_tail_arrival(flow, now);
     }
-    ++link_state_epoch_;  // Phase-7 §10.2: memberships removed from link_states
 
     recalculate_dirty_rates(now);
     maybe_rebuild_completion_heap();
@@ -593,41 +590,8 @@ uint64_t FluidScheduler::get_active_flow_count() const noexcept {
     return active_flow_count;
 }
 
-uint64_t FluidScheduler::link_state_epoch() const noexcept {
-    return link_state_epoch_;
-}
-
 size_t FluidScheduler::link_count() const noexcept {
     return link_states.size();
-}
-
-std::optional<LinkCongestionSnapshot> FluidScheduler::link_congestion_snapshot(
-    const LinkId link_id, const uint64_t expected_tick,
-    const uint64_t expected_epoch) const noexcept {
-    // Phase-7 §10.2 expired-handle semantics: a snapshot is only valid for the
-    // (tick, epoch) it was taken at; stale tick or stale epoch is rejected.
-    if (expected_tick != event_queue->get_current_time() ||
-        expected_epoch != link_state_epoch_) {
-        return std::nullopt;
-    }
-    if (link_id >= link_states.size()) {
-        return std::nullopt;
-    }
-    const auto& link = link_states[link_id];
-    long double remaining_bytes = 0.0L;
-    for (const auto& active : link.active_flows) {
-        const auto found = flows_by_id.find(active.flow_id);
-        if (found == flows_by_id.end() ||
-            found->second.state != FluidFlowState::Active) {
-            continue;  // defensive: link membership must be self-consistent
-        }
-        // Each active flow contributes its full outstanding bytes (the fluid
-        // model transfers the whole flow over every link of its route).
-        remaining_bytes += found->second.remaining_bytes;
-    }
-    return LinkCongestionSnapshot{link_id, remaining_bytes,
-                                  static_cast<uint64_t>(link.active_flows.size()),
-                                  expected_tick, expected_epoch};
 }
 
 uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
@@ -659,6 +623,7 @@ void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcep
     observer.rate_sum.assign(link_count_value, 0.0L);
     observer.total_bytes.assign(link_count_value, 0);
     observer.active_ns.assign(link_count_value, 0);
+    observer.flow_active_ns.assign(link_count_value, 0);
     observer.current_bucket_bytes.assign(link_count_value, 0);
     observer.active_links.clear();
     observer.active_links.reserve(link_count_value);
@@ -881,10 +846,11 @@ const std::vector<FluidScheduler::LinkObserverTotals>& FluidScheduler::link_obse
     // Materialized into scratch storage the caller can iterate while
     // emitting; the scheduler is single-threaded (event loop owner).
     auto& totals = link_observer_.totals_scratch;
-    totals.assign(link_states.size(), LinkObserverTotals{0, 0});
+    totals.assign(link_states.size(), LinkObserverTotals{0, 0, 0});
     for (size_t link = 0; link < link_states.size() && link < link_observer_.total_bytes.size(); ++link) {
         totals[link].total_bytes = link_observer_.total_bytes[link];
         totals[link].active_ns = link_observer_.active_ns[link];
+        totals[link].flow_active_ns = link_observer_.flow_active_ns[link];
     }
     return totals;
 }
@@ -912,6 +878,8 @@ void FluidScheduler::link_observer_release() noexcept {
     observer.total_bytes.shrink_to_fit();
     observer.active_ns.clear();
     observer.active_ns.shrink_to_fit();
+    observer.flow_active_ns.clear();
+    observer.flow_active_ns.shrink_to_fit();
     observer.active_links.clear();
     observer.active_links.shrink_to_fit();
     observer.current_bucket_bytes.clear();
@@ -1020,6 +988,23 @@ void FluidScheduler::link_observer_integrate(const EventTime now) noexcept {
                 link_observer_fail("active-time overflow");
             }
             observer.active_ns[link] += dt;
+            // M1: time-weighted flow-count integral. Flow joins/leaves are
+            // scheduler events, so the per-link count is constant within an
+            // integration segment; reading link_states here (member access)
+            // keeps the flow-count bookkeeping out of the membership
+            // mutation paths entirely.
+            const auto link_flow_count = static_cast<uint64_t>(
+                link_states[link].active_flows.size());
+            if (link_flow_count != 0
+                && dt > std::numeric_limits<uint64_t>::max() / link_flow_count) {
+                link_observer_fail("flow-active-time overflow");
+            }
+            const auto flow_dt = dt * link_flow_count;
+            if (flow_dt > std::numeric_limits<uint64_t>::max()
+                            - observer.flow_active_ns[link]) {
+                link_observer_fail("flow-active-time overflow");
+            }
+            observer.flow_active_ns[link] += flow_dt;
         }
         segment_start = segment_end;
     }
@@ -1032,8 +1017,4 @@ uint64_t FluidScheduler::get_total_started_flows() const noexcept {
 
 uint64_t FluidScheduler::get_total_completed_flows() const noexcept {
     return total_completed_flows;
-}
-
-size_t FluidScheduler::get_completion_heap_size() const noexcept {
-    return completion_heap.size();
 }

@@ -259,7 +259,7 @@ _P_CHUNK_HOLDER = [0]
 
 def _kv_event_dict(event) -> dict:
     """Serialize one KVCacheEvent for the online kv_actions stream
-    (与 _eviction_dict / _transfer_dict 同构的在线序列化)。"""
+    (与 _eviction_dict / _transfer_rows 同构的在线序列化)。"""
     return {
         "event_index": event.event_index,
         "planner_time_ns": event.planner_time_ns,
@@ -1159,6 +1159,13 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 "members": members,
                 "statuses": ["Success", "Skipped"],
             })
+            # B3(sh :904-906):drain 列车块末随 runtime 走——与整列发射
+            # _emit_train 同款回写(余量批 end barrier 即整列的 end
+            # barrier,返回结构相同);漏写会使 SH_FIRST_TOKEN_SPLIT=1
+            # 时被拆分列车 drain 的请求其后 arm 全 None,逐出 shard 丢掉
+            # 对 drain 列车 end barrier 的时序依赖边且无报错。
+            self.runtime_by_request_id[
+                request_id].drain_block_ends = dict(result["block_ends"])
         for request_id, members in result["exit_members"].items():
             self._batch["watches"].append({
                 "request_id": request_id,

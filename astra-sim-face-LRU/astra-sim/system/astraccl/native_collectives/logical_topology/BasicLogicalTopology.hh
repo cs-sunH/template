@@ -14,9 +14,7 @@ class BasicLogicalTopology : public LogicalTopology {
   public:
     enum class BasicTopology { Ring = 0, BinaryTree };
 
-    BasicLogicalTopology(BasicTopology basic_topology) {
-        this->basic_topology = basic_topology;
-    }
+    BasicLogicalTopology(BasicTopology basic_topology) {}
 
     virtual ~BasicLogicalTopology() = default;
 
@@ -30,8 +28,6 @@ class BasicLogicalTopology : public LogicalTopology {
         int dimension, ComType type) override {
         return this;
     }
-
-    BasicTopology basic_topology;
 };
 
 }  // namespace AstraSim

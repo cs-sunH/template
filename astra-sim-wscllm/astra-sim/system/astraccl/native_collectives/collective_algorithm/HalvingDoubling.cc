@@ -31,7 +31,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
     this->toggle = false;
-    this->name = Name::HalvingDoubling;
     if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
         transmition = MemBus::Transmition::Fast;
     } else {

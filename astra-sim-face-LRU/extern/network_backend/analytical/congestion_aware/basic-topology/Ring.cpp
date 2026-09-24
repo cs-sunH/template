@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "congestion_aware/Ring.h"
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 
 using namespace NetworkAnalyticalCongestionAware;
 
@@ -14,6 +16,18 @@ Ring::Ring(const int npus_count, const Bandwidth bandwidth, const Latency latenc
     assert(npus_count > 0);
     assert(bandwidth > 0);
     assert(latency >= 0);
+
+    // Degenerate widths break the closing edge: with a single NPU it loops
+    // the device onto itself, and with two NPUs on a bidirectional ring the
+    // ring edges have already connected both directions, so the closing edge
+    // re-connects existing devices and orphans the duplicated links.  Refuse
+    // to build such a ring instead of constructing a broken topology.
+    if (npus_count < 2 || (bidirectional && npus_count < 3)) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "ring requires at least 2 npus, or 3 npus when bidirectional (got "
+                  << npus_count << " npus)" << std::endl;
+        std::exit(-1);
+    }
 
     // connect npus in a ring
     for (auto i = 0; i < npus_count - 1; i++) {

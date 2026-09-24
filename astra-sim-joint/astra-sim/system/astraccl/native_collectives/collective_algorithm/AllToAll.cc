@@ -15,7 +15,6 @@ AllToAll::AllToAll(ComType type,
                    RingTopology::Direction direction,
                    InjectionPolicy injection_policy)
     : Ring(type, id, allToAllTopology, data_size, direction, injection_policy) {
-    this->name = Name::AllToAll;
     this->middle_point = nodes_in_ring - 1;
     if (window == -1) {
         parallel_reduce = nodes_in_ring - 1;

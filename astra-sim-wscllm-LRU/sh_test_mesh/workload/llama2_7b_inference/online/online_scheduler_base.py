@@ -170,6 +170,21 @@ class OnlineSchedulerBase:
         }
         if len(self.unseen_request_ids) != self.expected_request_count:
             raise ValueError("manifest request_id values must be unique")
+        # batch_train_ 前缀保留校验(low 修复 2026-09-24):列车哨兵/首步
+        # 唤醒使用 batch_train_ 批命名空间(BATCH_TRAIN_PREFIX),基类
+        # _settle_completions 与变体哨兵核销逻辑都按该前缀把完成事件从
+        # in-flight 核销中剥离——manifest request_id 携带该前缀会被静默
+        # 误路由为批信号,其完成事件永不核销。构造期 fail-closed 保留
+        # 校验(真实 request_id 缺省 request_{N} 命名,见 generate_trace.py;
+        # 手写队列破坏保留约定在此拒绝)。
+        _colliding = sorted(
+            request_id for request_id in self.unseen_request_ids
+            if request_id.startswith(BATCH_TRAIN_PREFIX))
+        if _colliding:
+            raise ValueError(
+                "manifest request_id values must not use the reserved "
+                "batch namespace prefix {!r} (colliding: {!r})".format(
+                    BATCH_TRAIN_PREFIX, _colliding[:5]))
         self.replay = replay
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):

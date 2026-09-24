@@ -29,7 +29,6 @@ from face_scheduler import (  # noqa: E402
 )
 from session_kv_manager import (  # noqa: E402
     NOC_MIGRATE,
-    RECOMPUTE,
     KVTransfer,
     KVTransferShard,
     physical_edge_ranks,
@@ -46,7 +45,6 @@ from generate_trace import (  # noqa: E402
     parse_rank_spec,
     sanitize_node_prefix,
     shard_extent,
-    transformer_pass,
     transformer_pass_aggregated,
 )
 from config_resolver import (  # noqa: E402
@@ -541,31 +539,6 @@ def _eviction_dict(record: object) -> dict[str, object]:
         "context_tokens": record.context_tokens,
         "shard_bytes": list(record.shard_bytes),
     }
-
-
-def _transfer_dict(transfer: object | None) -> object:
-    if transfer is None:
-        return None
-    return {
-        "action": transfer.action,
-        "phase": transfer.phase,
-        "reason": transfer.reason,
-        "source_instance_index": transfer.source_instance_index,
-        "target_instance_index": transfer.target_instance_index,
-        "history_tokens": transfer.history_tokens,
-        "total_bytes": transfer.total_bytes,
-        "shards": [
-            {
-                "relative_tp_rank": shard.relative_tp_rank,
-                "source_rank": shard.source_rank,
-                "target_rank": shard.target_rank,
-                "bytes": shard.bytes,
-            }
-            for shard in transfer.shards
-        ],
-    }
-
-
 
 
 def _emit_control_trigger(
@@ -1262,89 +1235,6 @@ def _emit_tp_point_to_point_readiness_barrier(
         "arrival_actions": arrival_actions,
         "release_actions": release_actions,
     }
-
-
-def _emit_prefill_stage(
-    *,
-    config: FaceTraceConfig,
-    builders: dict[int, TraceBuilder],
-    group: InferenceGroup,
-    prefix: str,
-    stage: str,
-    tokens: int,
-    initial_context_tokens: int,
-) -> dict[int, tuple[int, int]]:
-    """Emit one chunked prefill stage; returns, per rank, the ids of the first
-    and last *real* operator/collective nodes (the artificial one-byte
-    ``*_end_barrier`` collectives are excluded), or an empty mapping when the
-    stage has no tokens.  Used only for metrics boundary recording (doc
-    sec.6.2/6.3); the emitted nodes are unchanged."""
-
-    if tokens == 0:
-        return {}
-    bounds: dict[int, list[int]] = {}
-    tensor_parallel = len(group.ranks)
-    spans: list[tuple[int, int]] = []
-    processed = 0
-    while processed < tokens:
-        chunk = min(config.prefill_chunk_size, tokens - processed)
-        spans.append((chunk, initial_context_tokens + processed + chunk))
-        processed += chunk
-    if config.trace_granularity == "token_expanded":
-        for chunk_index, (chunk, kv_length) in enumerate(spans):
-            for relative_rank, rank in enumerate(group.ranks):
-                first_node_id = builders[rank].next_id
-                transformer_pass(
-                    builders[rank],
-                    phase=f"{prefix}_{stage}_chunk{chunk_index:04d}",
-                    tokens=chunk,
-                    kv_length=kv_length,
-                    layers=config.layers,
-                    hidden_size=config.hidden_size,
-                    ffn_size=config.ffn_size,
-                    tensor_parallel=tensor_parallel,
-                    pg_name=group.pg_name,
-                    vocab_size=config.vocab_size,
-                    bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                )
-                last_node_id = builders[rank].previous_id
-                if rank in bounds:
-                    bounds[rank][1] = last_node_id
-                else:
-                    bounds[rank] = [first_node_id, last_node_id]
-                builders[rank].all_reduce(
-                    f"{prefix}_{stage}_chunk{chunk_index:04d}_end_barrier",
-                    1,
-                    group.pg_name,
-                )
-    else:
-        for relative_rank, rank in enumerate(group.ranks):
-            first_node_id = builders[rank].next_id
-            pass_count = transformer_pass_aggregated(
-                builders[rank],
-                phase=f"{prefix}_{stage}_request_aggregated",
-                pass_spans=spans,
-                layers=config.layers,
-                hidden_size=config.hidden_size,
-                ffn_size=config.ffn_size,
-                tensor_parallel=tensor_parallel,
-                pg_name=group.pg_name,
-                vocab_size=config.vocab_size,
-                bytes_per_elem=config.bytes_per_elem,
-                num_heads=config.num_heads,
-                tensor_parallel_rank=relative_rank,
-                mlp_variant=config.mlp_variant,
-            )
-            bounds[rank] = [first_node_id, builders[rank].previous_id]
-            builders[rank].all_reduce(
-                f"{prefix}_{stage}_chunks_aggregated_end_barrier",
-                pass_count,
-                group.pg_name,
-            )
-    return {rank: (pair[0], pair[1]) for rank, pair in bounds.items()}
 
 
 def main(argv=None) -> None:  # noqa: ARG001

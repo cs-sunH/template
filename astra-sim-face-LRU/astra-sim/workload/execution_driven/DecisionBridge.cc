@@ -558,7 +558,7 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // Phase 7 (方案 §10.3): intermediate-product lifecycle. The response
     // file is fully consumed (the batch is materialized above); delete it
     // right away so the bridge dir holds only the request files (the
-    // decision-sequence evidence the idempotency fixture replays) plus the
+    // decision-sequence evidence replay-based re-checks consume) plus the
     // in-flight response. Measured on the frozen 20.csv first-30s input:
     // response files are ~202 MB of the ~252 MB bridge footprint. The
     // Python journals each successfully handled request into one ordered

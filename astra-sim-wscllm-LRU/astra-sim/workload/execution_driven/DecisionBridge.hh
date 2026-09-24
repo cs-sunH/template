@@ -197,10 +197,6 @@ class FileDecisionBridge : public DecisionBridge {
         uint64_t forced_flush_count = 0;
     };
 
-    const Stats& stats() const {
-        return stats_;
-    }
-
     /// One-line report ("[online] phase-6 stats counters:" continuation).
     std::string stats_report() const;
 

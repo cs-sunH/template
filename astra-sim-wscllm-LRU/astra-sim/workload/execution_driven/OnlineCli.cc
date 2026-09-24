@@ -230,12 +230,6 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 bridge_timeout_ms = static_cast<int>(parsed);
             } else {
-                if (parsed > static_cast<unsigned long long>(
-                                 std::numeric_limits<uint64_t>::max())) {
-                    error = "option --request-max-arrival-ns exceeds "
-                            "uint64_t range, got: " + value;
-                    return false;
-                }
                 request_max_arrival_ns = static_cast<uint64_t>(parsed);
             }
         } else if (name == "--idle-watchdog-s") {

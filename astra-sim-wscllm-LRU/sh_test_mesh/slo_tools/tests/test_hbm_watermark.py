@@ -1058,7 +1058,8 @@ class TrustTierJournalTests(unittest.TestCase):
         run_dir = self._fixture_with_journal(
             "hard", rows, default_checksum(rows, ranks_final),
             npu_bytes=10000)
-        # num_heads=3（基础 fixture 为 2）：三 KV rank 权重不均。
+        # num_heads=5（基础 fixture 为 2）：前五 rank 各持 1 头，KV rank
+        # 权重不均。
         (run_dir / "trace_config.csv").write_text(
             "kind,key,value,group_name,pg_name,ranks,description\n"
             "config,layers,1,,,,synthetic\n"

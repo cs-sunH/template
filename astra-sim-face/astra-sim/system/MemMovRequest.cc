@@ -15,13 +15,11 @@ MemMovRequest::MemMovRequest(int request_num,
                              Sys* sys,
                              LogGP* loggp,
                              int size,
-                             int latency,
                              Callable* callable,
                              bool processed,
                              bool send_back)
     : SharedBusStat(BusType::Mem, 0, 0, 0, 0) {
     this->size = size;
-    this->latency = latency;
     this->callable = callable;
     this->processed = processed;
     this->send_back = send_back;

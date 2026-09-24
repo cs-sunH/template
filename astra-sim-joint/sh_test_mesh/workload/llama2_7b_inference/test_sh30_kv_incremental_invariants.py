@@ -44,9 +44,9 @@ class IncrementalInvariantTests(unittest.TestCase):
         ``move_request_capacity_reservation(0→1)``——joint 仓 M3 钉死
         decode 于 prefill 实例（红线 #4：跨实例预约移动 fail-closed），
         该驱动面已从合同中移除。语义意图（增量/严格不变量在**全部合法
-        变更面**上等价）保留：跨实例轮换改走 copy 动作（尾部
-        prepare@copy + merge_back），同实例生命周期覆盖
-        move/move_prefill_to_decode 的同实例分支。"""
+        变更面**上等价）保留：跨实例轮换改走 merge v2 腿（2026-09-17：
+        PARTIAL 混合 remote-read 反向翻转 + REMOTE 基 copy 就地转正），
+        同实例生命周期覆盖 move/move_prefill_to_decode 的同实例分支。"""
         fast = _manager(False)
         strict = _manager(True)
 
@@ -141,6 +141,63 @@ class IncrementalInvariantTests(unittest.TestCase):
             trigger_request_id="next",
         )
         invoke("mark_complete", "session", 5, "human")
+        # ---- merge v2（少并多，2026-09-17）：混合形态 + 翻转腿。 ----
+        # 再截半层 → PARTIAL p=1；remote-read 混合形态（后缀池恢复热 KV）
+        # + 增量 expand；merge v2 反向（H < S+I）：基础前缀 NoC 搬 exec、
+        # home 侧释放、home 迁移到 exec——全程增量/严格审计等价。
+        with mock.patch.object(
+            fast,
+            "_check_invariants",
+            side_effect=AssertionError("normal mutation used the full verifier"),
+        ):
+            fast_partial = fast._evict_suffix(
+                fast._sessions["session"],
+                phase="test",
+                reason="parity",
+                trigger_request_id="hybrid",
+            )
+        self.assertEqual(
+            fast_partial,
+            strict._evict_suffix(
+                strict._sessions["session"],
+                phase="test",
+                reason="parity",
+                trigger_request_id="hybrid",
+            ),
+        )
+        verify()
+        invoke(
+            "prepare_prefill",
+            session_id="session",
+            target_instance_index=1,
+            history_tokens=5,
+            trigger_request_id="hybrid",
+            action="remote-read",
+        )
+        invoke(
+            "expand_prefill",
+            session_id="session",
+            instance_index=1,
+            context_tokens=1,
+            trigger_request_id="hybrid",
+            reservation_request_id="hybrid",
+        )
+        invoke(
+            "merge_back",
+            session_id="session",
+            trigger_request_id="hybrid",
+            new_tokens=1,
+        )
+        self.assertEqual(fast.last_merge_outcome,
+                         strict.last_merge_outcome)
+        self.assertEqual(
+            fast.last_merge_outcome["direction"], "reverse")
+        self.assertFalse(fast.last_merge_outcome["zero_byte_flip"])
+        self.assertEqual(fast.last_merge_outcome["winner_instance"], 1)
+        self.assertTrue(fast.last_merge_outcome["home_flipped"])
+        verify()
+        # 翻转后会话活跃位复位（下一 fixture 逐出需要 completed+inactive）。
+        invoke("mark_complete", "session", 6, "human")
         with mock.patch.object(
             fast,
             "_check_invariants",
@@ -166,18 +223,32 @@ class IncrementalInvariantTests(unittest.TestCase):
             "prepare_prefill",
             session_id="session",
             target_instance_index=0,
-            history_tokens=5,
+            history_tokens=6,
             trigger_request_id="final",
             action="copy",
         )
-        # joint（§2.3）：跨实例工作副本必须先 merge_back（增量归并回
-        # home）再 mark_complete——service_done 位于 merge_done 之后。
+        # 工作副本增长至终态上下文（copy 覆盖完整上下文 = 历史 6 ＋新 1）。
+        invoke(
+            "expand_prefill",
+            session_id="session",
+            instance_index=0,
+            context_tokens=7,
+            trigger_request_id="final",
+            reservation_request_id="final",
+        )
+        # joint（§2.3）：跨实例工作副本必须先 merge_back 再 mark_complete
+        # ——service_done 位于 merge_done 之后。REMOTE 基（无主，裁定③）
+        # → in_place：零传输零池写、工作副本直接转正、home := exec。
         invoke(
             "merge_back",
             session_id="session",
             trigger_request_id="final",
-            new_tokens=0,
+            new_tokens=1,
         )
+        self.assertEqual(fast.last_merge_outcome["direction"], "in_place")
+        self.assertEqual(fast.last_merge_outcome["winner_instance"], 0)
+        self.assertTrue(fast.last_merge_outcome["home_flipped"])
+        self.assertEqual(fast.last_merge_outcome["transferred_bytes"], 0)
         invoke("mark_complete", "session", 6, "human")
         invoke("retire_terminal_session", "session", 6, "final")
         fast.assert_final_state()

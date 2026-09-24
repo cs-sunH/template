@@ -48,7 +48,6 @@ class ResolvedHardware:
     remote_memory_bandwidth_gbps: float
     remote_memory_latency_ns: int | None
     remote_memory_npu_selection: str | None
-    remote_memory_logical_pool: str | None
     peak_perf_tflops: float
     metadata: dict[str, object]
 
@@ -231,7 +230,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         )
         remote_memory_latency = None
         remote_memory_npu_selection = None
-        remote_memory_logical_pool = None
     elif remote_memory_type == "PER_NPU_MEMORY_EXPANSION":
         _require_exact_keys(
             remote_memory,
@@ -240,7 +238,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
                 "bandwidth-gbps",
                 "latency-ns",
                 "npu-selection",
-                "logical-pool",
             },
             "Hardware configuration.remote-memory",
         )
@@ -259,11 +256,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
                 "Hardware configuration.remote-memory.npu-selection must be "
                 "'mesh-boundary'"
             )
-        remote_memory_logical_pool = _require_string(
-            remote_memory,
-            "logical-pool",
-            "Hardware configuration.remote-memory",
-        )
     else:
         raise ValueError(
             "Hardware configuration.remote-memory.memory-type is unsupported"
@@ -302,7 +294,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         remote_memory_bandwidth_gbps=remote_memory_bandwidth,
         remote_memory_latency_ns=remote_memory_latency,
         remote_memory_npu_selection=remote_memory_npu_selection,
-        remote_memory_logical_pool=remote_memory_logical_pool,
         peak_perf_tflops=peak_perf,
         metadata=metadata,
     )
@@ -336,8 +327,6 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
         raise ValueError("Remote-memory expansion requires a configured latency")
     if hardware.remote_memory_npu_selection != "mesh-boundary":
         raise ValueError("Remote-memory expansion requires mesh-boundary selection")
-    if hardware.remote_memory_logical_pool is None:
-        raise ValueError("Remote-memory expansion requires a logical pool")
 
     boundary_ranks = []
     for row in range(hardware.mesh_rows):
@@ -348,7 +337,6 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
             }:
                 boundary_ranks.append(row * hardware.mesh_cols + column)
     remote["remote-mem-latency"] = hardware.remote_memory_latency_ns
-    remote["logical-pool"] = hardware.remote_memory_logical_pool
     remote["npu-ids"] = boundary_ranks
     return remote
 
@@ -431,7 +419,6 @@ def materialize_runtime_configs(
     system = dict(system_template)
     system["local-mem-bw"] = hardware.local_hbm_bandwidth_gbps
     system["local-mem-latency"] = hardware.local_hbm_latency_ns
-    system["local-mem-capacity-bytes"] = hardware.local_hbm_capacity_bytes
     system["remote-mem-bw"] = hardware.remote_memory_bandwidth_gbps
     if "remote-mem-latency" in remote_memory:
         system["remote-mem-latency"] = remote_memory["remote-mem-latency"]

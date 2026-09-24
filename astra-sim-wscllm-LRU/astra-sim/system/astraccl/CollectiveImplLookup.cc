@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 
 #include <cstdlib>
+#include <stdexcept>
 #include <yaml-cpp/yaml.h>
 
 #include "astra-sim/common/Logging.hh"
@@ -16,6 +17,20 @@ using json = nlohmann::json;
 namespace AstraSim {
 
     CollectiveImplLookup::CollectiveImplLookup(int rank_) : rank(rank_) {}
+
+    CollectiveImplLookup::~CollectiveImplLookup() {
+        for (auto& node_and_impl : per_node_custom_impl) {
+            delete node_and_impl.second;
+        }
+        for (auto& type_and_impl : global_custom_impl_per_coll) {
+            delete type_and_impl.second;
+        }
+        for (auto& type_and_impls : native_impl_per_coll_dim) {
+            for (auto* impl : type_and_impls.second) {
+                delete impl;
+            }
+        }
+    }
 
     CollectiveImpl* generate_collective_impl_from_input(
         string collective_impl_str) {
@@ -28,13 +43,33 @@ namespace AstraSim {
         } else if (collective_impl_str.rfind("direct", 0) == 0) {
             int window = -1;
             if (collective_impl_str != "direct") {
-                window = stoi(collective_impl_str.substr(6, 5));
+                try {
+                    window = stoi(collective_impl_str.substr(6, 5));
+                } catch (const std::exception&) {
+                    auto logger = LoggerFactory::get_logger("astraccl");
+                    logger->critical(
+                        "Cannot interpret collective implementation '" +
+                        collective_impl_str +
+                        "'. An integer window must follow the 'direct' "
+                        "prefix.");
+                    exit(1);
+                }
             }
             return new DirectCollectiveImpl(CollectiveImplType::Direct, window);
         } else if (collective_impl_str.rfind("oneDirect", 0) == 0) {
             int window = -1;
             if (collective_impl_str != "oneDirect") {
-                window = stoi(collective_impl_str.substr(9, 5));
+                try {
+                    window = stoi(collective_impl_str.substr(9, 5));
+                } catch (const std::exception&) {
+                    auto logger = LoggerFactory::get_logger("astraccl");
+                    logger->critical(
+                        "Cannot interpret collective implementation '" +
+                        collective_impl_str +
+                        "'. An integer window must follow the 'oneDirect' "
+                        "prefix.");
+                    exit(1);
+                }
             }
             return new DirectCollectiveImpl(CollectiveImplType::OneDirect, window);
         } else if (collective_impl_str == "halvingDoubling") {
@@ -200,8 +235,7 @@ namespace AstraSim {
         BypassRule bypass_rule) {
 
         // Check if there is a per-node custom implementation first.
-        if (bypass_rule != BypassRule::BYPASS_PERNODE_CUSTOM &&
-            bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
+        if (bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
             auto it = per_node_custom_impl.find(static_cast<int>(workload_node_id));
             if (it != per_node_custom_impl.end()) {
                 return std::vector<CollectiveImpl*>{it->second};

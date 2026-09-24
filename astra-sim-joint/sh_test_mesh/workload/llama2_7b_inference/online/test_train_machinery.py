@@ -41,6 +41,7 @@ from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
     _OnlineInstanceState,
     _OnlineRequestRuntime,
+    _TASK_LOAD_CACHE_CAPACITY,  # F6 销账：替身对齐 __init__ 初值
 )
 
 
@@ -89,6 +90,10 @@ def _bare_scheduler(p_chunk=512):
     s.hardware = HARDWARE
     s.model = MODEL
     s._prefill_task_cache = {}
+    # 对齐 __init__ 初值（F6 销账：软门已删，替身漏设 = AttributeError）。
+    s._decode_task_load_cache = {}
+    s._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
+    s._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
     # joint（§3.1）：列车核销的 decode 因果增长钩子访问 kv 台账——纯
     # 列车账本测试无会话（_sessions 空 dict 即 no-op）。
     s.kv_manager = SimpleNamespace(_sessions={})

@@ -8,7 +8,9 @@ Step-1-2 implementation (方案 §4 步骤 1-2): initialization mirrors the stat
 main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
   - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
-    rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
+    rules are contract-documented in OnlineCli.hh -- no automated test
+    coverage, the historical tests/cli_online_test.cc fixture was an
+    out-of-build orphan and has been removed). Step 1-8/1-9: --online-mode
     takes the mode token replay|strategy; replay serves the offline decision
     log (LUT clock, step 1-8), strategy runs the real policy scheduler with
     real physics (step 1-9);
@@ -151,10 +153,8 @@ struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
     NetworkAnalytical::EventQueue* event_queue = nullptr;
     FileDecisionBridge* bridge = nullptr;
-    RequestIngress* ingress = nullptr;
     ServiceCoordinator* svc = nullptr;
     WatchRegistry* watch_registry = nullptr;
-    std::vector<Sys*>* systems = nullptr;
     // The per-rank NodeStore-backed sources are kept alive here (Sys stores
     // its own shared_ptr; this vector is the commit's access path).
     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
@@ -164,7 +164,6 @@ struct OnlineDriverContext {
     // map, the in-flight request tracking and the phase-5 counters.
     GraphBatchCommitter* committer = nullptr;
     uint64_t delivery_seq = 0;
-    uint64_t expected_requests = 0;  // CSV data rows; run-end assertion target
     // Step 1-11: pending T->T+1 deferral record. Set by the main loop when
     // it schedules the explicit next-decision-boundary wakeup; consumed (and
     // reset) by the next ed_driver_tick_end delivery, which serializes it as
@@ -196,6 +195,25 @@ struct OnlineDriverContext {
     // parsed CLI here so ed_commit_cb can gate Phase A without reaching
     // back into main's scope.
     int online_validate = 1;
+    // C6 (WP2 link telemetry, joint 遥测改造, E5 wiring): the fluid
+    // scheduler handle, injected from main()'s make_shared<FluidScheduler>
+    // scope so the tick-end delivery path can sample the link observer
+    // without reaching back into main's locals. Null in fixtures that
+    // never enable telemetry.
+    std::shared_ptr<FluidScheduler> fluid_scheduler;
+    // C6 (--link-telemetry, default off): when on, every delivery epoch
+    // carries the per-link window differential link_telemetry[] in the
+    // bridge request. The differential subtracts the PREVIOUS epoch's
+    // snapshot of the observer's cumulative totals
+    // (link_observer_totals(), const); prev_tick anchors the window start
+    // (F5: window = one decision epoch's physical duration; the first
+    // epoch's window starts at 0 -- no hole). Zero-sized prev vectors =
+    // not yet sampled (the pre-loop arming point sees all-zero totals).
+    bool link_telemetry = false;
+    uint64_t link_telemetry_prev_tick = 0;
+    std::vector<uint64_t> link_telemetry_prev_bytes;
+    std::vector<uint64_t> link_telemetry_prev_active_ns;
+    std::vector<uint64_t> link_telemetry_prev_flow_active_ns;
 };
 
 // The commit payload: the StateDelta + GraphBatch response of one delivery
@@ -210,6 +228,89 @@ struct CommitArg {
     GraphBatch batch;
     std::vector<std::string> completed_requests;
 };
+
+// C6 (WP2 link telemetry, --link-telemetry): the per-decision-epoch NoC
+// link window differential, installed as the DecisionBridge's
+// LinkTelemetryProvider. Pure read of the scheduler's const
+// link_observer_totals() cumulative snapshot: served_bytes / active_ns are
+// the increments since the previous delivery epoch, window bounds are the
+// previous and current delivery ticks (F5: the window IS one decision
+// epoch's physical duration -- adaptive, no new constants; the first epoch
+// spans [0, first_epoch_tick) because the pre-loop arming point sees
+// all-zero totals).
+// F6 coverage boundary: NoC leg only. Every collective rides the same
+// wire (Workload send nodes / astraccl algorithms -> front_end_sim_send ->
+// CongestionAwareNetworkApi::sim_send -> start_flow), so collectives are
+// included automatically; pool ports never enter the FluidScheduler
+// (Workload issue_remote_mem -> AnalyticalRemoteMemory) and stay on the
+// registry model.
+// Two deliberate behaviors:
+//   - idle links (zero served_bytes AND zero active_ns this window) are
+//     omitted: telemetry reports observed traffic, not fabricated zeros;
+//   - the observer's own gate still applies (metrics enabled AND
+//     ASTRA_LINK_OBSERVER != 0). With the observer off the totals are all
+//     zero, so the array is empty every epoch -- no data is invented (a
+//     startup line discloses this shape).
+// The observer's bucket-spool machinery is untouched: this differential
+// reads only the in-memory totals; the run-end emit/release path
+// (emit_link_observer_records / link_observer_release) keeps its exact
+// pre-C6 behavior. Attribution boundary (inherited from the observer):
+// bytes past the last scheduler event of the window are not integrated
+// yet, so window_end_ns (= the epoch tick) can strictly exceed the last
+// attributed instant; the same boundary applies to the spool records C7
+// diffs against.
+nlohmann::json compute_link_telemetry(OnlineDriverContext& driver,
+                                      const StateDelta& delta) {
+    const auto& totals = driver.fluid_scheduler->link_observer_totals();
+    nlohmann::json array = nlohmann::json::array();
+    const size_t links = totals.size();
+    if (driver.link_telemetry_prev_bytes.size() != links) {
+        // First delivery of the run (or a defensive resize on an impossible
+        // link-count change): the previous snapshot is zero, matching the
+        // pre-loop arming point -- the first window covers [0, this tick).
+        driver.link_telemetry_prev_bytes.assign(links, 0);
+        driver.link_telemetry_prev_active_ns.assign(links, 0);
+        driver.link_telemetry_prev_flow_active_ns.assign(links, 0);
+    }
+    for (size_t link = 0; link < links; ++link) {
+        const uint64_t served_bytes =
+            totals[link].total_bytes - driver.link_telemetry_prev_bytes[link];
+        const uint64_t active_ns =
+            totals[link].active_ns - driver.link_telemetry_prev_active_ns[link];
+        const uint64_t flow_active_ns =
+            totals[link].flow_active_ns
+            - driver.link_telemetry_prev_flow_active_ns[link];
+        driver.link_telemetry_prev_bytes[link] = totals[link].total_bytes;
+        driver.link_telemetry_prev_active_ns[link] = totals[link].active_ns;
+        driver.link_telemetry_prev_flow_active_ns[link] =
+            totals[link].flow_active_ns;
+        if (served_bytes == 0 && active_ns == 0) {
+            continue;  // idle link this window: nothing observed to report
+        }
+        // M1 (2026-09-23 acceptance audit): time-weighted average flow
+        // count over the active time. served/active is the AGGREGATE link
+        // throughput (collectives included) and cannot recover the flow
+        // count (a saturated link reports ~capacity at any N; a
+        // downstream-capped flow would masquerade as contention). The
+        // count is the physically well-posed denominator the SH-side
+        // pricing divisors and AIMD consume.
+        double active_flows = 0.0;
+        if (active_ns > 0) {
+            active_flows = static_cast<double>(flow_active_ns)
+                           / static_cast<double>(active_ns);
+        }
+        nlohmann::json sample;
+        sample["link_id"] = static_cast<LinkId>(link);
+        sample["served_bytes"] = served_bytes;
+        sample["active_ns"] = active_ns;
+        sample["active_flows"] = active_flows;
+        sample["window_start_ns"] = driver.link_telemetry_prev_tick;
+        sample["window_end_ns"] = delta.tick;
+        array.push_back(std::move(sample));
+    }
+    driver.link_telemetry_prev_tick = delta.tick;
+    return array;
+}
 
 [[noreturn]] void online_fatal(const std::string& what) {
     std::fprintf(stderr, "[Error] (execution_driven/online) %s\n",
@@ -226,10 +327,14 @@ struct CommitArg {
 /// MultiDimTopology's deterministic connect order (dims ascending; every
 /// connect() appends src->dest then dest->src). A directed link of a
 /// Line/Mesh dimension is a boundary link when its hop sits at either end
-/// of that dimension (coordinate 0 or dim_size-1). Ring/FullyConnected
-/// dimensions have no boundary (their links consume ids but never
-/// qualify). This backend has no remote-memory port topology inside the
-/// fluid link table (remote memory is a separate API), so the mesh
+/// of that dimension (coordinate 0 or dim_size-1). A Ring dimension of
+/// radix 2 degenerates to the Line/Mesh connect order in this backend
+/// (connect_ring_dimension falls back to connect_mesh_dimension), so it
+/// consumes ids and contributes boundary links exactly like a Line/Mesh
+/// dimension; wider Ring/FullyConnected dimensions have no boundary
+/// (their links consume ids but never qualify). This backend has no
+/// remote-memory port topology inside the fluid link table (remote
+/// memory is a separate API), so the mesh
 /// boundary IS the edge set; when a dimension block is unsupported the
 /// set is marked not derived and the records fall back to -1 + note.
 struct EdgeLinkSet {
@@ -266,27 +371,42 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
 
     LinkId next_id = 0;
     bool saw_non_mesh_dim = false;
+    // Line/Mesh dimension walk, replicating MultiDimTopology::
+    // connect_mesh_dimension: one bidirectional connect per non-last
+    // coordinate; boundary links land in the edge set. A Ring dimension
+    // of radix 2 goes through the same path because the backend's
+    // connect_ring_dimension degenerates to connect_mesh_dimension there.
+    const auto connect_mesh_like_dim = [&](int d) {
+        for (int64_t src = 0; src < npus; ++src) {
+            const auto address = address_of(src);
+            if (address[d] + 1 >= sizes[d]) {
+                continue;
+            }
+            const bool boundary =
+                address[d] == 0 || address[d] + 1 == sizes[d] - 1;
+            if (boundary) {
+                result.links.insert(next_id);
+                result.links.insert(next_id + 1);
+            }
+            next_id += 2;
+        }
+    };
     for (int d = 0; d < dims; ++d) {
         switch (blocks[d]) {
         case TopologyBuildingBlock::Mesh: {
-            for (int64_t src = 0; src < npus; ++src) {
-                const auto address = address_of(src);
-                if (address[d] + 1 >= sizes[d]) {
-                    continue;
-                }
-                const bool boundary =
-                    address[d] == 0 || address[d] + 1 == sizes[d] - 1;
-                if (boundary) {
-                    result.links.insert(next_id);
-                    result.links.insert(next_id + 1);
-                }
-                next_id += 2;
-            }
+            connect_mesh_like_dim(d);
             break;
         }
         case TopologyBuildingBlock::Ring: {
-            // Ring (incl. the radix==2 mesh fallback): one bidirectional
-            // connect per src; no boundary concept.
+            if (sizes[d] == 2) {
+                // Radix-2 Ring consumes npus link ids (not 2*npus) and
+                // its links carry mesh boundary semantics, exactly as
+                // the backend's mesh fallback.
+                connect_mesh_like_dim(d);
+                break;
+            }
+            // Wider rings: one bidirectional connect per src; no
+            // boundary concept.
             saw_non_mesh_dim = true;
             next_id += 2 * static_cast<LinkId>(npus);
             break;
@@ -1325,12 +1445,9 @@ int main(int argc, char* argv[]) {
     driver_ctx.mailbox = &mailbox;
     driver_ctx.event_queue = event_queue.get();
     driver_ctx.bridge = &bridge;
-    driver_ctx.ingress = &ingress;
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
-    driver_ctx.systems = &systems;
     driver_ctx.graph_sources = &graph_sources;
-    driver_ctx.expected_requests = expected_requests;
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1437,6 +1554,36 @@ int main(int argc, char* argv[]) {
     GraphBatchCommitter committer(committer_ctx);
     driver_ctx.committer = &committer;
     driver_ctx.online_validate = online_cli.online_validate;
+    // C6 (WP2, E5 wiring): inject the scheduler handle from main()'s
+    // make_shared<FluidScheduler> scope (the object created above the
+    // network API setup; set_fluid_scheduler registered the same
+    // shared_ptr with the API). Unconditional: the tick-end delivery path
+    // reads it through the context; fixtures that never enable telemetry
+    // never dereference it.
+    driver_ctx.fluid_scheduler = fluid_scheduler;
+    // C6 (--link-telemetry, default off): install the bridge's telemetry
+    // provider. The provider runs once per delivery epoch inside
+    // deliver_and_receive (1:1 backpressure), sampling the observer's
+    // cumulative totals and emitting the per-link window differential as
+    // the request's top-level link_telemetry[] array. Flag off = no
+    // provider = request bytes unchanged (A/B byte-equivalence contract).
+    if (online_cli.link_telemetry) {
+        driver_ctx.link_telemetry = true;
+        driver_ctx.link_telemetry_prev_tick = 0;
+        bridge.set_link_telemetry_provider(
+            [&driver_ctx](const StateDelta& delta) {
+                return compute_link_telemetry(driver_ctx, delta);
+            });
+        std::cout << "[online] link telemetry: enabled (--link-telemetry; "
+                     "per-epoch NoC link window differential, links="
+                  << fluid_scheduler->link_count() << ", observer="
+                  << (fluid_link_observer_on ?
+                          "on" :
+                          "OFF (metrics off or ASTRA_LINK_OBSERVER=0) -- "
+                          "link_telemetry[] will be empty; telemetry never "
+                          "fabricates data")
+                  << ")" << std::endl;
+    }
     if (online_cli.sensing_enabled) {
         std::cout << "[online] sensing: enabled (--sensing-enabled; "
                      "injected-unfinished ledger summary delivered per "
@@ -1540,7 +1687,7 @@ int main(int argc, char* argv[]) {
             // parking-point diagnostics for the fail-loud guard below
             // (wall-clock idle watchdog). Every counter the 形态判据
             // reasons over is printed: tick, service counters
-            // (active/pending alarm/fence), reader window state
+            // (active/pending alarm), reader window state
             // (occupancy/rows_read/data_rows/EOF), the input-close knob,
             // and the four emptiness witnesses (mailbox/deferred/commands
             // + the event queue itself, which finished() already proved).
@@ -1549,7 +1696,7 @@ int main(int argc, char* argv[]) {
             // calendar reader's machine states make that shape unreachable
             // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
             // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
-            // 12-field report itself is kept for the A3 watchdog so any
+            // 11-field report itself is kept for the A3 watchdog so any
             // silent-stall family stays attributable. window_occupancy in
             // the calendar reader counts committed-but-untriggered turn-0
             // entries.
@@ -1560,8 +1707,6 @@ int main(int argc, char* argv[]) {
                        std::to_string(svc.active_request_count()) +
                        " pending_alarm=" +
                        std::to_string(svc.pending_alarm_count()) +
-                       " pending_fence=" +
-                       std::to_string(svc.pending_fence_count()) +
                        " window_occupancy=" +
                        std::to_string(
                            windowed.current_window_occupancy()) +
@@ -1641,7 +1786,7 @@ int main(int argc, char* argv[]) {
                 // empty and the queue has nothing left -- yet svc.finished()
                 // is false, i.e. the coordinator still counts pending work
                 // (active request with no in-flight event -- e.g. a request
-                // the strategy deferred / a pending fence with no producer).
+                // the strategy deferred).
                 // No event will ever fire to deliver it and no producer will
                 // ever signal_work() (the official runs never use the
                 // command FIFO): wait_for_work() would block forever -- the
@@ -1945,13 +2090,6 @@ int main(int argc, char* argv[]) {
                       << " completed=" << audit_counts.completed << std::endl;
             gate_ok = false;
         }
-    }
-    if (mailbox.no_decision_python_callback_count() != 0) {
-        std::cerr << "[Error] (execution_driven/online) "
-                     "no_decision_python_callback_count="
-                  << mailbox.no_decision_python_callback_count()
-                  << " != 0" << std::endl;
-        gate_ok = false;
     }
     if (mailbox.delivery_count() == 0 && expected_requests > 0) {
         std::cerr << "[Error] (execution_driven/online) delivery_count == 0: "

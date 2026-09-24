@@ -24,9 +24,10 @@ online entry must parse its own family explicitly:
                         frozen simulation input window upper bound (ns) for
                         turn-0 arrivals; rows beyond it are rejected (never
                         submitted, counted and reported). Frozen default is
-                        30,000,000,000 (the 20.csv first-30-seconds input
-                        boundary; the input's own max arrival is 25.96s, so
-                        the rejection counter reads 0 on the allowed input).
+                        0 = UNBOUNDED (no cap; the window is an explicit
+                        experiment knob only -- any drop it causes is
+                        counted and fail-closes the run-end completion
+                        audit).
   --command-fifo        optional FIFO path read by an external producer
                         thread (step 1-10 IDLE fixture). JSON lines:
                         {"kind":"Submit", session_id, turn_index, request_id,
@@ -119,8 +120,35 @@ online entry must parse its own family explicitly:
                         token is a hard parse error, so a stale script can
                         never silently change validation frequency.
 
+  --link-telemetry      C6 (WP2, joint 遥测改造; default OFF, fail-closed
+                        F7 惯例): per-decision-epoch NoC link window
+                        telemetry in the bridge request. When set, the
+                        online main installs a DecisionBridge link-telemetry
+                        provider; every request_<seq>.json then carries the
+                        top-level link_telemetry[] array (parallel to
+                        ledger_summary), one element per link that carried
+                        bytes or active time in the epoch window:
+                        {link_id, served_bytes, active_ns, window_start_ns,
+                        window_end_ns}. The window IS one decision epoch's
+                        physical duration (F5: adaptive, no new constants);
+                        the values are differentials of the fluid link
+                        observer's cumulative totals (const
+                        link_observer_totals()), so the run's own decision
+                        cadence defines the window. Coverage boundary (F6):
+                        NoC leg only -- collectives included (every
+                        collective routes sim_send -> start_flow), pool
+                        ports excluded (Workload issue_remote_mem ->
+                        AnalyticalRemoteMemory, registry model). Flag off =
+                        the field is omitted entirely and request bytes are
+                        unchanged. NOTE: the observer itself still follows
+                        its own gate (metrics enabled AND
+                        ASTRA_LINK_OBSERVER != 0); telemetry never
+                        fabricates data, so a disabled observer yields
+                        empty arrays (a startup line discloses this).
+
 Hard-error rules: unknown flags in the online family (prefixes --request-,
---bridge-, --close-, --online-) are rejected, because the shared parser would
+--bridge-, --close-, --online-, --command-, --sensing-, --idle-, --link-)
+are rejected, because the shared parser would
 otherwise swallow typos silently. --request-queue-csv must name an existing,
 readable file.
 *******************************************************************************/
@@ -187,6 +215,12 @@ struct OnlineCliOptions {
     // rejected at parse time. The official runner passes
     // "${SH_ONLINE_VALIDATE:-0}".
     int online_validate = 1;
+    // C6 (WP2 link telemetry, joint 遥测改造; default OFF, fail-closed F7):
+    // enables the per-decision-epoch NoC link window telemetry in the
+    // bridge request (link_telemetry[] top-level array; see the
+    // --link-telemetry doc above). Flag off = the request schema and bytes
+    // are unchanged.
+    bool link_telemetry = false;
 };
 
 /// Parse argv for the online family. Returns false and fills `error` on any

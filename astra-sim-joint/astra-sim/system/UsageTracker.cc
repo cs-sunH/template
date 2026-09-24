@@ -56,20 +56,6 @@ void UsageTracker::set_usage(int level) {
     }
 }
 
-void UsageTracker::report(CSVWriter* writer, int offset) {
-    if (!retain_history_) {
-        throw std::logic_error(
-            "UsageTracker history was disabled for this online scheduler");
-    }
-    uint64_t col = offset * 3;
-    uint64_t row = 1;
-    for (auto a : usage) {
-        writer->write_cell(row, col, std::to_string(a.start));
-        writer->write_cell(row++, col + 1, std::to_string(a.level));
-    }
-    return;
-}
-
 std::list<std::pair<uint64_t, double>> UsageTracker::report_percentage(
     uint64_t cycles) {
     if (!retain_history_) {

@@ -338,12 +338,11 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
 
     for (const Job& job : completed) {
         const uint64_t elapsed = now - job.start_tick;
+        // RESTORE / COMM_* / POOL_* jobs are HBM transfers and do not count
+        // toward the GPU busy-tick accumulator (the old sibling
+        // tics_hbm_dma_ops counter was write-only and was removed).
         if (job.kind == JobKind::COMPUTE) {
             workload->hw_resource->tics_gpu_ops += elapsed;
-        } else {
-            // RESTORE / COMM_* / POOL_* jobs are HBM transfers; their
-            // elapsed time accumulates on the hbm_dma counter.
-            workload->hw_resource->tics_hbm_dma_ops += elapsed;
         }
         job.wlhd->workload->call(EventType::General, job.wlhd);
     }

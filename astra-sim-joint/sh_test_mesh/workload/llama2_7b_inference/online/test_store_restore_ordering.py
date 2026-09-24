@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """test_store_restore_ordering.py -- store→restore 前递依赖排序测试
-（2026-09-13，KV 逐出与 request 推理并行化，主方案 §3.3）。
+（2026-09-13，KV 逐出与 request 推理并行化，主方案 §3.3；2026-09-17
+§4.2.4 前递补边硬化）。
 
 逐出支链悬空后，"同会话 store 池写先于其 restore 池读"的主链传递性
 保障失效；回迁发射前 _arm_pending_store_edges 查 pending_store_tails
@@ -12,8 +13,16 @@
      send/recv 对，tag 配对）承载；
   3. 同会话两段式（suffix + full fallback）：两笔 store 均被依赖；
   4. PARTIAL 后缀恢复支链（同实例钉扎）：分支内回迁链同样带排序；
-  5. 消费即清：回迁后 pending_store_tails 条目弹出；
+  5. 消费即清：回迁后 pending_store_tails 匹配条目弹出；
   6. 中继节点命名避开 batch_train_ / first_token 唤醒路由锚点。
+
+§4.2.4 硬化（2026-09-17，条目扩层区间 + 交集选择性消费 + fail-closed）：
+
+  7. 交集选择性：条目 = (edge_rank, store_node, ack_node, ls, le)；
+     restore 区间只消费有交集条目，未匹配保留（后续消费者可再消费）；
+  8. fail-closed：restore 区间与全部条目无交集 → raise（含无条目态）；
+  9. 交错竞态（kimi）：整体外迁 [0,L) 写尾在途登记 + 立即回迁 [p,L)
+     → 交集消费成功（写尾未落盘即回迁）。
 
 依赖闭包口径：同 rank parent_edges + comm_send→comm_recv 的
 (src,dst,tag) 配对（跨 rank 依赖在桥协议内只经 p2p 承载）。
@@ -41,7 +50,7 @@ SESSION_X = "session_x"
 LAYERS = 2
 
 
-def _make_config(npus_count, groups, edge_npus):
+def _make_config(npus_count, groups, edge_npus, layers=LAYERS):
     return SimpleNamespace(
         npus_count=npus_count,
         remote_operand_loads=False,
@@ -49,7 +58,7 @@ def _make_config(npus_count, groups, edge_npus):
         inference_groups=[
             SimpleNamespace(ranks=ranks, pg_name=pg_name)
             for pg_name, ranks in groups],
-        layers=LAYERS,
+        layers=layers,
         hidden_size=64,
         ffn_size=128,
         vocab_size=256,
@@ -67,7 +76,7 @@ def _make_config(npus_count, groups, edge_npus):
 
 
 def _remote_store(session_id, shard_specs, layer_start=0, layer_end=LAYERS,
-                  resident_after=0):
+                  resident_after=0, model_layers=LAYERS):
     shards = tuple(
         KVTransferShard(
             source_rank=source, target_rank=edge, edge_rank=edge,
@@ -84,15 +93,16 @@ def _remote_store(session_id, shard_specs, layer_start=0, layer_end=LAYERS,
         target_instance_index=None,
         total_bytes=sum(spec[2] for spec in shard_specs),
         shards=shards,
-        model_layers=LAYERS,
+        model_layers=model_layers,
         layer_start=layer_start,
         layer_end=layer_end,
-        resident_prefix_layers_before=LAYERS,
+        resident_prefix_layers_before=model_layers,
         resident_prefix_layers_after=resident_after,
     )
 
 
-def _remote_load(session_id, shard_specs, layer_start=0, layer_end=LAYERS):
+def _remote_load(session_id, shard_specs, layer_start=0, layer_end=LAYERS,
+                 model_layers=LAYERS):
     shards = tuple(
         KVTransferShard(
             source_rank=edge, target_rank=target, edge_rank=edge,
@@ -109,11 +119,11 @@ def _remote_load(session_id, shard_specs, layer_start=0, layer_end=LAYERS):
         target_instance_index=0,
         total_bytes=sum(spec[2] for spec in shard_specs),
         shards=shards,
-        model_layers=LAYERS,
+        model_layers=model_layers,
         layer_start=layer_start,
         layer_end=layer_end,
         resident_prefix_layers_before=0,
-        resident_prefix_layers_after=LAYERS,
+        resident_prefix_layers_after=model_layers,
     )
 
 
@@ -235,8 +245,14 @@ class _OrderingHarness:
     def store_tail_ids(self, session_id):
         return {
             (edge_rank, store_id)
-            for edge_rank, store_id, _ack
+            for edge_rank, store_id, _ack, _ls, _le
             in self.builder.pending_store_tails.get(session_id, ())}
+
+    def store_tail_ranges(self, session_id):
+        return sorted(
+            (layer_start, layer_end)
+            for _edge_rank, _store_id, _ack, layer_start, layer_end
+            in self.builder.pending_store_tails.get(session_id, ()))
 
 
 class SameEdgeOrderingTest(unittest.TestCase):
@@ -253,6 +269,9 @@ class SameEdgeOrderingTest(unittest.TestCase):
         self.assertEqual(tails[0][0], 2)      # edge rank
         self.assertIsNotNone(tails[0][1])     # edge mem_store node id
         self.assertIsNotNone(tails[0][2])     # source ack recv node id
+        # §4.2.4：条目携带层区间（transfer.layer_start/layer_end）。
+        self.assertEqual(tails[0][3], 0)
+        self.assertEqual(tails[0][4], LAYERS)
         store_key = (tails[0][0], tails[0][1])
         harness.emit_restore(
             _remote_load(SESSION_X, [(0, 2, 1000)]),
@@ -365,21 +384,126 @@ class PartialSuffixOrderingTest(unittest.TestCase):
         self.assertNotIn(SESSION_X, harness.builder.pending_store_tails)
 
 
-class NoHazardNoEdgeTest(unittest.TestCase):
-    """无登记（无逐出在飞）时回迁链不引入任何补边节点。"""
+class NoRegistrationFailClosedTest(unittest.TestCase):
+    """§4.2.4 fail-closed：无任何条目（本会话此前无池写登记却要回迁
+    读池，账目不一致）→ raise（原 fail-open 静默返回已退役）。"""
 
-    def test_no_store_no_sidelink(self):
+    def test_no_store_restore_raises(self):
         harness = _OrderingHarness(_make_config(
             npus_count=4,
             groups=[("tp_prefill", (0,)), ("tp_decode", (3,))],
             edge_npus=(1, 2)))
+        with self.assertRaises(RuntimeError) as ctx:
+            harness.emit_restore(
+                _remote_load(SESSION_X, [(0, 2, 1000)]),
+                location="remote_memory")
+        message = str(ctx.exception)
+        self.assertIn(SESSION_X, message)
+        self.assertIn("[0, 2)", message)      # restore 区间入消息
+        self.assertIn("none", message)        # 现有条目区间 = 无
+
+
+class DisjointRangeFailClosedTest(unittest.TestCase):
+    """§4.2.4 fail-closed：有条目但与 restore 区间全不交集 → raise
+    （消息含 session_id / restore 区间 / 现有条目区间）。"""
+
+    def test_disjoint_restore_raises(self):
+        # L=32：登记 [16, 32)（深层后缀逐出），restore [4, 8)（合成
+        # 中段区间——钉选择公式 max(ls)<min(le)，非现行后缀形消费者）。
+        layers = 32
+        harness = _OrderingHarness(_make_config(
+            npus_count=4,
+            groups=[("tp_prefill", (0,)), ("tp_decode", (3,))],
+            edge_npus=(2,), layers=layers))
+        harness.emit_eviction(_remote_store(
+            SESSION_X, [(0, 2, 1000)], layer_start=16, layer_end=layers,
+            resident_after=16, model_layers=layers))
+        self.assertEqual(
+            harness.store_tail_ranges(SESSION_X), [(16, layers)])
+        with self.assertRaises(RuntimeError) as ctx:
+            harness.emit_restore(
+                _remote_load(SESSION_X, [(0, 2, 400)], layer_start=4,
+                             layer_end=8, model_layers=layers),
+                location="remote_memory")
+        message = str(ctx.exception)
+        self.assertIn(SESSION_X, message)
+        self.assertIn("[4, 8)", message)      # restore 区间
+        self.assertIn("[16, 32)", message)    # 现有条目区间
+
+
+class IntersectiveSelectiveConsumptionTest(unittest.TestCase):
+    """§4.2.4 交集选择性消费：restore 只消费有交集条目，未匹配条目
+    保留在 pending_store_tails 供后续消费者（PARTIAL remote-read 后缀
+    恢复 [p, L)）。"""
+
+    def test_disjoint_tail_retained_then_consumed(self):
+        # L=16：登记 [8, 16) 与 [4, 16) 两条目（两段后缀逐出）；restore
+        # [4, 8) 只交集 [4, 16)（[8,16) ∩ [4,8) = ∅ → 保留）；再一次
+        # restore [8, 16) 消费保留条目（"再一次 restore 可消费"）。
+        layers = 16
+        harness = _OrderingHarness(_make_config(
+            npus_count=4,
+            groups=[("tp_prefill", (0,)), ("tp_decode", (3,))],
+            edge_npus=(2,), layers=layers))
+        harness.emit_eviction(_remote_store(
+            SESSION_X, [(0, 2, 500)], layer_start=8, layer_end=layers,
+            resident_after=8, model_layers=layers))
+        harness.emit_eviction(_remote_store(
+            SESSION_X, [(0, 2, 500)], layer_start=4, layer_end=layers,
+            resident_after=4, model_layers=layers))
+        self.assertEqual(
+            harness.store_tail_ranges(SESSION_X), [(4, layers), (8, layers)])
+        # 第一次回迁 [4, 8)：交集选择性消费。
         harness.emit_restore(
-            _remote_load(SESSION_X, [(0, 2, 1000)]),
+            _remote_load(SESSION_X, [(0, 2, 400)], layer_start=4,
+                         layer_end=8, model_layers=layers),
             location="remote_memory")
-        self.assertFalse([
-            node for node in harness._nodes()
-            if "store_sidelink" in node["name"]])
         self.assertEqual(len(harness.mem_load_nodes()), 1)
+        self.assertEqual(
+            harness.store_tail_ranges(SESSION_X), [(8, layers)],
+            "disjoint [8, L) tail must survive the [4, 8) restore")
+        # 第二次回迁 [8, 16)：保留条目可被后续消费者消费。
+        harness.emit_restore(
+            _remote_load(SESSION_X, [(0, 2, 500)], layer_start=8,
+                         layer_end=layers, model_layers=layers),
+            location="remote_memory", request_id="session_x_request_2")
+        self.assertEqual(len(harness.mem_load_nodes()), 2)
+        self.assertNotIn(
+            SESSION_X, harness.builder.pending_store_tails,
+            "retained tail must be consumed by the matching restore")
+
+
+class InterleavedFullEvictionImmediateRestoreTest(unittest.TestCase):
+    """§4.2.4 交错竞态（kimi）：整体外迁 [0, L) 写尾在途登记 + 立即
+    回迁 [p, L) → 交集消费成功（覆盖"写尾未落盘即回迁"竞态）。"""
+
+    def test_immediate_partial_restore_after_full_eviction(self):
+        layers = 16
+        prefix = 4
+        harness = _OrderingHarness(_make_config(
+            npus_count=4,
+            groups=[("tp_prefill", (0,)), ("tp_decode", (3,))],
+            edge_npus=(1, 2)))
+        # 整体外迁 [0, L)：store 尾登记在途（store 物理未完成）。
+        harness.emit_eviction(_remote_store(
+            SESSION_X, [(0, 1, 1000)], layer_start=0, layer_end=layers,
+            resident_after=0, model_layers=layers))
+        store_key = next(iter(harness.store_tail_ids(SESSION_X)))
+        # 立即回迁 [p, L)（跨缘：store 边缘 1、restore 边缘 2）：交集
+        # [p, L) 非空 → 消费成功，回迁链经 1B 中继排序于在途 store 后。
+        harness.emit_restore(
+            _remote_load(SESSION_X, [(0, 2, 750)], layer_start=prefix,
+                         layer_end=layers, model_layers=layers),
+            location="remote_memory")
+        loads = harness.mem_load_nodes()
+        self.assertEqual(len(loads), 1)
+        self.assertIn(
+            store_key,
+            harness.ancestors(loads[0]["rank"], loads[0]["id"]),
+            "immediate suffix restore does not wait for the in-flight "
+            "full-eviction store tail")
+        self.assertNotIn(
+            SESSION_X, harness.builder.pending_store_tails)
 
 
 if __name__ == "__main__":

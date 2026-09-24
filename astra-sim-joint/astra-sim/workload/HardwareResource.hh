@@ -20,7 +20,7 @@ namespace AstraSim {
 class HardwareResource {
   public:
     HardwareResource(
-        uint32_t num_npus, int sys_id = -1,
+        int sys_id = -1,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static);
     ~HardwareResource() {
@@ -61,7 +61,6 @@ class HardwareResource {
     [[nodiscard]] bool tracks_node_ids() const {
         return retain_node_ids_;
     }
-    void report();
 
     std::unordered_set<uint64_t> cpu_ops_node;
     std::unordered_set<uint64_t> gpu_ops_node;
@@ -70,7 +69,6 @@ class HardwareResource {
 
     const int sys_id;
 
-    const uint32_t num_npus;
     // Static mode retains exact IDs for legacy destructor diagnostics. Online
     // mode relies on NodeStore's fail-closed lifecycle and keeps only exact
     // per-resource counters here, including sh_3.0's HBM-DMA class.
@@ -80,15 +78,10 @@ class HardwareResource {
     uint32_t num_in_flight_gpu_comm_ops;
     uint32_t num_in_flight_hbm_dma_ops;
 
-    uint64_t num_cpu_ops;
-    uint64_t num_gpu_ops;
-    uint64_t num_gpu_comms;
-    uint64_t num_hbm_dma_ops;
-
-    uint64_t tics_cpu_ops;
+    /// Cumulative GPU-comp busy ticks; Workload::report() reads it for the
+    /// exposed-communication summary -- the sibling per-class counters were
+    /// write-only and were removed.
     uint64_t tics_gpu_ops;
-    uint64_t tics_gpu_comms;
-    uint64_t tics_hbm_dma_ops;
 };
 
 }  // namespace AstraSim

@@ -7,11 +7,10 @@ main_online.cc -- online (execution-driven) entry point (wscllm phase 1).
 Step-1-2 implementation (方案 §4 步骤 1-2): initialization mirrors the static
 main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
-  - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
-    rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
-    takes the mode token replay|strategy; replay serves the offline decision
-    log (LUT clock, step 1-8), strategy runs the real policy scheduler with
-    real physics (step 1-9);
+  - parses the online CLI family explicitly (OnlineCli). Step 1-8/1-9:
+    --online-mode takes the mode token replay|strategy; replay serves the
+    offline decision log (LUT clock, step 1-8), strategy runs the real policy
+    scheduler with real physics (step 1-9);
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;
   - runs the request-neutral main loop, draining ingress commands before
@@ -62,8 +61,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
     (expected: 1177 for the 20.csv first-30-seconds input).
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
-    drained.  Assertions completed == CSV data rows and
-    no_decision_python_callback_count == 0 (acceptance: 1177/1177 replay).
+    drained.  Assertions completed == CSV data rows
+    (acceptance: 1177/1177 replay).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -151,10 +150,8 @@ struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
     NetworkAnalytical::EventQueue* event_queue = nullptr;
     FileDecisionBridge* bridge = nullptr;
-    RequestIngress* ingress = nullptr;
     ServiceCoordinator* svc = nullptr;
     WatchRegistry* watch_registry = nullptr;
-    std::vector<Sys*>* systems = nullptr;
     // The per-rank NodeStore-backed sources are kept alive here (Sys stores
     // its own shared_ptr; this vector is the commit's access path).
     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
@@ -164,7 +161,6 @@ struct OnlineDriverContext {
     // map, the in-flight request tracking and the phase-5 counters.
     GraphBatchCommitter* committer = nullptr;
     uint64_t delivery_seq = 0;
-    uint64_t expected_requests = 0;  // CSV data rows; run-end assertion target
     // Step 1-11: pending T->T+1 deferral record. Set by the main loop when
     // it schedules the explicit next-decision-boundary wakeup; consumed (and
     // reset) by the next ed_driver_tick_end delivery, which serializes it as
@@ -185,8 +181,8 @@ struct OnlineDriverContext {
     std::vector<int>* affected_ranks_accumulator = nullptr;
     // Phase 6 (方案 §9.1): per-run mechanism counters (C++ side; the bridge
     // round-trip/channel counters live in FileDecisionBridge::Stats and are
-    // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
-    // for the field semantics.
+    // printed through bridge->stats_report() at run end). See
+    // OnlineStatsCounters.hh for the field semantics.
     OnlineStatsCounters stats;
     // C1 validate switch (2026-08-28, --online-validate), B.2 cleanup
     // (2026-09-05): strict <0|1> enum -- 1 = validate every batch (pre-C1
@@ -755,10 +751,16 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
             break;
         }
         case TopologyBuildingBlock::Ring: {
-            // Ring (incl. the radix==2 mesh fallback): one bidirectional
-            // connect per src; no boundary concept.
+            // Ring: one bidirectional connect per src; no boundary concept.
+            // A width==2 Ring degenerates to the mesh fallback
+            // (MultiDimTopology::connect_ring_dimension), connecting only
+            // the npus/2 address-0 srcs -- npus link ids, not 2*npus.
             saw_non_mesh_dim = true;
-            next_id += 2 * static_cast<LinkId>(npus);
+            if (sizes[d] == 2) {
+                next_id += static_cast<LinkId>(npus);
+            } else {
+                next_id += 2 * static_cast<LinkId>(npus);
+            }
             break;
         }
         case TopologyBuildingBlock::FullyConnected: {
@@ -1326,12 +1328,9 @@ int main(int argc, char* argv[]) {
     driver_ctx.mailbox = &mailbox;
     driver_ctx.event_queue = event_queue.get();
     driver_ctx.bridge = &bridge;
-    driver_ctx.ingress = &ingress;
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
-    driver_ctx.systems = &systems;
     driver_ctx.graph_sources = &graph_sources;
-    driver_ctx.expected_requests = expected_requests;
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1550,7 +1549,7 @@ int main(int argc, char* argv[]) {
             // calendar reader's machine states make that shape unreachable
             // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
             // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
-            // 12-field report itself is kept for the A3 watchdog so any
+            // 11-field report itself is kept for the A3 watchdog so any
             // silent-stall family stays attributable. window_occupancy in
             // the calendar reader counts committed-but-untriggered turn-0
             // entries.
@@ -1561,8 +1560,6 @@ int main(int argc, char* argv[]) {
                        std::to_string(svc.active_request_count()) +
                        " pending_alarm=" +
                        std::to_string(svc.pending_alarm_count()) +
-                       " pending_fence=" +
-                       std::to_string(svc.pending_fence_count()) +
                        " window_occupancy=" +
                        std::to_string(
                            windowed.current_window_occupancy()) +
@@ -1779,18 +1776,13 @@ int main(int argc, char* argv[]) {
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
-    // first-30-seconds input; the offline replay equivalent of
-    // replay_poll_query_count == 0 is the never-incremented
-    // no_decision_python_callback_count -- no delivery epoch was ever
-    // dropped). tick_end_without_decision_count is a normal
+    // first-30-seconds input). tick_end_without_decision_count is a normal
     // allowed-nonzero counter, reported separately.
     std::cout << "[online] gate counters: event_count=" << mailbox.event_count()
               << " delivery_count=" << mailbox.delivery_count()
               << " coalescing_ratio=" << mailbox.coalescing_ratio()
               << " tick_end_without_decision_count="
-              << mailbox.tick_end_without_decision_count()
-              << " no_decision_python_callback_count="
-              << mailbox.no_decision_python_callback_count() << std::endl;
+              << mailbox.tick_end_without_decision_count() << std::endl;
     std::cout << "[online] service counters: accepted="
               << svc.accepted_request_count()
               << " completed=" << svc.completed_request_count()
@@ -1988,13 +1980,6 @@ int main(int argc, char* argv[]) {
                       << " completed=" << audit_counts.completed << std::endl;
             gate_ok = false;
         }
-    }
-    if (mailbox.no_decision_python_callback_count() != 0) {
-        std::cerr << "[Error] (execution_driven/online) "
-                     "no_decision_python_callback_count="
-                  << mailbox.no_decision_python_callback_count()
-                  << " != 0" << std::endl;
-        gate_ok = false;
     }
     if (mailbox.delivery_count() == 0 && expected_requests > 0) {
         std::cerr << "[Error] (execution_driven/online) delivery_count == 0: "

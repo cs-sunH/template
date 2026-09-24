@@ -124,10 +124,25 @@ void test_event_queue_cancellation() {
 
 constexpr uint64_t kMouseCount = 64;
 constexpr ChunkSize kElephantBytes = 10000;
-// Link accepts binary GB/s (2^30 B/s). This value is exactly 1 B/ns after
-// the backend conversion, keeping the expected integer completion ticks clear.
-constexpr double kOneBytePerNsGbps =
-    1'000'000'000.0 / static_cast<double>(1ULL << 30);
+// Link accepts bandwidth in SI GB/s and converts it with the decimal
+// identity (1 GB/s = 1e9 B/s = 1 B/ns; see bw_GBps_to_Bpns in
+// common/NetworkFunction.cpp). A 1 GB/s link therefore serves exactly
+// 1 B/ns, keeping the expected integer completion ticks clear.
+// (The pre-SI constant 1e9/2^30 GB/s was the binary-GiB calibration for
+// the old 2^30 B/GB conversion; under the SI identity it would yield
+// ~0.9313 B/ns and break every tick assertion below.)
+constexpr double kOneBytePerNsGbps = 1.0;
+// Exact-tick contract at 1 B/ns (hand-derived from FluidScheduler):
+// predicted_finish_time = now + max(1, ceil(remaining/rate)) and each
+// link splits its capacity equally among active flows. The elephant
+// starts alone at t=0 (rate 1, 1 byte gone by t=1). From t=1 exactly one
+// 1-byte mouse is always active alongside it, so both run at 0.5 B/ns:
+// each mouse needs ceil(1/0.5)=2 ticks, and each completion re-enters
+// start_flow at the same tick -- mouse i (0-based) completes at
+// 3 + 2*i (mouse 0 spans [1,3], mouse 63 ends at 129). The elephant
+// transfers 1 byte over [0,1) plus 1 byte per mouse cycle [1,129] (64
+// bytes), leaving 10000-65=9935 bytes at t=129, where it runs alone at
+// 1 B/ns and completes at 129+9935 = kElephantBytes + kMouseCount.
 
 struct FluidScenario;
 

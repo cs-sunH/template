@@ -170,7 +170,7 @@ class _OnlineRequestRuntime:
         "prefill_instance_index", "prefill_assignment_key",
         "decode_instance_index", "static_route",
         "admitted_prefill", "prefill_attempt_epoch", "decode_capacity_reserved",
-        "history_cache_state_before", "hbm_before_request",
+        "history_cache_state_before",
         "history_action", "history_source_instance_index",
         "history_location_before", "history_resident_prefix_layers",
         "history_transfer_bytes", "history_transfers",
@@ -181,8 +181,7 @@ class _OnlineRequestRuntime:
         "decode_queue_depth_before_enqueue",
         "waiting_decode_admission", "prefill_decode_transfer",
         "completion_evictions", "kv_state_after_completion",
-        "kv_instance_after_completion", "hbm_after_completion",
-        "completion_ns",
+        "kv_instance_after_completion",
         "decode_tokens_consumed", "decode_train_joined",
     )
 
@@ -205,7 +204,6 @@ class _OnlineRequestRuntime:
         self.prefill_attempt_epoch = None
         self.decode_capacity_reserved = False
         self.history_cache_state_before = None
-        self.hbm_before_request = None
         self.history_action = None
         self.history_source_instance_index = None
         # B2 三态:准入时点的会话历史位置快照(契约 §3 的
@@ -239,8 +237,6 @@ class _OnlineRequestRuntime:
         self.completion_evictions = ()
         self.kv_state_after_completion = None
         self.kv_instance_after_completion = None
-        self.hbm_after_completion = None
-        self.completion_ns = None
         # ---- 拼 batch 列车推进字段(2026-08-22;列车核销时闭式推进,
         # 余额与逐 token 精确值逐点一致) ----
         self.decode_tokens_consumed = 0  # 已物理完成 decode token 数
@@ -390,7 +386,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 "{!r}".format(config.kv_cache_policy))
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用)
 
-        # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(alpha 默认 1.0,与离线同参)。
+        # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(离线同参;alpha 调参旋钮与
+        # alpha/adjusted_transfer_cost 只写字段已按深挖文档只写不读族清除,
+        # 2026-09-24——该参数从不影响路由选择)。
         # offline: wsc_llm_scheduler.py
         specs = tuple(
             WscLlmInstanceSpec(
@@ -403,8 +401,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         )
         self.topology = build_instances(
             config.hardware, specs, require_equal_size=True)
-        self.static_mapping = build_static_pd_mapping(
-            self.topology, alpha=1.0)
+        self.static_mapping = build_static_pd_mapping(self.topology)
         # Hop-Bytes 覆盖调查(2026-08-26,W B2wp9py 任务 4):prefill 决策
         # 的 history NOC_MIGRATE 迁移此前无路由字段(基线 60s 覆盖 70.4%,
         # 缺口 29.6% = history_transfer_bytes)。迁移路由在线可知
@@ -507,6 +504,15 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 位移 ≤5% 的最大值";原则 1 优先于节点数)。
         self._train_max_iter = int(
             os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        # low 修复(2026-09-24):负值此前无构造期校验,进入 _plan_train 后
+        # `iterations > 负数` 恒真、iterations 被截为负值,要到发射期才以
+        # 难懂错误暴露——改 fail-fast。非整数字面值在 int() 已抛
+        # ValueError;0 = 不设限(值域见上注释)。
+        if self._train_max_iter < 0:
+            raise ValueError(
+                "SH_TRAIN_MAX_ITER must be a non-negative integer "
+                "(0 = unlimited), got {!r}".format(
+                    os.environ.get("SH_TRAIN_MAX_ITER")))
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
@@ -1138,7 +1144,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         """
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
-        runtime.completion_ns = tick  # :2050
         self.completed_requests += 1  # :2051
         runtime.completion_evictions = self.kv_manager.mark_complete(  # :2052-2056
             runtime.session_id,
@@ -1158,8 +1163,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError("completed session disappeared from KV manager")
         runtime.kv_state_after_completion = snapshot.location  # :2064 (B2 三态)
         runtime.kv_instance_after_completion = snapshot.instance_index  # :2065
-        runtime.hbm_after_completion = self.kv_manager.hbm_snapshots(  # :2066
-            state.index)
         self.log_decision(
             {"kind": "completion", "request_id": runtime.request_id,
              "priority": 0},
@@ -1195,11 +1198,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.history_transfers = ()             # B2 holder 同步核销
         runtime.history_recompute_tokens = 0
         runtime.history_cache_state_before = None
-        runtime.hbm_before_request = None
         runtime.reservation_credit = None    # 净额修正(2026-09-06)同步核销
         runtime.kv_state_after_completion = None
         runtime.kv_instance_after_completion = None
-        runtime.hbm_after_completion = None
 
     def _on_request_complete(self, request_id: str, tick: int) -> None:
         """离线 decode 完成分支的下一次 arrival 排程(:2067-2072):
@@ -1453,8 +1454,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.history_resident_prefix_layers = (
             None if before_snapshot is None
             else before_snapshot.resident_prefix_layers)
-        runtime.hbm_before_request = self.kv_manager.hbm_snapshots(  # :1788
-            runtime.prefill_instance_index)
         decision = self.kv_manager.prepare_history(  # :1789-1796
             runtime.session_id,
             runtime.prefill_instance_index,

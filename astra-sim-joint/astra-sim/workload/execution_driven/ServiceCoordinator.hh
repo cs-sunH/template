@@ -13,7 +13,7 @@ Request-neutral lifecycle state machine (方案 §4 步骤 1-2 操作 3):
                 IDLE (五态迁移: IDLE -> ACTIVE -> IDLE -> DRAINING -> FINISHED).
     ACTIVE   -- at least one request accepted / arrival alarm pending.
     DRAINING -- input closed, pending alarms/requests still draining.
-    FINISHED -- input closed && active==0 && no pending alarm/fence.
+    FINISHED -- input closed && active==0 && no pending alarm.
 
 Final end authority belongs exclusively to the ServiceCoordinator
 (总体方案 §5.5): EventQueue empty != FINISHED, and in online mode the
@@ -76,10 +76,6 @@ class ServiceCoordinator {
     void on_request_completed();
     /// An arrival alarm was queued on the EventQueue (future tick).
     void on_alarm_scheduled();
-    /// A fence is pending (step-1-5 accounting; no behavior yet).
-    void on_fence_scheduled();
-    /// A fence resolved (step-1-5 accounting; no behavior yet).
-    void on_fence_resolved();
     /// Input closed (thread-safe; may be called from the injector/bridge
     /// thread): IDLE/DRAINING transition + maybe FINISHED. Phase-7 §10.7:
     /// `reason` records HOW the input was closed (explicit close command /
@@ -148,10 +144,6 @@ class ServiceCoordinator {
     [[nodiscard]] uint64_t completed_request_count() const;
     [[nodiscard]] uint64_t active_request_count() const;
     [[nodiscard]] uint64_t pending_alarm_count() const;
-    /// P0-2 (2026-08-31, 总文档 §4 P0-2.2): read-only accessor for the
-    /// step-1-5 pending-fence counter -- the input-open dead-end
-    /// diagnostics (main_online.cc) print it alongside pending_alarm.
-    [[nodiscard]] uint64_t pending_fence_count() const;
 
   private:
     void set_state(ServiceState next);   // under mtx_: bounded log + hook
@@ -170,7 +162,6 @@ class ServiceCoordinator {
     uint64_t completed_request_count_ = 0;
     uint64_t active_request_count_ = 0;
     uint64_t pending_alarm_count_ = 0;
-    uint64_t pending_fence_count_ = 0;
     std::vector<ServiceState> transition_log_;
     uint64_t transition_log_dropped_ = 0;
     StateTransitionHook transition_hook_;

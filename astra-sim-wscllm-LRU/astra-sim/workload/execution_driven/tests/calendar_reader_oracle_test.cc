@@ -93,9 +93,11 @@ std::vector<FireRecord> run_legacy_arm(const std::string& csv) {
     ServiceCoordinator svc;
     RequestIngress ingress;
     ingress.bind(&eq, &mailbox, &svc);
-    // UNBOUNDED arm: window 0 reads the whole file in one pump and queues
-    // every turn-0 Submit in ROW order (the pre-P0 full-pass control arm).
-    LegacyOracleWindowedTraceReader reader(csv, ingress);
+    // UNBOUNDED arm: explicit high_water=0 reads the whole file in one pump
+    // and queues every turn-0 Submit in ROW order (the pre-P0 full-pass
+    // control arm; the constructor default is 128 = bounded, which would
+    // clamp the real-queue argv[1] comparison into a false failure).
+    LegacyOracleWindowedTraceReader reader(csv, ingress, 0);
     return run_arm(csv, ingress, eq, reader);
 }
 

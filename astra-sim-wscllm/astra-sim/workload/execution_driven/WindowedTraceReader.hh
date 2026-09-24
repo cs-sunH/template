@@ -258,8 +258,6 @@ class WindowedTraceReader {
     bool indexed_ = false;  // index pass completed (sidecar gate included)
     bool eof_ = false;      // indexed_ && calendar fully drained
     uint64_t data_rows_ = 0;
-    // Compatibility/audit watermark only (not an occupancy measure).
-    int64_t consumed_idx_ = -1;
     // Submitted-but-unfired turn-0 rows (occupancy).
     std::unordered_set<int64_t> outstanding_rows_;
     size_t rows_read_ = 0;

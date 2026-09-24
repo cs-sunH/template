@@ -25,7 +25,6 @@ DoubleBinaryTreeAllReduce::DoubleBinaryTreeAllReduce(int id,
     this->type = tree->get_node_type(id);
     this->final_data_size = data_size;
     this->comType = ComType::All_Reduce;
-    this->name = Name::DoubleBinaryTree;
 }
 
 void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
@@ -52,8 +51,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         sim_request rcv_req;
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived,
-            stream->current_queue_id, stream->stream_id);
+            stream, stream->owner->id, EventType::PacketReceived);
         stream->owner->front_end_sim_recv(0, Sys::dummy_data, data_size, UINT8,
                                           parent, stream->stream_id, &rcv_req,
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
@@ -80,8 +78,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         sim_request rcv_req;
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived,
-            stream->current_queue_id, stream->stream_id);
+            stream, stream->owner->id, EventType::PacketReceived);
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, left_child, stream->stream_id,
             &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE, &Sys::handleEvent,
@@ -89,8 +86,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         sim_request rcv_req2;
         rcv_req2.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd2 = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived,
-            stream->current_queue_id, stream->stream_id);
+            stream, stream->owner->id, EventType::PacketReceived);
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, right_child,
             stream->stream_id, &rcv_req2, Sys::FrontEndSendRecvType::COLLECTIVE,
@@ -137,8 +133,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         sim_request rcv_req;
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived,
-            stream->current_queue_id, stream->stream_id);
+            stream, stream->owner->id, EventType::PacketReceived);
         stream->owner->front_end_sim_recv(0, Sys::dummy_data, data_size, UINT8,
                                           parent, stream->stream_id, &rcv_req,
                                           Sys::FrontEndSendRecvType::COLLECTIVE,
@@ -187,8 +182,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
         sim_request rcv_req;
         rcv_req.vnet = this->stream->current_queue_id;
         RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-            stream, stream->owner->id, EventType::PacketReceived,
-            stream->current_queue_id, stream->stream_id);
+            stream, stream->owner->id, EventType::PacketReceived);
         stream->owner->front_end_sim_recv(
             0, Sys::dummy_data, data_size, UINT8, only_child_id,
             stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,

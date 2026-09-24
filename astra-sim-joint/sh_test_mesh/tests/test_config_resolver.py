@@ -78,7 +78,9 @@ class ConfigResolverTests(unittest.TestCase):
             system = json.loads(paths.system.read_text(encoding="utf-8"))
             self.assertEqual(system["local-mem-bw"], self.source["local-hbm"]["bandwidth-gbps"])
             self.assertEqual(system["local-mem-latency"], self.source["local-hbm"]["latency-ns"])
-            self.assertEqual(system["local-mem-capacity-bytes"], self.profile["bytes"])
+            # P11 死键清除回归钉（2026-09-23）：local-mem-capacity-bytes
+            # 写入链已退役（C++ 零读者），system.json 不再含该键。
+            self.assertNotIn("local-mem-capacity-bytes", system)
             self.assertEqual(system["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(system["peak-perf"], self.source["compute"]["peak-perf-tflops"])
             self.assertEqual(system["hbm-kv-restore-bandwidth-sharing"], 1)
@@ -88,7 +90,9 @@ class ConfigResolverTests(unittest.TestCase):
             self.assertEqual(remote["memory-type"], "PER_NPU_MEMORY_EXPANSION")
             self.assertEqual(remote["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(remote["remote-mem-latency"], self.source["remote-memory"]["latency-ns"])
-            self.assertEqual(remote["logical-pool"], self.source["remote-memory"]["logical-pool"])
+            # P11 死键清除回归钉（2026-09-23）：logical-pool 写入链已退役
+            # （C++ 零读者、纯审计透传），remote_memory.json 不再含该键。
+            self.assertNotIn("logical-pool", remote)
             self.assertNotIn("npu-selection", remote)
             expected_boundary = [
                 row * self.hardware.mesh_cols + column

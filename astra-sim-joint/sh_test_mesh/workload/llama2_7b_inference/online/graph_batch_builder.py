@@ -80,6 +80,7 @@ from generate_face_trace import (  # noqa: E402
     _emit_kv_transfer,
     _emit_tp_point_to_point_readiness_barrier,
     _emit_tp_readiness_barrier,
+    _history_control,
     reconcile_pending_history_location,
     sanitize_node_prefix,
 )
@@ -392,6 +393,14 @@ class GraphBatchBuilder:
         # 仍在准入批发射（与 suffix 恢复并行的语义改为经此账本挂到含其首
         # chunk 的列车体），见 emit_iteration_train 的 first_chunk_member。
         self._suffix_body_arms = {}
+        # C15 逐组恢复门（2026-09-22，设计方案 §5.1）：request_id ->
+        # ((group_index, layer_start, layer_end, {rank: 该 rank 该组目标
+        # HBM 写完成门节点 id}), ...)——后缀逐组恢复支链（rank 内消费顺
+        # 序串行链）的就绪门登记；列车体按层段门控消费（首 chunk 的逐层
+        # 段各自等其组门，替换"整列车等整段后缀"的列车级保守门——
+        # C12-G7/E17 登记的缺口闭合）。旧单笔口径（restore_group 无标记
+        # 的 remote_load）仍走 _suffix_body_arms 整段门（回归锚）。
+        self._suffix_restore_arms = {}
         # KV 逐出并行化（2026-09-13）：store→restore 前递依赖登记表——
         # session_id → 该会话全部在飞 remote_store 逐出支链的尾部
         # (edge_rank, edge mem_store 节点 id, 源端 ack_recv 节点 id) 列表。
@@ -400,6 +409,30 @@ class GraphBatchBuilder:
         # 消费（_arm_pending_store_edges），会话终结时清除（_emit_completion
         # 的 terminal 分支）。
         self.pending_store_tails = {}
+        # remote-read credit（唯一执行口径）：request_id ->
+        # {切片块号 b: {rank: 该 rank 上块 b 的 recv 完成门节点 id}}——
+        # 旁挂支链发射的尾块（块 2..M）流式到达语义的 body 依赖账本
+        # （_suffix_body_arms 同款手法：支链登记、体块消费点 arm）。列车
+        # 尾标记发射时清账（每列车恰一次——整列/余量批同路径）。
+        self._credit_arms = {}
+        # C13 copy 逐 chunk 交接（2026-09-22，设计文档 §2.3 四步协议）：
+        # request_id -> {交接块号 c: {rank: 该 rank 上块 c 的 recv 完成
+        # 门节点 id}}——准入批发射的尾块（块 1..M-1）旁挂支链，流式到达
+        # 语义与 _credit_arms 同款；含首 chunk 的列车体按消费顺序逐块
+        # arm（I2 门并集同源），块 0 在准入主链（readiness barrier 只等
+        # 它——不设"先整份搬运后计算"串行段）。列车体发射时消费（joiner
+        # 恰一次），残留即 fail-closed。
+        self._copy_handoff_arms = {}
+        # K6（P1-③，2026-09-23 外部审计）：request_id -> {交接块号 c:
+        # (layer_start, layer_end)}——尾块层区间账本（首体块层段门控的
+        # 段边界来源；生命周期与 _copy_handoff_arms 同步：发射登记 /
+        # 体块消费弹出 / 完成残留 fail-closed）。
+        self._copy_handoff_layers = {}
+        # C13：request_id -> {交接块号 c: {home_rank: 该 rank 上块 c 的
+        # ack_recv 节点 id}}——交接完成事件在源端的物理挂点（source
+        # release dependency = noc_migration_ack_recv；FS 账本侧的逐块
+        # home 释放即以此为到达事实锚）。completion 批弹出（审计面）。
+        self._copy_handoff_release_anchors = {}
         self.batch = None  # 当前批次累加器（由 begin_batch 建立）
         # WP9 首步批标记（2026-08-26）：本批是否含首步批发射（digests 行
         # first_step=True 标记的来源；OFF 侧恒 False，不进任何产物）。
@@ -476,15 +509,15 @@ class GraphBatchBuilder:
 
     # ------------------------------------------------------------- 发射 --
 
-    def emit_admission_batch(self, request_plan: dict) -> None:
+    def emit_admission_batch(self, request_plan: dict) -> dict:
         """发射 request 的准入动作（ARRIVAL 决策的图；拼 batch 改造
         2026-08-22）：到达/interval gate + history_evictions +
         history_transfer（含 partial 流水恢复全部节点）+ prefill_evictions +
         prefill readiness barrier。
 
         prefill 主体（chunk 序列）与 PREFILL_DRAIN watch 不再在此发射——
-        移入实例迭代列车（emit_iteration_train 的折叠体与 drain 标记）；
-        本方法无 watch 返回值（调度器在列车发射处注册）。
+        移入实例迭代列车（emit_iteration_train 的折叠体与 drain 标记）。
+        独立逐出支链返回自己的尾节点 watch，不能借 prefill drain 提前核销。
 
         strategy 恒走 roofline 物理时钟；[frontier 接续裁决，strategy
         死锁修复统一(2026-08-19)] 的无条件接续语义不变：准入动作链到该
@@ -495,8 +528,9 @@ class GraphBatchBuilder:
                 "only (production config)")
         self._set_context(request_plan, "prefill", 0)
         marker = self._mark()
-        self._emit_admission_actions(request_plan)
+        eviction_watches = self._emit_admission_actions(request_plan)
         self._collect(marker)
+        return {"eviction_watches": eviction_watches}
 
     def emit_iteration_train(self, train_plan: dict) -> dict:
         """发射一趟实例迭代列车（拼 batch 改造核心，2026-08-22；设计
@@ -554,12 +588,39 @@ class GraphBatchBuilder:
                 "split train plans must be emitted through "
                 "emit_train_first_step/emit_train_remainder")
         marker = self._mark()
-        self._emit_train_head(train_plan)
+        eviction_watches = self._emit_train_head(train_plan)
+        credit_blocks = (train_plan.get("remote_credit") or {}).get(
+            "body_blocks")
+        copy_blocks, copy_armed = self._copy_handoff_body_blocks(
+            train_plan, list(train_plan["pass_spans"]))
+        if credit_blocks is not None and copy_blocks is not None:
+            raise RuntimeError(
+                "train carries both remote-credit body blocks and copy "
+                "handoff arms -- a request is either remote-read or copy; "
+                "mixed block splitting is unsupported (fail-closed)")
         self._emit_train_body(
             train_plan, list(train_plan["pass_spans"]),
             int(train_plan["iterations"]),
-            first_chunk_member=train_plan.get("first_chunk_member"))
+            first_chunk_member=train_plan.get("first_chunk_member"),
+            credit_blocks=(credit_blocks if credit_blocks is not None
+                           else copy_blocks))
+        if copy_armed:
+            # C13：交接尾块门账本随体发射消费（joiner 恰一次）；残留尾块
+            # 未被任何体块 arm = 切分/发射 bug，fail-closed。K6：层区间
+            # 账本同步弹出（段边界已进入首体块层段发射）。
+            consumed = self._copy_handoff_arms.pop(copy_armed[0], None)
+            self._copy_handoff_layers.pop(copy_armed[0], None)
+            if consumed and any(
+                    block_index not in {
+                        gate[1] for block in (copy_blocks or ())
+                        for gate in block["gates"]}
+                    for block_index in consumed):
+                raise RuntimeError(
+                    "copy handoff arms were not fully consumed by the "
+                    "train body (un-gated tail chunks would let compute "
+                    "outrun the migration stream)")
         result = self._emit_train_tail_markers(train_plan, first_token)
+        result["eviction_watches"] = eviction_watches
         self._collect(marker)
         return result
 
@@ -594,11 +655,19 @@ class GraphBatchBuilder:
         if first_token is None or not first_token.get("split"):
             raise RuntimeError(
                 "emit_train_first_step requires a split first_token plan")
+        if self._train_has_pending_copy_arms(train_plan):
+            # C13：首步拆分列车不支持 copy 交接体门控（SH_FIRST_TOKEN_SPLIT
+            # 缺省关——B3 裁决后 OFF 为唯一生产姿态；整列发射路径才是
+            # 四步协议的体块化载体）。
+            raise RuntimeError(
+                "WP9 first-step split trains with pending copy handoff "
+                "arms are unsupported (whole-train body gating required)")
         marker = self._mark()
-        self._emit_train_head(train_plan)
+        eviction_watches = self._emit_train_head(train_plan)
         self._emit_train_body(
             train_plan, list(first_token["first_spans"]), 1,
-            first_chunk_member=train_plan.get("first_chunk_member"))
+            first_chunk_member=train_plan.get("first_chunk_member"),
+            credit_blocks=first_token.get("first_body_blocks"))
         first_token_members = self._emit_first_token_markers(
             train_plan, first_token["debut_marker_members"])
         group = self.group_by_index[train_plan["instance_index"]]
@@ -614,6 +683,7 @@ class GraphBatchBuilder:
         return {
             "first_token_members": first_token_members,
             "wakeup_members": wakeup_members,
+            "eviction_watches": eviction_watches,
         }
 
     def emit_train_remainder(self, train_plan: dict) -> dict:
@@ -638,12 +708,13 @@ class GraphBatchBuilder:
         marker = self._mark()
         self._emit_train_body(
             train_plan, list(first_token["rest_spans"]),
-            int(train_plan["iterations"]) - 1)
+            int(train_plan["iterations"]) - 1,
+            credit_blocks=first_token.get("rest_body_blocks"))
         result = self._emit_train_tail_markers(train_plan, first_token)
         self._collect(marker)
         return result
 
-    def _emit_train_head(self, train_plan: dict) -> None:
+    def _emit_train_head(self, train_plan: dict) -> list[dict]:
         """列车头：joiner 迁移 + 共享 readiness barrier + 起始标记节点。
 
         拆分时整段归首步批（迁移/栅栏/起始标记锚定的迭代位置在第 1
@@ -655,6 +726,7 @@ class GraphBatchBuilder:
         # ---- joiner 迁移（触发门 = 该成员 drain 列车的 post-barrier
         #      块末；上下文 (joiner, decode, 1) = decode_start 指标锚点） ----
         joiners = list(train_plan.get("joiners", ()))
+        eviction_watches = []
         for joiner in joiners:
             self._set_context(joiner, "decode", 1)
             self._action_seq.setdefault(joiner["request_id"], [0])
@@ -701,18 +773,62 @@ class GraphBatchBuilder:
             # decode_start 指标锚点）保持主链不动。
             decode_transfers = joiner.get("decode_evictions") or ()
             if decode_transfers:
+                watch_id = joiner.get("decode_eviction_watch_id")
+                if watch_id is None:
+                    watch_id = (
+                        "batch_train_evict_{}_decode_{}".format(
+                            joiner["request_id"], train_id))
                 def emit_decode_evictions() -> None:
                     for transfer in decode_transfers:
                         record = emit_transfer(
                             transfer, "decode_evictions",
                             trigger_gate=decode_eviction_trigger)
                         self._register_store_tails(transfer, record)
-                self._emit_side_branch(emit_decode_evictions)
+                members = self._emit_side_branch(
+                    emit_decode_evictions,
+                    watch_context=(watch_id, "prefill", 0))
+                if members:
+                    eviction_watches.append({
+                        "request_id": watch_id,
+                        "owner_request_id": joiner["request_id"],
+                        "branch": "decode_joiner",
+                        "members": members})
+            # remote-read credit 首列车（唯一执行口径）：切片
+            # 块 2..M 旁挂支链（D2 发射序 = checkpoint → 支链尾块 →
+            # restore → 块 1 上主链——restore_chain 会把主链回滚到
+            # checkpoint（:246-248 回滚语义），块 1 先发射会被回滚抹掉，
+            # 次序不可反）。尾块 recv 完成门入 _credit_arms 账本，由
+            # 对应体块首节点 arm 消费（块 b ← 门 b，I2）。
+            credit_tail = joiner.get("remote_credit_tail") or ()
+            if credit_tail:
+                def emit_joiner_credit_tail(
+                        joiner=joiner, credit_tail=credit_tail) -> None:
+                    self._emit_credit_stream_tail(
+                        joiner, credit_tail, stage="remote_credit")
+                self._emit_side_branch(emit_joiner_credit_tail)
             pd_transfer = joiner.get("prefill_decode_transfer")
             if pd_transfer is None:
                 raise RuntimeError(
                     "joiner is missing its Prefill-to-Decode KV action")
             emit_transfer(pd_transfer, "prefill_decode_transfer")
+
+        # ---- remote-read credit 续列车（T2+ 续坐成员，D7 新发射槽位）：
+        #      本列车切片块 1 上主链（发射序先于列车体；无 barrier——
+        #      per-rank 链序保证先行，§4.1 v3：与 T1 的形态区别仅缺
+        #      barrier），块 2..M 旁挂 + arm 门，与 T1 同构。上下文
+        #      (member, decode, 1) 与 joiner 槽位同构。 ----
+        for member in ((train_plan.get("remote_credit") or {}).get(
+                "continuations") or ()):
+            member_plan = member["plan"]
+            self._set_context(member_plan, "decode", 1)
+            tail = member.get("tail") or ()
+            if tail:
+                def emit_cont_credit_tail(
+                        member_plan=member_plan, tail=tail) -> None:
+                    self._emit_credit_stream_tail(
+                        member_plan, tail, stage="remote_credit")
+                self._emit_side_branch(emit_cont_credit_tail)
+            self._emit_credit_head_transfer(member_plan, member["block1"])
 
         # ---- 共享 readiness barrier（仅在有 joiner 时发射；无 joiner 的
         #      列车成员 KV 已就绪，无需再栅栏） ----
@@ -740,15 +856,37 @@ class GraphBatchBuilder:
                 self._emit_train_marker(
                     rank, f"{train_id}_pstart_"
                     f"{sanitize_node_prefix(prefill_start_member['request_id'])}")
+        return eviction_watches
 
     def _emit_train_body(self, train_plan: dict, pass_spans,
                          weight_passes: int, *,
-                         first_chunk_member=None) -> None:
+                         first_chunk_member=None,
+                         credit_blocks=None) -> None:
         """折叠列车体（17 类聚合节点；weight_passes = 权重读取次数）。
 
         拆分时首步批传首步 span 组 + weight_passes=1（含队列头首 chunk
         与 partial 恢复 suffix 门挂接），余量批传余量组 + iterations-1；
-        两批激活/KV/AR 字节按 span 求和与整列一致。"""
+        两批激活/KV/AR 字节按 span 求和与整列一致。
+
+        remote-read credit 体块化（唯一执行口径，
+        credit_blocks 非 None 时）：体按块切分发射——每体块一次
+        transformer_pass_aggregated（块内 spans 子集 + 块迭代数的
+        weight_passes；跨块求和与整列一致），首节点额外依赖 = 覆盖
+        该块迭代区间的全部 remote-read 成员切片块完成门之并集（I2，
+        经 _credit_arms 账本逐 rank arm；块 b 不得依赖后续块）。suffix
+        恢复门挂首块（首 chunk 恒在首个体块）。credit_blocks=None =
+        本列车无 remote-credit 参与，单段发射路径与 v1 逐字节一致。
+
+        多块集体节点命名（A6' 修复，2026-09-22）：C++ commit 预检按
+        (pg_name, 节点名) 计集体参与者——同名集体在单 rank 出现 N 次
+        即 N participants（期望恰 1），auto-K 多块（M>1）下 8 个体块
+        同用 train_id 作 phase 会使 ``{train_id}_all_layers_*_all_
+        reduce`` 同名 8 份、预检拒批（C4b 首次后端受控执行暴露）。
+        规则与 C13 copy 体块 ``_cb{k}``` 后缀同款：无显式 phase 的
+        credit 体块（remote-read 路径，SH 规划侧不带 phase 键）在
+        M>1 时逐块挂 ``{train_id}_rcb{b}`` 唯一后缀；M=1 不加后缀
+        ——K≥S 单块 = v1 等价锚逐字节不变（I3a）。copy 体块自带
+        phase（_copy_handoff_body_blocks）不受影响。"""
         instance_index = train_plan["instance_index"]
         group = self.group_by_index[instance_index]
         train_id = train_plan["train_id"]
@@ -760,9 +898,16 @@ class GraphBatchBuilder:
         # 账本在首步批发射处弹出；原"首 chunk 前缀层并行计算"降级为整列车
         # 等恢复，物理保守方向，见类 docstring）。
         suffix_arms = None
+        restore_arms = None
         if first_chunk_member is not None:
             suffix_arms = self._suffix_body_arms.pop(
                 first_chunk_member["request_id"], None)
+            restore_arms = self._suffix_restore_arms.pop(
+                first_chunk_member["request_id"], None)
+            if suffix_arms and restore_arms:
+                raise RuntimeError(
+                    "train head carries both legacy whole-suffix arms and "
+                    "per-group restore arms (plan shape bug)")
             if suffix_arms:
                 missing = [
                     rank for rank in group.ranks
@@ -771,16 +916,37 @@ class GraphBatchBuilder:
                     raise RuntimeError(
                         "suffix restore gate missing on ranks {}".format(
                             missing))
+            if restore_arms:
+                # 分组覆盖校验：层区间自驻留前缀顶向上连续铺到 L（不连
+                # 续 = 发射/切分 bug，fail-closed）；组序 = 消费顺序。
+                expected_start = restore_arms[0][1]
+                for _g, layer_start, layer_end, _gates in restore_arms:
+                    if layer_start != expected_start or layer_end <= layer_start:
+                        raise RuntimeError(
+                            "restore group arms are not contiguous in "
+                            f"consumption order (got [{layer_start}, "
+                            f"{layer_end}), expected start {expected_start})")
+                    expected_start = layer_end
+                if expected_start != self.config.layers:
+                    raise RuntimeError(
+                        "restore group arms do not tile the suffix up to the "
+                        f"model layer count ({expected_start} != "
+                        f"{self.config.layers})")
         for builder in self.builders.values():
             builder.set_context(train_id, stage, generation)
         tensor_parallel = len(group.ranks)
-        for relative_rank, rank in enumerate(group.ranks):
-            if suffix_arms:
-                self.builders[rank].arm_dependency(suffix_arms[rank])
+
+        def emit_pass(spans, passes, rank, relative_rank, phase=None,
+                      layer_start=0, layer_end=None, include_output=True,
+                      extra_gates_by_rank=None) -> None:
+            if extra_gates_by_rank is not None:
+                gate = extra_gates_by_rank.get(rank)
+                if gate is not None:
+                    self.builders[rank].arm_dependency(gate)
             transformer_pass_aggregated(
                 self.builders[rank],
-                phase=train_id,
-                pass_spans=pass_spans,
+                phase=phase if phase is not None else train_id,
+                pass_spans=spans,
                 layers=self.config.layers,
                 hidden_size=self.config.hidden_size,
                 ffn_size=self.config.ffn_size,
@@ -791,8 +957,209 @@ class GraphBatchBuilder:
                 num_heads=self.config.num_heads,
                 tensor_parallel_rank=relative_rank,
                 mlp_variant=self.config.mlp_variant,
-                weight_passes=weight_passes,
+                weight_passes=passes,
+                layer_start=layer_start,
+                layer_end=layer_end,
+                include_output=include_output,
             )
+
+        def emit_layer_segmented(spans, passes, phase=None):
+            """C15+K6：含首 chunk 计算体的逐层段发射（设计方案 §5.1 逐层
+            恢复与 prefill 重叠；2026-09-23 扩展至 copy 交接尾块）。
+
+            层段 = [0, 首段起点) 的热前缀段（无门——copy 块 0 在准入主链
+            /restore 前的零 KV 层区间）＋各 copy 交接尾块层段（逐 rank 等
+            该尾块 recv 完成门——K6/P1-③：C13(4)"未到达块按就绪事件等
+            待"的层粒度兑现；原体块粒度门只挂尾块 c，全层聚合 pass 计算
+            尾块 c+1..M-1 层不等其到达 = 时序乐观，生产 32 层 4-chunk 必
+            现）＋各恢复组层段（逐 rank 等该组目标 HBM 写完成门）。段集
+            连续铺满 [0, L]（不连续 = 发射/切分 bug，fail-closed）；每段
+            一次 transformer_pass_aggregated（同一 spans 集、该段层区间、
+            weight_passes=passes）——跨段求和与整段单次发射逐字节一致
+            （激活/KV/AR 按 Σ 段层跨度 × spans、权重按 passes × Σ 层跨
+            度、final norm/logits 仅末段一次），物理上首 chunk 的计算
+            按层序分段推进：段 i 只等其数据源——**不设**"全部冷层就绪
+            才开始 prefill"串行段。
+            """
+            segments = []
+            covered = 0
+            copy_gate_request_id = (
+                first_chunk_member or {}).get("request_id")
+            copy_layers = (
+                self._copy_handoff_layers.get(copy_gate_request_id)
+                if copy_gate_request_id is not None else None)
+            if copy_layers:
+                copy_arms = self._copy_handoff_arms.get(
+                    copy_gate_request_id, {})
+                for chunk_index in sorted(copy_layers):
+                    layer_start, layer_end = copy_layers[chunk_index]
+                    if layer_start != covered:
+                        if layer_start > covered:
+                            if covered > 0:
+                                # L5（2026-09-23 复核审计）：账本内部缺
+                                # 口 = 不变式破坏（_emit_copy_handoff_
+                                # tail 登记面恒连续）——静默插无门段会
+                                # 让缺口层不等到达即计算（时序乐观），与
+                                # 下方 restore 侧同情形 raise 对称。
+                                raise RuntimeError(
+                                    "copy handoff tail chunk {} layers "
+                                    "[{}, {}) leave an internal gap after "
+                                    "covered {} (ledger must be "
+                                    "contiguous)".format(
+                                        chunk_index, layer_start,
+                                        layer_end, covered))
+                            # 热前缀段（covered==0：copy 块 0 走准入主
+                            # 链，无旁挂门——合法无门段）。
+                            segments.append((covered, layer_start, None))
+                            covered = layer_start
+                        else:
+                            raise RuntimeError(
+                                "copy handoff tail chunk {} layers "
+                                "[{}, {}) overlap the covered prefix "
+                                "{}".format(
+                                    chunk_index, layer_start, layer_end,
+                                    covered))
+                    arm_map = copy_arms.get(chunk_index)
+                    if arm_map is None:
+                        raise RuntimeError(
+                            "copy handoff arm ledger is missing chunk {} "
+                            "of request {} (tail emission must precede "
+                            "the train body)".format(
+                                chunk_index, copy_gate_request_id))
+                    segments.append((layer_start, layer_end, arm_map))
+                    covered = layer_end
+            if restore_arms:
+                first_group_start = restore_arms[0][1]
+                if first_group_start > covered:
+                    if covered > 0:
+                        # L5：copy 尾段与恢复组之间缺口 = 账本并集不变
+                        # 式破坏（同上 fail-closed；covered==0 的纯
+                        # restore 热前缀仍是合法无门段）。
+                        raise RuntimeError(
+                            "restore group layers [{}, {}) leave an "
+                            "internal gap after covered {} (copy/restore "
+                            "ledgers must tile contiguously)".format(
+                                first_group_start,
+                                restore_arms[0][2], covered))
+                    segments.append((covered, first_group_start, None))
+                    covered = first_group_start
+                for _group, layer_start, layer_end, gates in restore_arms:
+                    if layer_start != covered or layer_end <= layer_start:
+                        raise RuntimeError(
+                            "layer segments are not contiguous in "
+                            "consumption order (got [{}, {}) covered "
+                            "{})".format(
+                                layer_start, layer_end, covered))
+                    segments.append((layer_start, layer_end, gates))
+                    covered = layer_end
+            if not segments:
+                raise RuntimeError(
+                    "layer-segmented emission invoked with no segments")
+            if covered < self.config.layers:
+                # 尾部零 KV 层区间（PARTIAL 基零后缀字节形态——无恢复组
+                # 覆盖）：无门段补齐到 L（跨段字节守恒需 [0, L) 全覆盖）。
+                segments.append((covered, self.config.layers, None))
+                covered = self.config.layers
+            if covered != self.config.layers:
+                raise RuntimeError(
+                    "layer segments do not tile the model layer count "
+                    "({} != {})".format(covered, self.config.layers))
+            last_index = len(segments) - 1
+            for position, (layer_start, layer_end, gates) in enumerate(
+                    segments):
+                for relative_rank, rank in enumerate(group.ranks):
+                    emit_pass(
+                        spans, passes, rank, relative_rank, phase=phase,
+                        layer_start=layer_start, layer_end=layer_end,
+                        include_output=(position == last_index),
+                        extra_gates_by_rank=gates)
+
+        if credit_blocks is None:
+            if restore_arms is None:
+                for relative_rank, rank in enumerate(group.ranks):
+                    if suffix_arms:
+                        self.builders[rank].arm_dependency(suffix_arms[rank])
+                    emit_pass(pass_spans, weight_passes, rank, relative_rank)
+                return
+            emit_layer_segmented(pass_spans, weight_passes)
+            return
+        # K6（P1-③）：copy 交接尾块层区间在场 ⇒ 首体块走层段化发射
+        # （段边界与逐 rank 门见 emit_layer_segmented）；remote-credit
+        # 体块（无 layers 账本）路径不变。
+        copy_gate_request_id = (first_chunk_member or {}).get("request_id")
+        copy_tail_layers = (
+            self._copy_handoff_layers.get(copy_gate_request_id)
+            if copy_gate_request_id is not None else None)
+        multi_credit_blocks = len(credit_blocks) > 1
+        for position, block in enumerate(credit_blocks):
+            if not block["spans"]:
+                raise RuntimeError(
+                    "credit body block [{},{}] has no spans".format(
+                        block["start_iter"], block["end_iter"]))
+            # A6'：无显式 phase 的 credit 体块在多块形态下逐块挂唯一
+            # phase 后缀（同名集体节点单 rank 8 participants 预检拒批
+            # 的修复面；单块不加——v1 等价锚逐字节不变）。copy 体块
+            # 自带 phase（_cb{k}），原样透传。
+            block_phase = block.get("phase")
+            if block_phase is None and multi_credit_blocks:
+                block_phase = "{}_rcb{}".format(train_id, position + 1)
+            segment_first_block = (
+                position == 0
+                and (restore_arms is not None or copy_tail_layers))
+            for rank in group.ranks:
+                if position == 0 and suffix_arms:
+                    self.builders[rank].arm_dependency(suffix_arms[rank])
+                for gate_request_id, block_index in block["gates"]:
+                    if segment_first_block and copy_tail_layers:
+                        # K6：首体块的 copy 尾块门由层段发射逐段精确
+                        # arm（块粒度 arm 与段门并存 = 同门双重依赖，
+                        # 冗余且掩盖段边界语义）。
+                        continue
+                    if block_index < 2 and not (
+                            self._copy_handoff_arms.get(
+                                gate_request_id, {}).get(block_index)):
+                        # 切片块 1 无旁挂门：主链先行性承担（T1 经
+                        # barrier、T2+ 经 per-rank 链序，§4.1）。C13 copy
+                        # 交接尾块从 1 起编号（块 0 在准入主链）——copy 门
+                        # 的块 1 有旁挂支链，须正常 arm。
+                        continue
+                    arm_map = (
+                        self._credit_arms.get(
+                            gate_request_id, {}).get(block_index)
+                        or self._copy_handoff_arms.get(
+                            gate_request_id, {}).get(block_index))
+                    if arm_map is None:
+                        # 尾块发射恒先于体（_emit_train_head 先于
+                        # _emit_train_body；copy 尾块在准入批发射）——门
+                        # 账本整块缺失只可能是 bug（尾块未发射/未登记/
+                        # 块号错位），fail-closed（2026-09-17 交付后复核
+                        # 硬化；C13 copy 同款）。
+                        raise RuntimeError(
+                            "credit arm ledger is missing block {} of "
+                            "request {} (tail emission must precede the "
+                            "train body)".format(
+                                block_index, gate_request_id))
+                    gate_node = arm_map.get(rank)
+                    if gate_node is not None:
+                        # 该 rank 有 shard 才有 recv 门；零字节 rank 与
+                        # v1 同口径跳过（无数据即无到达可等）。
+                        self.builders[rank].arm_dependency(gate_node)
+            if segment_first_block:
+                # C15+K6 组合形态：首块（覆盖迭代 1 = 首 chunk）按层段
+                # 切分发射——恢复组门/copy 尾块门逐段挂（见
+                # emit_layer_segmented）；块 ≥ 1 原样（其迭代的层消费已被
+                # 首块各段门传递覆盖：块 1+ 的 spans 计算晚于首块全部层
+                # 段完成 ⇒ 晚于全部尾块/恢复组——既有 per-block 门成为
+                # 冗余无害保险）。
+                emit_layer_segmented(
+                    block["spans"], block["weight_passes"],
+                    phase=block_phase)
+                continue
+            for relative_rank, rank in enumerate(group.ranks):
+                emit_pass(
+                    block["spans"], block["weight_passes"],
+                    rank, relative_rank,
+                    phase=block_phase)
 
     def _emit_first_token_markers(self, train_plan: dict,
                                   debut_members) -> dict:
@@ -903,6 +1270,30 @@ class GraphBatchBuilder:
             self._block_ends.setdefault(member["request_id"], {})[
                 "seg2"] = dict(block_ends)
 
+        # remote-read credit：清本列车的 arm 账本——尾标记每列车恰发射
+        # 一次（整列发射/余量批同路径），此刻全部体块消费点均已发射；
+        # 下一列车该请求的切片在列车头重新登记（块号从 2 起重用，不残留
+        # 陈旧门）。O10④：本列车发射过尾块（remote_credit_tail 非空）
+        # 的请求在 pop 点必须有账本——尾块发射登记与尾标记结清同列车
+        # 成对出现，缺失 = 发射/记账链破损，fail-closed；单块切片无尾块
+        # （账本合法缺席，pop 空放）。
+        credit_plan = train_plan.get("remote_credit") or {}
+        expected_arm_owners = set()
+        for joiner in train_plan.get("joiners") or ():
+            if joiner.get("remote_credit_tail"):
+                expected_arm_owners.add(joiner["request_id"])
+        for member in credit_plan.get("continuations") or ():
+            if member.get("tail"):
+                expected_arm_owners.add(member["plan"]["request_id"])
+        for request_id in credit_plan.get("request_ids") or ():
+            leftover_arms = self._credit_arms.pop(request_id, None)
+            if request_id in expected_arm_owners and leftover_arms is None:
+                raise RuntimeError(
+                    "credit arm ledger for {} is missing at train "
+                    "tail-marker settlement although this train emitted "
+                    "its credit tail blocks (emission/bookkeeping chain "
+                    "broken)".format(request_id))
+
         return {
             "drain_members": drain_members,
             "exit_members": exit_members,
@@ -914,6 +1305,330 @@ class GraphBatchBuilder:
         """列车标记节点（每 rank 1 个小 COMP 节点；上下文由调用方设置）。"""
         self.builders[rank].comp(name, 1, 1)
         return self.builders[rank].previous_id
+
+    # ---------------------------------- remote-read credit 发射（v2）--
+
+    def _emit_credit_stream_tail(self, member_plan, blocks, *, stage) -> None:
+        """remote-read credit 尾块（切片块 2..M）旁挂支链的物理发射
+        （D2 credit 发射拓扑，经 _emit_side_branch 包裹——分支首节点
+        parent = fork frontier，分支不 join，与 decode_evictions 支链
+        同款）：
+
+        - home 侧 send_b → send_{b+1} → … 直连链（不等 ack——home 侧
+          全速泵出，ack_recv 尾随整条 send 链之后）；
+        - exec 侧 recv_b → recv_{b+1} → … 顺序链 = 流式到达语义
+          （ack_send 尾随整条 recv 链之后）；
+        - 块 b 的逐 rank recv 完成门记入 _credit_arms[rid][b]，由覆盖
+          该迭代区间的体块首节点 arm 消费（I2 门并集）。
+
+        blocks = ((块号 b, KVTransfer), ...)——块号为切片内绝对序
+        （体块门规格按同一块号引用）。M=1 时无尾块（调度器不置
+        remote_credit_tail），切片块 1 走 v1 原路径——I3a 逐字节锚。"""
+        request_id = member_plan["request_id"]
+        # O10④（2026-09-23 终轮审计）：前序列车尾标记必须已结清本
+        # 账本（每列车尾标记发射点统一 pop——:1255-1261）；残留即
+        # 前一列车的 pop 名单漏本请求 = 记账破损被 setdefault 静默
+        # 吞并（旧门账与新门账混装），fail-closed。检查须在块循环
+        # **之前**（单次调用内块 2..M 连续登记本账本，同调用内的
+        # 后续块非残留）。
+        if request_id in self._credit_arms:
+            raise RuntimeError(
+                "credit arm ledger for {} still holds blocks {} from "
+                "a previous train (tail-marker settlement missed this "
+                "request -- bookkeeping bug)".format(
+                    request_id, sorted(self._credit_arms[request_id])))
+        prefix = _prefix_of(member_plan)
+        action_state = self._action_seq.setdefault(request_id, [0])
+        named_blocks = []
+        for block_index, transfer in blocks:
+            action_sequence = action_state[0]
+            action_name = (
+                f"{prefix}_{stage}_action{action_sequence:03d}_"
+                f"{sanitize_node_prefix(transfer.session_id)}_{transfer.kind}"
+            )
+            action_state[0] = action_sequence + 1
+            named_blocks.append((block_index, transfer, action_name))
+        for block_index, transfer, action_name in named_blocks:
+            per_rank = {}
+            for shard_index, shard in enumerate(transfer.shards):
+                data_tag = self.tag_allocator.take()
+                self.builders[shard.source_rank].comm_send(
+                    f"{action_name}_shard{shard_index}"
+                    f"_credit{block_index}_send",
+                    src=shard.source_rank, dst=shard.target_rank,
+                    comm_size=shard.bytes, comm_tag=data_tag)
+                self.builders[shard.target_rank].comm_recv(
+                    f"{action_name}_shard{shard_index}"
+                    f"_credit{block_index}_recv",
+                    src=shard.source_rank, dst=shard.target_rank,
+                    comm_size=shard.bytes, comm_tag=data_tag)
+                recv_node = self.builders[shard.target_rank].previous_id
+                if recv_node is None:
+                    raise RuntimeError(
+                        "credit stream recv did not generate a node")
+                per_rank[shard.target_rank] = recv_node
+            self._credit_arms.setdefault(request_id, {})[block_index] = (
+                per_rank)
+        for block_index, transfer, action_name in named_blocks:
+            for shard_index, shard in enumerate(transfer.shards):
+                ack_tag = self.tag_allocator.take()
+                self.builders[shard.target_rank].comm_send(
+                    f"{action_name}_shard{shard_index}"
+                    f"_credit{block_index}_ack_to_rank{shard.source_rank}",
+                    src=shard.target_rank, dst=shard.source_rank,
+                    comm_size=1, comm_tag=ack_tag)
+                self.builders[shard.source_rank].comm_recv(
+                    f"{action_name}_shard{shard_index}"
+                    f"_credit{block_index}_ack_from_rank{shard.target_rank}",
+                    src=shard.target_rank, dst=shard.source_rank,
+                    comm_size=1, comm_tag=ack_tag)
+
+    def _emit_copy_handoff_tail(self, member_plan, chunks, *,
+                                pending_gate=None) -> None:
+        """C13 copy 交接尾块（块 1..M-1）旁挂支链的物理发射（四步协议
+        的图侧 (2)：源 HBM 读取 + 传输；目标 HBM 写完成 = exec 侧 recv
+        节点——逐块就绪门控/交接完成事件挂点；ack_recv = 源端释放依赖
+        挂点）。与 _emit_credit_stream_tail 同款拓扑（经 _emit_side_branch
+        包裹调用——分支首节点 parent = fork frontier，分支不 join）：
+
+        - home 侧 send_c → send_{c+1} → … 直连链（全速泵出，不等 ack）；
+        - exec 侧 recv_c → recv_{c+1} → … 顺序链 = 流式到达语义；
+        - 块 c 的逐 rank recv 完成门记入 _copy_handoff_arms[rid][c]，
+          由含首 chunk 的列车体按消费顺序逐块 arm 消费（I2 门并集同源；
+          块 c 的消费区间覆盖由 _copy_handoff_body_blocks 比例映射）；
+        - ack 链尾随整条数据链（ack_send 尾随 recv 链、ack_recv 尾随
+          send 链）——逐块 ack_recv 节点记入 _copy_handoff_release_
+          anchors[rid][c]（源端立即释放的物理到达事实锚，账本侧在
+          prefill drain 边界结算，见 FS _settle_copy_handoffs）。
+
+        触发门：gate 实例 == 源实例时分支首 send 逐 source rank arm
+        timer gate（与头块 noc_migrate 主链同策略）；跨实例 gate（上轮
+        执行实例）时无门控发射、per-rank 链序兜底（NEW-1 同款）。
+        """
+        request_id = member_plan["request_id"]
+        prefix = _prefix_of(member_plan)
+        action_state = self._action_seq.setdefault(request_id, [0])
+        stage = "history_handoff"
+        named_chunks = []
+        for transfer in chunks:
+            chunk_index = transfer.handoff_chunk
+            if transfer.kind != "noc_migrate":
+                raise RuntimeError(
+                    "copy handoff tail chunk must be a NoC migration "
+                    f"(got {transfer.kind!r})")
+            action_sequence = action_state[0]
+            action_name = (
+                f"{prefix}_{stage}_action{action_sequence:03d}_"
+                f"{sanitize_node_prefix(transfer.session_id)}_{transfer.kind}"
+            )
+            action_state[0] = action_sequence + 1
+            named_chunks.append((chunk_index, transfer, action_name))
+        named_chunks.sort(key=lambda item: item[0])
+        # 触发门 arming（分支内完成——_emit_side_branch 的 stash-and-clear
+        # 契约）：仅 gate 实例 == 源实例时（头块同策略）。
+        if (
+            pending_gate is not None
+            and named_chunks
+            and named_chunks[0][1].source_instance_index is not None
+            and pending_gate.source_instance_index
+            == named_chunks[0][1].source_instance_index
+        ):
+            source_group = self.group_by_index[
+                named_chunks[0][1].source_instance_index]
+            for relative_index, source_rank in enumerate(source_group.ranks):
+                control_rank, timer_gate = _history_control(
+                    group_by_index=self.group_by_index,
+                    pending_gate=pending_gate,
+                    relative_index=relative_index,
+                )
+                if control_rank != source_rank:
+                    raise RuntimeError(
+                        "copy handoff tail control rank is not its source "
+                        "rank")
+                self.builders[source_rank].arm_timer_gate(timer_gate)
+        for chunk_index, transfer, action_name in named_chunks:
+            per_rank = {}
+            for shard_index, shard in enumerate(transfer.shards):
+                data_tag = self.tag_allocator.take()
+                self.builders[shard.source_rank].comm_send(
+                    f"{action_name}_shard{shard_index}"
+                    f"_handoff{chunk_index}_send",
+                    src=shard.source_rank, dst=shard.target_rank,
+                    comm_size=shard.bytes, comm_tag=data_tag)
+                self.builders[shard.target_rank].comm_recv(
+                    f"{action_name}_shard{shard_index}"
+                    f"_handoff{chunk_index}_recv",
+                    src=shard.source_rank, dst=shard.target_rank,
+                    comm_size=shard.bytes, comm_tag=data_tag)
+                recv_node = self.builders[shard.target_rank].previous_id
+                if recv_node is None:
+                    raise RuntimeError(
+                        "copy handoff recv did not generate a node")
+                per_rank[shard.target_rank] = recv_node
+            self._copy_handoff_arms.setdefault(
+                request_id, {})[chunk_index] = per_rank
+            # K6（P1-③）：尾块层区间随发射登记（首体块层段门控的段
+            # 边界——块 c 的 recv 门只应 gate 其层区间 [start, end) 的
+            # 计算段，全层聚合 pass 在 c 之前的层段不等 c 即可计算）。
+            self._copy_handoff_layers.setdefault(
+                request_id, {})[chunk_index] = (
+                    transfer.layer_start, transfer.layer_end)
+        for chunk_index, transfer, action_name in named_chunks:
+            release_per_rank = {}
+            for shard_index, shard in enumerate(transfer.shards):
+                ack_tag = self.tag_allocator.take()
+                self.builders[shard.target_rank].comm_send(
+                    f"{action_name}_shard{shard_index}"
+                    f"_handoff{chunk_index}_ack_to_rank{shard.source_rank}",
+                    src=shard.target_rank, dst=shard.source_rank,
+                    comm_size=1, comm_tag=ack_tag)
+                self.builders[shard.source_rank].comm_recv(
+                    f"{action_name}_shard{shard_index}"
+                    f"_handoff{chunk_index}_ack_from_rank{shard.target_rank}",
+                    src=shard.target_rank, dst=shard.source_rank,
+                    comm_size=1, comm_tag=ack_tag)
+                ack_node = self.builders[shard.source_rank].previous_id
+                if ack_node is not None:
+                    release_per_rank[shard.source_rank] = ack_node
+            self._copy_handoff_release_anchors.setdefault(
+                request_id, {})[chunk_index] = release_per_rank
+
+    def _train_has_pending_copy_arms(self, train_plan) -> bool:
+        """本列车成员/队列头是否有待消费的 copy 交接尾块门（C13）。"""
+        if not self._copy_handoff_arms:
+            return False
+        request_ids = {
+            request_id for request_id, _ in train_plan.get("members") or ()}
+        request_ids.add(train_plan.get("head_request_id"))
+        request_ids.discard(None)
+        return any(request_id in self._copy_handoff_arms
+                   for request_id in request_ids)
+
+    def _copy_handoff_body_blocks(self, train_plan, pass_spans):
+        """C13：含首 chunk 列车体的逐块就绪门控切分（消费顺序映射）。
+
+        体块数 B = min(尾块数 + 1, 迭代数)（首体块无门——readiness
+        barrier 已等交接块 0；迭代数不足时尾块并入最后体块，仍保证
+        "列车体完成 ⇒ 全部尾块到达"⇒ prefill drain 结算因果成立）。尾块
+        c → 体块 min(c, B)：1:1 流水（体块 c 等尾块 c，读流与计算重
+        叠，不设"先整份搬运后计算"串行段）。
+
+        span 划分（布局契约：SH _plan_train 平铺序 = [队列头 chunk
+        spans（每迭代恰一条，共 iterations 条）][成员连续段]——GB 侧
+        train_plan 不携带 members/prefill_chunk_tokens，头部 span 恒为
+        前 iterations 条）：头部 span 按迭代区间精确入块（迭代 i ↔ 第
+        i 条）；成员 span 按块迭代数比例确定性地分配到尾随块（每 span
+        恰入一块、块序保持；权重字节按块迭代数——跨块求和与整列一
+        致）。返回 (blocks, (request_id,)) 或 (None, ())。
+        """
+        first_chunk_member = train_plan.get("first_chunk_member")
+        if first_chunk_member is None:
+            return None, ()
+        request_id = first_chunk_member["request_id"]
+        arms = self._copy_handoff_arms.get(request_id)
+        if not arms:
+            return None, ()
+        tail_indices = sorted(arms)
+        iterations = int(train_plan["iterations"])
+        if iterations <= 0:
+            raise RuntimeError(
+                "copy handoff train has no iterations to gate")
+        if len(pass_spans) < iterations:
+            raise RuntimeError(
+                "copy handoff train span layout does not match the "
+                "frozen plan (fewer spans than head iterations)")
+        head_spans = pass_spans[:iterations]
+        member_spans = pass_spans[iterations:]
+        block_count = min(len(tail_indices) + 1, iterations)
+        per_block = -(-iterations // block_count)
+        # C15 修复（C13 先在缺陷，跨车道披露——非 C15 引入）：per_block
+        # 上取整可使尾块数超出覆盖迭代所需块数，空尾块（end_iter <
+        # start_iter）在 stress 10s 窗实测 raise（crash 形 (it, tails) ∈
+        # {(4,2),(5,3),(6,3),(9,3),(6,4),(7,4),…}）。收紧 block_count 至
+        # 全覆盖所需最小块数；多出尾块经 min(tail_index, block_count)
+        # 并入末块（与"迭代数不足时尾块并入最后体块"的既有披露语义一
+        # 致，"体块完成 ⇒ 全部尾块到达"不变量保持）。
+        block_count = min(block_count, -(-iterations // per_block))
+        # 成员 span 的比例分配（确定性，块序保持；最后块吃余量）。
+        member_allocation: list[int] = []
+        assigned_members = 0
+        remaining_members = len(member_spans)
+        remaining_iters = iterations
+        for block_position in range(1, block_count + 1):
+            count = min(
+                per_block, iterations - (block_position - 1) * per_block)
+            if block_position == block_count:
+                take = remaining_members
+            else:
+                take = remaining_members * count // max(1, remaining_iters)
+            member_allocation.append(take)
+            assigned_members += take
+            remaining_members -= take
+            remaining_iters -= count
+        if assigned_members != len(member_spans):
+            raise RuntimeError(
+                "copy handoff member-span allocation lost spans "
+                f"({assigned_members} != {len(member_spans)})")
+        member_cursor = 0
+        blocks = []
+        for block_position in range(1, block_count + 1):
+            start_iter = (block_position - 1) * per_block + 1
+            end_iter = min(block_position * per_block, iterations)
+            if end_iter < start_iter:
+                raise RuntimeError(
+                    "copy handoff body block covers no iterations")
+            take = member_allocation[block_position - 1]
+            spans = (
+                list(head_spans[start_iter - 1:end_iter])
+                + member_spans[member_cursor:member_cursor + take])
+            member_cursor += take
+            if not spans:
+                raise RuntimeError(
+                    "copy handoff body block covers no spans")
+            gates = [
+                (request_id, tail_index)
+                for tail_index in tail_indices
+                if min(tail_index, block_count) == block_position]
+            blocks.append({
+                "start_iter": start_iter,
+                "end_iter": end_iter,
+                "weight_passes": end_iter - start_iter + 1,
+                "spans": spans,
+                "gates": gates,
+                # 块唯一 phase 标签：同列车多体块的聚合节点/集体节点不
+                # 可重名（C++ commit 预检按名字对集体做跨 rank 签名一
+                # 致性校验——同块内逐 rank 字节一致，跨块字节不同，重
+                # 名即误配；remote-credit 多块在现行 auto-K 下恒单块，
+                # 本后缀是首个真实多块路径的必要区分）。
+                "phase": f"{train_plan['train_id']}_cb{block_position}",
+            })
+        return blocks, (request_id,)
+
+    def _emit_credit_head_transfer(self, member_plan, transfer) -> dict:
+        """remote-read credit 续列车切片块 1 的主链发射（exec 实例
+        per-rank 链序保证其先于列车体；无 barrier）。发射走 v1 同一
+        _emit_kv_transfer noc_migrate 路径，命名经 _action_seq 闭包
+        （与 joiner pd_transfer 同款手法）。"""
+        request_id = member_plan["request_id"]
+        prefix = _prefix_of(member_plan)
+        action_state = self._action_seq.setdefault(request_id, [0])
+        action_sequence = action_state[0]
+        action_name = (
+            f"{prefix}_remote_credit_action{action_sequence:03d}_"
+            f"{sanitize_node_prefix(transfer.session_id)}_{transfer.kind}"
+        )
+        record = _emit_kv_transfer(
+            config=self.config,
+            builders=self.builders,
+            group_by_index=self.group_by_index,
+            tag_allocator=self.tag_allocator,
+            transfer=transfer,
+            action_name=action_name,
+        )
+        record["sequence_stage"] = "remote_credit"
+        record["action_sequence"] = action_sequence
+        action_state[0] = action_sequence + 1
+        return record
 
     def emit_completion_batch(self, request_plan: dict) -> dict:
         """completion 批（DECODE_COMPLETION/REQUEST_COMPLETE 边界）：
@@ -933,6 +1648,42 @@ class GraphBatchBuilder:
         # 完成后即死重，当场弹出（下一 turn 是不同 request_id）。
         self._block_ends.pop(request_plan["request_id"], None)
         self._action_seq.pop(request_plan["request_id"], None)
+        # C13：交接门账本残留 = 请求完成而尾块从未被体块消费（发射/切分
+        # bug）——fail-closed；释放挂点账本为审计面，完成后弹出。
+        leftover_arms = self._copy_handoff_arms.pop(
+            request_plan["request_id"], None)
+        if leftover_arms:
+            raise RuntimeError(
+                "request {} completed with unconsumed copy handoff arms "
+                "{} -- the migration stream was never gated into a train "
+                "body".format(
+                    request_plan["request_id"], sorted(leftover_arms)))
+        self._copy_handoff_layers.pop(request_plan["request_id"], None)
+        self._copy_handoff_release_anchors.pop(
+            request_plan["request_id"], None)
+        # C15：恢复组门账本残留 = 请求完成而恢复组从未被体块消费（发射/
+        # 切分 bug）——fail-closed（C13 copy 同款纪律）。
+        leftover_restore_arms = self._suffix_restore_arms.pop(
+            request_plan["request_id"], None)
+        if leftover_restore_arms:
+            raise RuntimeError(
+                "request {} completed with unconsumed restore group arms "
+                "{} -- the suffix restore stream was never gated into a "
+                "train body".format(
+                    request_plan["request_id"],
+                    [arm[0] for arm in leftover_restore_arms]))
+        # O10④：credit arm 账本残留 = 请求完成而其切片尾块门账本未被
+        # 列车尾标记结清（发射/切分 bug）——fail-closed（C13 copy /
+        # C15 restore 同款纪律；单块切片无尾块，账本合法缺席）。
+        leftover_credit_arms = self._credit_arms.pop(
+            request_plan["request_id"], None)
+        if leftover_credit_arms:
+            raise RuntimeError(
+                "request {} completed with unconsumed credit arms "
+                "{} -- the credit tail stream was never gated into a "
+                "train body".format(
+                    request_plan["request_id"],
+                    sorted(leftover_credit_arms)))
         return merge_info
 
     def _set_context(self, request_plan: dict, stage: str,
@@ -987,7 +1738,8 @@ class GraphBatchBuilder:
 
     # ------------------------------------ KV 逐出旁路支链（2026-09-13）--
 
-    def _emit_side_branch(self, emit_fn) -> None:
+    def _emit_side_branch(
+            self, emit_fn, *, watch_context=None) -> dict[int, int]:
         """把一段逐出发射包成旁路分支（主方案 §3.2）：全 rank 暂存并清空
         既有 pending 依赖 → fork 快照 → 发射（分支内自行接续成链；触发门
         的 arming 必须在 emit_fn 内部完成）→ 恢复主链 → 归还暂存依赖。
@@ -1005,8 +1757,10 @@ class GraphBatchBuilder:
         fail-closed。
         """
         stashed = {}
+        node_counts = {}
         for rank, builder in self.builders.items():
             stashed[rank] = builder.pending_extra_dependencies
+            node_counts[rank] = len(builder.nodes)
             if builder.pending_extra_dependencies:
                 builder.pending_extra_dependencies = []
         checkpoints = {
@@ -1020,6 +1774,20 @@ class GraphBatchBuilder:
                     raise RuntimeError(
                         "side-branch left unconsumed pending deps on "
                         f"rank {builder.rank}")
+            members = {}
+            touched_ranks = [
+                rank for rank, builder in self.builders.items()
+                if len(builder.nodes) > node_counts[rank]
+            ]
+            if watch_context is not None and touched_ranks:
+                request_id, stage, generation = watch_context
+                for rank in touched_ranks:
+                    builder = self.builders[rank]
+                    builder.set_context(request_id, stage, generation)
+                    builder.comp(
+                        "eviction_done_rank{}".format(rank), 1, 1)
+                    members[rank] = builder.previous_id
+            return members
         finally:
             for rank, builder in self.builders.items():
                 builder.restore_chain(checkpoints[rank])
@@ -1027,23 +1795,32 @@ class GraphBatchBuilder:
                     builder.pending_extra_dependencies.extend(stashed[rank])
 
     def _register_store_tails(self, transfer, record) -> None:
-        """逐出支链的边缘 mem_store 尾部登记（主方案 §3.3 登记侧）。
+        """逐出支链的边缘 mem_store 尾部登记（主方案 §3.3 登记侧；§4.2.4
+        层区间化 2026-09-17）。
 
         仅 remote_store 逐出登记；record 为 _emit_kv_transfer 的返回值
         （2026-09-13 起携带 edge_store_node_id / source_ack_recv_node_id）。
+        条目 = (edge_rank, edge_store_node_id, source_ack_recv_node_id,
+        layer_start, layer_end)——层区间取 transfer.layer_start/layer_end
+        （逐出池写恒为后缀形 [k, L)）；消费侧按区间交集选择性消费
+        （_arm_pending_store_edges）。
         """
         if transfer.kind != "remote_store":
             return
-        tails = self.pending_store_tails.setdefault(transfer.session_id, [])
         for shard_record in record["shards"]:
+            tails = self.pending_store_tails.setdefault(
+                transfer.session_id, [])
             tails.append((
                 shard_record["edge_rank"],
                 shard_record["edge_store_node_id"],
                 shard_record["source_ack_recv_node_id"],
+                transfer.layer_start,
+                transfer.layer_end,
             ))
 
     def _arm_pending_store_edges(self, transfer, name_prefix: str) -> None:
-        """回迁发射前的 store→restore 前递依赖补偿（主方案 §3.3）。
+        """回迁发射前的 store→restore 前递依赖补偿（主方案 §3.3；§4.2.4
+        硬化 2026-09-17）。
 
         逐出支链化后"同会话 store 池写先于其 restore 池读"的主链传递性
         保障失效；本方法在回迁（remote_load）发射前查 pending_store_tails
@@ -1058,14 +1835,51 @@ class GraphBatchBuilder:
           后缀池恢复**均可达跨缘（后缀 store 在 home 边缘、restore 在
           执行实例边缘；1B 中继路径两用）。
 
+        §4.2.4 层区间交集选择性消费：restore 传输区间
+        [transfer.layer_start, transfer.layer_end)；匹配条目 = 区间有
+        交集（max(ls1,ls2) < min(le1,le2)）的全部条目；只移除匹配条目，
+        未匹配保留在 pending_store_tails 供后续消费者（新增消费者 =
+        PARTIAL remote-read 后缀恢复 [p, L)）。行为保持注记：现有全部
+        逐出池写层区间恒为后缀形 [k,L)，现有消费者区间（REMOTE 全量
+        [0,L) / copy 后缀 [p,L)）与之恒有交集 ⇒ 交集选择性消费与旧
+        pop-all 在现行模式下行为等价，硬化属防御性改造，零时间线扰动。
+
+        fail-closed（原 fail-open 静默返回已退役）：会话在
+        pending_store_tails 无任何条目与 restore 区间交集（"有条目但
+        都不交集"与"无条目"两态同罪——本会话此前无池写登记却要回迁
+        读池，账目不一致）→ raise（store→restore 前递保障失效）。
+
         store 早已物理完成时补边即刻满足（懒处理，无需判在飞）。消费即
-        清：该会话首次回迁的池读已排序于全部在飞 store 之后，后续回迁读
-        的是不再变化的池数据，无 hazard。发射次序：先跨缘中继（此时
+        清（匹配条目）：该回迁的池读已排序于全部匹配 store 之后；未匹配
+        条目的层区间池数据不受本次读影响。发射次序：先跨缘中继（此时
         restore 边缘 rank 尚无 armed 依赖，中继 recv 不吞并同缘 arm），
         后同缘 arm（由回迁链在该 rank 的首节点消费）。"""
-        entries = self.pending_store_tails.pop(transfer.session_id, None)
-        if not entries:
-            return
+        entries = self.pending_store_tails.get(transfer.session_id) or []
+        matched = []
+        retained = []
+        for entry in entries:
+            entry_layer_start, entry_layer_end = entry[3], entry[4]
+            if (max(entry_layer_start, transfer.layer_start)
+                    < min(entry_layer_end, transfer.layer_end)):
+                matched.append(entry)
+            else:
+                retained.append(entry)
+        if not matched:
+            registered = (
+                ", ".join(
+                    "[{}, {})".format(entry[3], entry[4])
+                    for entry in entries)
+                or "none")
+            raise RuntimeError(
+                "store->restore 前递保障失效: session {!r} restore 区间 "
+                "[{}, {}) 无交集池写登记条目（现有条目区间: {}）".format(
+                    transfer.session_id,
+                    transfer.layer_start, transfer.layer_end,
+                    registered))
+        if retained:
+            self.pending_store_tails[transfer.session_id] = retained
+        else:
+            self.pending_store_tails.pop(transfer.session_id, None)
         restore_edges = []
         for shard in transfer.shards:
             if (shard.edge_rank is not None
@@ -1073,7 +1887,7 @@ class GraphBatchBuilder:
                 restore_edges.append(shard.edge_rank)
         same_edge_arms = {}
         relay_arms = {}
-        for edge_rank, store_node_id, _ack_node_id in entries:
+        for edge_rank, store_node_id, _ack_node_id, _ls, _le in matched:
             for restore_edge in restore_edges:
                 if edge_rank == restore_edge:
                     same_edge_arms.setdefault(
@@ -1186,7 +2000,8 @@ class GraphBatchBuilder:
             location=pending_gate.location,
         )
 
-    def emit_eviction_side_branch(self, transfers, tick: int) -> None:
+    def emit_eviction_side_branch(
+            self, transfers, tick: int, *, watch_id: str | None = None):
         """R2/D7（2026-09-14）：准入事务失败路径上**已提交**逐出的图侧
         发射（旁路支链、无触发门——与 prefill_evictions 的发射形态同构；
         失败请求不入队，逐出是合法容量释放，其池写必须进图，否则 C++
@@ -1203,6 +2018,9 @@ class GraphBatchBuilder:
         self._set_context(context_plan, "prefill", 0)
         action_state = self._action_seq.setdefault(
             first.trigger_request_id, [0])
+        if watch_id is None:
+            watch_id = "batch_train_evict_{}_failed_q{:03d}".format(
+                first.trigger_request_id, action_state[0])
 
         def emit_failed_admission_evictions() -> None:
             for transfer in transfers:
@@ -1224,10 +2042,20 @@ class GraphBatchBuilder:
                 action_state[0] += 1
                 self._register_store_tails(transfer, record)
 
-        self._emit_side_branch(emit_failed_admission_evictions)
+        members = self._emit_side_branch(
+            emit_failed_admission_evictions,
+            watch_context=(watch_id, "prefill", 0))
         self._collect(marker)
+        if not members:
+            return None
+        return {
+            "request_id": watch_id,
+            "owner_request_id": first.trigger_request_id,
+            "branch": "failed_admission",
+            "members": members,
+        }
 
-    def _emit_admission_actions(self, request_plan: dict) -> None:
+    def _emit_admission_actions(self, request_plan: dict) -> list[dict]:
         """turn-gates / history / prefill 准入动作的在线发射
         （拼 batch 改造，2026-08-22）。
         request_plan 为 dict（strategy 自在线账本；
@@ -1250,6 +2078,7 @@ class GraphBatchBuilder:
         prefix = _prefix_of(request_plan)
         action_state = self._action_seq.setdefault(
             request_plan["request_id"], [0])
+        eviction_watches = []
 
         def emit_transfer(transfer, stage: str, *, gate=None,
                           trigger_gate=None) -> dict:
@@ -1358,6 +2187,10 @@ class GraphBatchBuilder:
         #      到达/间隔 timer gate 触发门在分支内构建并挂分支首节点——
         #      逐出开始时刻不变，物理完成不再阻塞其后主链的一切计算）----
         if request_plan["history_evictions"]:
+            watch_id = request_plan.get(
+                "history_eviction_watch_id",
+                "batch_train_evict_{}_admission_history".format(
+                    request_plan["request_id"]))
             def emit_history_evictions() -> None:
                 history_eviction_trigger = TransferTriggerGate(
                     control_instance_index=pending_gate.source_instance_index,
@@ -1368,7 +2201,15 @@ class GraphBatchBuilder:
                         transfer, "history_evictions",
                         trigger_gate=history_eviction_trigger)
                     self._register_store_tails(transfer, record)
-            self._emit_side_branch(emit_history_evictions)
+            members = self._emit_side_branch(
+                emit_history_evictions,
+                watch_context=(watch_id, "prefill", 0))
+            if members:
+                eviction_watches.append({
+                    "request_id": watch_id,
+                    "owner_request_id": request_plan["request_id"],
+                    "branch": "admission_history",
+                    "members": members})
 
         partial_history_restore = (
             request_plan["history_location_before"] is not None
@@ -1394,12 +2235,47 @@ class GraphBatchBuilder:
         single_history_transfer = (
             history_transfers[0]
             if len(history_transfers) == 1 else None)
+        # C13 copy 逐 chunk 交接：交接块 1..M-1（handoff_chunk ≥ 1）旁挂
+        # 支链流水发射（fork 点 = 头块发射后的主链 frontier），块 0 与
+        # 其余腿（池恢复后缀等）走下方既有主链循环——readiness barrier
+        # 只等主链节点，即只等交接块 0（计算不等整份搬运完成，不设
+        # "先整份搬运后计算"串行段；尾块由列车体逐块就绪门控消费）。
+        copy_handoff_tail = tuple(
+            transfer for transfer in history_transfers
+            if (getattr(transfer, "handoff_chunk", None) or 0) >= 1)
+        # C15 后缀逐组恢复腿（restore_group 标记；消费顺序 = 层自低向
+        # 高）：从主链循环摘出——readiness barrier 不再等整段后缀；逐组
+        # 旁挂/分支发射（rank 内串行链）+ 逐组就绪门登记（列车体按层段
+        # 门控消费，_suffix_restore_arms）。旧单笔口径（无标记）不变。
+        restore_group_transfers = tuple(sorted(
+            (
+                transfer for transfer in history_transfers
+                if transfer.kind == "remote_load"
+                and getattr(transfer, "restore_group", None) is not None
+            ),
+            key=lambda transfer: transfer.restore_group))
+
+        def _is_restore_group_tail(transfer) -> bool:
+            return (
+                transfer.kind == "remote_load"
+                and getattr(transfer, "restore_group", None) is not None)
+
+        if copy_handoff_tail or restore_group_transfers:
+            main_history_transfers = tuple(
+                transfer for transfer in history_transfers
+                if (getattr(transfer, "handoff_chunk", None) or 0) < 1
+                and not _is_restore_group_tail(transfer))
+        else:
+            main_history_transfers = history_transfers
         # partial 流水恢复分支仅适用于 stay（同实例单笔后缀恢复）；
         # 跨实例 copy 的前缀+后缀走通用发射（readiness barrier 保守等
-        # 全部就绪）。
+        # 全部就绪）。C15：逐组恢复腿不走旧单笔 partial 分支（分组发射
+        # 替换整段门；单组亦然——restore_group 有标记即走分组路径）。
         partial_history_restore = (
             partial_history_restore
             and single_history_transfer is not None
+            and getattr(single_history_transfer, "restore_group", None)
+            is None
             and request_plan["history_location_before"].instance_index
             == request_plan["prefill_instance_index"])
 
@@ -1422,7 +2298,7 @@ class GraphBatchBuilder:
                         pending_gate.timer_gates[relative_index])
         elif not partial_history_restore:
             # gate location 已在弹出时归一化到权威快照（见上方裁决注释）。
-            for history_transfer in history_transfers:
+            for history_transfer in main_history_transfers:
                 if history_transfer.kind == "local_hit":
                     # 零节点本地命中（stay 驻留复用）——无发射节点。
                     continue
@@ -1449,6 +2325,17 @@ class GraphBatchBuilder:
                 else:
                     emit_transfer(history_transfer,
                                   "history_transfer", gate=pending_gate)
+            if copy_handoff_tail:
+                # C13：交接尾块支链（fork 顺序 = 头块主链发射之后；分支
+                # 不 join——readiness barrier 不等尾块，列车体逐块 arm 消
+                # 费）。home 侧 send 链全速泵出，exec 侧 recv 链流式到达
+                # （与 _emit_credit_stream_tail 同款拓扑）；ack 链尾随整
+                # 条数据链（source release dependency 挂点）。
+                def emit_copy_handoff_branch(
+                        tail=copy_handoff_tail, gate=pending_gate):
+                    self._emit_copy_handoff_tail(
+                        request_plan, tail, pending_gate=gate)
+                self._emit_side_branch(emit_copy_handoff_branch)
 
         # ---- prefill_evictions（KV 逐出并行化 2026-09-13：旁路支链化，
         #      无触发门；fork 时可能存在主链 armed 依赖（turn-0 arrival
@@ -1463,14 +2350,80 @@ class GraphBatchBuilder:
         # 注释消除下一个"伪消费者"式误读；非 joint 调用面若未来启用该
         # 字段，此处语义照旧。
         if request_plan["prefill_evictions"]:
+            watch_id = request_plan.get(
+                "prefill_eviction_watch_id",
+                "batch_train_evict_{}_admission_prefill".format(
+                    request_plan["request_id"]))
             def emit_prefill_evictions() -> None:
                 for transfer in request_plan["prefill_evictions"]:
                     record = emit_transfer(transfer, "prefill_evictions")
                     self._register_store_tails(transfer, record)
-            self._emit_side_branch(emit_prefill_evictions)
+            members = self._emit_side_branch(
+                emit_prefill_evictions,
+                watch_context=(watch_id, "prefill", 0))
+            if members:
+                eviction_watches.append({
+                    "request_id": watch_id,
+                    "owner_request_id": request_plan["request_id"],
+                    "branch": "admission_prefill",
+                    "members": members})
 
-        # ---- readiness barrier / partial 流水恢复 ----
-        if partial_history_restore:
+        # ---- readiness barrier / partial 流水恢复 / C15 逐组恢复 ----
+        restore_groups_partial = bool(
+            restore_group_transfers
+            and request_plan["history_location_before"] is not None
+            and request_plan["history_location_before"].location
+            == "partial_hbm_remote"
+            and request_plan["history_location_before"].instance_index
+            == request_plan["prefill_instance_index"])
+        if restore_groups_partial:
+            # C15（设计方案 §5.1）：后缀逐组恢复——同实例 partial 快速
+            # 路径的同款拓扑（驻留前缀屏障 + checkpoint 分支），但恢复
+            # 腿逐组顺序发射（rank 内消费顺序串行链：同 rank 下一组的
+            # 首节点链在上一组之后 = 物理串行），逐组逐 rank 目标 HBM
+            # 写完成门登记 _suffix_restore_arms，由含首 chunk 的列车体
+            # 按层段门控消费——**不设**"整段后缀恢复完才开始 prefill"
+            # 的串行门（无 suffix p2p readiness barrier——逐 rank 门控
+            # 替换整段栅栏，C12-G7/E17 登记的列车级保守门闭合）。
+            history_before = request_plan["history_location_before"]
+            if pending_gate.location != history_before.location:
+                raise RuntimeError(
+                    f"history gate location {pending_gate.location!r} does "
+                    f"not match planned {history_before.location!r}")
+            for relative_index, rank in enumerate(prefill_group.ranks):
+                builders[rank].arm_timer_gate(
+                    pending_gate.timer_gates[relative_index])
+            _emit_tp_readiness_barrier(
+                builders=builders, group=prefill_group,
+                name=f"{prefix}_prefill_resident_prefix_ready_barrier")
+            checkpoints = {
+                rank: builders[rank].chain_checkpoint()
+                for rank in prefill_group.ranks
+            }
+            prefix_barrier_nodes = tuple(
+                builders[rank].previous_id for rank in prefill_group.ranks)
+            branch_gate = PendingHistoryGate(
+                source_instance_index=request_plan["prefill_instance_index"],
+                timer_gates=prefix_barrier_nodes,
+                location=history_before.location,
+            )
+            # store→restore 前递补边：组 0 一次性消费全部区间交集条目
+            # （后缀形 store 与首组即交集；组 ≥ 1 经 rank 内串行链传递
+            # 性覆盖——同 rank 链序保证其后于组 0 = 后于全部匹配 store）。
+            self._arm_pending_store_edges(
+                restore_group_transfers[0], f"{prefix}_history_transfer")
+            group_arms = []
+            for group_transfer in restore_group_transfers:
+                group_record = emit_transfer(
+                    group_transfer, "history_transfer", gate=branch_gate)
+                group_arms.append(self._restore_group_arm(
+                    group_transfer, group_record, prefill_group))
+            for rank in prefill_group.ranks:
+                builders[rank].restore_chain(checkpoints[rank])
+            # 链回滚保留（恢复分支与本 rank 后续发射并行，与旧口径一致）。
+            self._suffix_restore_arms[request_plan["request_id"]] = (
+                tuple(group_arms))
+        elif partial_history_restore:
             history_transfer = single_history_transfer
             history_before = request_plan["history_location_before"]
             if (history_transfer.kind != "remote_load"
@@ -1545,12 +2498,57 @@ class GraphBatchBuilder:
             self._suffix_body_arms[request_plan["request_id"]] = (
                 suffix_ready_nodes_by_rank)
         else:
+            if restore_group_transfers:
+                # C15：跨实例后缀逐组恢复（copy/remote-read 工作副本的
+                # 池恢复后缀）——主链迁移腿发射后旁挂支链逐组流水发射
+                # （fork 点 = 主链迁移后的 frontier；分支不 join——
+                # readiness barrier 只等主链，计算不等整段后缀恢复）。
+                def emit_restore_group_branch(
+                        groups=restore_group_transfers, gate=pending_gate):
+                    self._arm_pending_store_edges(
+                        groups[0], f"{prefix}_history_transfer")
+                    group_arms = []
+                    for group_transfer in groups:
+                        group_record = emit_transfer(
+                            group_transfer, "history_transfer", gate=gate)
+                        group_arms.append(self._restore_group_arm(
+                            group_transfer, group_record, prefill_group))
+                    self._suffix_restore_arms[request_plan["request_id"]] = (
+                        tuple(group_arms))
+                self._emit_side_branch(emit_restore_group_branch)
             _emit_tp_readiness_barrier(
                 builders=builders, group=prefill_group,
                 name=f"{prefix}_prefill_kv_ready_barrier")
         # prefill 主体（chunk spans + end barrier + seg1 块末）自拼 batch
         # 改造（2026-08-22）起移入 emit_iteration_train 的折叠体与 drain
         # 标记；此处止于准入动作（到达 gates/历史迁移/逐出/屏障）。
+        return eviction_watches
+
+    def _restore_group_arm(self, group_transfer, group_record, prefill_group):
+        """C15：单组恢复腿的逐 rank 就绪门（目标 HBM 写完成节点）。
+
+        逐 rank 门控（非 TP 栅栏）：rank r 的列车体层段只等 rank r 的
+        该组写完成——与预测器的逐 rank 恢复链口径一致；零字节 rank 无
+        shard 即无门（无数据即无到达可等）。组序/层区间取 transfer 值。
+        """
+        gates_by_rank = {}
+        for shard_record in group_record["shards"]:
+            target_rank = shard_record.get("target_rank")
+            completion_node = shard_record.get("target_hbm_completion_node_id")
+            if not isinstance(target_rank, int) or not isinstance(
+                    completion_node, int):
+                raise RuntimeError(
+                    "restore group is missing a target HBM gate")
+            gates_by_rank[target_rank] = completion_node
+        if not set(gates_by_rank) <= set(prefill_group.ranks):
+            raise RuntimeError(
+                "restore group gates leaked outside the Prefill instance")
+        return (
+            int(getattr(group_transfer, "restore_group")),
+            int(group_transfer.layer_start),
+            int(group_transfer.layer_end),
+            gates_by_rank,
+        )
 
     def _emit_completion(self, request_plan: dict) -> None:
         """completion_evictions + 下一 turn interval gate 段的在线发射

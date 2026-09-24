@@ -20,27 +20,6 @@ LICENSE file in the root directory of this source tree.
 
 namespace NetworkAnalyticalCongestionAware {
 
-/// Phase-7 §10.2 route-congestion snapshot (audit/explanation input only;
-/// the wscllm strategy never consumes it -- red-line decision inputs stay
-/// Python queue/KV ledgers and the static route).
-///
-/// remaining_bytes sums the outstanding bytes of the flows currently
-/// traversing the link (each active flow contributes its full remaining
-/// bytes -- the fluid model transfers the whole flow over every link of its
-/// route). It is the accounting value as of the last flow advance (the
-/// scheduler advances flows lazily on membership changes, not on every
-/// tick), i.e. a stable monotone-decreasing bookkeeping value rather than a
-/// per-nanosecond estimate. active_flow_count is exact at the snapshot
-/// instant. tick/epoch are the freshness guards: a snapshot is only valid
-/// for the (tick, epoch) it was taken at; any later use must be rejected.
-struct LinkCongestionSnapshot {
-    LinkId link_id;
-    long double remaining_bytes;
-    uint64_t active_flow_count;
-    NetworkAnalytical::EventTime tick;
-    uint64_t epoch;
-};
-
 class FluidScheduler {
   public:
     FluidScheduler(std::shared_ptr<NetworkAnalytical::EventQueue> event_queue,
@@ -74,14 +53,6 @@ class FluidScheduler {
      */
     void set_deferred_flush_mode(bool enabled) noexcept;
 
-    /**
-     * Schedule a flush of all pending flow starts via the same-tick deferred
-     * channel (schedule_event_deferred). Post-commit communication emission in
-     * online mode must go through this entry (or start_flow with deferred mode
-     * enabled); it never inserts a current_time event into the main queue.
-     */
-    void flush_pending_starts_deferred() noexcept;
-
     void mark_event_loop_started() noexcept;
     void handle_service_wakeup(uint64_t generation) noexcept;
     void handle_tail_arrival(FlowId flow_id) noexcept;
@@ -90,32 +61,6 @@ class FluidScheduler {
     [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
     [[nodiscard]] uint64_t get_total_started_flows() const noexcept;
     [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
-    [[nodiscard]] size_t get_completion_heap_size() const noexcept;
-
-    /**
-     * Phase-7 §10.2: per-link route-congestion snapshot accessor.
-     *
-     * Pure query -- no flow is advanced and no state is touched. Expired-handle
-     * semantics: the caller must pass the tick it believes is current and the
-     * link-state epoch it last observed; when either does not match the
-     * scheduler's current event time / epoch, or the link id is unknown, the
-     * snapshot is rejected and nullopt is returned (a stale snapshot must
-     * never be consumed as fresh congestion).
-     *
-     * The accessor is a shared mechanism (like the list-mode EventQueue):
-     * reusable by face/sh_1.0 online backends as audit/explanation input.
-     */
-    [[nodiscard]] std::optional<LinkCongestionSnapshot> link_congestion_snapshot(
-        LinkId link_id, uint64_t expected_tick, uint64_t expected_epoch) const noexcept;
-
-    /// Phase-7 §10.2: current link-state epoch. Incremented on every
-    /// membership change that touches link_states (flow starts / completions).
-    /// Audit/explanation input; a snapshot's epoch is only valid while it
-    /// equals this value.
-    [[nodiscard]] uint64_t link_state_epoch() const noexcept;
-
-    /// Phase-7 §10.2: number of directed links tracked by the scheduler.
-    [[nodiscard]] size_t link_count() const noexcept;
 
     /// -------------------------------------------------------------------
     /// WP6 NoC link observer (SLO pipeline B2, /tmp/slo_wps/plans/
@@ -264,7 +209,6 @@ class FluidScheduler {
     uint64_t total_completed_flows;
     uint64_t max_active_flows;
     uint64_t max_route_memberships;
-    uint64_t link_state_epoch_;
 
     uint64_t progress_report_event_interval;
     uint64_t scheduler_event_count;

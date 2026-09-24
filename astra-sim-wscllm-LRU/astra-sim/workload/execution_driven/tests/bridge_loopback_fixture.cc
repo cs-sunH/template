@@ -34,7 +34,7 @@ Scenarios (方案 §4 步骤 1-7 操作 4):
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-wscllm-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest \
       sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py

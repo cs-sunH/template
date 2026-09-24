@@ -27,13 +27,11 @@ Ring::Ring(ComType type,
     this->curr_sender = ring_topology->get_sender(id, direction);
     this->parallel_reduce = 1;
     this->injection_policy = injection_policy;
-    this->total_packets_sent = 0;
     this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
     this->toggle = false;
-    this->name = Name::Ring;
     if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
         transmition = MemBus::Transmition::Fast;
     } else {
@@ -108,9 +106,6 @@ void Ring::run(EventType event, CallData* data) {
 }
 
 void Ring::release_packets() {
-    for (auto packet : locked_packets) {
-        packet->set_notifier(this);
-    }
     if (NPU_to_MA == true) {
         (new PacketBundle(stream->owner, stream, locked_packets, processed,
                           send_back, msg_size, transmition))
@@ -126,8 +121,6 @@ void Ring::release_packets() {
 void Ring::process_stream_count() {
     if (remained_packets_per_message > 0) {
         remained_packets_per_message--;
-    }
-    if (id == 0) {
     }
     if (remained_packets_per_message == 0 && stream_count > 0) {
         stream_count--;
@@ -156,7 +149,6 @@ void Ring::reduce() {
     process_stream_count();
     packets.pop_front();
     free_packets--;
-    total_packets_sent++;
 }
 
 bool Ring::iteratable() {
@@ -179,7 +171,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
@@ -191,7 +182,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
@@ -236,7 +226,7 @@ bool Ring::ready() {
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, packet.stream_id);
+        packet.preferred_vnet, stream->stream_id);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,

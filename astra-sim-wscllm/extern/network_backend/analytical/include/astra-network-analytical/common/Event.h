@@ -68,6 +68,9 @@ class Event {
      * Get the callback function and the argument.
      *
      * @return callback function and its argument
+     *
+     * Dead accessor (2026-09 deep-dive): zero callers in this repo; kept
+     * unchanged from the face backend for cross-repo parity.
      */
     [[nodiscard]] std::pair<Callback, CallbackArg> get_handler_arg() const noexcept;
 

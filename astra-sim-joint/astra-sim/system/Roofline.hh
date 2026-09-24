@@ -10,9 +10,7 @@ namespace AstraSim {
 
 class Roofline {
   public:
-    Roofline(double peak_perf);
     Roofline(double bandwidth, double peak_perf);
-    void set_bandwidth(double bandwidth);
     double get_perf(double operational_intensity);
 
   private:

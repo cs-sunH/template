@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/IntData.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
@@ -110,12 +109,34 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
         // hbm-kv-restore-bandwidth-sharing flag (contention off) no comm/pool
         // jobs are ever issued, so the model degenerates to the historical
         // one-COMP-plus-one-restore 50/50 behavior (A/B baseline).
-        this->local_hbm_bandwidth_model =
-            std::make_unique<LocalHbmBandwidthModel>(sys, this);
+        //
+        // The model constructor requires positive local-mem-bw AND
+        // peak-perf. Sys force-disables hbm-bandwidth-contention for
+        // local-mem-bw <= 0, but that guard does not cover
+        // hbm-kv-restore-bandwidth-sharing, and a missing "peak-perf" key
+        // defaults peak_perf to 0. Fail closed with a clear diagnostic
+        // instead of letting std::invalid_argument escape this constructor
+        // (it runs under "new Workload" inside Sys, with no try/catch up
+        // the chain, so an escape is std::terminate at startup).
+        try {
+            this->local_hbm_bandwidth_model =
+                std::make_unique<LocalHbmBandwidthModel>(sys, this);
+        } catch (const std::invalid_argument& e) {
+            workload_logger_->critical(
+                "local HBM bandwidth model requested "
+                "(hbm-bandwidth-contention={}, "
+                "hbm-kv-restore-bandwidth-sharing={}) but its parameters "
+                "are missing or non-positive in the system configuration "
+                "(local-mem-bw={}, peak-perf={}): {}",
+                sys->hbm_bandwidth_contention,
+                sys->hbm_kv_restore_bandwidth_sharing, sys->local_mem_bw,
+                sys->peak_perf, e.what());
+            exit(EXIT_FAILURE);
+        }
     }
     this->comm_groups.clear();
     // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
+    this->hw_resource = new HardwareResource(sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     this->sys = sys;
@@ -201,21 +222,11 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
 
 void Workload::record_network_bandwidth(uint64_t node_id,
                                         Tick execution_time) {
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        auto& online_stat = online_statistics_state_or_fail(node_id);
-        if (execution_time > 0 && online_stat.comm_size.has_value()) {
-            online_stat.network_bandwidth =
-                static_cast<double>(online_stat.comm_size.value()) /
-                execution_time;
-        }
-        return;
-    }
-    auto& op_stat = stats->get_operator_statistics(node_id);
-    if (execution_time > 0 && op_stat.comm_size.has_value()) {
-        op_stat.network_bandwidth =
-            static_cast<double>(op_stat.comm_size.value()) / execution_time;
-    }
+    // No-op: OnlineStatisticsState::network_bandwidth was removed (dead
+    // field; the achieved-bandwidth value had no reader).  The legacy
+    // per-node OperatorStatistics::network_bandwidth field was also
+    // write-only in this repository (its only reader was a commented-out
+    // report block), so no mode has anything to do here.
 }
 
 void Workload::initialize_comm_groups(string comm_group_filename) {
@@ -406,11 +417,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
     // TODO: someway to identify this metadata node is a pytorch pg node
-    if (true) {
-        issue_pytorch_pg_metadata(node);
-    } else {
-        throw std::runtime_error("Unknown metadata node type");
-    }
+    issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
 
@@ -483,6 +490,19 @@ void Workload::issue_local_hbm_kv_restore(
         return;
     }
 
+    // Legacy closed-form fallback (both HBM flags off). A non-positive
+    // local-mem-bw would make the division below Inf, ceil into a huge
+    // uint64 runtime, and hang the simulation: fail closed instead.
+    if (sys->local_mem_bw <= 0) {
+        workload_logger_->critical(
+            "local HBM KV-restore fallback requires a positive local-mem-bw "
+            "in the system configuration (local-mem-bw={}, "
+            "hbm-bandwidth-contention={}, "
+            "hbm-kv-restore-bandwidth-sharing={})",
+            sys->local_mem_bw, sys->hbm_bandwidth_contention,
+            sys->hbm_kv_restore_bandwidth_sharing);
+        exit(EXIT_FAILURE);
+    }
     const double elapsed_seconds =
         (static_cast<double>(sys->local_mem_latency) / 1e9) +
         static_cast<double>(tensor_size) / sys->local_mem_bw;
@@ -500,7 +520,19 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     if (node.is_cpu_op) {
         throw std::runtime_error("Roofline is only available for GPU nodes");
-        return;
+    }
+
+    // Fail-closed configuration check: roofline is enabled, but its two
+    // divisors below were never configured (Sys defaults both to 0 when the
+    // "peak-perf"/"local-mem-bw" keys are missing or non-positive).  Using
+    // them would produce NaN/Inf perf or utilization values.
+    if (sys->peak_perf <= 0.0 || sys->local_mem_bw <= 0.0) {
+        workload_logger_->critical(
+            "roofline is enabled but peak-perf/local-mem-bw are missing or "
+            "non-positive in the system configuration (peak_perf={}, "
+            "local_mem_bw={})",
+            sys->peak_perf, sys->local_mem_bw);
+        exit(EXIT_FAILURE);
     }
 
     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
@@ -527,9 +559,16 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                                                      node_tensor_size);
     }
 
-    double operational_intensity = num_ops / tensor_size;
-    double perf = sys->roofline->get_perf(operational_intensity);
-    double compute_elapsed_time = num_ops / perf;  // sec
+    // A zero-FLOP node has no roofline value at all; skip the divisions and
+    // keep benign zeros instead of 0/0 = NaN (perf is 0 at zero intensity).
+    double operational_intensity = 0.0;
+    double perf = 0.0;
+    double compute_elapsed_time = 0.0;  // sec
+    if (node_num_ops != 0ul) {
+        operational_intensity = num_ops / tensor_size;
+        perf = sys->roofline->get_perf(operational_intensity);
+        compute_elapsed_time = num_ops / perf;  // sec
+    }
     if (sys->local_mem_latency > 0) {
         const double compute_only_elapsed_time = num_ops / sys->peak_perf;
         const double local_mem_elapsed_time =
@@ -598,11 +637,14 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
-        online_stat.operation_intensity = operational_intensity;
         online_stat.compute_utilization = perf / sys->peak_perf;
-        online_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
-        online_stat.is_memory_bound = perf < sys->peak_perf;
+        // Zero-intensity nodes have no memory utilization; leave the field
+        // unset instead of dividing by 0 (a non-finite value fails closed in
+        // the compact online aggregation).
+        if (operational_intensity != 0.0) {
+            online_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         if (sys->trace_enabled) {
             workload_logger_
                 ->debug("operation_intensity={}, perf={}, elapsed_time={} "
@@ -612,8 +654,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         online_stat.compute_utilization.value(),
-                        online_stat.memory_utilization.value(), tensor_size,
-                        num_ops);
+                        online_stat.memory_utilization.value_or(0),
+                        tensor_size, num_ops);
         }
     } else {
         // Static ET and history-preserving online microbenchmarks retain the
@@ -621,8 +663,11 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         auto& op_stat = this->stats->get_operator_statistics(node.global_id);
         op_stat.operation_intensity = operational_intensity;
         op_stat.compute_utilization = perf / sys->peak_perf;
-        op_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
+        // Same zero-denominator skip as the compact online branch above.
+        if (operational_intensity != 0.0) {
+            op_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         op_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
@@ -633,7 +678,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         op_stat.compute_utilization.value(),
-                        op_stat.memory_utilization.value(), tensor_size, num_ops);
+                        op_stat.memory_utilization.value_or(0), tensor_size,
+                        num_ops);
         }
     }
 }

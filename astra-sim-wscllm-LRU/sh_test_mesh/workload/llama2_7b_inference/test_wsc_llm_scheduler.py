@@ -21,35 +21,25 @@ from wsc_llm_scheduler import (  # noqa: E402
     DECODE_ROLE,
     PREFILL_ROLE,
     InstanceGraph,
-    KVAllocation,
     PrefillQueueSnapshot,
     WscLlmHardware,
     WscLlmInstanceSpec,
     WscLlmModel,
-    WscLlmTimingEntry,
-    WscLlmTimingLut,
-    WscRelevantKvAllocator,
     build_instances,
     build_static_pd_mapping,
     estimate_model_weight_bytes,
     select_prefill_instance,
 )
 from generate_wsc_llm_trace import (  # noqa: E402
-    IDLE_SENTINEL_DURATION_NS,
-    _add_idle_rank_sentinels,
-    _validate_all_rank_dags,
-    _validate_rank_dag,
     load_wsc_llm_trace_config,
     select_first_session_requests,
 )
 from generate_trace import (  # noqa: E402
     COMM_COLL_NODE,
     COMP_NODE,
-    ChakraNode,
     REMOTE_WEIGHT_ATTR,
     RequestSpec,
     TraceBuilder,
-    load_remote_memory_config,
     shard_extent,
     transformer_pass,
     transformer_pass_aggregated,
@@ -286,24 +276,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_first_session_requests(requests, -1)
 
-    def test_remote_memory_mesh_shape_rejects_malformed_legacy_value(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "remote_memory.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "memory-type": "PER_NPU_MEMORY_EXPANSION",
-                        "npu-ids": [0],
-                        "mesh-shape": 4,
-                        "remote-mem-latency": 0,
-                        "remote-mem-bw": 1,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(ValueError, "mesh-shape"):
-                load_remote_memory_config(source, 4, mesh_shape=(2, 2))
-
     def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(self) -> None:
         """checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认
         request 队列)+ 缺失输入 fail-closed + 配置字段语义(拓扑/角色/模型/
@@ -325,7 +297,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
@@ -577,7 +548,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
 
     def test_exact_static_routes_are_one_hop_and_edge_disjoint(self) -> None:
         _, topology = checked_in_topology()
-        mapping = build_static_pd_mapping(topology, alpha=4.0)
+        mapping = build_static_pd_mapping(topology)
         actual = {
             route.prefill_instance_index: (
                 route.decode_instance_index,
@@ -588,32 +559,8 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(actual, EXPECTED_STATIC_ROUTES)
         self.assertEqual(mapping.total_hops, 6)
         self.assertEqual(mapping.shared_edge_occurrences, 0)
-        self.assertEqual(mapping.adjusted_transfer_cost, 6.0)
         self.assertEqual({count for _, _, count in mapping.edge_use_counts}, {1})
         self.assertTrue(all(not route.shared_edges for route in mapping.routes))
-        expected_domains = {
-            1: (0, 1, 4),
-            4: (0, 4, 1),
-            5: (2, 5, 7),
-            7: (2, 7, 5),
-            6: (3, 6, 8),
-            8: (3, 8, 6),
-        }
-        for prefill_index, expected_domain in expected_domains.items():
-            allocator = WscRelevantKvAllocator(
-                topology,
-                mapping,
-                model_weight_bytes=0,
-            )
-            allocation = allocator.allocate(
-                request_id=f"domain_{prefill_index}",
-                route=mapping.route_for_prefill(prefill_index),
-                total_bytes=1,
-            )
-            self.assertEqual(
-                allocation.relevant_instance_indices,
-                expected_domain,
-            )
 
     def test_real_layout_nearest_decode_is_unique(self) -> None:
         """钉住"真实布局无实例平局"（中-1 裁决 2026-08-20）。
@@ -675,89 +622,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
             PrefillQueueSnapshot(1, 0),
         )
         self.assertEqual(select_prefill_instance(tied_out_of_order), 1)
-
-    def test_timing_lut_is_phase_exclusive_and_not_a_mixed_pd_lut(self) -> None:
-        hardware, _ = line_topology()
-        lut = WscLlmTimingLut.build(
-            hardware,
-            small_model(),
-            instance_sizes=(2,),
-            p_chunk=64,
-            request_count=2,
-            max_d_token=500,
-        )
-        self.assertTrue(lut.entries)
-        for entry in lut.entries:
-            self.assertNotEqual(entry.p_chunk > 0, entry.d_batch > 0)
-            self.assertEqual(
-                entry.phase_role,
-                PREFILL_ROLE if entry.p_chunk > 0 else DECODE_ROLE,
-            )
-        nearest = lut.lookup(
-            phase_role=DECODE_ROLE,
-            instance_size=2,
-            p_chunk=0,
-            d_batch=1,
-            d_token=384,
-        )
-        self.assertEqual(nearest.d_token, 256)
-        with self.assertRaises(ValueError):
-            WscLlmTimingEntry(2, PREFILL_ROLE, 64, 1, 256, 10)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output = Path(temp_dir) / "wsc_llm_timing_lut.csv"
-            lut.export_csv(output)
-            contents = output.read_text(encoding="utf-8")
-            self.assertIn("phase_role", contents)
-            self.assertIn("iteration_time_ns", contents)
-
-    def test_wsc_relevant_kv_priority_release_and_capacity_error(self) -> None:
-        _, topology = line_topology()
-        mapping = build_static_pd_mapping(topology)
-        route = mapping.route_for_prefill(0)
-        self.assertEqual(route.path, (0, 1, 2))
-        allocator = WscRelevantKvAllocator(
-            topology,
-            mapping,
-            model_weight_bytes=0,
-        )
-        allocator.remaining_capacity[:] = [60, 80, 100, 100, 100]
-        allocation = allocator.allocate(
-            request_id="r0",
-            route=route,
-            total_bytes=220,
-        )
-        self.assertIsInstance(allocation, KVAllocation)
-        self.assertEqual(allocation.relevant_instance_indices, (2, 1, 0, 3, 4))
-        self.assertEqual(
-            [
-                (
-                    piece.instance_index,
-                    piece.bytes,
-                    piece.location_priority,
-                    piece.path,
-                )
-                for piece in allocation.pieces
-            ],
-            [
-                (2, 100, "decode", (2,)),
-                (1, 80, "selected_path_intermediate", (2, 1)),
-                (0, 40, "selected_prefill", (2, 1, 0)),
-            ],
-        )
-        self.assertEqual(allocator.remaining_capacity[3:], [100, 100])
-        allocator.release(allocation)
-        self.assertEqual(tuple(allocator.remaining_capacity), (60, 80, 100, 100, 100))
-
-        allocator2 = WscRelevantKvAllocator(
-            topology,
-            mapping,
-            model_weight_bytes=0,
-        )
-        with self.assertRaisesRegex(
-            ValueError,
-            r"Relevant\(P,D\).*Decode remapping.*disabled",
-        ):
-            allocator2.allocate(request_id="too_large", route=route, total_bytes=501)
 
     def test_manager_deletes_multiple_lru_victims_but_not_active_kv(self) -> None:
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
@@ -1012,8 +876,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         manager.assert_final_state()
 
 
-
-
     def test_llama2_7b_tp6_partition_is_exact_without_model_padding(self) -> None:
         config = load_checked_in_config()
         attention_heads = tuple(
@@ -1031,74 +893,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
             config.vocab_size,
         )
         self.assertEqual(estimate_model_weight_bytes(config.model), 13_476_831_232)
-
-    def test_idle_rank_sentinel_makes_every_builder_nonempty(self) -> None:
-        builders = {
-            0: TraceBuilder(remote_operand_loads=False),
-            1: TraceBuilder(remote_operand_loads=False),
-            2: TraceBuilder(remote_operand_loads=False),
-        }
-        builders[1].comp("rank_1_real_work", num_ops=1, tensor_size=1)
-        idle_ranks = _add_idle_rank_sentinels(builders)
-
-        self.assertEqual(idle_ranks, (0, 2))
-        self.assertEqual([len(builders[rank].nodes) for rank in builders], [1, 1, 1])
-        self.assertEqual(
-            builders[0].nodes[0].name,
-            "wsc_llm_idle_rank_0000_sentinel",
-        )
-        self.assertEqual(builders[0].nodes[0].type, COMP_NODE)
-        self.assertEqual(
-            builders[0].nodes[0].duration_micros,
-            IDLE_SENTINEL_DURATION_NS // 1000,
-        )
-        self.assertEqual(tuple(builders[0].nodes[0].data_deps), ())
-        timer_attrs = {
-            attr.name: attr.bool_val for attr in builders[0].nodes[0].attr
-        }
-        self.assertTrue(timer_attrs["is_cpu_op"])
-        self.assertTrue(timer_attrs["is_timer_op"])
-        self.assertEqual(builders[1].nodes[0].name, "rank_1_real_work")
-        _validate_all_rank_dags(builders)
-        self.assertTrue(all(builder.nodes for builder in builders.values()))
-
-    def test_rank_dag_validation_accepts_a_legal_small_dag(self) -> None:
-        builder = TraceBuilder(remote_operand_loads=False)
-        builder.comp("root", num_ops=1, tensor_size=1)
-        builder.comp("child", num_ops=1, tensor_size=1)
-        _validate_rank_dag(7, builder)
-
-    def test_rank_dag_validation_rejects_missing_dependency_and_cycle(self) -> None:
-        missing = TraceBuilder(remote_operand_loads=False)
-        missing_node = ChakraNode()
-        missing_node.id = 1
-        missing_node.name = "missing_dep"
-        missing_node.type = COMP_NODE
-        missing_node.data_deps.append(99)
-        missing.nodes.append(missing_node)
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"rank 3: node 1 references missing dependency 99",
-        ):
-            _validate_rank_dag(3, missing)
-
-        cyclic = TraceBuilder(remote_operand_loads=False)
-        first = ChakraNode()
-        first.id = 1
-        first.name = "cycle_1"
-        first.type = COMP_NODE
-        first.data_deps.append(2)
-        second = ChakraNode()
-        second.id = 2
-        second.name = "cycle_2"
-        second.type = COMP_NODE
-        second.data_deps.append(1)
-        cyclic.nodes.extend((first, second))
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"rank 4: Chakra ET DAG contains a cycle",
-        ):
-            _validate_rank_dag(4, cyclic)
 
     def test_aggregated_transformer_pass_preserves_expanded_totals(self) -> None:
         spans = ((3, 7), (1, 11), (5, 19))

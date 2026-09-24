@@ -223,7 +223,7 @@ def _ancestors_of(edges, rank, node_id):
 
 def _store_tail_ids(builder, session=VICTIM):
     """登记表里该会话的 (edge_rank, mem_store_id) 对。"""
-    return [(edge, store) for edge, store, _ack
+    return [(edge, store) for edge, store
             in builder.pending_store_tails.get(session, ())]
 
 

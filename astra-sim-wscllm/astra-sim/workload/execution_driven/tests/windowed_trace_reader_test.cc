@@ -643,7 +643,6 @@ void test_calendar_out_of_order_turn0() {
         "session_1,0,session_1_request_0,100,50,100,,d",
         "session_2,0,session_2_request_0,100,50,300,,d",
     });
-    expect(true, "fixture written");  // silence unused-warning style checks
 
     EventQueue eq;
     DecisionMailbox mailbox;
@@ -876,14 +875,31 @@ void test_provenance_tampering() {
                "index)");
     }
 
-    // Wrong data_rows only: still fail-closed.
+    // Wrong data_rows only: still fail-closed. Every other compared field
+    // carries the REAL provenance (the all-wrong arm above trips on the
+    // digest long before the row count, so this arm rebuilds the sidecar
+    // from a fresh ungated probe to isolate the data_rows check).
+    std::remove(sidecar.c_str());
     {
+        EventQueue eq;
+        DecisionMailbox mailbox;
+        ServiceCoordinator svc;
+        RequestIngress ingress;
+        ingress.bind(&eq, &mailbox, &svc);
+        WindowedTraceReader probe(csv, ingress);
+        probe.pump();
+        const auto& p = probe.provenance();
         std::ofstream out(sidecar);
-        out << "{\"schema\":1,\"csv_fnv1a64\":0,\"csv_bytes\":0,"
-               "\"data_rows\":999,\"sessions\":0,\"turn0_count\":0,"
-               "\"turn0_arrival_min_ns\":0,\"turn0_arrival_max_ns\":0,"
-               "\"turn0_adjacent_inversions\":0,"
-               "\"session_blocks_contiguous\":true}\n";
+        out << "{\"schema\":1,\"generator_version\":\"fixture\","
+               "\"csv_sha256\":\"human-only\",\"csv_fnv1a64\":"
+            << p.fnv1a64 << ",\"csv_bytes\":" << p.csv_bytes
+            << ",\"data_rows\":999,\"sessions\":" << p.sessions
+            << ",\"turn0_count\":" << p.turn0_count
+            << ",\"turn0_arrival_min_ns\":" << p.turn0_arrival_min_ns
+            << ",\"turn0_arrival_max_ns\":" << p.turn0_arrival_max_ns
+            << ",\"turn0_adjacent_inversions\":"
+            << p.turn0_adjacent_inversions
+            << ",\"session_blocks_contiguous\":true}\n";
     }
     expect_exit_code(
         [&]() {
@@ -1055,23 +1071,28 @@ void test_gate_trips_on_delayed_submission() {
            "audit row records declared=2000 discovered=5000 "
            "effective=5001 late_by=3001");
 
-    // Normal path (fresh ingress, no backpressure): gate passes.
+    // Normal path (fresh ingress, no backpressure): gate passes. Default
+    // construction = unbounded max_arrival_ns; an explicit bound here would
+    // reject the fixture's 1000/2000 ns arrivals before any Submit and make
+    // both assertions below vacuously true (zero-submission arm).
     {
         EventQueue eq2;
         DecisionMailbox mailbox2;
         ServiceCoordinator svc2;
         RequestIngress ingress2;
         ingress2.bind(&eq2, &mailbox2, &svc2);
-        WindowedTraceReader reader2(csv, ingress2, 128);
+        WindowedTraceReader reader2(csv, ingress2);
         reader2.pump();
         ingress2.drain_commands();
         while (!eq2.finished()) {
             eq2.proceed();
         }
+        const auto normal = reader2.audit_static_arrivals();
+        expect(normal.turn0_submitted == 2,
+               "normal path: both turn-0 arrivals admitted");
         expect(ingress2.late_static_submit_count() == 0,
                "normal path: no late static submits");
-        expect(reader2.audit_static_arrivals().gate_ok,
-               "normal path: arrival gate passes");
+        expect(normal.gate_ok, "normal path: arrival gate passes");
     }
     std::remove(csv.c_str());
     std::printf("[fixture] part Q PASS: gate trips on delayed submission, "

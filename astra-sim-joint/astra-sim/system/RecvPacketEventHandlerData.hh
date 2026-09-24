@@ -20,15 +20,13 @@ class RecvPacketEventHandlerData : public BasicEventHandlerData {
     RecvPacketEventHandlerData(BaseStream* owner,
                                int sys_id,
                                EventType event,
-                               int vnet,
-                               int stream_id);
+                               int vnet);
 
     Workload* workload;
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
     CustomAlgorithm* custom_algorithm;
     int vnet;
-    int stream_id;
     bool message_end;
     Tick ready_time;
 };

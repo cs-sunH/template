@@ -32,8 +32,7 @@
     "memory-type": "PER_NPU_MEMORY_EXPANSION",
     "bandwidth-gbps": 512.0,
     "latency-ns": 100,
-    "npu-selection": "mesh-boundary",
-    "logical-pool": "unified-kv-cache-pool"
+    "npu-selection": "mesh-boundary"
   },
   "compute": {
     "peak-perf-tflops": 261.12

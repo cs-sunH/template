@@ -129,6 +129,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
     } else {
         std::vector<CollectiveImpl*> collective_implementation =
             generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
+        // Ownership: the pointers returned by the lookup are shared registry
+        // entries and must never be deleted through the plan. Only when the
+        // multi-dimensional implementation is replaced below does the plan
+        // take ownership of the freshly allocated Ring implementation.
+        bool implementations_should_be_removed = false;
         if (collective_implementation.size() > 1) {
             // This means that everything fell through and we got a native collective that is multi-dimensional.
             // (Custom collective always assumes 1 dimension).
@@ -138,6 +143,7 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             // was a good choice.
             collective_implementation = std::vector<CollectiveImpl*>{
                 new CollectiveImpl(CollectiveImplType::Ring)};
+            implementations_should_be_removed = true;
         }
         LogicalTopology* logical_topology = new RingTopology(
             RingTopology::Dimension::Local, generator->id, involved_NPUs);
@@ -145,7 +151,8 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
         bool should_be_removed = true;
         comm_plans[comm_type] =
             new CollectivePlan(logical_topology, collective_implementation,
-                               dimensions_involved, should_be_removed, true);
+                               dimensions_involved, should_be_removed,
+                               implementations_should_be_removed);
         return comm_plans[comm_type];
     }
     assert(false);

@@ -26,13 +26,7 @@ HardwareResource::HardwareResource(
       num_in_flight_gpu_comm_ops(0),
       num_in_flight_gpu_comp_ops(0) {
 
-    num_cpu_ops = 0;
-    num_gpu_ops = 0;
-    num_gpu_comms = 0;
-
-    tics_cpu_ops = 0;
     tics_gpu_ops = 0;
-    tics_gpu_comms = 0;
     tics_hbm_dma_ops = 0;
 
     // cpu_ops_node = NULL;
@@ -48,13 +42,11 @@ void HardwareResource::occupy(
     if (node->is_cpu_op()) {
         assert(num_in_flight_cpu_ops == 0);
         ++num_in_flight_cpu_ops;
-        ++num_cpu_ops;
         cpu_ops_node.emplace(node->id());
     } else {
         if (node->type() == ChakraNodeType::COMP_NODE) {
             assert(num_in_flight_gpu_comp_ops == 0);
             ++num_in_flight_gpu_comp_ops;
-            ++num_gpu_ops;
             // gpu_ops_node = node;
             gpu_ops_node.emplace(node->id());
         } else {
@@ -63,7 +55,6 @@ void HardwareResource::occupy(
             }
             assert(num_in_flight_gpu_comm_ops == 0);
             ++num_in_flight_gpu_comm_ops;
-            ++num_gpu_comms;
             // gpu_comms_node = node;
             gpu_comms_node.emplace(node->id());
         }
@@ -120,9 +111,6 @@ bool HardwareResource::is_available(
                 if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
                     return true;
                 }
-                if (num_in_flight_gpu_comm_ops == 0) {
-                    return true;
-                }
                 return false;
             }
         }
@@ -138,7 +126,6 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
     if (node.is_cpu_op) {
         assert(num_in_flight_cpu_ops == 0);
         ++num_in_flight_cpu_ops;
-        ++num_cpu_ops;
         if (retain_node_ids_) {
             cpu_ops_node.emplace(node.global_id);
         }
@@ -150,7 +137,6 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         // count, not a single slot. The static ETFeederNode path above keeps
         // its single-slot assert (static mode never runs concurrent COMPs).
         ++num_in_flight_gpu_comp_ops;
-        ++num_gpu_ops;
         if (retain_node_ids_) {
             gpu_ops_node.emplace(node.global_id);
         }
@@ -160,7 +146,6 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
             }
             assert(num_in_flight_gpu_comm_ops == 0);
             ++num_in_flight_gpu_comm_ops;
-            ++num_gpu_comms;
             if (retain_node_ids_) {
                 gpu_comms_node.emplace(node.global_id);
             }
@@ -234,15 +219,4 @@ bool HardwareResource::is_available(const ExecutionDriven::NodeView& node) const
         return true;
     }
     return num_in_flight_gpu_comm_ops == 0;
-}
-
-void HardwareResource::report() {
-    cout << "num_cpu_ops: " << num_cpu_ops << endl;
-    cout << "num_gpu_ops: " << num_gpu_ops << endl;
-    cout << "num_gpu_comms: " << num_gpu_comms << endl;
-
-    cout << "tics_cpu_ops: " << tics_cpu_ops << endl;
-    cout << "tics_gpu_ops: " << tics_gpu_ops << endl;
-    cout << "tics_gpu_comms: " << tics_gpu_comms << endl;
-    cout << "tics_hbm_dma_ops: " << tics_hbm_dma_ops << endl;
 }

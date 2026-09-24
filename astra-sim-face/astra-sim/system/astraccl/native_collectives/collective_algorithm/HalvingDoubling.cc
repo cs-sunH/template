@@ -25,13 +25,11 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->data_size = data_size;
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
     this->parallel_reduce = 1;
-    this->total_packets_sent = 0;
     this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
     this->toggle = false;
-    this->name = Name::HalvingDoubling;
     if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
         transmition = MemBus::Transmition::Fast;
     } else {
@@ -119,9 +117,6 @@ void HalvingDoubling::run(EventType event, CallData* data) {
 }
 
 void HalvingDoubling::release_packets() {
-    for (auto packet : locked_packets) {
-        packet->set_notifier(this);
-    }
     if (NPU_to_MA == true) {
         (new PacketBundle(stream->owner, stream, locked_packets, processed,
                           send_back, msg_size, transmition))
@@ -137,8 +132,6 @@ void HalvingDoubling::release_packets() {
 void HalvingDoubling::process_stream_count() {
     if (remained_packets_per_message > 0) {
         remained_packets_per_message--;
-    }
-    if (id == 0) {
     }
     if (remained_packets_per_message == 0 && stream_count > 0) {
         stream_count--;
@@ -181,7 +174,6 @@ void HalvingDoubling::reduce() {
     process_stream_count();
     packets.pop_front();
     free_packets--;
-    total_packets_sent++;
 }
 
 bool HalvingDoubling::iteratable() {
@@ -204,7 +196,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
@@ -216,7 +207,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
@@ -261,7 +251,7 @@ bool HalvingDoubling::ready() {
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, packet.stream_id);
+        packet.preferred_vnet, stream->stream_id);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,

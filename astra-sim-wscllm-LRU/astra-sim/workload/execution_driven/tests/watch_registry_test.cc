@@ -33,7 +33,7 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-wscllm-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_WatchRegistryTest
 Exit code 0 on ALL PASS.
@@ -402,8 +402,7 @@ void test_communicator_lifetime() {
 }
 
 void test_online_hardware_counters_without_ids() {
-    AstraSim::HardwareResource online(
-        1, 7, ExecutionMode::Online);
+    AstraSim::HardwareResource online(7, ExecutionMode::Online);
     expect(!online.tracks_node_ids(),
            "G: online HardwareResource disables diagnostic ID hashes");
     NodeView first;
@@ -422,7 +421,7 @@ void test_online_hardware_counters_without_ids() {
                online.gpu_ops_node.empty(),
            "G: online releases return the counter to zero");
 
-    AstraSim::HardwareResource static_resource(1, 7);
+    AstraSim::HardwareResource static_resource(7);
     expect(static_resource.tracks_node_ids(),
            "G: static HardwareResource preserves ID diagnostics");
 }

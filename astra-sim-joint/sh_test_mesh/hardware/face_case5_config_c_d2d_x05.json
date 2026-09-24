@@ -1,0 +1,53 @@
+{
+  "schema-version": 1,
+  "slug": "face_case5_config_c_d2d_x05",
+  "label": "C / FACE Case 5 D2D x0.5 twin (2025 GB/s)",
+  "paper-case": "FACE Case 5 (500 mm^2 compute die, 4 HBM2E chiplets)",
+  "mesh": {
+    "rows": 9,
+    "columns": 6,
+    "topology-by-network-dimension": ["Line", "Line"]
+  },
+  "local-hbm": {
+    "bandwidth-gbps": 1640.0,
+    "latency-ns": 100,
+    "capacity-profiles": {
+      "paper-64gib": {
+        "bytes": 68719476736,
+        "label": "64 GiB paper configuration",
+        "note": "FACE Case 5 provides 64 GiB of local HBM per NPU in the paper configuration."
+      },
+      "validation-160gib": {
+        "bytes": 171798691840,
+        "label": "160 GiB validation extension",
+        "note": "Validation-only capacity extension for workloads that require 160 GiB of local HBM per NPU."
+      }
+    }
+  },
+  "d2d": {
+    "bandwidth-gbps": 2025.0,
+    "latency-ns": 5
+  },
+  "remote-memory": {
+    "memory-type": "PER_NPU_MEMORY_EXPANSION",
+    "bandwidth-gbps": 512.0,
+    "latency-ns": 100,
+    "npu-selection": "mesh-boundary",
+    "logical-pool": "unified-kv-cache-pool"
+  },
+  "compute": {
+    "peak-perf-tflops": 261.12
+  },
+  "notes": [
+    "The physical mesh is row-major with 9 rows and 6 columns.",
+    "The analytical network lists dimensions as columns then rows.",
+    "Peak compute is an explicit WSC-LLM comparison-group-C fallback because the FACE Case 5 peak is unpublished.",
+    "D2D latency is modeled as a per-hop adjacent-link latency.",
+    "The remote-memory pool is attached to every physical mesh-boundary NPU.",
+    "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
+    "The capacity profile describes local HBM placement per NPU.",
+    "D2D bandwidth twin of face_case5_config_c.json (WP7 hardware twin set): only d2d.bandwidth-gbps differs from the base source (4050.0 -> 2025.0 GB/s, x0.5); every other field is identical.",
+    "Derived rho = B_D2D/B_HBM = 2025.0/1640.0 ~= 1.2348 (simplified analytical anchor, design doc section 1.2); the anchor's parity band d <= rho narrows versus the base configuration's 4050/1640 ~= 2.4695.",
+    "Twin set: _d2d_x05 (2025 GB/s) / _d2d_x2 (8100 GB/s) / _d2d_sub (1200 GB/s). The _d2d_sub tier is a rho < 1 configuration: the anchor's bandwidth-parity condition fails even for a single flow; this does not preclude system-level gains from lower remote compute load or smaller target capacity pressure, the benefit direction is not preset, and the selection-rate-profile domain shape is an open research question (C20 item 5)."
+  ]
+}

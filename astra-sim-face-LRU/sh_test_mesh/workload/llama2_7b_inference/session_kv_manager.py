@@ -33,14 +33,14 @@ from typing import Any, Iterable, Optional, Sequence
 # ---------------------------------------------------------------------------
 # Legacy two-state action vocabulary (kept importable: face_scheduler.py /
 # generate_face_trace.py / graph_batch_builder.py re-export or compare these
-# names; after B2 the manager itself never produces RECOMPUTE decisions).
+# names; after B2 the manager itself never produces RECOMPUTE decisions and
+# the RECOMPUTE constant itself is gone — B2 deleted the recompute path).
 # ---------------------------------------------------------------------------
 RESIDENT = "RESIDENT"
 EVICTED = "EVICTED"
 NO_HISTORY = "NO_HISTORY"
 LOCAL_HIT = "LOCAL_HIT"
 NOC_MIGRATE = "NOC_MIGRATE"
-RECOMPUTE = "RECOMPUTE"
 
 # B2 three-state session locations and the restore-path history actions.
 LOCAL_HBM = "local_hbm"
@@ -372,12 +372,6 @@ class SessionKVSnapshot:
     last_request_id: Optional[str] = None
     evicted_at_ns: Optional[int] = None
     evicted_by_request_id: Optional[str] = None
-
-    @property
-    def context_tokens(self) -> int:
-        """Compatibility alias used by manifest and small fixture code."""
-
-        return self.logical_context_tokens
 
 
 @dataclass
@@ -723,10 +717,6 @@ class SessionKVCacheManager:
         """D4 (2026-09-05): 深缺口累计计数(passive 观测口径,预期恒 0)。"""
         return self._deep_gap_events
 
-    @property
-    def node_states(self) -> tuple[NodeHBMState, ...]:
-        return tuple(self._rank_states[rank] for rank in sorted(self._rank_states))
-
     def session_snapshot(self, session_id: str) -> Optional[SessionKVSnapshot]:
         state = self._sessions.get(session_id)
         return None if state is None else self._snapshot_of(state)
@@ -774,13 +764,6 @@ class SessionKVCacheManager:
         else:
             ranks = tuple(self.topology.instance(instance_index).ranks)
         return tuple(self._rank_states[rank].snapshot() for rank in ranks)
-
-    def final_session_counts(self) -> tuple[int, int]:
-        resident = sum(
-            state.location in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
-            for state in self._sessions.values()
-        )
-        return resident, len(self._sessions) - resident
 
     def nearest_edge(self, rank: int) -> int:
         """B2: nearest remote-memory edge port for a rank."""

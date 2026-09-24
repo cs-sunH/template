@@ -55,10 +55,19 @@ token):
        under/overflow, (0, 1e-9) "below clock resolution", and anything
        above 1e9; failed parses leave out untouched.
 
-Build (from template/astra-sim-wscllm):
-  g++ -std=c++17 -I . astra-sim/workload/execution_driven/tests/cli_online_test.cc \
-      astra-sim/workload/execution_driven/OnlineCli.cc \
-      -o /tmp/cli_online_test && /tmp/cli_online_test
+Build: registered in the CMake build (M20) as target
+  AstraSim_Analytical_Congestion_Aware_CliOnlineTest in
+  astra-sim/network_frontend/analytical/CMakeLists.txt (same shared-source +
+  execution_driven recipe as the sibling fixtures; links AstraSim and
+  Analytical_Congestion_Aware). Configure per README §2 (the
+  build/astra_analytical aggregation with
+  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON), then:
+    cmake --build build/astra_analytical/build_congestion_aware \
+          --target AstraSim_Analytical_Congestion_Aware_CliOnlineTest -j
+    build/astra_analytical/build_congestion_aware/bin/\
+AstraSim_Analytical_Congestion_Aware_CliOnlineTest
+  (the binary is emitted to <build-tree>/bin/ via the targets'
+  RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
 #include <cassert>

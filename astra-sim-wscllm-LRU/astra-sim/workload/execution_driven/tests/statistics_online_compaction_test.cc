@@ -299,8 +299,8 @@ void test_history_preserving_legacy_post_processing_succeeds(
 
     expect(stats.get_wall_time() == 30,
            "history-preserving legacy post-processing keeps wall time");
-    expect(stats.get_type_time(
-               Statistics::OperatorStatistics::OperatorType::GPU) == 20,
+    expect(stats.calculate_type_time_in_window(
+               Statistics::OperatorStatistics::OperatorType::GPU, 0, 30) == 20,
            "history-preserving legacy post-processing keeps GPU union");
 }
 
@@ -385,11 +385,9 @@ void test_cpu_no_util_and_comm_state_stay_compact() {
     compact_start(stats, comm, comm_state, 20);
     comm_state.comm_size = 4096;
     compact_end(stats, comm, comm_state, 30);
-    comm_state.network_bandwidth = 409.6;
 
     expect(comm_state.completed && comm_state.comm_size.has_value() &&
-               comm_state.comm_size.value() == 4096 &&
-               comm_state.network_bandwidth.has_value(),
+               comm_state.comm_size.value() == 4096,
            "compact NodeStore state retains terminal communication facts");
     expect(stats.retained_online_operator_count() == 0,
            "CPU, no-util GPU, and comm state never create map entries");

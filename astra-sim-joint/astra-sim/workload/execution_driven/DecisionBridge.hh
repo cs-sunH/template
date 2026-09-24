@@ -45,6 +45,12 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     affected_ranks[] the epoch's affected rank set (v1); snapshot_handle
     the placeholder (v1, expiry rule frozen in the contract); snapshot is
     the v0 reserved field kept empty for backward comprehension.
+    C6 (WP2, --link-telemetry, default OFF): when the online main installs
+    the LinkTelemetryProvider, requests additionally carry the top-level
+    link_telemetry[] array (additive, sibling of ledger_summary; see
+    LinkTelemetryProvider for the element schema and the F5/F6 semantics).
+    Flag off = field absent; the Python side only pins schema_version and
+    tolerates the additive field either way.
   - Response fields: {schema_version, batch_id, source_delivery_sequence,
     nodes[], parent_edges[], watches[], assignments[], kv_actions[],
     future_alarms[], error?}. The inner node/edge/watch/assignment/kv-action
@@ -78,6 +84,7 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
 #define EXECUTION_DRIVEN_DECISIONBRIDGE_HH
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include <json/json.hpp>
@@ -91,6 +98,29 @@ namespace ExecutionDriven {
 /// Bridge protocol schema version (frozen, v1 -- phase 4 §7.1; this
 /// header and the Python validator are the authority).
 inline constexpr int kDecisionBridgeSchemaVersion = 1;
+
+/// C6 (WP2 link telemetry, joint 遥测改造, --link-telemetry): optional
+/// per-delivery top-level link_telemetry[] payload provider, installed by
+/// the online main when the flag is on. Each element carries
+/// {link_id, served_bytes, active_ns, window_start_ns, window_end_ns}:
+///   - window = one decision epoch's physical duration (F5: adaptive, no
+///     new constants; window bounds are the previous and current delivery
+///     ticks);
+///   - served_bytes/active_ns = differentials of the fluid link
+///     observer's cumulative totals (const link_observer_totals());
+///   - coverage (F6): NoC leg only -- collectives included (every
+///     collective routes sim_send -> start_flow), pool ports excluded
+///     (Workload issue_remote_mem -> AnalyticalRemoteMemory; registry
+///     model owns that contention).
+/// The provider runs inside deliver_and_receive on the simulation thread,
+/// exactly once per delivery epoch (the 1:1 backpressure guarantees no
+/// double sampling). Unset provider = the field is omitted entirely, so
+/// flag-off runs serialize byte-identical requests (fail-closed default;
+/// StateDelta and the frozen v1 schema fields are untouched -- the array
+/// rides as an additive top-level sibling of ledger_summary and never
+/// occupies a snapshot reserved slot).
+using LinkTelemetryProvider =
+    std::function<nlohmann::json(const StateDelta&)>;
 
 /// GraphBatch: the C++<-Python reply of one delivery epoch.
 /// C1 (2026-08-29): the batch is TYPED. The pre-C1 struct carried the six
@@ -178,15 +208,26 @@ class FileDecisionBridge : public DecisionBridge {
     /// true. Python holds the write end from serve_forever start to exit.
     void open_notify();
 
+    /// C6 (WP2, --link-telemetry): install the link telemetry provider.
+    /// Once installed, every request_<seq>.json gains the top-level
+    /// link_telemetry[] array (the provider's return value; see
+    /// LinkTelemetryProvider). Never installed = the field is absent.
+    /// Legal only before the first delivery (the main installs it at
+    /// startup wiring; a mid-run swap would change the request schema
+    /// between epochs of one run).
+    void set_link_telemetry_provider(LinkTelemetryProvider provider);
+
     /// Phase-6 (方案 §9.1) per-run channel stats. Cumulative across the run;
     /// zero for bridges that never deliver. Measured from the C++ side:
     ///   - roundtrip_count / roundtrip_ns: deliver_and_receive calls and the
     ///     cumulative wall ns of the full blocking round trip (write request
     ///     + notify + wait for Python + read response);
-    ///   - channel_bytes: JSON payload bytes written AND read through the
-    ///     channel (request_<seq>.json + response_<seq>.json +
-    ///     commit_ack_<seq>.json; the C++ side counts its own dump size,
-    ///     which equals the on-disk file bytes);
+    ///   - channel_bytes: JSON payload bytes that crossed the channel
+    ///     (request_<seq>.json + response_<seq>.json + commit_ack_<seq>.json;
+    ///     B1 (2026-08-23): the request/ack sides count their own written
+    ///     body bytes, while the response side contributes the REAL on-disk
+    ///     response file size -- stat before the unlink, matching what the
+    ///     Python side actually wrote; DecisionBridge.cc for the details);
     ///   - forced_flush_count: one per atomic JSON file write
     ///     (write_file_atomic's out.flush(); 方案 §15: 正式日志无逐节点强制
     ///     flush -- 该计数必须为 O(deliveries) 而非 O(nodes)).
@@ -228,6 +269,8 @@ class FileDecisionBridge : public DecisionBridge {
     // Mutable: write_file_atomic() is const (the phase-1 contract) but the
     // phase-6 channel accounting is a per-run observation, not bridge state.
     mutable Stats stats_;
+    // C6 (WP2, --link-telemetry): empty = telemetry off (field omitted).
+    LinkTelemetryProvider link_telemetry_provider_;
 };
 
 }  // namespace ExecutionDriven

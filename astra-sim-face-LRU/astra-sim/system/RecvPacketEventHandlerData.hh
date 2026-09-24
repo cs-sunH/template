@@ -29,7 +29,6 @@ class RecvPacketEventHandlerData : public BasicEventHandlerData {
     CustomAlgorithm* custom_algorithm;
     int vnet;
     int stream_id;
-    bool message_end;
     Tick ready_time;
 };
 

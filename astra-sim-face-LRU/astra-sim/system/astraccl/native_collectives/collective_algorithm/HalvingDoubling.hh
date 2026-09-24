@@ -33,7 +33,6 @@ class HalvingDoubling : public Algorithm {
     bool ready();
     void exit();
 
-    RingTopology::Direction dimension;
     MemBus::Transmition transmition;
     int zero_latency_packets;
     int non_zero_latency_packets;
@@ -51,7 +50,6 @@ class HalvingDoubling : public Algorithm {
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
-    long total_packets_sent;
     long total_packets_received;
     uint64_t msg_size;
     std::list<MyPacket*> locked_packets;

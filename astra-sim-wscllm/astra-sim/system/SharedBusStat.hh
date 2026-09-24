@@ -134,15 +134,19 @@ class SharedBusStat : public BasicEventHandlerData {
     }
 
     void take_bus_stats_average() {
-        total_shared_bus_transfer_queue_delay /= shared_request_counter;
-        total_shared_bus_transfer_delay /= shared_request_counter;
-        total_shared_bus_processing_queue_delay /= shared_request_counter;
-        total_shared_bus_processing_delay /= shared_request_counter;
+        if (shared_request_counter != 0) {
+            total_shared_bus_transfer_queue_delay /= shared_request_counter;
+            total_shared_bus_transfer_delay /= shared_request_counter;
+            total_shared_bus_processing_queue_delay /= shared_request_counter;
+            total_shared_bus_processing_delay /= shared_request_counter;
+        }
 
-        total_mem_bus_transfer_queue_delay /= mem_request_counter;
-        total_mem_bus_transfer_delay /= mem_request_counter;
-        total_mem_bus_processing_queue_delay /= mem_request_counter;
-        total_mem_bus_processing_delay /= mem_request_counter;
+        if (mem_request_counter != 0) {
+            total_mem_bus_transfer_queue_delay /= mem_request_counter;
+            total_mem_bus_transfer_delay /= mem_request_counter;
+            total_mem_bus_processing_queue_delay /= mem_request_counter;
+            total_mem_bus_processing_delay /= mem_request_counter;
+        }
     }
 
     double total_shared_bus_transfer_queue_delay;

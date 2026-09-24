@@ -34,7 +34,9 @@ violations):
             represented by one exact bounded range; type
             in 1..7 (NodeKind); name/inputs_values strings, is_cpu_op /
             is_timer_op booleans; request_id non-empty; stage in
-            {prefill, decode}; generation == stage (prefill 0 / decode 1);
+            {prefill, decode, completion}; generation == stage_generation
+            (prefill -> 0, decode/completion -> 1, the sh_3.0 completion
+            tail carries on from decode);
             compute/comm/coll well-typed; type-7 collective bytes > 0 (also a
             mandatory cheap commit preflight when full validation is off);
             comm src/dst/tag range checks are
@@ -308,7 +310,6 @@ class GraphBatchCommitter {
     /// runs unconditionally at the start of commit().
     std::optional<std::string> mandatory_liveness_preflight(
         const StateDelta& delta, const GraphBatch& batch) const;
-    bool was_json_id_committed(int rank, uint64_t id) const;
     void record_affine_node(int rank, uint64_t json_id, uint64_t store_id);
     void commit_after_preflight(const StateDelta& delta, const GraphBatch& batch,
                                 const std::vector<int>& touched_ranks);

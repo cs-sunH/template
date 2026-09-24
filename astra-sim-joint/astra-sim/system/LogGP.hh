@@ -27,7 +27,7 @@ class LogGP : public Callable {
           EventType trigger_event);
     ~LogGP();
     void process_next_read();
-    void request_read(int bytes,
+    void request_read(uint64_t bytes,
                       bool processed,
                       bool send_back,
                       Callable* callable);

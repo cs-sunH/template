@@ -32,7 +32,6 @@ class BaseStream : public Callable, public StreamStat {
     virtual void init() = 0;
 
     int stream_id;
-    int total_packets_sent;
     SchedulingPolicy preferred_scheduling;
     std::list<CollectivePhase> phases_to_go;
     int current_queue_id;
@@ -43,17 +42,11 @@ class BaseStream : public Callable, public StreamStat {
     Sys* owner;
     DataSet* dataset;
     int steps_finished;
-    int initial_data_size;
     int priority;
     StreamState state;
     bool initialized;
 
     Tick last_phase_change;
-
-    int test;
-    int test2;
-    uint64_t phase_latencies[10];
-
 };
 
 }  // namespace AstraSim

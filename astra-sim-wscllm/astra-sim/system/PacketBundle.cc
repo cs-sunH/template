@@ -52,13 +52,20 @@ void PacketBundle::send_to_NPU() {
 void PacketBundle::call(EventType event, CallData* data) {
     if (needs_processing == true) {
         needs_processing = false;
-        // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
-        // HBM write/read pays the configured fixed access latency.
-        const auto local_mem_access_delay =
-            sys->local_mem_latency +
-            static_cast<uint64_t>(static_cast<double>(size) /
-                                  sys->local_mem_bw * 1e9);
-        this->delay = 3 * local_mem_access_delay;  // write + read + read
+        if (sys->local_mem_bw <= 0) {
+            // local-mem-bw missing or <= 0 falls back to the legacy
+            // behavior (fixed access latency only, README G) instead of
+            // dividing by a zero rate into inf/NaN below.
+            this->delay = 3 * sys->local_mem_latency;  // write + read + read
+        } else {
+            // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
+            // HBM write/read pays the configured fixed access latency.
+            const auto local_mem_access_delay =
+                sys->local_mem_latency +
+                static_cast<uint64_t>(static_cast<double>(size) /
+                                      sys->local_mem_bw * 1e9);
+            this->delay = 3 * local_mem_access_delay;  // write + read + read
+        }
         sys->try_register_event(this, EventType::CommProcessingFinished, data,
                                 this->delay);
         return;

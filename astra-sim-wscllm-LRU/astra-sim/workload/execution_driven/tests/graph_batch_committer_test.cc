@@ -10,8 +10,6 @@ GraphSources, a real WatchRegistry, a real RequestIngress over an EventQueue
 + DecisionMailbox + ServiceCoordinator -- the alarm path schedules a genuine
 future arrival) through:
 
-  Part A  static/pure checks: compute_touched_ranks (sorted unique, rank
-          filtering).
   Part B  deliberately illegal batches (one per Phase-A rule category:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
@@ -89,7 +87,7 @@ committer's own domain rules must still reject them).
 Build: the CMake target
 AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest (build with
 cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-wscllm-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
 Exit code 0 on ALL PASS.
@@ -453,21 +451,6 @@ StateDelta baseline_delta() {
     arrival.payload.decode_length = 10;
     d.events.push_back(arrival);
     return d;
-}
-
-// ----------------------------------------------------------- Part A ------
-void test_static_checks(const Fixture& f) {
-    (void)f;
-    const GraphBatch base = baseline_batch();
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 3) ==
-               std::vector<int>({0, 1, 2}),
-           "A: compute_touched_ranks covers all three ranks");
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 2) ==
-               std::vector<int>({0, 1}),
-           "A: compute_touched_ranks filters out-of-range ranks");
-    // C1: non-object entries can no longer reach this pure helper (the
-    // parse layer rejects them); the rank filter above keeps the tolerance
-    // contract for out-of-range typed values.
 }
 
 // ----------------------------------------------------------- Part B ------
@@ -1906,7 +1889,6 @@ void test_affine_metadata_under_million_node_pressure() {
 }  // namespace
 int main() {
     Fixture f;
-    test_static_checks(f);
     test_negative_cases(f);
     test_validate_and_commit_atomic();
     test_json_id_stamp_wrap_and_recovery();

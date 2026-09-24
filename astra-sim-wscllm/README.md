@@ -574,13 +574,27 @@ reader 基线拷贝 `tests/LegacyOracleWindowedTraceReader`（window=0 全量臂
 队列 CSV——全量 22,816 行 TraceLab 队列实测两臂各 496 条全等、且新臂
 late_static_submit=0），
 `..._LocalHbmBandwidthModelTest`（本地 HBM 带宽竞争数值/join 两序/回退，见 G 节）、
-`..._NodeStoreTest`、`..._AlarmCancellationTest`（可取消 alarm 链路：bucket 清空时
+`..._AlarmCancellationTest`（可取消 alarm 链路：bucket 清空时
 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退
 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket
 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期
 锁定）、`..._RemoteFifoLedgerTest`（RemoteFifoLedger 按 backend 真实端口记账；自带
 PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记账接线，账本
-不启用）等（后三项 2026-08-29 新增，五仓同构）。Python 侧
+不启用）等（后三项 2026-08-29 新增，五仓同构）。
+2026-09-24 修复批接入：`..._CliOnlineTest`（R1–R14 在线 CLI 契约，含 FP1 加固
+词法与看门狗判界回归）、`..._EventQueueDeferredTest`（EventQueue tick 末收口 +
+同 tick deferred 通道 + FluidScheduler deferred-flush 集成回归）、
+`..._IngressIdleTest`（IDLE 五态生命周期 + FP1 边界 9 场景）——三者原仅头注
+g++ 手工可达（孤儿测试），现均为前端 CMake 正式目标、随主构建落 bin/ 直跑
+（未注册 ctest，不进默认用例集）；同批 6 个既有单测目标的输出目录统一归位
+bin/（改前落在前端默认目录，按本文档 bin/ 路径执行找不到文件）。
+例外：`..._NodeStoreTest` **不在无参数直跑之列**——part C（ETFeederGraphSource
+适配器）需要 `--fixture-et=` 指向合成 trace，先跑
+`python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py`
+生成（缺省输出 `sh_test_mesh/generated/completion_fixture/fixture.0.et`，该目录
+gitignored、裸仓不存在），再以
+`--fixture-et=sh_test_mesh/generated/completion_fixture/fixture.0.et` 运行；
+缺参时打印 `FAIL: --fixture-et is required` 并以退出码 1 结束。Python 侧
 `online/test_propagating_tail.py`（`online_scheduler_base.py` 的在途尾部观测器
 PropagatingTailTracker：对到达未完成请求、未 ack 交付、未确认 provisional KV 动作
 三类在途工作记 current/peak/按来源计数，超限 fail-closed 报错、绝不截断；8 用例，

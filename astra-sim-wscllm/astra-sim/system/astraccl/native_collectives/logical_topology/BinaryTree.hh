@@ -36,7 +36,6 @@ class BinaryTree : public BasicLogicalTopology {
     int get_left_child_id(int id);
     int get_right_child_id(int id);
     Type get_node_type(int id);
-    void print(Node* node);
 
     int total_tree_nodes;
     int start;

@@ -12,10 +12,3 @@ SendPacketEventHandlerData::SendPacketEventHandlerData() {
     callable = nullptr;
     wlhd = nullptr;
 }
-
-SendPacketEventHandlerData::SendPacketEventHandlerData(Callable* callable,
-                                                       int tag)
-    : BasicEventHandlerData(-1, EventType::PacketSent) {
-    this->callable = callable;
-    this->tag = tag;
-}

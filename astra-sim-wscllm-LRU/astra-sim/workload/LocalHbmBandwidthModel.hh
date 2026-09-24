@@ -145,6 +145,13 @@ class LocalHbmBandwidthModel : public Callable {
                    uint64_t tensor_size,
                    WorkloadLayerHandlerData* wlhd);
     void advance_to(Tick now);
+    // Retire every complete() job at `now`: erase from `jobs`, apply the
+    // batch-level redistribution count, accumulate tics, and fire the
+    // completion callbacks. Shared by the transition callback and by
+    // issue_job, which must retire jobs that advance_to() completed at
+    // exactly the issue tick instead of deferring them to the next
+    // transition (M23).
+    void retire_completed_jobs(Tick now);
     void cancel_scheduled_transition();
     void schedule_next_transition();
     static void destroy_transition_data(CallData* data);

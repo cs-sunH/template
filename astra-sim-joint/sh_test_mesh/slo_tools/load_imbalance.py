@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WP7 负载不均衡度（离线重建，五仓逐字节相同，标准库实现）。
+"""WP7 负载不均衡度（离线重建，标准库实现）。
 
 算法严格按主规格 §1.5-A：
 
@@ -13,14 +13,12 @@
   * instance  = decision log kind=decode 行的 decision.decode_instance_index
     （请求实际占用的是其 decode 实例；PD 迁移仓的 prefill 段归属不重复
     计——固定算法只取一个 (instance, interval) 对/请求）；
-  * drain     = train_ledger 中非 first_step 的 batch_train 行 exits 数组
-    含该 request_id 的行 tick（D 侧终态行）。
-    （train_ledger 是 graph batch 账本；本脚本只读取 exits 归属，不 dump
-    账本内容。2026-09-04 口径修正：原读 drains 行——WP9 拆分格式下请求
-    在准入 tick 即被退化 prefill_train 行 drain（wsc_llm_online_scheduler
-    准入路径同步拼 P 侧行），admission→drain 区间 100% 零长度，wscllm
-    全仓 time_avg_backlog 退化为 0；exits 终态行在五仓账本格式下均每请求
-    恰一行，0902 批次实测 0 重复/0 缺失/0 零长度区间。）
+  * drain     = joint 决策日志 kind=completion 的 tick（请求实际完成事件）；
+    train_ledger 非 first_step 的 batch_train exits 只作成员和实例对账，
+    其 tick 是列车发射时刻，不能充当完成时刻。历史非 joint 仓没有可靠
+    completion 合同，仍以 exits 行 tick 重建旧代理区间，并在输出中标注
+    legacy_train_ledger_emit，不冒称实际完成。缺 joint completion 时拒绝
+    输出貌似可信的时间平均值。
 
 统计口径：每实例时间平均积压 b̄_i = Σ(桶内积压×桶长)/总跨度；
 CV = stdev_population(b̄_i)/mean(b̄_i)；Max/Mean = max(b̄_i)/mean(b̄_i)。
@@ -57,7 +55,8 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
 
 def li_prepare(repo_variant: str) -> dict:
     """decision-log 扫描态（A4：driver 单遍复用；CLI 路径同构）。"""
-    return {"admissions": {}, "decode_instances": {}}
+    return {"repo_variant": repo_variant, "admissions": {},
+            "decode_instances": {}, "completions": {}}
 
 
 def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
@@ -90,10 +89,15 @@ def li_consume_decision(record: dict, repo_variant: str, state: dict) -> None:
                  f"decode_instance_index（逐仓字段映射失效？repo="
                  f"{repo_variant}）")
         decode_instances[request_id] = instance
+    elif kind == "completion":
+        completions = state["completions"]
+        if request_id in completions:
+            fail(f"请求 {request_id} 出现多次 completion 事件")
+        completions[request_id] = tick
 
 
 def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
-    """train_ledger 读（仅本工具使用，保留独立读；读数仍 1 次）。"""
+    """train_ledger 读（exits 成员/实例及发射时刻；读数仍 1 次）。"""
     drains: dict[str, tuple[int, int]] = {}  # request_id -> (tick, instance)
     skipped_first_step_rows = 0
     for record in iter_jsonl(run_dir / TRAIN_LEDGER_RELPATH):
@@ -130,9 +134,11 @@ def li_collect_drains(run_dir: Path) -> tuple[dict, int]:
 
 def li_assemble_intervals(state: dict, drains: dict,
                           skipped_first_step_rows: int) -> list[dict]:
-    """admission/decode/drain 三源合并 + 跳过计数 stderr（顺序原样）。"""
+    """admission/decode/exits/completion 合并，joint 使用实际完成钟。"""
     admissions = state["admissions"]
     decode_instances = state["decode_instances"]
+    completions = state["completions"]
+    joint = state["repo_variant"] == "astra-sim-joint"
     intervals = []
     skipped_no_admission = []
     skipped_no_decode = []
@@ -148,9 +154,19 @@ def li_assemble_intervals(state: dict, drains: dict,
         if drain is None:
             skipped_no_drain.append(request_id)
             continue
-        drain_tick, drain_instance = drain
+        ledger_tick, drain_instance = drain
         if drain_instance != instance:
             instance_mismatch += 1
+        if joint:
+            drain_tick = completions.get(request_id)
+            if drain_tick is None:
+                fail(f"joint 请求 {request_id} 有 train_ledger exits，"
+                     "但缺 completion 事件；不能用发射时刻代替实际完成")
+            if drain_tick < ledger_tick:
+                fail(f"joint 请求 {request_id} completion tick {drain_tick} "
+                     f"早于 train_ledger 发射 tick {ledger_tick}")
+        else:
+            drain_tick = ledger_tick
         if drain_tick < admission:
             skipped_bad_order.append(request_id)
             continue
@@ -173,6 +189,10 @@ def li_assemble_intervals(state: dict, drains: dict,
     if instance_mismatch:
         print(f"[load-imbalance] decode 实例与 drain 列车实例不一致 "
               f"{instance_mismatch} 例（以 decode_instance_index 为准）",
+              file=sys.stderr)
+    if not joint:
+        print("[load-imbalance] 历史非 joint run 使用 "
+              "legacy_train_ledger_emit 代理终点；非实际完成时刻",
               file=sys.stderr)
     if not intervals:
         fail("load_imbalance：没有任何可用的 (instance, admission→drain) 区间")
@@ -306,6 +326,9 @@ def load_imbalance_emit(args: argparse.Namespace, repo_variant: str,
         "span_end_ns": span_end,
         "n_instances": n_instances,
         "n_requests_used": len(intervals),
+        "drain_time_source": (
+            "completion_event" if repo_variant == "astra-sim-joint"
+            else "legacy_train_ledger_emit"),
         "time_avg_backlog_mean": mean,
         "time_avg_backlog_population_std": std,
         "cv_time_avg": cv,

@@ -66,11 +66,6 @@ class Statistics {
         std::optional<double> operation_intensity;
         std::optional<bool> is_memory_bound;
 
-        // communication node
-        std::optional<uint64_t> comm_size;  // Size of communication in bytes
-        std::optional<double>
-            network_bandwidth;  // Achieved bandwidth in bytes/ns
-
         // remote memory node
 
         // replay node
@@ -141,13 +136,6 @@ class Statistics {
     WindowedRooflineUtilization calculate_roofline_utilization_in_window(
         Tick window_start,
         Tick window_end) const;
-
-    // Online service mode retires a terminal NodeView after every last
-    // consumer has observed it.  Static ET callers never use this path, and
-    // an enabled microbenchmark explicitly preserves the complete history.
-    // Repeating a retirement is harmless so terminal callback paths can stay
-    // idempotent.
-    void retire_online_operator(NodeId node_id, bool preserve_history);
 
     // Workload fixes this policy before issuing the first online node.  It
     // lets the service path fail closed on a live GPU even when no terminal
@@ -251,9 +239,9 @@ class Statistics {
     // completion-order aggregates; only their full-prefix GPU/roofline
     // queries are supported after compaction.
 
-    // Online service-only compact aggregates.  They are populated exclusively
-    // by retire_online_operator(false); static and online microbenchmark runs
-    // keep the legacy unordered_map scan unchanged.
+    // Online service-only compact aggregates.  They are populated
+    // exclusively by complete_online_service_operator(); static and online
+    // microbenchmark runs keep the legacy unordered_map scan unchanged.
     bool online_compaction_active_ = false;
     // Set at the first direct compact-service record, including a live node.
     // It keeps legacy finalization from silently treating an empty map as a

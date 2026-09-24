@@ -52,6 +52,16 @@ void PacketBundle::send_to_NPU() {
 void PacketBundle::call(EventType event, CallData* data) {
     if (needs_processing == true) {
         needs_processing = false;
+        if (sys->local_mem_bw <= 0) {
+            // A missing or non-positive local-mem-bw would turn the transfer
+            // delay below into inf/NaN and, after the uint64_t cast, an
+            // astronomical tick that stalls the simulation.  Fail fast
+            // instead of silently hanging.
+            Sys::sys_panic(
+                "local-mem-bw must be set to a positive bandwidth (GB/s) in "
+                "the system configuration before collective processing can "
+                "compute a local memory access delay");
+        }
         // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
         // HBM write/read pays the configured fixed access latency.
         const auto local_mem_access_delay =

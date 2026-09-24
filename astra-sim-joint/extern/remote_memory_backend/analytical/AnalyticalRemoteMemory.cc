@@ -10,11 +10,6 @@ the root directory of this source tree.
 #include <limits>
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
-// R3 (方案 §3.6): self-contained observation layer -- the ONLY astra-sim
-// workload header this backend translation unit needs (kept minimal so the
-// backend pair plus this ledger hh/cc stay trivially syncable across the
-// five repositories; the blueprint repos never enable the ledger).
-#include "astra-sim/workload/RemoteFifoLedger.hh"
 
 using namespace std;
 using namespace AstraSim;
@@ -51,14 +46,38 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
   }
 
   if (mem_type == PER_NODE_MEMORY_EXPANSION) {
-    num_nodes = 0;
-    if (j.contains("num-nodes")) {
-      num_nodes = j["num-nodes"];
+    // Fail fast at construction on a missing/invalid node shape: silently
+    // defaulting these to 0 used to construct successfully and then hit a
+    // divide-by-zero at the first remote access
+    // (port_index = sys_id / num_npus_per_node).
+    if (!j.contains("num-nodes")) {
+      cerr << "PER_NODE_MEMORY_EXPANSION requires the 'num-nodes' key"
+           << endl;
+      exit(1);
     }
-    num_npus_per_node = 0;
-    if (j.contains("num-npus-per-node")) {
-      num_npus_per_node = j["num-npus-per-node"];
+    if (!j.contains("num-npus-per-node")) {
+      cerr << "PER_NODE_MEMORY_EXPANSION requires the "
+           << "'num-npus-per-node' key" << endl;
+      exit(1);
     }
+    if (!j["num-nodes"].is_number_unsigned() ||
+        j["num-nodes"].get<uint64_t>() == 0 ||
+        j["num-nodes"].get<uint64_t>() >
+            static_cast<uint64_t>(numeric_limits<int>::max())) {
+      cerr << "'num-nodes' must be a positive integer in the int range"
+           << endl;
+      exit(1);
+    }
+    if (!j["num-npus-per-node"].is_number_unsigned() ||
+        j["num-npus-per-node"].get<uint64_t>() == 0 ||
+        j["num-npus-per-node"].get<uint64_t>() >
+            static_cast<uint64_t>(numeric_limits<int>::max())) {
+      cerr << "'num-npus-per-node' must be a positive integer in the int "
+           << "range" << endl;
+      exit(1);
+    }
+    num_nodes = j["num-nodes"].get<int>();
+    num_npus_per_node = j["num-npus-per-node"].get<int>();
   } else if (mem_type == PER_NPU_MEMORY_EXPANSION &&
              j.contains("npu-ids")) {
     per_npu_ids_configured = true;
@@ -116,15 +135,17 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
   if (j.contains("remote-mem-bw")) {
     if (mem_type != NO_MEMORY_EXPANSION &&
         (!j["remote-mem-bw"].is_number() ||
-         j["remote-mem-bw"].get<double>() <= 0)) {
+         !(j["remote-mem-bw"].get<double>() > 0))) {
       cerr << "remote-mem-bw must be positive for the configured memory type"
            << endl;
       exit(1);
     }
-    remote_mem_bw = j["remote-mem-bw"];
+    // Read as double (same consumption type as the Sys.cc side): the old
+    // uint64_t read silently truncated json floats (e.g. 512.7 -> 512).
+    remote_mem_bw = j["remote-mem-bw"].get<double>();
   }
 
-  if (mem_type != NO_MEMORY_EXPANSION && remote_mem_bw == 0) {
+  if (mem_type != NO_MEMORY_EXPANSION && !(remote_mem_bw > 0)) {
     cerr << "remote-mem-bw must be positive for the configured memory type"
          << endl;
     exit(1);
@@ -183,15 +204,6 @@ void AnalyticalRemoteMemory::issue(
     return;
   }
 
-  // R3 (方案 §3.6 / 阶段 E): issue accounting at the point where the REAL
-  // port_index has been resolved, before the busy/enqueue decision -- both
-  // the immediate-start and the queued path count exactly once per request.
-  // Pure observation (counters only); the ledger is sensing-gated and
-  // fail-closed (default off), so ordinary runs and the blueprint repos
-  // (which compile this but never enable it) see zero behavior change.
-  AstraSim::ExecutionDriven::RemoteFifoLedger::instance().record_issue(
-      port_index, sys_id, tensor_size);
-
   if (ongoing_transaction[port_index]) {
     pending_requests[port_index].emplace_back(tensor_size, wlhd);
   } else {
@@ -210,7 +222,7 @@ void AnalyticalRemoteMemory::start_request(
   sys->register_event(
       this,
       EventType::General,
-      new RemoteMemoryCompletionData(port_index, tensor_size),
+      new RemoteMemoryCompletionData(port_index),
       runtime);
 
   ongoing_transaction[port_index] = true;
@@ -220,17 +232,7 @@ void AnalyticalRemoteMemory::call(EventType type, CallData* data) {
   RemoteMemoryCompletionData* completion_data =
       static_cast<RemoteMemoryCompletionData*>(data);
   size_t port_index = completion_data->port_index;
-  // R3 (方案 §3.6): the payload carries THIS transaction's bytes; the
-  // dequeued pmr.tensor_size below belongs to the NEXT request.
-  uint64_t completed_bytes = completion_data->tensor_size;
   delete completion_data;
-
-  // R3 (方案 §3.6 / 阶段 E): completion accounting right after the payload
-  // extraction and BEFORE the next pending request starts -- the exact
-  // moment the port transaction really finished (no HBM-join deferral).
-  // Sensing-gated pure observation; zero behavior change when disabled.
-  AstraSim::ExecutionDriven::RemoteFifoLedger::instance().record_completion(
-      port_index, completed_bytes);
 
   if (!pending_requests[port_index].empty()) {
     PendingMemoryRequest pmr = pending_requests[port_index].front();
@@ -239,35 +241,6 @@ void AnalyticalRemoteMemory::call(EventType type, CallData* data) {
   } else {
     ongoing_transaction[port_index] = false;
   }
-}
-
-const char* AnalyticalRemoteMemory::architecture_name() const {
-  switch (mem_type) {
-    case NO_MEMORY_EXPANSION:
-      return "NO_MEMORY_EXPANSION";
-    case PER_NODE_MEMORY_EXPANSION:
-      return "PER_NODE_MEMORY_EXPANSION";
-    case PER_NPU_MEMORY_EXPANSION:
-      return "PER_NPU_MEMORY_EXPANSION";
-    case MEMORY_POOL:
-      return "MEMORY_POOL";
-  }
-  return "UNKNOWN";
-}
-
-std::string AnalyticalRemoteMemory::port_mapping_rule() const {
-  switch (mem_type) {
-    case NO_MEMORY_EXPANSION:
-      return "none";
-    case PER_NODE_MEMORY_EXPANSION:
-      return "sys-id/num-npus-per-node";
-    case PER_NPU_MEMORY_EXPANSION:
-      return per_npu_ids_configured ? "npu-ids-array-index"
-                                    : "set-sys-registration-order(=rank)";
-    case MEMORY_POOL:
-      return "single-shared-port-0";
-  }
-  return "unknown";
 }
 
 uint64_t AnalyticalRemoteMemory::get_remote_mem_runtime(uint64_t tensor_size) {

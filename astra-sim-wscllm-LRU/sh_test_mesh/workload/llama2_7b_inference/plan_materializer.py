@@ -159,13 +159,23 @@ def _derive_manifest_requests(config, sidecar_rows):
     """manifest.json 的 requests[]（队列派生 9 字段）。"""
     requests = []
     last_final_by_session = {}
+    last_turn_by_session = {}
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
             history = 0
             # recompute 单口径:turn-0 队列 prefill 已折入 prefix
             context = int(spec.prefill_length)
         else:
-            history = last_final_by_session.get(spec.session_id, 0)
+            # 畸形队列 fail-closed（与同文件 _derive_metrics_requests 的
+            # parent 缺失 raise 同口径）：turn>0 却无紧邻前序 turn 在队列
+            # 中时不得静默 history=0（窗口物化保证 turn-0 先行、turn 连续）。
+            if last_turn_by_session.get(spec.session_id) != spec.turn_index - 1:
+                raise RuntimeError(
+                    f"request {spec.request_id} (turn {spec.turn_index}) has "
+                    "no immediately preceding turn in the queue; "
+                    "materialize a well-formed request queue (turn-0 first, "
+                    "turns in order per session)")
+            history = last_final_by_session[spec.session_id]
             # recompute 单口径后续 turn:context = 驻留 history + 新 prefill
             context = history + int(spec.prefill_length)
         final = context + int(spec.decode_length)
@@ -199,6 +209,7 @@ def _derive_manifest_requests(config, sidecar_rows):
                 entry["prefix_len"] = int(prefix_text)
         requests.append(entry)
         last_final_by_session[spec.session_id] = final
+        last_turn_by_session[spec.session_id] = spec.turn_index
     return requests
 
 

@@ -33,8 +33,6 @@ void CmdLineParser::define_options() noexcept {
         cxxopts::value<std::string>()->default_value("log"))(
         "num-queues-per-dim", "Number of queues per each dimension",
         cxxopts::value<int>()->default_value("1"))(
-        "compute-scale", "Compute scale",
-        cxxopts::value<double>()->default_value("1"))(
         "comm-scale", "Communication scale",
         cxxopts::value<double>()->default_value("1"))(
         "injection-scale", "Injection scale",
@@ -57,8 +55,4 @@ void CmdLineParser::parse(int argc, char* argv[]) noexcept {
                   << "Error parsing options: " << e.what() << std::endl;
         exit(-1);
     }
-}
-
-cxxopts::Options& CmdLineParser::get_options() {
-    return options;
 }

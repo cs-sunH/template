@@ -193,8 +193,11 @@ class DeepGapLedgerBoundaryTest(unittest.TestCase):
         kv.commit_deep_gap_records(exc.deep_gap_records)
         self.assertEqual(len(kv.deep_gap_events), kv.tp_degree)
 
-    def test_recoverable_merge_degrade_leaves_ledger_empty(self):
-        """R4 自降级成功（可恢复路径）不落账（用例 B 口径回归）。"""
+    def test_recoverable_merge_flip_leaves_ledger_empty(self):
+        """merge v2（2026-09-17）：copy 零字节翻转成功（可恢复路径——
+        并集已在胜者侧、无空间准备）不落 deep_gap 台账、自降级台账冻结
+        恒空。金样留档（改造前口径，git 9a95e06）：R4 自降级成功落
+        merge_degrade_events、终态 PARTIAL@home。"""
         kv = _manager(capacity_bytes=51_328)
         _seed(kv, "s", 0, 10, 10, "human")
         _seed(kv, "hog", 0, 300, 10, "human")
@@ -206,7 +209,7 @@ class DeepGapLedgerBoundaryTest(unittest.TestCase):
             session_id="s", instance_index=1, context_tokens=14,
             trigger_request_id="t1")
         kv.merge_back(session_id="s", trigger_request_id="t1", new_tokens=4)
-        self.assertTrue(kv.merge_degrade_events)
+        self.assertEqual(kv.merge_degrade_events, [])
         self.assertEqual(kv.deep_gap_events, [])
 
 
@@ -230,9 +233,14 @@ def _request_view(input_tokens=5, decode=10, input_bytes=(500, 500)):
 
 
 class MergeIncrementPricingTest(unittest.TestCase):
-    """K4：merge 段 = 增量（input + decode 增长）口径。"""
+    """K4 → merge v2（2026-09-17 需求②《部分层逐出kv管理改造分析方案》）：
+    copy/recompute 执行端恒持并集（驻留+池恢复/重算复份+增量）⊇ home 侧
+    → 反向零字节翻转——零传输、零池写、无空间准备（merge_ns=0）。
+    金样留档（改造前口径，git 9a95e06 可复算）：merge_ns =
+    _transfer_ns(total_bytes=3000, path_hops=1, divisor=1)——增量经
+    NoC 回 home（前缀拆分公式 prefix = inc × p // L）。"""
 
-    def test_merge_ns_equals_increment_transfer(self):
+    def test_copy_merge_is_zero_byte_flip(self):
         model = _model({0: _load(), 1: _load()})
         session = _session_view()          # home 0，执行 1（异地）
         request = _request_view()          # input 500/rank，decode 增长 1000/rank
@@ -240,14 +248,14 @@ class MergeIncrementPricingTest(unittest.TestCase):
             session=session, request=request, instance_index=1,
             action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        # 增量/rank = 500 + 500*10//5 = 1500；总 3000；hops=1、除数 1。
-        expected = _transfer_ns(
-            total_bytes=3000, path_hops=1, divisor=1, rates=model.rates,
-            per_hop_latency_ns=None, startup_ns=0)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
+        self.assertIn("merge_v2_zero_byte_flip",
+                      candidate.breakdown.notes)
+        self.assertNotIn("merge_to_home=0", candidate.breakdown.notes)
 
     def test_merge_ns_independent_of_history_bytes(self):
-        """基础历史翻倍不改变 merge 段（旧口径会虚增整份工作副本）。"""
+        """基础历史翻倍不改变 merge 段（v2 下 copy 恒零字节翻转 = 0；
+        物理面 home 侧释放量随基础变化，但执行端并集已在胜者侧）。"""
         loads = {0: _load(), 1: _load()}
         small = _model(loads).estimate_action(
             session=_session_view(history_bytes=(1000, 1000)),
@@ -259,7 +267,8 @@ class MergeIncrementPricingTest(unittest.TestCase):
             action="copy", remote_enabled=True)
         self.assertEqual(
             small.breakdown.merge_ns, big.breakdown.merge_ns,
-            "merge 段不得随基础历史字节膨胀（增量口径）")
+            "merge 段不得随基础历史字节膨胀（零字节翻转口径）")
+        self.assertEqual(small.breakdown.merge_ns, 0)
 
 
 # ========================================================== K5 timer 整µs ==
@@ -319,7 +328,9 @@ class ClassifierActionFilterTest(unittest.TestCase):
         scheduler = Sh30OnlineScheduler.__new__(Sh30OnlineScheduler)
         scheduler.kv_manager = _manager(capacity_bytes=100_000)
         scheduler.joint_config = SimpleNamespace(
-            remote_enabled=remote_enabled)
+            remote_enabled=remote_enabled,
+            # O12：分类器直读消融开关（F6 无软门），夹具显式供值。
+            remote_read_partial_enabled=True)
         return scheduler
 
     @staticmethod
@@ -354,7 +365,16 @@ class ClassifierActionFilterTest(unittest.TestCase):
         self.assertFalse(any("remote-read" in line for line in detail))
 
     def test_remote_on_partial_base_excludes_remote_read(self):
-        """PARTIAL 基（后缀不可直读）即使 remote on 也不参与判定。"""
+        """PARTIAL 基 remote-read 参与判定（O12 改钉，2026-09-23）。
+
+        原断言（"PARTAL 基即使 remote on 也不参与判定"）钉的是 N1(a)
+        解除（2026-09-17《部分层逐出kv管理改造分析方案》需求①）之前
+        的旧口径；解除后 JCM action_applicability（joint_cost_model.py
+        :1363-1427）与 O12 修复后的分类器都把 PARTIAL 基 remote-read
+        列为合法适用动作（后缀池恢复物化＋前缀读流）。M1 设计前提
+        "按适用动作集合过滤"不变，变的是适用集合本身。本用例场景
+        （final 800 整份放不下）下 remote-read 的 input-only 足迹可行
+        ⇒ 不再是结构性不可行，且 detail 含 remote-read 组合。"""
         scheduler = self._scheduler(remote_enabled=True)
         kv = scheduler.kv_manager
         _make_partial(kv, tokens=400)
@@ -364,8 +384,8 @@ class ClassifierActionFilterTest(unittest.TestCase):
         self.assertEqual(session_view.location, "partial_hbm_remote")
         structural, detail = scheduler._classify_physical_feasibility(
             runtime, session_view)
-        self.assertTrue(structural)
-        self.assertFalse(any("remote-read" in line for line in detail))
+        self.assertFalse(structural)
+        self.assertTrue(any("remote-read" in line for line in detail))
 
 
 # ============================================ M3 时域估计器 + 覆盖缺口 ==
@@ -414,23 +434,67 @@ class CausalHorizonEstimatorTest(unittest.TestCase):
 
 
 class RemoteReadApplicabilityTest(unittest.TestCase):
-    """N1(a) 覆盖缺口：remote-read 适用性收窄（LOCAL 基专属）。"""
+    """N1(a) 解除（2026-09-17 需求①）：remote-read 适用性 = LOCAL 基
+    （不变锚）＋ PARTIAL 基混合形态（缺省放开；JOINT_REMOTE_READ_PARTIAL
+    =off 消融时拒）；REMOTE 基仍拒（无主 session，裁定③走池恢复/重算
+    就地转正）。
+    金样留档（改造前口径）：PARTIAL 基拒绝理由
+    "suffix not directly readable at home"。"""
 
-    def test_remote_read_requires_local_base(self):
+    def test_partial_base_applicable_by_default(self):
+        import dataclasses
         model = _model({0: _load(), 1: _load()})
         request = _request_view()
-        for location in ("partial_hbm_remote", "remote_memory"):
-            session = _session_view(location=location)
-            actions = dict(zip(
-                ("stay", "recompute", "copy", "remote-read"),
-                model.applicable_actions(
-                    session, request, 1, remote_enabled=True)))
-            self.assertFalse(actions["remote-read"][0], location)
-            self.assertIsNotNone(actions["remote-read"][1])
+        actions = dict(zip(
+            ("stay", "recompute", "copy", "remote-read"),
+            model.applicable_actions(
+                _session_view(location="partial_hbm_remote"), request, 1,
+                remote_enabled=True)))
+        self.assertTrue(actions["remote-read"][0])
+        self.assertIsNone(actions["remote-read"][1])
+        self.assertTrue(dataclasses.replace(
+            model, remote_read_partial=True).applicable_actions(
+                _session_view(location="partial_hbm_remote"), request, 1,
+                remote_enabled=True)[3][0])
+
+    def test_partial_base_rejected_when_ablation_off(self):
+        import dataclasses
+        model = dataclasses.replace(
+            _model({0: _load(), 1: _load()}), remote_read_partial=False)
+        actions = dict(zip(
+            ("stay", "recompute", "copy", "remote-read"),
+            model.applicable_actions(
+                _session_view(location="partial_hbm_remote"),
+                _request_view(), 1, remote_enabled=True)))
+        self.assertFalse(actions["remote-read"][0])
+        self.assertEqual(
+            actions["remote-read"][1],
+            "remote-read for partial sessions disabled")
+        # LOCAL 基不受该消融开关影响。
         local = dict(zip(
             ("stay", "recompute", "copy", "remote-read"),
             model.applicable_actions(
-                _session_view(location="local_hbm"), request, 1,
+                _session_view(location="local_hbm"), _request_view(), 1,
+                remote_enabled=True)))
+        self.assertTrue(local["remote-read"][0])
+
+    def test_remote_base_still_rejected(self):
+        model = _model({0: _load(), 1: _load()})
+        actions = dict(zip(
+            ("stay", "recompute", "copy", "remote-read"),
+            model.applicable_actions(
+                _session_view(location="remote_memory"), _request_view(), 1,
+                remote_enabled=True)))
+        self.assertFalse(actions["remote-read"][0])
+        self.assertEqual(actions["remote-read"][1],
+                         "no resident remote history")
+
+    def test_local_base_applicable_unchanged(self):
+        model = _model({0: _load(), 1: _load()})
+        local = dict(zip(
+            ("stay", "recompute", "copy", "remote-read"),
+            model.applicable_actions(
+                _session_view(location="local_hbm"), _request_view(), 1,
                 remote_enabled=True)))
         self.assertTrue(local["remote-read"][0])
 
@@ -485,6 +549,11 @@ class ServiceFactorPurityTest(unittest.TestCase):
         scheduler._decode_task_load_cache = {}
         scheduler._task_load_cache_capacity = 128
         scheduler._joint_factors = ServiceFactors()
+        # M4：γ_prefill 桥接目标（face ServiceFactorGroup）——替身
+        # 补设同款真件（真实件可断言桥接后样本纯度语义不变）。
+        from joint.event_recursion_predictor import ServiceFactorGroup
+        scheduler.kv_manager = SimpleNamespace(
+            service_factors=ServiceFactorGroup())
         scheduler.runtime_by_request_id = {}
         return scheduler
 
@@ -657,6 +726,12 @@ class MetricsInstanceFilterTest(unittest.TestCase):
         import face_scheduler as fs
         kv = _manager()
         # 同会话 parts 落两实例：home 基础（0..2 层）+ exec 工作副本。
+        # C4 triage（2026-09-22）：C13 copy 块级交接/源端立即释放把
+        # home 侧前缀段 metrics parts 的释放点自 merge 前移至交接块
+        # 到达（expand_prefill 的 prefill_drain 结算，前缀镜像
+        # _metrics_prefix_release_parts）——两实例并存的探测时点自
+        # expand 后改为 prepare 后（旧口径在 expand 后断言 {0,1}，C13
+        # 后彼时已只剩 exec 侧——语义变更非缺陷，断言对象刷新）。
         fs.set_metrics_observer(_RecordingRecorder())
         try:
             kv2 = _manager()
@@ -664,9 +739,6 @@ class MetricsInstanceFilterTest(unittest.TestCase):
             kv2.prepare_prefill(
                 session_id="s", target_instance_index=1,
                 history_tokens=10, trigger_request_id="t1", action="copy")
-            kv2.expand_prefill(
-                session_id="s", instance_index=1, context_tokens=14,
-                trigger_request_id="t1")
             parts = kv2._metrics_parts["s"]
             instances = {part["instance_index"] for part in parts}
             self.assertEqual(instances, {0, 1})
@@ -682,12 +754,25 @@ class MetricsInstanceFilterTest(unittest.TestCase):
             home = [part for part in kv2._metrics_parts["s"]
                     if part["instance_index"] == 0]
             self.assertTrue(all(part["layer_end"] <= 1 for part in home))
+            # C13 语义披露：expand（prefill_drain 结算）后 home 侧前缀
+            # 段被逐块精确释放（metrics 前缀镜像），该会话 parts 只剩
+            # exec 侧——实例过滤语义不变（仍只动指定实例的 parts）。
+            kv2.expand_prefill(
+                session_id="s", instance_index=1, context_tokens=14,
+                trigger_request_id="t1")
+            instances_after = {
+                part["instance_index"]
+                for part in kv2._metrics_parts["s"]}
+            self.assertEqual(instances_after, {1})
         finally:
             fs.set_metrics_observer(None)
 
-    def test_merge_release_clears_exec_parts(self):
-        """自查 B'：merge_back 结算后该会话在 exec 实例的 parts 必须
-        全量移除（旧代码漏镜像 → metrics 通道 exec 永久高估）。"""
+    def test_merge_flip_clears_home_parts_keeps_exec(self):
+        """自查 B' → merge v2（2026-09-17）：copy 零字节翻转后该会话在
+        **home** 实例的 parts 必须全量移除（基础释放镜像——漏镜像 =
+        metrics 通道 home 永久高估）；exec 侧 parts 保留（工作副本转正
+        为权威驻留）。金样留档（改造前口径）：exec parts 全量移除、
+        home 侧并入增量。"""
         import face_scheduler as fs
         fs.set_metrics_observer(_RecordingRecorder())
         try:
@@ -701,9 +786,13 @@ class MetricsInstanceFilterTest(unittest.TestCase):
                 trigger_request_id="t1")
             kv.merge_back(session_id="s", trigger_request_id="t1",
                           new_tokens=4)
+            home_parts = [part for part in kv._metrics_parts.get("s", [])
+                          if part["instance_index"] == 0]
             exec_parts = [part for part in kv._metrics_parts.get("s", [])
                           if part["instance_index"] == 1]
-            self.assertEqual(exec_parts, [])
+            self.assertEqual(home_parts, [])
+            self.assertTrue(exec_parts,
+                            "零字节翻转后 exec 侧工作副本 parts 转正保留")
         finally:
             fs.set_metrics_observer(None)
 
@@ -722,10 +811,13 @@ class _RecordingRecorder:
 # ================================================== 自查 C REMOTE 基计价 ==
 
 class RemoteBaseMergePricingTest(unittest.TestCase):
-    """自查 C：REMOTE 基会话的 merge 段按池写口径计价（执行端池端口
-    除数、无 home 空间准备），不再误用 NoC→home 路由。"""
+    """自查 C → merge v2（2026-09-17 裁定③）：REMOTE 基 = 无主 session
+    就地保留——零传输零池写（merge_ns=0，note merge_in_place）；LOCAL 基
+    copy = 零字节翻转。金样留档（改造前口径，git 9a95e06）：REMOTE 基
+    merge_ns = _pool_transfer_ns(total_bytes=3000)（整份增量池写）＋note
+    "merge_to_pool_backing"；LOCAL 基 = 增量 NoC 回 home。"""
 
-    def test_remote_base_merge_uses_pool_caliber(self):
+    def test_remote_base_merge_in_place_zero(self):
         model = _model({0: _load(), 1: _load()})
         session = SessionKVView(
             session_id="s", home_instance=0, resident_instance=None,
@@ -738,22 +830,23 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
             session=session, request=request, instance_index=1,
             action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        from joint.joint_cost_model import _pool_transfer_ns
-        expected = _pool_transfer_ns(
-            total_bytes=3000, divisor=model._pool_divisor(1),
-            rates=model.rates)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
-        self.assertIn("merge_to_pool_backing",
-                      candidate.breakdown.notes)
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
+        self.assertIn("merge_in_place", candidate.breakdown.notes)
+        self.assertNotIn("merge_to_pool_backing",
+                         candidate.breakdown.notes)
         self.assertNotIn("merge_to_home=0", candidate.breakdown.notes)
 
-    def test_local_base_still_uses_noc_caliber(self):
-        """LOCAL 基（跨实例）保持 NoC→home + home 空间准备口径。"""
+    def test_local_base_copy_zero_byte_flip(self):
+        """LOCAL 基（跨实例）copy：执行端并集 ⊇ home 基础 → 零字节翻转
+        （零传输零池写），不再有 NoC→home 增量回传计价。"""
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
             session=_session_view(), request=_request_view(),
             instance_index=1, action="copy", remote_enabled=True)
-        self.assertIn("merge_to_home=0", candidate.breakdown.notes)
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
+        self.assertIn("merge_v2_zero_byte_flip",
+                      candidate.breakdown.notes)
+        self.assertNotIn("merge_to_home=0", candidate.breakdown.notes)
         self.assertNotIn("merge_to_pool_backing",
                          candidate.breakdown.notes)
 
@@ -761,8 +854,7 @@ class RemoteBaseMergePricingTest(unittest.TestCase):
 # ================================================== 自查 D 增长逐出进图 ==
 
 class GrowthEvictionEmissionTest(unittest.TestCase):
-    """自查 D：逐列车 decode 增长的已提交逐出必须进图（旁路支链）
-    + R15 流登记（rid#decode owner）——三路（成功/停滞/唤醒）同款。"""
+    """逐列车 decode 增长逐出进图；流保持到旁支尾 watch 交付。"""
 
     def _scheduler(self):
         from online.sh30_online_scheduler import (
@@ -779,6 +871,8 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         scheduler.decision_log_sink = None
         scheduler.online_log_rows = []
         scheduler._pending_merge_alarms = {}
+        scheduler._pending_eviction_watches = {}
+        scheduler._eviction_watch_seq = {}
         scheduler.arrival_heap = []
         scheduler.runtimes = []
         scheduler._arrived_request_count = 0
@@ -786,6 +880,12 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         from joint.joint_cost_model import LinkFlowRegistry
         scheduler._joint_flows = LinkFlowRegistry()
         scheduler._pool_ports = _RecordingPoolPorts()
+        # 对齐 __init__ 初值（F6 销账：类级软缺省已删，替身漏设 =
+        # AttributeError；_register_transfer_flows 为真实现，noc_migrate
+        # 支路直达 _hbm_ports.register）。
+        from joint.hbm_port_flow_registry import HbmPortFlowRegistry
+        scheduler._hbm_ports = HbmPortFlowRegistry()
+        scheduler._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
         scheduler._instance_edge_ports = {}
         return scheduler
 
@@ -807,7 +907,7 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         runtime.decode_tokens_consumed = 5  # 目标上下文 7 > 当前 2：增长
         # 5 token(640B/rank) > effective remaining(≈304，不计可逐会话)
         # → 必逐 victim（completed 会话为合法 victim）。
-        scheduler._batch = {"tick": 42}
+        scheduler._batch = {"tick": 42, "watches": []}
         scheduler._joint_grow_decode(runtime, 0)
         emitted = scheduler.graph.emitted
         self.assertTrue(emitted, "增长逐出必须进图（旁路支链）")
@@ -815,9 +915,11 @@ class GrowthEvictionEmissionTest(unittest.TestCase):
         # 池端口登记（_pool_ports），owner 同为 rid#decode。
         self.assertTrue(scheduler._pool_ports._counts,
                         "增长逐出必须登记池端口份额（除数口径）")
-        scheduler._pool_ports.release_owner("r0#decode")
-        released = scheduler._joint_flows.release_owner("r0#decode")
-        self.assertGreaterEqual(released, 0)  # 链路登记可为空（单节点路径）
+        self.assertEqual(len(scheduler._batch["watches"]), 1)
+        watch_id = scheduler._batch["watches"][0]["request_id"]
+        self.assertIn(watch_id, scheduler._pending_eviction_watches)
+        scheduler._on_eviction_watch(watch_id, "prefill", 43)
+        self.assertNotIn(watch_id, scheduler._pending_eviction_watches)
 
 
 class _RecordingGraph:
@@ -829,8 +931,11 @@ class _RecordingGraph:
     def sync_pending_history_after_evictions(self, transfers):
         return None
 
-    def emit_eviction_side_branch(self, transfers, tick):
+    def emit_eviction_side_branch(self, transfers, tick, *, watch_id):
         self.emitted.append((tuple(transfers), tick))
+        return {"request_id": watch_id,
+                "owner_request_id": transfers[0].trigger_request_id,
+                "members": {0: 1}}
 
 
 class _RecordingPoolPorts:
@@ -945,10 +1050,13 @@ class WatermarkJointHardeningTest(unittest.TestCase):
 
 
 class RemoteBaseAtHomeMergePricingTest(unittest.TestCase):
-    """终审-中3：REMOTE 基 + exec==home（copy@home 退化池恢复）——
-    执行侧 merge_back 恒走池写，计价不得因 home==exec 免单。"""
+    """终审-中3 → merge v2（2026-09-17 裁定③）：REMOTE 基 + exec==home
+    （copy@home 退化池恢复）= 就地保留——merge_ns=0（note merge_in_place）。
+    物理侧 v2 不再有任何池写（热 KV 裁定），免单是正确价而非漏计。
+    金样留档（改造前口径）：merge_ns > 0（整份增量池写，
+    "merge_to_pool_backing"）。"""
 
-    def test_remote_base_at_home_charges_pool_merge(self):
+    def test_remote_base_at_home_merges_in_place(self):
         model = _model({0: _load(), 1: _load()})
         session = SessionKVView(
             session_id="s", home_instance=0, resident_instance=None,
@@ -960,9 +1068,8 @@ class RemoteBaseAtHomeMergePricingTest(unittest.TestCase):
             session=session, request=_request_view(),
             instance_index=0, action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
-        self.assertGreater(candidate.breakdown.merge_ns, 0,
-                           "REMOTE 基 exec==home 的池写 merge 不得免单")
-        self.assertIn("merge_to_pool_backing", candidate.breakdown.notes)
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
+        self.assertIn("merge_in_place", candidate.breakdown.notes)
 
 
 class GuardMessageEmbedsRecordsTest(unittest.TestCase):

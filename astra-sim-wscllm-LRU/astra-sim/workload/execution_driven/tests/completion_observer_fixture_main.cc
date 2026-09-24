@@ -19,7 +19,7 @@ the hook count equals the number of completed nodes (54 ranks x 3 = 162).
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_CompletionFixture
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm, after generating the synthetic trace):
+Run (from template/astra-sim-wscllm-LRU, after generating the synthetic trace):
   python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_CompletionFixture \

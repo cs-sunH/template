@@ -21,7 +21,6 @@ StreamBaseline::StreamBaseline(Sys* owner,
     this->dataset = dataset;
     this->priority = priority;
     steps_finished = 0;
-    initial_data_size = phases_to_go.front().initial_data_size;
 }
 
 void StreamBaseline::init() {
@@ -35,7 +34,6 @@ void StreamBaseline::init() {
         queuing_delay.push_back(last_phase_change - creation_time);
     }
     queuing_delay.push_back(Sys::boostedTick() - last_phase_change);
-    total_packets_sent = 1;
 }
 
 void StreamBaseline::call(EventType event, CallData* data) {

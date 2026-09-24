@@ -222,11 +222,6 @@ class RequestIngress {
     /// rather than growing with all CSV rows seen during the run.
     size_t pending_queue_index_count() const;
 
-    /// Number of request ids reserved by successfully scheduled future alarms
-    /// which have not reached arrival_cb() yet. This stays proportional to
-    /// outstanding future alarms, not to committed batches or all requests.
-    size_t scheduled_future_arrival_count() const;
-
   private:
     struct ArrivalAlarmArg {
         RequestIngress* ingress;

@@ -200,8 +200,7 @@ namespace AstraSim {
         BypassRule bypass_rule) {
 
         // Check if there is a per-node custom implementation first.
-        if (bypass_rule != BypassRule::BYPASS_PERNODE_CUSTOM &&
-            bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
+        if (bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
             auto it = per_node_custom_impl.find(static_cast<int>(workload_node_id));
             if (it != per_node_custom_impl.end()) {
                 return std::vector<CollectiveImpl*>{it->second};

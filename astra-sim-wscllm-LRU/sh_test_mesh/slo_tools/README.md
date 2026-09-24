@@ -9,6 +9,12 @@ A.5（2026-09-05）wscllm 工作树附加说明：relevant_distributed 变体已
 kv_cache_adapter.py 的 relevant 专属分支已删（其余三仓的同名副本不带这些
 分支，同步回各仓 = 各仓删自身副本中的对应段；本仓不再逐字节相同，属本
 方案预期差异）。
+2026-09-24 死代码清除（本仓深挖文档 §2）附加差异：slo_common.py 删
+percentile_from_sorted/ns_to_ms、slo_stats.py 删 APPENDIX_PCTS_DEFAULT
+与 cmd_violation 死局部 deadlines、hopbytes.py 删 prefill 行 history_
+transfer_shards[] 恒死分支（写侧零生产）——均为全仓零引用符号，删除后
+本仓与三姊妹仓同名副本再添预期差异（同步回各仓 = 各仓按自身深挖清单
+处置）。
 纯离线、纯标准库、只读输入；不注册仿真事件、不反向参与调度。
 
 ## cpp.log 回退顺序（归档兼容，P1/2026-08-28）
@@ -107,10 +113,17 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
   1150-1221）；resident_prefix_layers（PARTIAL_HBM_REMOTE）→ partial。
 * **hopbytes 覆盖**（四仓同步收口后，各变体采集器已合并进同一
   REPO_HOP_SOURCES 表）：sh_1.0=shard 级 noc_path/noc_hops；
-  wscllm=实例级 static_route.hop_count + history 迁移 noc_hops
-  （B2wp9py 起）；face=per-TP-shard hops 列表（B2wp9py 起）；
-  sh_2.0=决策级 transfer_hop_bytes（WP9-线5 起）；sh_3.0=completion_
-  evictions shards[].noc_hops（B4 起）。四仓新产物均可覆盖；旧产物按
+  wscllm=decode 行 prefill_decode_transfer.shards[] 逐 shard
+  bytes×noc_hops（2026-09-05 起）+ 实例级聚合回退（decode=
+  static_route.hop_count、prefill history 迁移=noc_hops，B2wp9py 起）；
+  face=per-TP-shard hops 列表（B2wp9py 起）；sh_2.0=决策级
+  transfer_hop_bytes（WP9-线5 起）；sh_3.0=completion_
+  evictions shards[].noc_hops（B4 起）。wscllm 逐出/回迁契约行
+  （history_evictions/prefill_evictions/decode_evictions/completion_
+  evictions；旧产物 admission_evictions+decode_target_evictions，
+  单键取用防 B3 双序列化双计）自 2026-09-24（M29）起计入
+  bytes_without_hops——契约行无 shard 级路由，wscllm coverage 如实
+  低于 1（此前逐出字节整类不进账，notes 误称满覆盖）。旧产物按
   字段缺席回退 bytes_without_hops/coverage=0（不臆造 hop 数）。
 
 ## fail-closed 纪律
@@ -212,8 +225,9 @@ prefill_context_tokens/final_context_tokens/history_tokens_before），以及
   span_ns/bucket_origin_ns 分立，不得混用）。
 * **容量三口径（P1-③，summary `capacity_calibers` 分列；逐 rank 剖面函数
   逐字拷贝自 workload/llama2_7b_inference/session_kv_manager.py 的
-  model_weight_shard_bytes_by_tp_rank(:185)/kv_cache_shard_bytes_for_
-  tokens(:220)，同步义务见脚本内注记）**：
+  model_weight_shard_bytes_by_tp_rank(:217)/kv_cache_bytes_for_tokens(:252)/
+  kv_cache_shard_bytes_for_tokens(:259)/kv_cache_shard_bytes_for_layer_
+  range(:275)，同步义务见脚本内注记）**：
   1. 正式认证：逐 rank physical=weight+resident+reserved ≤ capacity_bytes
      （数据源=journal 行；仅 certified 层构成判决）；
   2. resident 硬上限：reservation=0 时任意时刻成立 =

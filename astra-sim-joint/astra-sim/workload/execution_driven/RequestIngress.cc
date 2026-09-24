@@ -357,11 +357,6 @@ size_t RequestIngress::pending_queue_index_count() const {
     return queue_index_map_.size();
 }
 
-size_t RequestIngress::scheduled_future_arrival_count() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return scheduled_future_request_ids_.size();
-}
-
 std::map<int64_t, RequestIngress::StaticCsvArrivalRecord>
 RequestIngress::static_csv_arrivals() const {
     std::lock_guard<std::mutex> lock(mtx_);

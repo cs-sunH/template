@@ -32,12 +32,12 @@ class MemBus {
     ~MemBus();
 
     void send_from_NPU_to_MA(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);
     void send_from_MA_to_NPU(Transmition transmition,
-                             int bytes,
+                             uint64_t bytes,
                              bool processed,
                              bool send_back,
                              Callable* callable);

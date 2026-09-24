@@ -104,6 +104,32 @@ class NaSemanticsTests(unittest.TestCase):
         with self.assertRaises(SloToolError):
             read_request_metrics(run_dir / "request_metrics.csv")
 
+    def test_iter_jsonl_rejects_nan_infinity_literals(self):
+        """O9：NaN/Infinity/-Infinity 字面量 fail-closed（默认 json.loads
+        静默收 nan/inf 进统计，下游 float('nan') 中毒聚合）。"""
+        run_dir = synthetic.make_run_dir("jsonlconst")
+        path = run_dir / "records.jsonl"
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            path.write_text('{"a": 1}\n{"b": %s}\n' % literal,
+                            encoding="utf-8")
+            with self.assertRaises(SloToolError):
+                list(slo_common.iter_jsonl(path))
+
+    def test_iter_jsonl_normal_rows_unchanged(self):
+        run_dir = synthetic.make_run_dir("jsonlok")
+        path = run_dir / "records.jsonl"
+        path.write_text('{"a": 1}\n\n{"b": null, "c": 2.5, "d": "NA"}\n',
+                        encoding="utf-8")
+        self.assertEqual(list(slo_common.iter_jsonl(path)),
+                         [{"a": 1}, {"b": None, "c": 2.5, "d": "NA"}])
+
+    def test_fmt_ratio_non_finite_is_na(self):
+        self.assertEqual(slo_common.fmt_ratio(float("nan")), "NA")
+        self.assertEqual(slo_common.fmt_ratio(float("inf")), "NA")
+        self.assertEqual(slo_common.fmt_ratio(float("-inf")), "NA")
+        self.assertEqual(slo_common.fmt_ratio(None), "NA")
+        self.assertEqual(slo_common.fmt_ratio(0.5), "0.500000")
+
 
 class FailClosedTests(unittest.TestCase):
     def test_repo_manifest_params_filled_b4_frozen(self):
@@ -470,11 +496,13 @@ class LoadImbalanceHandTests(unittest.TestCase):
             {"kind": "completion", "request_id": "r2", "tick": 100,
              "decision": {}},
         ]
+        # O13（2026-09-23）：2026-09-04 口径修正 drain 源 drains→exits
+        # （与 drains 时刻同语义迁移；形态对齐 test_golden_g1g4.py）。
         ledger = [
             {"train_id": "t0", "instance_index": 0, "tick": 100,
-             "drains": ["r0", "r1"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r0", "r1"], "joiners": []},
             {"train_id": "t1", "instance_index": 1, "tick": 100,
-             "drains": ["r2"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r2"], "joiners": []},
         ]
         synthetic.write_jsonl(run_dir, "online_decision_log.jsonl",
                               decisions)
@@ -755,6 +783,27 @@ class CppLogFallbackTests(unittest.TestCase):
                          ["init", "request", "memory_anchor"])
         self.assertEqual(slo_common.read_init_record(run_dir)["repo_variant"],
                          "astra-sim-face")
+
+    def test_cpp_metric_rejects_non_finite_json_numbers(self):
+        run_dir = synthetic.make_run_dir("cpp_nonfinite")
+        path = run_dir / "cpp.log"
+        for literal in ("NaN", "Infinity", "-Infinity", "1e999", "-1e999"):
+            path.write_text(
+                '[METRIC] {"type":"request","value":%s}\n' % literal,
+                encoding="utf-8")
+            with self.subTest(literal=literal):
+                with self.assertRaises(SloToolError):
+                    list(slo_common.read_cpp_metric_records(path))
+
+    def test_cpp_metric_keeps_finite_json_numbers(self):
+        run_dir = synthetic.make_run_dir("cpp_finite")
+        path = run_dir / "cpp.log"
+        path.write_text(
+            '[METRIC] {"i":1,"f":2.5,"exp":1e300,"null":null}\n',
+            encoding="utf-8")
+        self.assertEqual(
+            list(slo_common.read_cpp_metric_records(path)),
+            [{"i": 1, "f": 2.5, "exp": 1e300, "null": None}])
 
     def test_metrics_log_only_matches_cpp_log_records(self):
         plain = synthetic.make_run_dir("fb1a")

@@ -56,6 +56,59 @@ inline uint64_t fnv1a64_byte(uint64_t h, unsigned char b) {
     std::exit(EXIT_FAILURE);
 }
 
+// M15 (2026-09-23, deep-review): the frozen unsigned integer lexicon for
+// the numeric CSV columns -- non-empty and every character an ASCII
+// '0'..'9', byte-for-byte OnlineCli's is_ascii_digits rule (FP1/E25). A
+// bare std::stoull wraps negatives ("-1" -> ULLONG_MAX) and silently
+// truncates trailing garbage ("12x" -> 12); a bare std::stoi additionally
+// throws an uncaught std::invalid_argument on an empty or non-numeric
+// field. Each numeric column is lexically validated and range-checked
+// BEFORE the conversion, so a malformed value aborts through reader_fatal
+// (zero submissions) instead of entering the simulation silently. The
+// official pipeline CSV is all-digits, so legal input is unchanged.
+bool is_ascii_digits(const std::string& s) {
+    if (s.empty()) {
+        return false;
+    }
+    for (const char c : s) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// For pure-digit strings, lexicographic comparison equals numeric
+// comparison; rejects values the target type cannot hold BEFORE the
+// (throwing) std::sto* conversion runs.
+bool digits_exceed(const std::string& digits, const std::string& type_max) {
+    if (digits.size() != type_max.size()) {
+        return digits.size() > type_max.size();
+    }
+    return digits > type_max;
+}
+
+uint64_t parse_u64_column(const std::string& column, const std::string& value,
+                          const std::string& where) {
+    if (!is_ascii_digits(value) ||
+        digits_exceed(value, "18446744073709551615")) {
+        reader_fatal("CSV column " + column +
+                     " is not a representable unsigned integer: "
+                     "value='" +
+                     value + "' " + where);
+    }
+    return std::stoull(value);
+}
+
+int parse_turn_index_column(const std::string& value, const std::string& where) {
+    if (!is_ascii_digits(value) || digits_exceed(value, "2147483647")) {
+        reader_fatal("CSV column turn_index is not a representable "
+                     "non-negative integer: value='" +
+                     value + "' " + where);
+    }
+    return std::stoi(value);
+}
+
 // Nearest-rank percentile (workspace convention: the ceil(rank*N)-th
 // smallest value, 1-based; e.g. p99 of 496 samples = the 492nd) over a
 // SORTED copy of vals.
@@ -194,21 +247,30 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     std::getline(row, arrival_s, ',');
     std::getline(row, interval_s, ',');
     ++data_rows_;
-
-    RequestEnvelope env;
-    env.session_id = session_id;
-    env.turn_index = std::stoi(turn_index_s);
-    env.request_id = request_id;
-    env.prefill_length = std::stoull(prefill_s);
-    env.decode_length = std::stoull(decode_s);
-    env.inter_request_interval_ns =
-        interval_s.empty() ? 0 : std::stoull(interval_s);
     // Frozen queue index (CSV data-row order, 0-based). Turn-0 carries it
     // directly in the Submit envelope. Turn>0 rows are ALL pre-registered
     // here during the index pass (O(rows), same order as the metrics side;
     // P0 fix note: this is a full pre-registration, no longer bounded by a
     // row window); schedule_future_arrival consumes the entries one-shot.
     const int64_t queue_index = static_cast<int64_t>(data_rows_) - 1;
+    const std::string row_where =
+        "session_id=" + session_id + " request_id=" + request_id +
+        " data row " + std::to_string(queue_index) + " (csv=" + csv_path_ +
+        ")";
+
+    RequestEnvelope env;
+    env.session_id = session_id;
+    env.turn_index = parse_turn_index_column(turn_index_s, row_where);
+    env.request_id = request_id;
+    env.prefill_length =
+        parse_u64_column("prefill_length", prefill_s, row_where);
+    env.decode_length =
+        parse_u64_column("decode_length", decode_s, row_where);
+    env.inter_request_interval_ns =
+        interval_s.empty()
+            ? 0
+            : parse_u64_column("inter_request_interval_ns", interval_s,
+                               row_where);
     env.queue_index = queue_index;
 
     const bool is_turn0 = !arrival_s.empty();
@@ -282,7 +344,9 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
         } else {
             MetricCollector::instance().online_register_request(
                 queue_index, request_id, session_id, env.turn_index,
-                /*absolute_arrival=*/true, std::stoull(arrival_s),
+                /*absolute_arrival=*/true,
+                parse_u64_column("session_arrival_time_ns", arrival_s,
+                                 row_where),
                 /*arrival_parent_queue_index=*/-1, 0);
         }
         last_queue_index_by_session_[session_id] = queue_index;
@@ -301,7 +365,8 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     // counted separately for the run-end accepted-accounting invariant
     // (accepted + dropped == turn-0 rows; backport fix 2026-08-16).
     ++turn0_rows_;
-    const uint64_t arrival_ns = std::stoull(arrival_s);
+    const uint64_t arrival_ns =
+        parse_u64_column("session_arrival_time_ns", arrival_s, row_where);
     env.arrival_world_ns = arrival_ns;
 
     if (!have_prev_turn0_) {
@@ -409,9 +474,6 @@ void WindowedTraceReader::submit_from_calendar() {
         if (max_arrival_ns_ > 0 && entry.arrival_ns > max_arrival_ns_) {
             ++rejected_out_of_range_;
             entry.rejected = true;
-            if (entry.queue_index > consumed_idx_) {
-                consumed_idx_ = entry.queue_index;
-            }
             ++calendar_cursor_;
             continue;
         }
@@ -472,9 +534,6 @@ void WindowedTraceReader::notify_consumed(const int64_t queue_index) {
         std::abort();
     }
     outstanding_rows_.erase(queue_index);
-    if (queue_index > consumed_idx_) {
-        consumed_idx_ = queue_index;
-    }
 }
 
 std::vector<WindowedTraceReader::ArrivalAuditEntry>

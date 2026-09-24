@@ -236,7 +236,6 @@ def base_system() -> dict:
         "reduce-scatter-implementation": ["ring", "ring"],
         "all-to-all-implementation": ["ring", "ring"],
         "collective-optimization": "localBWAware",
-        "boost-mode": 0,
         "roofline-enabled": 1,
         "hbm-kv-restore-bandwidth-sharing": 1,
         "replay-only": 0,

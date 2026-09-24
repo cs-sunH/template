@@ -34,23 +34,12 @@ class BasicTopology : public Topology {
      */
     virtual ~BasicTopology() noexcept;
 
-    /**
-     * Return the type of the basic topology
-     * as a TopologyBuildingBlock enum class element.
-     *
-     * @return type of the basic topology
-     */
-    [[nodiscard]] TopologyBuildingBlock get_basic_topology_type() const noexcept;
-
   protected:
     /// bandwidth of each link
     Bandwidth bandwidth;
 
     /// latency of each link
     Latency latency;
-
-    /// basic topology type
-    TopologyBuildingBlock basic_topology_type;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

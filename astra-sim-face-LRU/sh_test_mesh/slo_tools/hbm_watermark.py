@@ -2043,12 +2043,12 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
             if reserve_tokens < 0:
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
-            npus_for_calibers = load_npus_per_instance(
-                args.run_dir, args.request_manifest, request_manifest_loader) \
-                if not npus else npus
+            # capacity 仅在 load_npus_per_instance 成功(npus 真值)时赋值,
+            # 进入本块 npus 必非零,直接复用(npus_for_calibers 的回取调用
+            # 不可达,且其异常也不在下方 except 域内,已删)。
             try:
                 calibers = compute_capacity_calibers(
-                    model, npus_for_calibers, hardware["bytes"],
+                    model, npus, hardware["bytes"],
                     reserve_tokens)
             except (ValueError, RuntimeError, ZeroDivisionError) as exc:
                 print(f"[hbm-watermark] 警告：三口径容量剖面计算失败"

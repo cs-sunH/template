@@ -100,16 +100,18 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
                 this->et_feeder, sys->id);
     }
     this->comm_groups.clear();
-    // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
+    this->hw_resource = new HardwareResource(sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     if (sys->hbm_bandwidth_contention || sys->hbm_kv_restore_bandwidth_sharing) {
         // sh_2.0: the LocalHbmBandwidthModel is a preserved execution model
         // (contract B11) -- assembled in BOTH modes, identical timing/params.
         // With hbm-bandwidth-contention (default) it runs the N-way
-        // equal-split policy over every HBM user (COMP, KV restore, NoC p2p
-        // comm endpoints, pool endpoints); with only the legacy
+        // equal-split policy over its HBM users (COMP, NoC p2p comm
+        // endpoints, pool endpoints, and KV restore only under the
+        // hbm-kv-restore-bandwidth-sharing switch -- 策略说明 §4.4, M24:
+        // a sharing-off restore keeps the closed-form single-slot timing in
+        // issue_local_hbm_kv_restore); with only the legacy
         // hbm-kv-restore-bandwidth-sharing flag (contention off) no comm/pool
         // jobs are ever issued, so the model degenerates to the historical
         // one-COMP-plus-one-restore 50/50 behavior (A/B baseline).
@@ -201,18 +203,12 @@ void Workload::record_network_bandwidth(uint64_t node_id,
                                         Tick execution_time) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
-        auto& online_stat = online_statistics_state_or_fail(node_id);
-        if (execution_time > 0 && online_stat.comm_size.has_value()) {
-            online_stat.network_bandwidth =
-                static_cast<double>(online_stat.comm_size.value()) /
-                execution_time;
-        }
-        return;
-    }
-    auto& op_stat = stats->get_operator_statistics(node_id);
-    if (execution_time > 0 && op_stat.comm_size.has_value()) {
-        op_stat.network_bandwidth =
-            static_cast<double>(op_stat.comm_size.value()) / execution_time;
+        // Compact online mode keeps no per-node bandwidth record: the
+        // OnlineStatisticsState::network_bandwidth field was write-only
+        // dead state and was removed.  The lookup stays as the fail-closed
+        // guard for the terminal callback (an unknown/duplicate online node
+        // exits instead of silently passing).
+        online_statistics_state_or_fail(node_id);
     }
 }
 
@@ -405,11 +401,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
     // TODO: someway to identify this metadata node is a pytorch pg node
-    if (true) {
-        issue_pytorch_pg_metadata(node);
-    } else {
-        throw std::runtime_error("Unknown metadata node type");
-    }
+    issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
 
@@ -424,9 +416,9 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
         // already converted them into nanoseconds
         runtime = node.compute.runtime_ns;
     }
-    if (node.is_cpu_op) {
-        hw_resource->tics_cpu_ops += runtime;
-    } else {
+    if (!node.is_cpu_op) {
+        // tics_cpu_ops (CPU replay time) was write-only and was removed;
+        // only the GPU counter is read by Workload::report.
         hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
@@ -454,12 +446,6 @@ void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
                 node.compute.tensor_size, wlhd);
         }
     }
-    // R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger issue
-    // record moved INTO the backend -- AnalyticalRemoteMemory::issue counts
-    // on the real resolved port_index (Workload must not infer a port from
-    // sys_id; see RemoteFifoLedger.hh). The call below is the only issue
-    // call site in the repo, so per-request accounting coverage is
-    // unchanged, now with the correct key under every memory architecture.
     sys->remote_mem->issue(node.compute.tensor_size, wlhd);
 }
 
@@ -480,17 +466,38 @@ void Workload::issue_local_hbm_kv_restore(
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) HBM restore
     // completion branch was deleted with the replay route; strategy/static
     // keep the real LocalHbmBandwidthModel DMA physics.
-    if (local_hbm_bandwidth_model != nullptr) {
+    // M24 (策略说明 §4.4): restore joins the shared HBM model only under
+    // the hbm-kv-restore-bandwidth-sharing switch -- with contention on but
+    // sharing off it keeps the closed-form single-slot timing below instead
+    // of silently entering the N-way model (the switch used to be masked by
+    // the `contention || sharing` model-construction gate).  A zero-byte
+    // restore never creates an HBM job (same Workload-layer guard as the
+    // other three HBM issue paths) and falls through to the fixed-latency
+    // closed form instead of throwing from inside the model where the event
+    // dispatcher would swallow it.
+    if (local_hbm_bandwidth_model != nullptr &&
+        sys->hbm_kv_restore_bandwidth_sharing && tensor_size > 0) {
         local_hbm_bandwidth_model->issue_restore(tensor_size, wlhd);
         return;
     }
 
+    // Closed-form single-slot timing (both HBM switches off, sharing off, or
+    // a zero-byte restore): fail closed on a missing/non-positive
+    // local-mem-bw instead of dividing into an Inf runtime cast to uint64
+    // (M14; the Sys zero-rate guard only clears the contention flag and
+    // never protects this fallback division).
+    if (sys->local_mem_bw <= 0) {
+        workload_logger_->critical(
+            "local HBM KV restore requires local-mem-bw in the system "
+            "configuration (local_mem_bw={})",
+            sys->local_mem_bw);
+        exit(EXIT_FAILURE);
+    }
     const double elapsed_seconds =
         (static_cast<double>(sys->local_mem_latency) / 1e9) +
         static_cast<double>(tensor_size) / sys->local_mem_bw;
     const uint64_t runtime = std::max<uint64_t>(
         1, static_cast<uint64_t>(std::ceil(elapsed_seconds * 1e9)));
-    hw_resource->tics_hbm_dma_ops += runtime;
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
@@ -503,6 +510,20 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     if (node.is_cpu_op) {
         throw std::runtime_error("Roofline is only available for GPU nodes");
         return;
+    }
+
+    // Fail-closed configuration check (aligned with the face fix of its M9):
+    // roofline is enabled, but its two divisors below were never configured
+    // (Sys defaults both to 0 when the "peak-perf"/"local-mem-bw" keys are
+    // missing or non-positive).  Using them would produce NaN/Inf perf or
+    // utilization values.
+    if (sys->peak_perf <= 0.0 || sys->local_mem_bw <= 0.0) {
+        workload_logger_->critical(
+            "roofline is enabled but peak-perf/local-mem-bw are missing or "
+            "non-positive in the system configuration (peak_perf={}, "
+            "local_mem_bw={})",
+            sys->peak_perf, sys->local_mem_bw);
+        exit(EXIT_FAILURE);
     }
 
     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
@@ -529,9 +550,16 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                                                      node_tensor_size);
     }
 
-    double operational_intensity = num_ops / tensor_size;
-    double perf = sys->roofline->get_perf(operational_intensity);
-    double compute_elapsed_time = num_ops / perf;  // sec
+    // A zero-FLOP node has no roofline value at all; skip the divisions and
+    // keep benign zeros instead of 0/0 = NaN (perf is 0 at zero intensity).
+    double operational_intensity = 0.0;
+    double perf = 0.0;
+    double compute_elapsed_time = 0.0;  // sec
+    if (node_num_ops != 0ul) {
+        operational_intensity = num_ops / tensor_size;
+        perf = sys->roofline->get_perf(operational_intensity);
+        compute_elapsed_time = num_ops / perf;  // sec
+    }
     if (sys->local_mem_latency > 0) {
         const double compute_only_elapsed_time = num_ops / sys->peak_perf;
         const double local_mem_elapsed_time =
@@ -599,22 +627,23 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         local_hbm_bandwidth_model->issue_compute(
             node_num_ops, node_tensor_size, wlhd);
     } else {
-        if (node.is_cpu_op) {
-            hw_resource->tics_cpu_ops += runtime;
-        } else {
-            hw_resource->tics_gpu_ops += runtime;
-        }
+        // is_cpu_op was rejected at the top of issue_comp; tics_cpu_ops was
+        // write-only and was removed.
+        hw_resource->tics_gpu_ops += runtime;
         sys->register_event(this, EventType::General, wlhd, runtime);
     }
 
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
-        online_stat.operation_intensity = operational_intensity;
         online_stat.compute_utilization = perf / sys->peak_perf;
-        online_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
-        online_stat.is_memory_bound = perf < sys->peak_perf;
+        // Zero-intensity nodes have no memory utilization; leave the field
+        // unset instead of dividing by 0 (a non-finite value fails closed in
+        // the compact online aggregation).
+        if (operational_intensity != 0.0) {
+            online_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         if (sys->trace_enabled) {
             workload_logger_
                 ->debug("operation_intensity={}, perf={}, elapsed_time={} "
@@ -624,8 +653,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         online_stat.compute_utilization.value(),
-                        online_stat.memory_utilization.value(), tensor_size,
-                        num_ops);
+                        online_stat.memory_utilization.value_or(0),
+                        tensor_size, num_ops);
         }
     } else {
         // Static ET and history-preserving online microbenchmarks retain the
@@ -633,8 +662,11 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         auto& op_stat = this->stats->get_operator_statistics(node.global_id);
         op_stat.operation_intensity = operational_intensity;
         op_stat.compute_utilization = perf / sys->peak_perf;
-        op_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
+        // Same zero-denominator skip as the compact online branch above.
+        if (operational_intensity != 0.0) {
+            op_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         op_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
@@ -645,7 +677,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         op_stat.compute_utilization.value(),
-                        op_stat.memory_utilization.value(), tensor_size, num_ops);
+                        op_stat.memory_utilization.value_or(0), tensor_size,
+                        num_ops);
         }
     }
 }
@@ -686,8 +719,6 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
     }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
@@ -755,8 +786,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -808,8 +837,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -926,7 +953,6 @@ void Workload::call(EventType event, CallData* data) {
         collective_comm_node_id_map.erase(node_id_it);
         collective_comm_wrapper_map.erase(wrapper_it);
 
-        hw_resource->tics_gpu_comms += int_data->execution_time;
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.

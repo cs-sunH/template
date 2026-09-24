@@ -24,7 +24,6 @@ class Algorithm : public Callable {
     virtual void call(EventType event, CallData* data);
     virtual void exit();
 
-    Name name;
     int id;
     BaseStream* stream;
     LogicalTopology* logical_topo;

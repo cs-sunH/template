@@ -211,9 +211,12 @@ def load_digests(bridge_dir):
 
 def load_decision_log(bridge_dir):
     """online_decision_log.jsonl:每 request 恰 prefill/decode/completion
-    三条决策(kind);completion 行 tick 即 KV 生命周期终止时刻。"""
+    三条决策(kind);completion 行 tick 即 KV 生命周期终止时刻。
+    同一 (kind, request_id) 重复出现记入 duplicates(M32 修复:此前 dict
+    赋值 last-wins 静默覆盖重复行,R3 只查缺失不查重复/总数恒 PASS)。"""
     by_kind = {"prefill": {}, "decode": {}, "completion": {}}
     kind_counts = {}
+    duplicates = []
     rows = 0
     for row in _iter_jsonl(_artifact_path(
             bridge_dir, "online_decision_log.jsonl")):
@@ -221,8 +224,15 @@ def load_decision_log(bridge_dir):
         kind = row.get("kind")
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
         if kind in by_kind:
-            by_kind[kind][row["request_id"]] = row
-    return by_kind, kind_counts, rows
+            request_id = row["request_id"]
+            if request_id in by_kind[kind]:
+                duplicates.append({
+                    "kind": kind,
+                    "request_id": request_id,
+                    "ticks": [by_kind[kind][request_id].get("tick"),
+                              row.get("tick")]})
+            by_kind[kind][request_id] = row
+    return by_kind, kind_counts, rows, duplicates
 
 
 def load_cpp_audit(cpp_log_path):
@@ -341,7 +351,7 @@ def main(argv=None) -> int:
     committed_counts, committed_ranks, group_pairs, completed_nodes_total = \
         load_committed(args.bridge_dir)
     digests, watch_total, digest_node_total = load_digests(args.bridge_dir)
-    decision_log, decision_kind_counts, decision_rows = \
+    decision_log, decision_kind_counts, decision_rows, decision_duplicates = \
         load_decision_log(args.bridge_dir)
     python_ledger = load_python_ledger(args.bridge_dir)
     query_log = load_sensing_query_log(args.bridge_dir)
@@ -537,6 +547,18 @@ def main(argv=None) -> int:
     # request 恰一条,kind_counts 校验;tick = KV 生命周期终止时刻)、
     # (b) cpp.log phase-5 total_kv_actions(每 request ≥ 1 动作的计数级
     # 保证)。
+    # M32 修复:"每 request 恰一条"现在真实执行——重复行由 load_decision_log
+    # 检出(decision_duplicates),kind 行数/唯一 request 数与 manifest 总数
+    # 对平(decision_kind_counts 即该对账的自然消费点,原为只存不读死变量)。
+    kv_kind_bad = []
+    for kind in ("prefill", "decode", "completion"):
+        kind_rows = decision_kind_counts.get(kind, 0)
+        unique_requests = len(decision_log[kind])
+        if kind_rows != manifest_count or unique_requests != manifest_count:
+            kv_kind_bad.append({
+                "kind": kind, "decision_rows": kind_rows,
+                "unique_requests": unique_requests,
+                "expected": manifest_count})
     kv_missing_bad = []
     kv_tick_bad = []
     kv_order_bad = []
@@ -580,10 +602,14 @@ def main(argv=None) -> int:
         active_left = []
         if cpp_counters is not None and cpp_counters["active"] != 0:
             active_left.append(cpp_counters["active"])
-        check("R3a", not kv_missing_bad and not kv_low,
-              "KV 生命周期缺失(每 request 恰一 completion 决策;C++ "
-              "total_kv_actions >= 请求数): 缺 completion {} 条 / 动作"
-              "计数过低 {}".format(len(kv_missing_bad), kv_low))
+        check("R3a", not kv_missing_bad and not kv_low
+              and not decision_duplicates and not kv_kind_bad,
+              "KV 生命周期缺失/重复/计数失配(每 request 恰 prefill/decode/"
+              "completion 三条决策;C++ total_kv_actions >= 请求数): 缺 "
+              "completion {} 条 / 重复决策 {} 条 / kind 计数失配 {} / "
+              "动作计数过低 {}".format(
+                  len(kv_missing_bad), decision_duplicates[:5],
+                  kv_kind_bad, kv_low))
         check("R3b", not kv_tick_bad,
               "completion 决策 tick != ledger completed_tick: {} 条".format(
                   len(kv_tick_bad)))
@@ -593,7 +619,8 @@ def main(argv=None) -> int:
               "active 残留 {}".format(
                   len(kv_order_bad), len(kv_instance_bad), active_left))
     else:
-        check("R3a", False, "online_decision_log.jsonl 缺失/为空")
+        check("R3a", False, "online_decision_log.jsonl 缺失/为空(kind 计数"
+              "失配: {})".format(kv_kind_bad))
         kv_low, active_left = [], []
 
     # ---- R4 排队账本对平 ----
@@ -845,6 +872,8 @@ def main(argv=None) -> int:
                 audit_bad=audit_bad,
                 kv_missing_bad=kv_missing_bad, kv_tick_bad=kv_tick_bad,
                 kv_order_bad=kv_order_bad, kv_instance_bad=kv_instance_bad,
+                kv_kind_bad=kv_kind_bad,
+                decision_duplicates=decision_duplicates,
                 kv_low=kv_low, active_left=active_left,
                 admitted_left=admitted_left, committed_left=committed_left,
                 ready_bad=ready_bad, final_ready=final_ready,
@@ -869,7 +898,8 @@ def _render_report(balanced, failures, manifest_count, arrival_epochs,
                    lifecycle_bad, watch_total_bad, batch_watch_bad,
                    batch_rank_bad, node_total_bad, audit_bad,
                    kv_missing_bad, kv_tick_bad, kv_order_bad,
-                   kv_instance_bad, kv_low, active_left,
+                   kv_instance_bad, kv_kind_bad, decision_duplicates,
+                   kv_low, active_left,
                    admitted_left, committed_left,
                    ready_bad, final_ready, issued_only_python,
                    issued_residual_bad, residual_peak, final_issued,
@@ -903,12 +933,14 @@ def _render_report(balanced, failures, manifest_count, arrival_epochs,
         else "FAIL: watch 总数 {} 条 / 批 watch {} 条 / 批 rank {} 条 / node 总数 {} 条 / 审计 {} 条".format(
             len(watch_total_bad), len(batch_watch_bad), len(batch_rank_bad),
             len(node_total_bad), len(audit_bad))))
-    lines.append("| R3 KV 账本对平(decision_log 每 request 恰一次 completion 决策;completion tick == ledger completed_tick;prefill<=decode<=completion;kv 实例 id ∈ [0,53];cpp total_kv_actions >= 请求数;运行结束 active=0) | {} |".format(
+    lines.append("| R3 KV 账本对平(decision_log 每 request 恰一次 completion 决策,零重复、prefill/decode/completion 行数各= 请求数;completion tick == ledger completed_tick;prefill<=decode<=completion;kv 实例 id ∈ [0,53];cpp total_kv_actions >= 请求数;运行结束 active=0) | {} |".format(
         "PASS" if not (kv_missing_bad or kv_tick_bad or kv_order_bad
-                       or kv_instance_bad or kv_low or active_left)
-        else "FAIL: 缺 completion={} tick={} 乱序={} 实例={} kv_low={} active_left={}".format(
+                       or kv_instance_bad or kv_kind_bad
+                       or decision_duplicates or kv_low or active_left)
+        else "FAIL: 缺 completion={} tick={} 乱序={} 实例={} 重复决策={} kind计数失配={} kv_low={} active_left={}".format(
             len(kv_missing_bad), len(kv_tick_bad), len(kv_order_bad),
-            len(kv_instance_bad), kv_low, active_left)))
+            len(kv_instance_bad), len(decision_duplicates), kv_kind_bad,
+            kv_low, active_left)))
     lines.append("| R4 排队账本对平(运行结束 admitted/committed 清空;末边界 admitted_count=0) | {} |".format(
         "PASS" if not (admitted_left or committed_left) else
         "FAIL: admitted={} committed={}".format(

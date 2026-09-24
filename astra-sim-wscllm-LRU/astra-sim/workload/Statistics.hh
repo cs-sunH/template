@@ -1,7 +1,7 @@
 #ifndef ASTRASIM_WORKLOAD_STATISTICS_HH
 #define ASTRASIM_WORKLOAD_STATISTICS_HH
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 #include <array>
 #include <cstddef>
@@ -27,7 +27,7 @@ class Statistics {
     class OperatorStatistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
-        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, REPLAY, INVALID };
+        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
         static OperatorType get_operator_type(
             const std::shared_ptr<Chakra::ETFeederNode> node);
         // Step 1-8: online-mode overload dispatching on the NodeView fields
@@ -65,15 +65,6 @@ class Statistics {
         std::optional<double> compute_utilization;
         std::optional<double> operation_intensity;
         std::optional<bool> is_memory_bound;
-
-        // communication node
-        std::optional<uint64_t> comm_size;  // Size of communication in bytes
-        std::optional<double>
-            network_bandwidth;  // Achieved bandwidth in bytes/ns
-
-        // remote memory node
-
-        // replay node
     };
 
   public:
@@ -82,9 +73,6 @@ class Statistics {
     OperatorStatistics& get_operator_statistics(NodeId node_id);
 
     const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
-
-    const std::unordered_map<NodeId, OperatorStatistics>&
-    get_operator_statistics() const;
 
     void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                       Tick start_time);
@@ -117,9 +105,6 @@ class Statistics {
     // Wall time of this rank: max operator end_time.
     Tick get_wall_time() const;
 
-    // Merged union of all intervals of the given operator type.
-    Tick get_type_time(OperatorStatistics::OperatorType type) const;
-
     // Merged union of the intervals of the given operator type, clipped to
     // [window_start, window_end].
     Tick calculate_type_time_in_window(
@@ -141,13 +126,6 @@ class Statistics {
     WindowedRooflineUtilization calculate_roofline_utilization_in_window(
         Tick window_start,
         Tick window_end) const;
-
-    // Online service mode retires a terminal NodeView after every last
-    // consumer has observed it.  Static ET callers never use this path, and
-    // an enabled microbenchmark explicitly preserves the complete history.
-    // Repeating a retirement is harmless so terminal callback paths can stay
-    // idempotent.
-    void retire_online_operator(NodeId node_id, bool preserve_history);
 
     // Workload fixes this policy before issuing the first online node.  It
     // lets the service path fail closed on a live GPU even when no terminal
@@ -252,8 +230,8 @@ class Statistics {
     // queries are supported after compaction.
 
     // Online service-only compact aggregates.  They are populated exclusively
-    // by retire_online_operator(false); static and online microbenchmark runs
-    // keep the legacy unordered_map scan unchanged.
+    // by complete_online_service_operator(); static and online microbenchmark
+    // runs keep the legacy unordered_map scan unchanged.
     bool online_compaction_active_ = false;
     // Set at the first direct compact-service record, including a live node.
     // It keeps legacy finalization from silently treating an empty map as a

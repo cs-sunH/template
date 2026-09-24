@@ -134,11 +134,13 @@ CSV 维持 8 列。
   LRU 序把驻留**前缀 [0, resident_prefix_layers) 整体** remote_store →
   状态→REMOTE、清实例归属。
 
-**触发时机（五处，与原仓完全一致，不新增触发位置）**：prefill 准入
+**触发时机（四处收敛点，与原仓完全一致，不新增触发位置）**：prefill 准入
 （`prepare_history`）、decode 准入 P→D 交接（`move_prefill_to_decode`）、
 KV 容量增长（prefill/decode 增长路径）、decode 终态净额预占
-（`reserve_request_capacity`，净额口径）、净额回补（`extend_request_capacity`）
-——后两处为 wscllm 生产链路真实使用。
+（`reserve_request_capacity`，净额口径）——净额预占为 wscllm 生产链路
+真实使用。净额回补（`extend_request_capacity`）仅增量记账、**不触发逐出
+收敛**：resident→reserved 1:1 换位保证任何瞬间不超订（§4.5），容量已由
+净额预占处的收敛 + 迁移删除旧驻留共同保证。
 
 **失败语义**：两阶段耗尽仍不足 → 记 deep_gap（延迟事件计数）后**队头阻塞等待**，
 容量纪元（capacity_epoch）唤醒后重试，绝不改投其他实例；不搬 sh 的"耗尽即 raise"。
@@ -211,8 +213,11 @@ hop 零计费、双计有守卫拒收）：
 本地 HBM 为 N 用户流体模型：推理 COMP、KV restore DMA、NoC p2p 数据端点读/写、
 池流量端点读/写**六类作业严格均分**同一份 B_HBM（任一作业完成立即事件驱动
 重分配）；restore 与推理的带宽共享由 `hbm-kv-restore-bandwidth-sharing` 开关。
-KV 传输 tag 由专用分配器自 10,000,000 起单调分配，与既有请求内 tag 段
-（queue_index×10000 + {1000,1900,3000}）错开，上限 2³²−1。
+KV 传输 tag 由专用分配器自 100,000,000 起单调分配，与既有请求内 tag 段
+（queue_index×10000 + {1000,1900,3000}）错开，上限 2³²−1。（H8 修正
+2026-09-24：原基址 10,000,000 的错开只对 <1000 行队列成立，30s 窗口源
+trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9999 行两段
+保持不相交，`_stage_tag` 越界 fail-closed 守卫随基址同步补上。）
 
 ### 4.5 守恒与不变量
 
@@ -311,7 +316,7 @@ KV 传输 tag 由专用分配器自 10,000,000 起单调分配，与既有请求
 | KV 层次 | LOCAL / PARTIAL（前 ⌈L/2⌉ 层片上）/ REMOTE，三级（承袭 sh_2.0，去类型化） |
 | 层划分 | 前 ⌈L/2⌉ 层驻留，后 ⌊L/2⌋ 层首迁，不可配置 |
 | 淘汰 | 去类型化两段式 LRU：（完成时刻， 会话标识）升序；先全部后半层、不足才整体外迁；逐 NPU 收敛、逐笔重查、活跃保护 |
-| 触发点 | 五处（prefill 准入 / decode 准入 / 容量增长 / decode 终态净额预占 / 净额回补），不新增位置 |
+| 触发点 | 四处收敛点（prefill 准入 / decode 准入 / 容量增长 / decode 终态净额预占），不新增位置；净额回补 extend 仅增量记账、不触发逐出收敛 |
 | 恢复 | 按需（非预取）六分支：PARTIAL 同实例后缀回迁与前缀计算真流水；PARTIAL 跨实例前缀迁移+后缀恢复两段链；REMOTE 全量回迁经最近边缘端口；RECOMPUTE 已删除 |
 | 失败语义 | 队头阻塞 + 容量纪元唤醒重试（不改映射；不搬 sh 的 raise） |
 | 预占 | decode 目的地净额预占（终态−旧驻留账面）+ 迁移后 extend 回补，resident→reserved 1:1 不超订 |

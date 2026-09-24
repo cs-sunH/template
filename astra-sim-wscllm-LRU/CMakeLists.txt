@@ -115,7 +115,7 @@ set_target_properties(AstraSim
 )
 
 option(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST
-       "Build the communicator-scoped OfflineGreedy schedule journal test" OFF)
+       "Build the communicator-scoped OfflineGreedy schedule journal test" ON)
 if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
     enable_testing()
     add_executable(AstraSim_OfflineGreedyScheduleJournalTest

@@ -48,18 +48,6 @@ void ServiceCoordinator::on_alarm_scheduled() {
     ++pending_alarm_count_;
 }
 
-void ServiceCoordinator::on_fence_scheduled() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    ++pending_fence_count_;
-}
-
-void ServiceCoordinator::on_fence_resolved() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    assert(pending_fence_count_ > 0);
-    --pending_fence_count_;
-    maybe_finish();
-}
-
 void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     std::lock_guard<std::mutex> lock(mtx_);
     // Phase-7 §10.7: record the close source BEFORE the state transitions
@@ -203,13 +191,6 @@ uint64_t ServiceCoordinator::pending_alarm_count() const {
     return pending_alarm_count_;
 }
 
-uint64_t ServiceCoordinator::pending_fence_count() const {
-    // P0-2 (2026-08-31): read-only diagnostics accessor (step-1-5 counter;
-    // no behavior change).
-    std::lock_guard<std::mutex> lock(mtx_);
-    return pending_fence_count_;
-}
-
 void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
@@ -246,15 +227,14 @@ void ServiceCoordinator::maybe_finish() {
     // unreachable there (input_open_ is false); it is the IDLE fixture's
     // contract.
     if (input_open_ && active_request_count_ == 0 &&
-        pending_alarm_count_ == 0 && pending_fence_count_ == 0 &&
-        state_ == ServiceState::ACTIVE) {
+        pending_alarm_count_ == 0 && state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::IDLE);
     }
 }
 
 bool ServiceCoordinator::finished_locked() const {
     return !input_open_ && active_request_count_ == 0 &&
-           pending_alarm_count_ == 0 && pending_fence_count_ == 0;
+           pending_alarm_count_ == 0;
 }
 
 }  // namespace ExecutionDriven

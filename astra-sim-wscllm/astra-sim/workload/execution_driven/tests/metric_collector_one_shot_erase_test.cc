@@ -56,9 +56,14 @@ using json = nlohmann::json;
 // value while the mirror assert still holds, update the number and re-prove
 // -- that failure mode is protective, not an equivalence break.
 // (R5 wscllm sync, 2026-08-29: this repo's ComputeAttrs has no
-// hbm_access_mode tail field, so the anchor is 440 here vs 448 in sh_1.0;
-// the mirror assert -- the real "size did not grow" proof -- holds with
-// offsets 57/58/59 and the next member at 64.)
+// hbm_access_mode tail field, so the anchor sat 8 bytes under sh_1.0's
+// 448.  2026-09-24 anchor update, per the update-the-number rule above:
+// OnlineStatisticsState slimmed to {memory_utilization, compute_utilization,
+// comm_size} -- this repo's online path has no readers for the removed
+// operation_intensity/is_memory_bound/network_bandwidth optionals -- which
+// lowered the anchor 440 -> 400; the mirror assert -- the real "size did
+// not grow" proof -- holds unchanged with offsets 57/58/59 and the next
+// member at 64.)
 // ---------------------------------------------------------------------------
 struct OnlineNodePreR2Mirror {
     uint64_t global_id = 0;
@@ -82,7 +87,7 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 440,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 400,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 

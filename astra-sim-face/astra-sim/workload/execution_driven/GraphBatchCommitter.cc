@@ -457,9 +457,7 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 const uint64_t tag = node.comm.tag;
                 const uint64_t bytes = node.comm.bytes;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
-                    dst >= ctx_.num_ranks ||
-                    tag > static_cast<uint64_t>(
-                              std::numeric_limits<uint32_t>::max())) {
+                    dst >= ctx_.num_ranks) {
                     return fail("node[" + std::to_string(node_index) +
                                 "] p2p src/dst/tag out of range");
                 }
@@ -846,11 +844,6 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     return std::nullopt;
 }
 
-bool GraphBatchCommitter::was_json_id_committed(const int rank,
-                                                const uint64_t id) const {
-    return resolve_store_id(rank, id).has_value();
-}
-
 std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
     const int rank, const uint64_t json_id) const {
     if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
@@ -953,7 +946,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
         std::unordered_map<int, std::set<uint64_t>> batch_ids;
         std::set<std::pair<std::string, std::string>> node_stages;
         std::set<int> touched;
-        uint64_t node_count = 0;
         uint64_t node_index = 0;
         for (const auto& parsed : batch.nodes) {
             const int rank = parsed.node.rank;
@@ -1013,18 +1005,12 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             if (type == 5 || type == 6) {
                 const int src = node.comm.src;
                 const int dst = node.comm.dst;
-                const int64_t tag = node.comm.tag;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
                     return "node[" + std::to_string(node_index) +
                            "] comm src/dst out of range: src=" +
                            std::to_string(src) +
                            " dst=" + std::to_string(dst);
-                }
-                if (tag < 0) {
-                    return "node[" + std::to_string(node_index) +
-                           "] comm tag out of range: " +
-                           std::to_string(tag);
                 }
                 if (type == 5 && src != rank) {
                     return "node[" + std::to_string(node_index) +
@@ -1055,7 +1041,6 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
 
             node_stages.insert({request_id, stage});
             touched.insert(rank);
-            ++node_count;
             ++node_index;
         }
 

@@ -272,13 +272,20 @@ def build_sh10_run_dir() -> Path:
                 for record in decision_log), encoding="utf-8")
 
     # -- train_ledger（含 first_step 行以覆盖跳过打印）---------------------
+    # O13（2026-09-23）：2026-09-04 口径修正把 load_imbalance 的 drain
+    # 源从 drains 键改为 exits 键（load_imbalance.py docstring 自证，
+    # 缺 exits 数组 fail-closed）——夹具按"与 drains 时刻同语义迁移"补
+    # exits 数组（形态对齐 test_golden_g1g4.py 新 schema 行）。
     (results / "train_ledger.jsonl").write_text(
         json.dumps({"tick": 1100, "instance_index": 0, "first_step": True,
-                    "train_id": "t0", "drains": []}, sort_keys=True) + "\n"
-        + json.dumps({"tick": 20_000_001_400, "instance_index": 0, "first_step": False,
-                      "train_id": "t0",
-                      "drains": ["session_A_request_0",
-                                 "session_B_request_0"]},
+                    "train_id": "t0", "drains": [], "exits": [],
+                    "joiners": []}, sort_keys=True) + "\n"
+        + json.dumps({"tick": 20_000_001_400, "instance_index": 0,
+                      "first_step": False, "train_id": "t0",
+                      "drains": [],
+                      "exits": ["session_A_request_0",
+                                "session_B_request_0"],
+                      "joiners": []},
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----

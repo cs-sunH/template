@@ -125,15 +125,15 @@ class Workload : public Callable {
     void complete_online_statistics(const ExecutionDriven::NodeView& node,
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
-    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
 
     // Body shared by every generic (wlhd) node completion: node release /
     // stats / metrics / terminal record / dependency release / static-mode
     // auto-advance.  Extracted from Workload::call's generic branch so the
     // LocalHbmBandwidthModel callback can complete COMP nodes through the
     // exact same path.  event is the completion event the caller observed
-    // (PacketSent/PacketReceived keep their network-bandwidth statistics
-    // semantics).
+    // (PacketSent/PacketReceived for p2p network completions, General
+    // otherwise; the network-bandwidth statistics it used to feed were
+    // removed as write-only dead state).
     void finish_generic_node(uint64_t node_id, EventType event);
 
     // Two-event join for p2p comm nodes with an HBM endpoint job: the node

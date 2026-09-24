@@ -41,11 +41,10 @@ set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Path-1 removal (2026-08-18): the static aware target and
     # congestion_aware/main.cc were deleted with the offline static pipeline
-    # (ruling A); the shared-source glob still excludes both entry files so
-    # the online target declares its own main only.
+    # (ruling A); the shared-source glob still excludes the online entry
+    # file so the online target declares its own main only.
     set(srcs_congestion_aware_shared ${srcs_congestion_aware} ${srcs_common})
     list(REMOVE_ITEM srcs_congestion_aware_shared
-            ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main_online.cc)
 
     # Execution-driven mechanism sources (online target only). The root CMake
@@ -168,16 +167,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_model_test.cc
             ${srcs_execution_driven})
 
-    # R3 (frozen plan §3.6 / stage E) RemoteFifoLedger real-backend-port
-    # fixture (test-only): PER_NPU with out-of-order npu-ids (key label),
-    # PER_NODE 2x2 (shared-port active/pending/peak), MEMORY_POOL (single
-    # port) -- per-port counters against the backend queue's closed-form
-    # serial service ticks; never part of the baseline gates.
-    add_executable(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_fifo_ledger_test.cc
-            ${srcs_execution_driven})
-
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
@@ -205,8 +194,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmBandwidthModelTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -248,9 +235,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -342,13 +326,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
     # Statistics compaction regression: zero-retirement live GPU failures and
     # microbenchmark history preservation. Standalone and test-only.
     add_executable(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest
@@ -357,7 +334,7 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
     # BaseStream/UsageTracker lifecycle regression: no retired stream-id
-    # tables, exact ready-list scheduling gate, and bounded online history.
+    # tables, exact ready-list scheduling gate, and O(1) UsageTracker state.
     add_executable(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/system_history_lifecycle_test.cc)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_SystemHistoryLifecycleTest LINK_PRIVATE AstraSim)
@@ -431,6 +408,79 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_AlarmCancellationTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Orphan-test registration (face M12② same fix): the three tests below
+    # previously had only a manual g++ line in their header comments (pointing
+    # at the sister-repo root template/astra-sim-wscllm), so they sat outside
+    # every build and their regressions escaped the tree. They join the build
+    # with the same recipe as the fixtures above: shared sources +
+    # execution_driven glob, linked against AstraSim and the
+    # Analytical_Congestion_Aware static library (which carries the backend
+    # event-queue/fluid sources these tests exercise); never part of the
+    # baseline gates.
+
+    # Phase-1 step 1-2 online CLI contract test (R1-R14, incl. the FP1
+    # hardened unsigned lexicon and watchdog bounds).
+    add_executable(AstraSim_Analytical_Congestion_Aware_CliOnlineTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/cli_online_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CliOnlineTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_CliOnlineTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CliOnlineTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CliOnlineTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_CliOnlineTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_CliOnlineTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Phase-1 step 1-1 EventQueue tick-end closing + same-tick deferred
+    # channel unit tests, incl. the FluidScheduler deferred-flush integration
+    # (the scheduler comes from the linked Analytical_Congestion_Aware
+    # library).
+    add_executable(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/event_queue_deferred_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Phase-1 step 1-2 IDLE lifecycle fixture (IDLE/ACTIVE/DRAINING/FINISHED
+    # transitions, EOF/Error terminals, overflow audit, close-vs-submit race).
+    # Uses std::thread (the only thread-using test in this directory), so it
+    # additionally links pthread, matching the -pthread of its old manual
+    # g++ line.
+    add_executable(AstraSim_Analytical_Congestion_Aware_IngressIdleTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/ingress_idle_fixture.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_IngressIdleTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_IngressIdleTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_IngressIdleTest LINK_PRIVATE pthread)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_IngressIdleTest
             PROPERTIES
             COMPILE_WARNING_AS_ERROR OFF
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/

@@ -19,6 +19,7 @@
      容差内(口径差:层次 A 对 attention 取 max,层次 B 17 节点链
      逐类 max 求和)。
 """
+import math
 import os
 import sys
 import unittest
@@ -41,8 +42,73 @@ from wsc_llm_scheduler import (  # noqa: E402  (红线:只读 import)
     DECODE_ROLE,
     WscLlmHardware,
     WscLlmModel,
-    estimate_iteration_time_ns,
+    estimate_model_weight_bytes,
 )
+
+
+def estimate_iteration_time_ns(
+    hardware: WscLlmHardware,
+    model: WscLlmModel,
+    *,
+    instance_size: int,
+    p_chunk: int,
+    d_batch: int,
+    d_token: int,
+) -> int:
+    """Layer-A 解析时序 oracle(2026-09-24 自 wsc_llm_scheduler 迁入本测试)。
+
+    深挖文档时序估算族裁决:该函数零生产消费者(在线调度器决策从不
+    读时序估计),生产模块侧已删;本测试的 §7.6 Layer A/B 互校验以它
+    为独立解析口径,逐字保留(公式与迁入前一致)。
+    """
+    if instance_size <= 0 or p_chunk < 0 or d_batch < 0 or d_token < 0:
+        raise ValueError("invalid timing workload parameters")
+    if (p_chunk > 0) == (d_batch > 0):
+        raise ValueError("timing workload must contain exactly one of Prefill or Decode")
+    if d_batch > 0 and d_token <= 0:
+        raise ValueError("Decode timing requires a positive token/KV length")
+
+    h = model.hidden_size
+    ffn = model.ffn_size
+    layers = model.layers
+    bytes_per_elem = model.bytes_per_elem
+    aggregate_perf = instance_size * hardware.peak_perf_tflops * 1e12
+    aggregate_bw = instance_size * hardware.local_hbm_bandwidth_gbps * 1e9
+    local_hbm_latency_seconds = hardware.local_hbm_latency_ns / 1e9
+
+    linear_tokens = p_chunk + d_batch
+    mlp_ops_per_token = 6 * h * ffn if model.mlp_variant == "swiglu" else 4 * h * ffn
+    linear_ops_per_token = layers * (8 * h * h + mlp_ops_per_token)
+    linear_ops = linear_tokens * linear_ops_per_token
+    weight_bytes = estimate_model_weight_bytes(model)
+    activation_bytes = layers * linear_tokens * h * bytes_per_elem * 8
+    linear_seconds = max(
+        linear_ops / aggregate_perf,
+        local_hbm_latency_seconds +
+        (weight_bytes + activation_bytes) / aggregate_bw,
+    )
+
+    phase_seconds = 0.0
+    if p_chunk:
+        attention_ops = layers * 4 * p_chunk * p_chunk * h
+        attention_bytes = layers * p_chunk * p_chunk * bytes_per_elem * 4
+        phase_seconds = max(
+            attention_ops / aggregate_perf,
+            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
+        )
+    else:
+        attention_ops = layers * 4 * d_batch * d_token * h
+        attention_bytes = layers * 2 * d_batch * d_token * h * bytes_per_elem
+        phase_seconds = max(
+            attention_ops / aggregate_perf,
+            local_hbm_latency_seconds + attention_bytes / aggregate_bw,
+        )
+
+    return max(
+        1,
+        math.ceil((linear_seconds + phase_seconds) * 1e9)
+        + hardware.d2d_latency_ns,
+    )
 
 
 def _record(request_id, *, prefill=512, decode=4, ctx=None, history=0):

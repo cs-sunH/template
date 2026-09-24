@@ -53,14 +53,6 @@ PARTIAL_MIGRATE = "PARTIAL_MIGRATE"  # PARTIAL, cross instance: prefix NoC
                                      # migrate + suffix remote restore
 REMOTE_RESTORE = "REMOTE_RESTORE"    # REMOTE: full restore
 
-# Legacy two-state constants.  ``RECOMPUTE`` (and the historical RESIDENT /
-# EVICTED pair, kept private below) must stay importable because
-# generate_wsc_llm_trace.py imports them at module load; every decision path
-# in this module has been de-recomputized (B2).
-RECOMPUTE = "RECOMPUTE"
-_RESIDENT_LEGACY = "RESIDENT"
-_EVICTED_LEGACY = "EVICTED"
-
 # B1 已消费前缀的摊销压缩水位(2026-08-28,风格对齐 graph_batch_builder
 # 的 M1 压缩):_events 已消费水位达到该值且不小于现存总量一半时才整段
 # 删除前缀,均摊 O(1)/事件。
@@ -428,33 +420,23 @@ class NodeHBMState:
 
 @dataclass(frozen=True)
 class SessionKVSnapshot:
+    """B2 three-state read-only session view.
+
+    ``local_shard_bytes`` is the physically resident distribution (layer
+    range ``[0, resident_prefix_layers)``); ``remote_bytes`` is the remote
+    remainder.  Only fields with real consumers are kept (the legacy
+    full-vector/eviction-metadata fields were write-only and removed).
+    """
+
     session_id: str
     location: str
     instance_index: Optional[int]
     logical_context_tokens: int
-    shard_bytes: tuple[int, ...]
     resident_prefix_layers: int
-    remote_source_instance_index: Optional[int]
-    remote_shard_bytes: tuple[int, ...]
     local_shard_bytes: tuple[int, ...]
-    local_bytes: int
     remote_bytes: int
-    rank_bytes: tuple[tuple[int, int], ...]
     last_completion_ns: Optional[int]
     active: bool
-    last_request_id: Optional[str]
-    evicted_at_ns: Optional[int]
-    evicted_by_request_id: Optional[str]
-
-    @property
-    def context_tokens(self) -> int:
-        """Compatibility alias used by manifest and small fixture code."""
-
-        return self.logical_context_tokens
-
-    @property
-    def total_bytes(self) -> int:
-        return sum(self.shard_bytes)
 
 
 @dataclass
@@ -794,31 +776,16 @@ class SessionKVCacheManager:
         if state is None:
             return None
         local_shard_bytes = self._local_prefix_shards(state)
-        remote_shard_bytes = self._remote_shards(state)
-        rank_bytes: tuple[tuple[int, int], ...] = ()
-        if state.location in {LOCAL_HBM, PARTIAL_HBM_REMOTE}:
-            if state.instance_index is None:
-                raise RuntimeError("local KV session has no instance")
-            instance = self.topology.instance(state.instance_index)
-            rank_bytes = tuple(zip(instance.ranks, local_shard_bytes))
         return SessionKVSnapshot(
             session_id=state.session_id,
             location=state.location,
             instance_index=state.instance_index,
             logical_context_tokens=state.logical_context_tokens,
-            shard_bytes=state.shard_bytes,
             resident_prefix_layers=state.resident_prefix_layers,
-            remote_source_instance_index=state.remote_source_instance_index,
-            remote_shard_bytes=remote_shard_bytes,
             local_shard_bytes=local_shard_bytes,
-            local_bytes=sum(local_shard_bytes),
-            remote_bytes=sum(remote_shard_bytes),
-            rank_bytes=rank_bytes,
+            remote_bytes=sum(self._remote_shards(state)),
             last_completion_ns=state.last_completion_ns,
             active=state.active,
-            last_request_id=state.last_request_id,
-            evicted_at_ns=state.evicted_at_ns,
-            evicted_by_request_id=state.evicted_by_request_id,
         )
 
     def hbm_snapshots(self, instance_index: Optional[int] = None) -> tuple[NodeHBMSnapshot, ...]:
@@ -827,13 +794,6 @@ class SessionKVCacheManager:
         else:
             ranks = tuple(self.topology.instance(instance_index).ranks)
         return tuple(self._rank_states[rank].snapshot() for rank in ranks)
-
-    def final_session_counts(self) -> tuple[int, int]:
-        resident = sum(
-            state.location in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
-            for state in self._sessions.values()
-        )
-        return resident, len(self._sessions) - resident
 
     def remote_bytes_by_rank(self) -> dict[int, int]:
         """Read-only view of the per-rank remote-pool account."""
@@ -900,7 +860,6 @@ class SessionKVCacheManager:
     def _completed_full_candidates(
         self,
         instance_index: int,
-        protected_session_id: Optional[str] = None,
     ) -> list[SessionKVState]:
         """Stage-1 pool: completed inactive fully-local sessions (LRU)."""
         if self.partial_resident_prefix_layers >= self.model_layers:
@@ -912,13 +871,11 @@ class SessionKVCacheManager:
             and session.instance_index == instance_index
             and not session.active
             and session.last_completion_ns is not None
-            and session.session_id != protected_session_id
         ])
 
     def _completed_resident_candidates(
         self,
         instance_index: int,
-        protected_session_id: Optional[str] = None,
     ) -> list[SessionKVState]:
         """Stage-2 pool: completed inactive sessions with any local layers."""
         return self._fifo_sort([
@@ -928,7 +885,6 @@ class SessionKVCacheManager:
             and session.instance_index == instance_index
             and not session.active
             and session.last_completion_ns is not None
-            and session.session_id != protected_session_id
         ])
 
     def _event(
@@ -2212,17 +2168,21 @@ class SessionKVCacheManager:
                 if rank in impossible
             )
             raise ValueError(f"request cannot fit an empty instance: {details}")
-        protected = tuple(dict.fromkeys(protected_sessions))
-        protected_session_id = protected[0] if protected else None
+        # Every protected session is excluded from both candidate pools;
+        # stage order and LRU semantics are unchanged for the single-session
+        # callers (prepare_history / reserve / grow / move).
+        protected = set(protected_sessions)
         evictions: list[KVTransfer] = []
         insufficient = self._insufficient(instance_index, required)
         # Stage 1: suffix-offload the trailing half of each LOCAL candidate.
         # Eligibility and LRU order of the unselected candidates are static
         # within this stage (only the selected victim mutates).
         if insufficient:
-            suffix_candidates = self._completed_full_candidates(
-                instance_index, protected_session_id
-            )
+            suffix_candidates = [
+                session
+                for session in self._completed_full_candidates(instance_index)
+                if session.session_id not in protected
+            ]
             suffix_candidate_index = 0
             while insufficient:
                 if suffix_candidate_index >= len(suffix_candidates):
@@ -2243,9 +2203,11 @@ class SessionKVCacheManager:
         # evict complete resident sessions (the remaining prefix of partial
         # sessions included) in the same deterministic LRU order.
         if insufficient:
-            resident_candidates = self._completed_resident_candidates(
-                instance_index, protected_session_id
-            )
+            resident_candidates = [
+                session
+                for session in self._completed_resident_candidates(instance_index)
+                if session.session_id not in protected
+            ]
             resident_candidate_index = 0
             while insufficient:
                 if resident_candidate_index >= len(resident_candidates):

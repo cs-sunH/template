@@ -43,16 +43,22 @@ Expected state-transition log across all scenarios: 2 (scenario 1), 4
 (scenario 2), 2 (scenario 3), 2 (scenario 4; the log records the NEW state
 of each transition, initial IDLE is not an entry).
 
-Build (from template/astra-sim-wscllm):
-  g++ -std=c++17 -pthread -I extern/network_backend/analytical/include/astra-network-analytical \
-      -I . astra-sim/workload/execution_driven/tests/ingress_idle_fixture.cc \
-      astra-sim/workload/execution_driven/RequestIngress.cc \
-      astra-sim/workload/execution_driven/DecisionMailbox.cc \
-      astra-sim/workload/execution_driven/ServiceCoordinator.cc \
-      extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
-      extern/network_backend/analytical/common/event-queue/EventList.cpp \
-      extern/network_backend/analytical/common/event-queue/Event.cpp \
-      -o /tmp/ingress_idle_fixture && /tmp/ingress_idle_fixture
+Build: registered in the CMake build (M20) as target
+  AstraSim_Analytical_Congestion_Aware_IngressIdleTest in
+  astra-sim/network_frontend/analytical/CMakeLists.txt (same shared-source +
+  execution_driven recipe as the sibling fixtures; the old manual g++ line's
+  RequestIngress/DecisionMailbox/ServiceCoordinator and backend event-queue
+  sources come from the execution_driven glob and the linked
+  Analytical_Congestion_Aware static library, and the -pthread of that line
+  is carried by the target's pthread link). Configure per README §2 (the
+  build/astra_analytical aggregation with
+  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON), then:
+    cmake --build build/astra_analytical/build_congestion_aware \
+          --target AstraSim_Analytical_Congestion_Aware_IngressIdleTest -j
+    build/astra_analytical/build_congestion_aware/bin/\
+AstraSim_Analytical_Congestion_Aware_IngressIdleTest
+  (the binary is emitted to <build-tree>/bin/ via the targets'
+  RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
 #include <sys/wait.h>

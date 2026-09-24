@@ -192,6 +192,18 @@ void MultiDimTopology::connect_mesh_dimension(const int dim) noexcept {
 void MultiDimTopology::connect_ring_dimension(const int dim) noexcept {
     assert(0 <= dim && dim < dims_count);
 
+    // A size-1 ring dimension degenerates to connect(src, src) self-loops:
+    // the wrap-around (address + 1) % 1 lands back on the same device, which
+    // re-connects an already-connected device and orphans the duplicated
+    // links.  (A size-2 ring dimension falls back to the single mesh edge
+    // below.)  Refuse the degenerate axis instead of building a broken ring.
+    if (npus_count_per_dim[dim] == 1) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "ring dimension requires at least 2 npus (got 1 npus in dimension "
+                  << dim << ")" << std::endl;
+        std::exit(-1);
+    }
+
     if (npus_count_per_dim[dim] == 2) {
         connect_mesh_dimension(dim);
         return;

@@ -649,31 +649,6 @@ void Statistics::require_online_compacted_full_window(
     std::exit(EXIT_FAILURE);
 }
 
-void Statistics::retire_online_operator(NodeId node_id, bool preserve_history) {
-    if (preserve_history) {
-        return;
-    }
-    const auto it = operator_statistics.find(node_id);
-    if (it == operator_statistics.end()) {
-        return;  // idempotent duplicate terminal callback
-    }
-    const OperatorStatistics& stat = it->second;
-    if (stat.end_time == OperatorStatistics::INVALID_TICK) {
-        return;  // never retire a live tail node
-    }
-
-    online_compaction_active_ = true;
-    add_online_roofline_contribution(stat.type, stat.start_time, stat.end_time,
-                                     stat.compute_utilization,
-                                     stat.memory_utilization);
-    if (stat.type == OperatorStatistics::OperatorType::GPU &&
-        stat.end_time > stat.start_time) {
-        online_gpu_newest_retired_end_ =
-            std::max(online_gpu_newest_retired_end_, stat.end_time);
-    }
-    operator_statistics.erase(it);
-}
-
 Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
     get_operator_type(const std::shared_ptr<Chakra::ETFeederNode> node) {
     const auto& node_type = node->type();
@@ -829,37 +804,6 @@ void Statistics::report(std::shared_ptr<spdlog::logger> logger) const {
         logger->info("sys[{}], Total compute-communication overlap: {}", sys_id,
                      this->comp_comm_overlap);
     }
-
-    // Report network bandwidth for communication operations
-    // logger->info("sys[{}], Network bandwidth details:", sys_id);
-
-    // double total_bandwidth = 0.0;
-    // size_t num_comm_ops = 0;
-
-    // for (const auto& [node_id, stat] : operator_statistics) {
-    //   if (stat.type == OperatorStatistics::OperatorType::COMM &&
-    //       stat.network_bandwidth.has_value() &&
-    //       stat.comm_size.has_value()) {
-    //     // Convert from bytes/ns to GB/s (1 GB/s = 1 byte/ns)
-    //     double bandwidth_gbps = stat.network_bandwidth.value();
-    //     total_bandwidth += bandwidth_gbps;
-    //     num_comm_ops++;
-
-    //     logger->info("  Node {}: Size: {} bytes, Duration: {} ns, Bandwidth:
-    //     {:.3f} GB/s",
-    //                 node_id,
-    //                 stat.comm_size.value(),
-    //                 stat.end_time - stat.start_time,
-    //                 bandwidth_gbps);
-    //   }
-    // }
-
-    // if (num_comm_ops > 0) {
-    //   double avg_bandwidth = total_bandwidth / num_comm_ops;
-    //   logger->info("sys[{}], Average network bandwidth: {:.3f} GB/s across {}
-    //   communication operations",
-    //               sys_id, avg_bandwidth, num_comm_ops);
-    // }
 
     // only report utilization statistics when roofline is enabled
     if (workload->sys->roofline_enabled) {

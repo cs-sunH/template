@@ -14,6 +14,28 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
+namespace {
+// Deep-copies a CollectiveImpl owned by the CollectiveImplLookup registry.
+// The dynamic type must be preserved: direct and custom implementations carry
+// a payload (direct_collective_window / filename) that a base-class copy would
+// slice away, and Sys.cc reads it back through derived-type casts.
+CollectiveImpl* clone_collective_impl(const CollectiveImpl* impl) {
+    if (impl->type == CollectiveImplType::CustomCollectiveImpl) {
+        return new CustomCollectiveImpl(
+            impl->type,
+            static_cast<const CustomCollectiveImpl*>(impl)->filename);
+    }
+    if (impl->type == CollectiveImplType::Direct ||
+        impl->type == CollectiveImplType::OneDirect) {
+        return new DirectCollectiveImpl(
+            impl->type,
+            static_cast<const DirectCollectiveImpl*>(impl)
+                ->direct_collective_window);
+    }
+    return new CollectiveImpl(impl->type);
+}
+}  // namespace
+
 bool AstraSim::same_communicator_definition(
     const std::vector<int>& lhs_ranks,
     const std::vector<int>& lhs_dimensions,
@@ -120,6 +142,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             generator->get_logical_topology(comm_type);
         std::vector<CollectiveImpl*> collective_implementation =
             generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
+        if (collective_implementation.empty()) {
+            throw std::runtime_error(
+                "No collective implementation registered for a whole-cluster "
+                "communicator");
+        }
         std::vector<bool> dimensions_involved(10, true);
         bool should_be_removed = false;
         comm_plans[comm_type] =
@@ -129,6 +156,11 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
     } else {
         std::vector<CollectiveImpl*> collective_implementation =
             generator->collective_impl_lookup->get_collective_impl(comm_type, workload_node_id);
+        if (collective_implementation.empty()) {
+            throw std::runtime_error(
+                "No collective implementation registered for a sub-cluster "
+                "communicator");
+        }
         if (collective_implementation.size() > 1) {
             // This means that everything fell through and we got a native collective that is multi-dimensional.
             // (Custom collective always assumes 1 dimension).
@@ -138,6 +170,15 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             // was a good choice.
             collective_implementation = std::vector<CollectiveImpl*>{
                 new CollectiveImpl(CollectiveImplType::Ring)};
+        } else if (collective_implementation.size() == 1) {
+            // The lookup registry owns and shares this implementation across
+            // all comm groups, while the plan below deletes its
+            // implementations on destruction (implementations_should_be_removed
+            // = true). Handing the shared pointer to the plan double-frees once
+            // two sub-cluster groups of the same ComType destruct and leaves
+            // the registry dangling afterwards. Give the plan its own copy.
+            collective_implementation = std::vector<CollectiveImpl*>{
+                clone_collective_impl(collective_implementation[0])};
         }
         LogicalTopology* logical_topology = new RingTopology(
             RingTopology::Dimension::Local, generator->id, involved_NPUs);

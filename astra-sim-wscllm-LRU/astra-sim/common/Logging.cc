@@ -15,15 +15,11 @@ std::vector<spdlog::sink_ptr> LoggerFactory::default_sinks;
 
 std::shared_ptr<spdlog::logger> LoggerFactory::get_logger(
     const std::string& logger_name) {
-    constexpr bool ENABLE_DEFAULT_SINK_FOR_OTHER_LOGGERS = true;
     auto logger = spdlog::get(logger_name);
     if (logger == nullptr) {
         logger = spdlog::create_async<spdlog::sinks::null_sink_mt>(logger_name);
         logger->set_level(spdlog::level::trace);
         logger->flush_on(spdlog::level::info);
-    }
-    if constexpr (!ENABLE_DEFAULT_SINK_FOR_OTHER_LOGGERS) {
-        return logger;
     }
     auto& logger_sinks = logger->sinks();
     for (auto sink : default_sinks) {

@@ -149,10 +149,8 @@ struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
     NetworkAnalytical::EventQueue* event_queue = nullptr;
     FileDecisionBridge* bridge = nullptr;
-    RequestIngress* ingress = nullptr;
     ServiceCoordinator* svc = nullptr;
     WatchRegistry* watch_registry = nullptr;
-    std::vector<Sys*>* systems = nullptr;
     // The per-rank NodeStore-backed sources are kept alive here (Sys stores
     // its own shared_ptr; this vector is the commit's access path).
     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
@@ -162,7 +160,6 @@ struct OnlineDriverContext {
     // map, the in-flight request tracking and the phase-5 counters.
     GraphBatchCommitter* committer = nullptr;
     uint64_t delivery_seq = 0;
-    uint64_t expected_requests = 0;  // CSV data rows; run-end assertion target
     // Step 1-11: pending T->T+1 deferral record. Set by the main loop when
     // it schedules the explicit next-decision-boundary wakeup; consumed (and
     // reset) by the next ed_driver_tick_end delivery, which serializes it as
@@ -753,10 +750,16 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
             break;
         }
         case TopologyBuildingBlock::Ring: {
-            // Ring (incl. the radix==2 mesh fallback): one bidirectional
-            // connect per src; no boundary concept.
+            // Ring: one bidirectional connect per src; no boundary concept.
+            // A width==2 Ring degenerates to the mesh fallback
+            // (MultiDimTopology::connect_ring_dimension), connecting only
+            // the npus/2 address-0 srcs -- npus link ids, not 2*npus.
             saw_non_mesh_dim = true;
-            next_id += 2 * static_cast<LinkId>(npus);
+            if (sizes[d] == 2) {
+                next_id += static_cast<LinkId>(npus);
+            } else {
+                next_id += 2 * static_cast<LinkId>(npus);
+            }
             break;
         }
         case TopologyBuildingBlock::FullyConnected: {
@@ -1320,12 +1323,9 @@ int main(int argc, char* argv[]) {
     driver_ctx.mailbox = &mailbox;
     driver_ctx.event_queue = event_queue.get();
     driver_ctx.bridge = &bridge;
-    driver_ctx.ingress = &ingress;
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
-    driver_ctx.systems = &systems;
     driver_ctx.graph_sources = &graph_sources;
-    driver_ctx.expected_requests = expected_requests;
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1535,7 +1535,7 @@ int main(int argc, char* argv[]) {
             // parking-point diagnostics for the fail-loud guard below
             // (wall-clock idle watchdog). Every counter the 形态判据
             // reasons over is printed: tick, service counters
-            // (active/pending alarm/fence), reader window state
+            // (active/pending alarm), reader window state
             // (occupancy/rows_read/data_rows/EOF), the input-close knob,
             // and the four emptiness witnesses (mailbox/deferred/commands
             // + the event queue itself, which finished() already proved).
@@ -1555,8 +1555,6 @@ int main(int argc, char* argv[]) {
                        std::to_string(svc.active_request_count()) +
                        " pending_alarm=" +
                        std::to_string(svc.pending_alarm_count()) +
-                       " pending_fence=" +
-                       std::to_string(svc.pending_fence_count()) +
                        " window_occupancy=" +
                        std::to_string(
                            windowed.current_window_occupancy()) +

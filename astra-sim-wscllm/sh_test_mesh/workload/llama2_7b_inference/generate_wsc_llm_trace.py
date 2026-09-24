@@ -41,7 +41,6 @@ from generate_trace import (  # noqa: E402
     parse_rank_spec,
     sanitize_node_prefix,
     shard_extent,
-    transformer_pass,
     transformer_pass_aggregated,
 )
 from config_resolver import (  # noqa: E402
@@ -603,21 +602,6 @@ def _paired_transfer(
     return routes
 
 
-
-
-
-
-KV_CACHE_EVENT_COLUMNS = (
-    "event_index", "planner_time_ns", "phase", "event_type", "reason",
-    "trigger_request_id", "session_id", "source_instance_index",
-    "target_instance_index", "context_tokens", "total_bytes", "shard_bytes",
-    "last_completion_ns", "instance_remaining_before_bytes",
-    "instance_remaining_after_bytes", "insufficient_ranks",
-)
-
-
-
-
 def _emit_control_trigger(
     *,
     builders: dict[int, TraceBuilder],
@@ -657,7 +641,7 @@ def _emit_prefill_stage(
     initial_context_tokens: int,
 ) -> dict[int, tuple[int, int]]:
     """Emit one chunked prefill stage; returns, per rank, the ids of the first
-    and last *real* operator/collective nodes (the artificial one-byte
+    and last *real* operator/collective nodes (the artificial
     ``*_end_barrier`` collectives are excluded), or an empty mapping when the
     stage has no tokens.  Used only for metrics boundary recording (doc
     sec.6.2/6.3); the emitted nodes are unchanged."""
@@ -672,42 +656,20 @@ def _emit_prefill_stage(
         spans.append((chunk, initial_context_tokens + processed + chunk))
         processed += chunk
     tp = len(group.ranks)
-    if config.trace_granularity == "token_expanded":
-        for chunk_index, (chunk, kv_length) in enumerate(spans):
-            for relative_rank, rank in enumerate(group.ranks):
-                first_node_id = builders[rank].next_id
-                transformer_pass(
-                    builders[rank], phase=f"{prefix}_{stage}_chunk{chunk_index:04d}",
-                    tokens=chunk, kv_length=kv_length, layers=config.layers,
-                    hidden_size=config.hidden_size, ffn_size=config.ffn_size,
-                    tensor_parallel=tp, pg_name=group.pg_name,
-                    vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                )
-                last_node_id = builders[rank].previous_id
-                if rank in bounds:
-                    bounds[rank][1] = last_node_id
-                else:
-                    bounds[rank] = [first_node_id, last_node_id]
-                builders[rank].all_reduce(
-                    f"{prefix}_{stage}_chunk{chunk_index:04d}_end_barrier", 1, group.pg_name
-                )
-    else:
-        for relative_rank, rank in enumerate(group.ranks):
-            first_node_id = builders[rank].next_id
-            pass_count = transformer_pass_aggregated(
-                builders[rank], phase=f"{prefix}_{stage}_request_aggregated",
-                pass_spans=spans, layers=config.layers, hidden_size=config.hidden_size,
-                ffn_size=config.ffn_size, tensor_parallel=tp, pg_name=group.pg_name,
-                vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
-                num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
-                mlp_variant=config.mlp_variant,
-            )
-            bounds[rank] = [first_node_id, builders[rank].previous_id]
-            builders[rank].all_reduce(
-                f"{prefix}_{stage}_chunks_aggregated_end_barrier", pass_count, group.pg_name
-            )
+    for relative_rank, rank in enumerate(group.ranks):
+        first_node_id = builders[rank].next_id
+        pass_count = transformer_pass_aggregated(
+            builders[rank], phase=f"{prefix}_{stage}_request_aggregated",
+            pass_spans=spans, layers=config.layers, hidden_size=config.hidden_size,
+            ffn_size=config.ffn_size, tensor_parallel=tp, pg_name=group.pg_name,
+            vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
+            num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
+            mlp_variant=config.mlp_variant,
+        )
+        bounds[rank] = [first_node_id, builders[rank].previous_id]
+        builders[rank].all_reduce(
+            f"{prefix}_{stage}_chunks_aggregated_end_barrier", pass_count, group.pg_name
+        )
     return {rank: (pair[0], pair[1]) for rank, pair in bounds.items()}
 
 

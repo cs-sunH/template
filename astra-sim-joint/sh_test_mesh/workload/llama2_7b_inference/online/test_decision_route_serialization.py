@@ -49,7 +49,11 @@ from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
     _OnlineInstanceState,
     _OnlineRequestRuntime,
+    _TASK_LOAD_CACHE_CAPACITY,  # F6 销账：替身对齐 __init__ 初值
     _transfer_summary,
+)
+from joint.hbm_port_flow_registry import (  # noqa: E402  F6 销账替身对齐
+    HbmPortFlowRegistry,
 )
 
 
@@ -95,7 +99,7 @@ def _two_instance_topology(hardware):
 
 class _GraphStub:
     def emit_admission_batch(self, plan):
-        pass
+        return {"eviction_watches": []}
 
     def sync_pending_history_after_evictions(self, evictions):
         pass
@@ -130,6 +134,10 @@ def _decision_shell(kv_manager, *, hardware=None, model=None, topology=None,
     }
     scheduler._prefill_task_cache = {}
     scheduler._decode_task_load_cache = {}
+    # 对齐 __init__ 初值（F6 销账：软门已删，替身漏设 = AttributeError）。
+    scheduler._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
+    scheduler._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
+    scheduler._hbm_ports = HbmPortFlowRegistry()
     scheduler._snapshot_verify = False
     scheduler.kv_manager = kv_manager
     scheduler.edge_free_mask = (False, False)

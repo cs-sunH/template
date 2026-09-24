@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BinaryTree.hh"
 #include "astra-sim/common/Logging.hh"
 
+#include <cstdlib>
 #include <iostream>
 
 using namespace std;
@@ -13,7 +14,24 @@ using namespace AstraSim;
 
 BinaryTree::BinaryTree(
     int id, TreeType tree_type, int total_tree_nodes, int start, int stride)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::BinaryTree) {
+    : BasicLogicalTopology() {
+    // The tree builder below allocates node ids for a complete binary tree of
+    // depth floor(log2(total_tree_nodes)) + 1, which only covers every rank
+    // when total_tree_nodes is a power of two. With a non-power-of-two node
+    // count the accessors (get_parent_id, etc.) would look up ids that were
+    // never inserted and dereference the nullptr that std::map::operator[]
+    // inserts. Fail fast instead of crashing later.
+    if (total_tree_nodes <= 0 ||
+        (total_tree_nodes & (total_tree_nodes - 1)) != 0) {
+        LoggerFactory::get_logger("system::topology::BinaryTree")
+            ->critical(
+                "######### Exiting because the number of nodes in the binary "
+                "tree ({}) is not a power of two. The doubleBinaryTree "
+                "collective algorithm requires power-of-two dimension sizes "
+                "#########",
+                total_tree_nodes);
+        std::exit(1);
+    }
     this->total_tree_nodes = total_tree_nodes;
     this->start = start;
     this->tree_type = tree_type;
@@ -93,33 +111,5 @@ BinaryTree::Type BinaryTree::get_node_type(int id) {
         return Type::Leaf;
     } else {
         return Type::Intermediate;
-    }
-}
-
-void BinaryTree::print(Node* node) {
-    auto logger = LoggerFactory::get_logger("system::topology::BinaryTree");
-    logger->debug("I am node: {}", node->id);
-    if (node->left_child != nullptr) {
-        logger->debug("and my left child is {}", node->left_child->id);
-    }
-    if (node->right_child != nullptr) {
-        logger->debug("and my right child is {}", node->right_child->id);
-    }
-    if (node->parent != nullptr) {
-        logger->debug("and my parent is {}", node->parent->id);
-    }
-    BinaryTree::Type typ = get_node_type(node->id);
-    if (typ == BinaryTree::Type::Root) {
-        logger->debug("and I am Root");
-    } else if (typ == BinaryTree::Type::Intermediate) {
-        logger->debug("and I am Intermediate");
-    } else if (typ == BinaryTree::Type::Leaf) {
-        logger->debug("and I am Leaf");
-    }
-    if (node->left_child != nullptr) {
-        print(node->left_child);
-    }
-    if (node->right_child != nullptr) {
-        print(node->right_child);
     }
 }

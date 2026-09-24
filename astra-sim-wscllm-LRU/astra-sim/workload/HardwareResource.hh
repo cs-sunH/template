@@ -20,7 +20,7 @@ namespace AstraSim {
 class HardwareResource {
   public:
     HardwareResource(
-        uint32_t num_npus, int sys_id = -1,
+        int sys_id = -1,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static);
     ~HardwareResource() {
@@ -55,17 +55,17 @@ class HardwareResource {
     // path (GraphSource::et_node == nullptr) dispatches on the NodeView
     // fields: is_timer_op -> no-op, MEM_LOAD/MEM_STORE with
     // is_local_hbm_kv_restore -> hbm_dma class (sh_2.0 fourth resource
-    // class, single slot; count-based occupy/release like Compute -- the
-    // replay bypass in Workload::issue_dep_free_nodes can issue several
-    // concurrently), is_cpu_op -> CPU, CommRecv -> no-op, Compute -> GPU
-    // comp, else -> GPU comm.
+    // class, single slot, serialized through the is_available gate --
+    // Workload::issue_dep_free_nodes checks it before every issue; the
+    // former replay-only bypass was removed with the Path-2 replay route),
+    // is_cpu_op -> CPU, CommRecv -> no-op, Compute -> GPU comp, else -> GPU
+    // comm.
     void occupy(const ExecutionDriven::NodeView& node);
     void release(const ExecutionDriven::NodeView& node);
     bool is_available(const ExecutionDriven::NodeView& node) const;
     [[nodiscard]] bool tracks_node_ids() const {
         return retain_node_ids_;
     }
-    void report();
 
     std::unordered_set<uint64_t> cpu_ops_node;
     std::unordered_set<uint64_t> gpu_ops_node;
@@ -74,7 +74,6 @@ class HardwareResource {
 
     const int sys_id;
 
-    const uint32_t num_npus;
     // Static mode retains exact IDs for legacy destructor diagnostics. Online
     // mode relies on NodeStore's fail-closed lifecycle and keeps only exact
     // per-resource counters here, including sh_2.0's HBM-DMA class.
@@ -84,15 +83,10 @@ class HardwareResource {
     uint32_t num_in_flight_gpu_comm_ops;
     uint32_t num_in_flight_hbm_dma_ops;
 
-    uint64_t num_cpu_ops;
-    uint64_t num_gpu_ops;
-    uint64_t num_gpu_comms;
-    uint64_t num_hbm_dma_ops;
-
-    uint64_t tics_cpu_ops;
+    // Busy-time accumulator read by Workload::report (exposed-communication
+    // metric); the former per-class tics/num counters were write-only
+    // (HardwareResource::report was dead) and were removed.
     uint64_t tics_gpu_ops;
-    uint64_t tics_gpu_comms;
-    uint64_t tics_hbm_dma_ops;
 };
 
 }  // namespace AstraSim

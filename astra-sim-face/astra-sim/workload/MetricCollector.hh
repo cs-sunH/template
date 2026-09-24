@@ -142,44 +142,9 @@ class MetricCollector {
                           uint64_t num_ops,
                           uint64_t local_tensor_bytes);
 
-    // Reserved for repos with a local HBM restore model (e.g. SH2). In this
-    // repo no caller exists; the accumulator is kept for interface parity.
-    void on_local_hbm_restore_issue(int rank, uint64_t bytes);
-
     // Compute and print all metric records. Called after the event loop,
     // before systems are deleted. No-op when disabled.
     void finalize(const std::vector<Sys*>& systems, Tick sim_end_tick);
-
-    // Phase-0 performance counter framework (plan step 0-7; 总改造计划 §6
-    // 阶段 0): named per-category counters for the stage-6/7 accounting.
-    // Default OFF and never serialized into any [METRIC] record.  Offline
-    // static-ET runs never exercise these mechanisms, so every counter stays
-    // 0 and [METRIC] output is byte-identical to a build without this
-    // framework; stage 6/7 may opt in per category without touching the
-    // static baseline bytes.
-    struct PerformanceCounters {
-      uint64_t callback_count = 0;        // Python decision callbacks
-      uint64_t poll_count = 0;            // completion polling hits
-      uint64_t bridge_bytes = 0;          // Python<->C++ bridge payload bytes
-      uint64_t gil_contention_ns = 0;     // GIL wait time in the bridge
-      uint64_t log_bytes = 0;             // decision/audit log bytes written
-      uint64_t node_completion_count = 0; // node completion events observed
-      uint64_t reader_window_events = 0;  // ingress reader window events
-      uint64_t backpressure_events = 0;   // backpressure/watermark hits
-      uint64_t batch_count = 0;           // decision batches committed
-    };
-
-    void enable_counters() {
-      this->counters_enabled_ = true;
-    }
-
-    bool counters_enabled() const {
-      return this->counters_enabled_;
-    }
-
-    const PerformanceCounters& counters() const {
-        return this->counters_;
-    }
 
     // ---------------------------------------------------------------------
     // SLO pipeline B2 observers (WP6/WP8/WP9; /tmp/slo_wps/plans/
@@ -221,10 +186,6 @@ class MetricCollector {
     // documented provisional anchor (5,000,000 ns) with provisional=true;
     // batch B4 replaces them with derived values. Every related record
     // echoes the period actually used.
-    [[nodiscard]] uint64_t slo_watermark_period_ns() const {
-        return this->watermark_period_ns_;
-    }
-
     [[nodiscard]] uint64_t slo_link_bucket_ns() const {
         return this->link_bucket_ns_;
     }
@@ -453,9 +414,6 @@ class MetricCollector {
 
     bool enabled_ = false;
     std::string detail_level_ = "off";
-    // Phase-0 counters (plan step 0-7): opt-in, default off, never emitted.
-    bool counters_enabled_ = false;
-    PerformanceCounters counters_;
     // D3 (2026-08-28): set by clear_static_node_events (online mode only).
     // Online synthetic manifests carry no planner ledger, so the
     // hbm_watermark bucket records are the documented all-zero series (the

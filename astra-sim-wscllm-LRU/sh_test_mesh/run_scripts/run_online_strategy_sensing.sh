@@ -176,12 +176,19 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger kv_delta_journal; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))
   fi
 done
+# kv delta journal 的 run 末 checksum 门产物(journal 开关 off 时不存在,
+# 缺文件不是错误)——与主 runner run_online_strategy.sh 同款搬运;缺了则
+# journal/checksum 滞留 bridge/ 成孤儿,SLO 权威重放层降级 upper_bound_only。
+if [ -f "${RUN_DIR}/bridge/kv_delta_journal_checksum.json" ]; then
+  mv "${RUN_DIR}/bridge/kv_delta_journal_checksum.json" \
+     "${RUN_DIR}/results/kv_delta_journal_checksum.json"
+fi
 echo "[run_online_strategy_sensing] artifacts: ${ARCHIVED} jsonl archived -> results/; request_journal=results/request_journal.jsonl"
 # P3(2026-08-28):仿真成功后自动 SLO 指标提取(postprocess 成功之后、
 # archive_run_outputs.sh 之前:cpp.log 未压缩、manifest 已拷入、results/

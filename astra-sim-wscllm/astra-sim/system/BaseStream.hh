@@ -50,10 +50,6 @@ class BaseStream : public Callable, public StreamStat {
 
     Tick last_phase_change;
 
-    int test;
-    int test2;
-    uint64_t phase_latencies[10];
-
 };
 
 }  // namespace AstraSim

@@ -51,8 +51,6 @@ enum class ComType {
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
 
-enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
-
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
 
 enum class IntraDimensionScheduling {
@@ -108,10 +106,7 @@ enum class EventType {
     Consider_Send_Back,
     StreamInit,
     CommProcessingFinished,
-    CollectiveCommunicationFinished,
-    CompFinished,
-    MemLoadFinished,
-    MemStoreFinished
+    CollectiveCommunicationFinished
 };
 
 }  // namespace AstraSim

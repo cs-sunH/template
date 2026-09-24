@@ -20,27 +20,6 @@ LICENSE file in the root directory of this source tree.
 
 namespace NetworkAnalyticalCongestionAware {
 
-/// Phase-7 §10.2 route-congestion snapshot (audit/explanation input only;
-/// the wscllm strategy never consumes it -- red-line decision inputs stay
-/// Python queue/KV ledgers and the static route).
-///
-/// remaining_bytes sums the outstanding bytes of the flows currently
-/// traversing the link (each active flow contributes its full remaining
-/// bytes -- the fluid model transfers the whole flow over every link of its
-/// route). It is the accounting value as of the last flow advance (the
-/// scheduler advances flows lazily on membership changes, not on every
-/// tick), i.e. a stable monotone-decreasing bookkeeping value rather than a
-/// per-nanosecond estimate. active_flow_count is exact at the snapshot
-/// instant. tick/epoch are the freshness guards: a snapshot is only valid
-/// for the (tick, epoch) it was taken at; any later use must be rejected.
-struct LinkCongestionSnapshot {
-    LinkId link_id;
-    long double remaining_bytes;
-    uint64_t active_flow_count;
-    NetworkAnalytical::EventTime tick;
-    uint64_t epoch;
-};
-
 class FluidScheduler {
   public:
     FluidScheduler(std::shared_ptr<NetworkAnalytical::EventQueue> event_queue,
@@ -90,29 +69,6 @@ class FluidScheduler {
     [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
     [[nodiscard]] uint64_t get_total_started_flows() const noexcept;
     [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
-    [[nodiscard]] size_t get_completion_heap_size() const noexcept;
-
-    /**
-     * Phase-7 §10.2: per-link route-congestion snapshot accessor.
-     *
-     * Pure query -- no flow is advanced and no state is touched. Expired-handle
-     * semantics: the caller must pass the tick it believes is current and the
-     * link-state epoch it last observed; when either does not match the
-     * scheduler's current event time / epoch, or the link id is unknown, the
-     * snapshot is rejected and nullopt is returned (a stale snapshot must
-     * never be consumed as fresh congestion).
-     *
-     * The accessor is a shared mechanism (like the list-mode EventQueue):
-     * reusable by face/sh_1.0 online backends as audit/explanation input.
-     */
-    [[nodiscard]] std::optional<LinkCongestionSnapshot> link_congestion_snapshot(
-        LinkId link_id, uint64_t expected_tick, uint64_t expected_epoch) const noexcept;
-
-    /// Phase-7 §10.2: current link-state epoch. Incremented on every
-    /// membership change that touches link_states (flow starts / completions).
-    /// Audit/explanation input; a snapshot's epoch is only valid while it
-    /// equals this value.
-    [[nodiscard]] uint64_t link_state_epoch() const noexcept;
 
     /// Phase-7 §10.2: number of directed links tracked by the scheduler.
     [[nodiscard]] size_t link_count() const noexcept;
@@ -134,6 +90,14 @@ class FluidScheduler {
     struct LinkObserverTotals {
         uint64_t total_bytes;  ///< whole bytes integrated over the window
         uint64_t active_ns;    ///< time with at least one active flow
+        /// M1 (2026-09-23 acceptance audit): sum over active time of the
+        /// per-link active-flow count, i.e. time-weighted flow-seconds.
+        /// window average flow count = flow_active_ns / active_ns; this is
+        /// the aggregate-throughput-blind denominator the SH-side pricing
+        /// divisors and AIMD need (aggregate throughput cannot recover the
+        /// flow count: a saturated link reports ~capacity regardless of N,
+        /// and a downstream-capped flow would be misread as contention).
+        uint64_t flow_active_ns;
     };
 
     /// Finalization callback for one non-empty (bucket, link) contribution.
@@ -264,7 +228,6 @@ class FluidScheduler {
     uint64_t total_completed_flows;
     uint64_t max_active_flows;
     uint64_t max_route_memberships;
-    uint64_t link_state_epoch_;
 
     uint64_t progress_report_event_interval;
     uint64_t scheduler_event_count;
@@ -286,6 +249,9 @@ class FluidScheduler {
         std::vector<long double> rate_sum;             // maintained per-link Bpns sum
         std::vector<uint64_t> total_bytes;             // per-link whole bytes
         std::vector<uint64_t> active_ns;               // per-link active time
+        // M1: per-link time-weighted flow count integral (dt * active
+        // flow count per integration segment).
+        std::vector<uint64_t> flow_active_ns;
         std::vector<LinkId> active_links;              // sorted links with memberships
         std::vector<uint64_t> current_bucket_bytes;    // one bucket, indexed by link
         std::vector<LinkId> current_bucket_links;      // non-zero rows in that bucket

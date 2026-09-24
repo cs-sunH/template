@@ -12,7 +12,6 @@ using namespace NetworkAnalyticalCongestionAware;
 
 Link::Link(const LinkId id, const Bandwidth bandwidth, const Latency latency) noexcept
     : link_id(id),
-      bandwidth(bandwidth),
       latency(latency) {
     assert(bandwidth > 0);
     assert(latency >= 0);

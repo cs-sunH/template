@@ -284,12 +284,6 @@ class OnlineTraceBuilder:
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
 
-    # ------------------------------------------------------------- 只读属性 --
-
-    @property
-    def node_count_total(self) -> int:
-        return self.node_count
-
 
 class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界

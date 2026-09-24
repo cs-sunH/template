@@ -24,6 +24,12 @@ namespace NetworkAnalyticalCongestionAware {
 /// the wscllm strategy never consumes it -- red-line decision inputs stay
 /// Python queue/KV ledgers and the static route).
 ///
+/// Cross-repo exemption (2026-09 deep-dive): the four-piece set below
+/// (LinkCongestionSnapshot / link_congestion_snapshot / link_state_epoch /
+/// link_count) stays although nothing in THIS repo consumes it -- the joint
+/// repo's main_online has a real link_count() consumer, so a mechanical sweep
+/// of the face deletion list must not drop it here (face keeps it too).
+///
 /// remaining_bytes sums the outstanding bytes of the flows currently
 /// traversing the link (each active flow contributes its full remaining
 /// bytes -- the fluid model transfers the whole flow over every link of its
@@ -79,6 +85,11 @@ class FluidScheduler {
      * channel (schedule_event_deferred). Post-commit communication emission in
      * online mode must go through this entry (or start_flow with deferred mode
      * enabled); it never inserts a current_time event into the main queue.
+     *
+     * Dead accessor (2026-09 deep-dive): no caller anywhere in this repo today
+     * (online emitters enter via start_flow/flush_pending_starts under
+     * deferred mode). Kept unchanged from the face backend for cross-repo
+     * parity.
      */
     void flush_pending_starts_deferred() noexcept;
 
@@ -90,6 +101,8 @@ class FluidScheduler {
     [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
     [[nodiscard]] uint64_t get_total_started_flows() const noexcept;
     [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
+    /// Dead accessor (2026-09 deep-dive): zero callers in this repo; kept
+    /// unchanged from the face backend for cross-repo parity.
     [[nodiscard]] size_t get_completion_heap_size() const noexcept;
 
     /**
@@ -154,6 +167,9 @@ class FluidScheduler {
 
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
 
+    /// Dead accessor (2026-09 deep-dive): zero callers in this repo -- the
+    /// enable gate lives in the online main, which tracks the state itself;
+    /// kept unchanged from the face backend for cross-repo parity.
     [[nodiscard]] bool link_observer_enabled() const noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).

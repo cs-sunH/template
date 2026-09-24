@@ -38,6 +38,10 @@ class Device {
      * Get the number of outgoing links from this device.
      *
      * @return number of outgoing links
+     *
+     * Dead accessor (2026-09 deep-dive): only caller is the dead
+     * Topology::get_links_count(); kept unchanged from the face backend for
+     * cross-repo parity.
      */
     [[nodiscard]] int get_links_count() const noexcept;
 

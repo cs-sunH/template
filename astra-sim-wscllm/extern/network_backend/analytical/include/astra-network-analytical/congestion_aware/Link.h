@@ -35,7 +35,10 @@ class Link {
     /// stable directed-link identifier
     LinkId link_id;
 
-    /// bandwidth of the link in GB/s
+    /// bandwidth of the link in GB/s (write-only: assigned once by the ctor;
+    /// the Bpns mirror below reads the ctor parameter, not this field, so the
+    /// field itself has no reader -- registered 2026-09 deep-dive, kept for
+    /// face cross-repo parity)
     Bandwidth bandwidth;
 
     /// bandwidth of the link in B/ns, used in actual computation

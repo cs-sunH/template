@@ -309,15 +309,6 @@ void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
 
     const int level_before_report = online.current_level;
     const AstraSim::Tick tick_before_report = online.last_tick;
-    bool report_failed_closed = false;
-    try {
-        online.report(nullptr, 0);
-    } catch (const std::logic_error&) {
-        report_failed_closed = true;
-    }
-    expect(report_failed_closed,
-           "online UsageTracker::report rejects unavailable history");
-
     bool percentage_failed_closed = false;
     try {
         (void)online.report_percentage(100);

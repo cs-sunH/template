@@ -14,8 +14,47 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
-RUN_DIR=$1
-REQUEST_CSV=${2:?"request_csv 必填(request-neutral:materialize the 20.csv first-30s input via traces/materialize_20_30s.py 后显式传入)"}
+RUN_DIR=$(realpath -m -- "${1:?run_dir 必填}")
+REQUEST_CSV=${2:?request_csv 必填(request-neutral:materialize the 20.csv first-30s input via traces/materialize_20_30s.py 后显式传入)}
+REQUEST_CSV=$(realpath -- "${REQUEST_CSV}")
+
+# 与 joint_runner 共用仓级仿真锁。直呼本脚本也必须互斥；matrix/stress/
+# joint_runner 通过 SH_SINGLE_SIMULATION_LOCK_FD 传入并校验同一锁 inode，
+# 因而仅复用继承的 OFD，不会在嵌套路径上二次 flock 自锁。
+SINGLE_SIMULATION_LOCK_PATH="${PROJECT}/sh_test_mesh/runs/.single_simulation.lock"
+SINGLE_SIMULATION_LOCK_FD=""
+SINGLE_SIMULATION_LOCK_OWNED=0
+acquire_single_simulation_lock() {
+  mkdir -p "${PROJECT}/sh_test_mesh/runs"
+  local inherited_fd="${SH_SINGLE_SIMULATION_LOCK_FD:-}"
+  if [[ -n "${inherited_fd}" ]]; then
+    if [[ ! "${inherited_fd}" =~ ^[0-9]+$ ]]; then
+      echo "[run_online_strategy] invalid SH_SINGLE_SIMULATION_LOCK_FD=${inherited_fd@Q}" >&2
+      return 1
+    fi
+    local fd_identity lock_identity
+    fd_identity=$(stat -Lc '%d:%i' "/proc/${BASHPID}/fd/${inherited_fd}" 2>/dev/null) || {
+      echo "[run_online_strategy] inherited simulation lock FD ${inherited_fd} is not open" >&2
+      return 1
+    }
+    lock_identity=$(stat -Lc '%d:%i' "${SINGLE_SIMULATION_LOCK_PATH}") || return 1
+    if [[ "${fd_identity}" != "${lock_identity}" ]] || ! flock -n "${inherited_fd}"; then
+      echo "[run_online_strategy] inherited simulation lock FD does not hold ${SINGLE_SIMULATION_LOCK_PATH}" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_FD="${inherited_fd}"
+  else
+    exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
+    if ! flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+      exec {SINGLE_SIMULATION_LOCK_FD}>&-
+      echo "[run_online_strategy] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to start" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_OWNED=1
+  fi
+  export SH_SINGLE_SIMULATION_LOCK_FD="${SINGLE_SIMULATION_LOCK_FD}"
+}
+acquire_single_simulation_lock
 
 # Backport 2026-08-16 (four-tier 3-min comparison test adaptation 5a):
 # resolve the single generated dir dynamically -- the dir name encodes
@@ -93,6 +132,50 @@ fi
 
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
+
+# C16/WP6b：把本次在线服务实际读取的 trace_config 及其指定的硬件 JSON
+# 原始字节归档到 run_dir。离线域指标只从显式参数或 run 本地证据解析，
+# 避免历史 run 在仓内配置变化后被重放成另一档 rho。
+TRACE_CONFIG_SOURCE="${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv"
+python3 - "${TRACE_CONFIG_SOURCE}" "${PROJECT}/sh_test_mesh" "${RUN_DIR}" <<'PY'
+import csv
+import shutil
+import sys
+from pathlib import Path
+
+trace_path, sh_test_mesh, run_dir = map(Path, sys.argv[1:4])
+if not trace_path.is_file():
+    raise SystemExit(f"[run_online_strategy] missing trace config: {trace_path}")
+hardware_declared = None
+try:
+    with trace_path.open(newline="", encoding="utf-8-sig") as source:
+        for row in csv.DictReader(source):
+            if ((row.get("kind") or "").strip().lower() == "config"
+                    and (row.get("key") or "").strip()
+                    == "hardware_config"):
+                hardware_declared = (row.get("value") or "").strip()
+                break
+except (OSError, csv.Error) as error:
+    raise SystemExit(
+        f"[run_online_strategy] cannot parse {trace_path}: {error}")
+if not hardware_declared:
+    raise SystemExit(
+        f"[run_online_strategy] trace config has no hardware_config row: "
+        f"{trace_path}")
+hardware_path = Path(hardware_declared)
+if not hardware_path.is_absolute():
+    hardware_path = sh_test_mesh / hardware_path
+if not hardware_path.is_file():
+    raise SystemExit(
+        f"[run_online_strategy] missing configured hardware JSON: "
+        f"{hardware_path}")
+shutil.copyfile(trace_path, run_dir / "trace_config.csv.snapshot")
+shutil.copyfile(hardware_path, run_dir / "hardware_config.json.snapshot")
+print("[run_online_strategy] run inputs snapshotted: "
+      f"{run_dir / 'trace_config.csv.snapshot'}, "
+      f"{run_dir / 'hardware_config.json.snapshot'}")
+PY
+
 cd "${PROJECT}"
 
 # P2(2026-08-28):per-request manifest 拷入 run_dir 根——run_dir 自包含、
@@ -110,7 +193,44 @@ fi
 #   ASTRA_LINK_OBSERVER 默认 0(在线模式 link_bucket/link_total 行无消费者;
 #                       metrics_postprocess 不读,hopbytes 走 decision log;
 #                       =1 恢复发射)。
+# K7(P2-9,2026-09-23 外部审计):F7 耦合此前只注入旗标不注入数据源——
+#   observer 关则 C++ 观测门关、link_telemetry[] 每 epoch 恒空(main_online
+#   注释自证"observer off the totals are all zero"),官方 aimd 臂空转
+#   全绿。修:SH_LINK_TELEMETRY=1(aimd 臂经 runner 自动注入)且用户未
+#   显式置 observer 时缺省置 1(遥测差分的数据源);显式 =0 仍被尊重
+#   (刻意跑 no-signal 对照臂)。C20-③ 控制律实验的前置条件。
+if [[ "${SH_LINK_TELEMETRY:-0}" == "1" && -z "${ASTRA_LINK_OBSERVER:-}" ]]; then
+  export ASTRA_LINK_OBSERVER=1
+fi
 export ASTRA_LINK_OBSERVER="${ASTRA_LINK_OBSERVER:-0}"
+
+# C11(F7 耦合规则,2026-09-22):JOINT_QUOTA_MODE=aimd ⇒ --link-telemetry
+# 自动注入。注入交接变量 SH_LINK_TELEMETRY(joint_runner.py 的 --quota
+# aimd 置位;显式 =1 亦可直跑遥测臂)。本处为**公共发射路径**的注入落点
+# 与防御性断言:
+#   - SH_LINK_TELEMETRY=1 ⇒ C++ 启动行追加 --link-telemetry(C6 交付,
+#     每 epoch link_telemetry[] 差分数组;C8 ingest/C11 键换算消费);
+#   - JOINT_QUOTA_MODE=aimd 而 SH_LINK_TELEMETRY 未置位 ⇒ fail-closed
+#     (仅注入逻辑损坏才触发——不存在"aimd + 无遥测"的合法启动路径;
+#     直跑本脚本绕过 runner 的路径由本断言兜底)。
+LINK_TELEMETRY_ARGS=()
+if [[ "${SH_LINK_TELEMETRY:-0}" == "1" ]]; then
+  LINK_TELEMETRY_ARGS=(--link-telemetry)
+fi
+if [[ "${JOINT_QUOTA_MODE:-off}" == "aimd" && "${SH_LINK_TELEMETRY:-0}" != "1" ]]; then
+  echo "[run_online_strategy] FAIL: JOINT_QUOTA_MODE=aimd requires link telemetry (F7 coupling); SH_LINK_TELEMETRY must be 1 (joint_runner.py --quota aimd injects it automatically)" >&2
+  exit 1
+fi
+# L6（2026-09-23 复核审计）：C++ 观测门还需 MetricCollector::enabled
+# （main_online.cc:1165）——SH_METRICS_DETAIL=off 时即便 observer=1、
+# --link-telemetry 在位，link_telemetry[] 仍恒空 ⇒ AIMD 空转。"不存在
+# aimd + 无遥测的合法启动路径"语义扩展到 metrics 门（off 是显式降耗
+# 档，与 aimd 的遥测依赖矛盾即拒；joint_runner.py 持有同构运行期守卫
+# O11——绕过 wrapper 直启 runner 不再静默空转）。
+if [[ "${JOINT_QUOTA_MODE:-off}" == "aimd" && "${DETAIL:-}" == "off" ]]; then
+  echo "[run_online_strategy] FAIL: JOINT_QUOTA_MODE=aimd requires metrics enabled (C++ observer gate is behind MetricCollector::enabled); SH_METRICS_DETAIL=off empties link_telemetry — use summary/full" >&2
+  exit 1
+fi
 
 # P0-2 (2026-08-31, 总文档 §4 P0-2.5): Python 侧无缓冲输出——下方启动行已是
 # python3 -u，此处再 export PYTHONUNBUFFERED=1 属防御性冗余：确保本 runner
@@ -125,6 +245,7 @@ export PYTHONUNBUFFERED=1
   --bridge-dir "${RUN_DIR}/bridge" \
   --online-validate "${SH_ONLINE_VALIDATE:-0}" \
   "${BRIDGE_TIMEOUT_ARGS[@]}" \
+  "${LINK_TELEMETRY_ARGS[@]}" \
   --request-queue-csv "${REQUEST_CSV}" \
   --close-input \
   --workload-configuration="${ET_PREFIX}" \
@@ -154,7 +275,12 @@ python3 -u online/online_service.py \
   --plan-dir "${ET_DIR}" \
   > "${RUN_DIR}/python.log" 2>&1 || PY_EXIT=$?
 
-wait "${CPP_PID}"; CPP_EXIT=$?
+# L10（2026-09-23 深挖审计）：set -e 下裸 wait 在 C++ 非零退出时直接终止
+# 本脚本，下方失败诊断尾段（log tail / "bridge retained" 提示）不可达——
+# 改为 || 捕获退出码（与上方 PY_EXIT 同手法），诊断可达后仍经下方判定
+# fail-closed 非零退出。
+CPP_EXIT=0
+wait "${CPP_PID}" || CPP_EXIT=$?
 echo "[run_online_strategy] cpp_exit=${CPP_EXIT} python_exit=${PY_EXIT}"
 if [[ ${CPP_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/cpp.log" >&2

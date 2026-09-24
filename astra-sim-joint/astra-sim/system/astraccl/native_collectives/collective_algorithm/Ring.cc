@@ -33,7 +33,6 @@ Ring::Ring(ComType type,
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
     this->toggle = false;
-    this->name = Name::Ring;
     if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
         transmition = MemBus::Transmition::Fast;
     } else {
@@ -127,8 +126,6 @@ void Ring::process_stream_count() {
     if (remained_packets_per_message > 0) {
         remained_packets_per_message--;
     }
-    if (id == 0) {
-    }
     if (remained_packets_per_message == 0 && stream_count > 0) {
         stream_count--;
         if (stream_count > 0) {
@@ -179,7 +176,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
@@ -191,7 +187,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
@@ -236,7 +231,7 @@ bool Ring::ready() {
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
         stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, packet.stream_id);
+        packet.preferred_vnet);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,

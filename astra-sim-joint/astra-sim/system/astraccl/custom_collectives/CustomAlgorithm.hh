@@ -36,6 +36,11 @@ namespace AstraSim {
 class CustomAlgorithm : public Algorithm {
   public:
     CustomAlgorithm(std::string et_filename, int id, int pos_in_comm, CommunicatorGroup* comm_group);
+    // Frees the ETFeeder allocated in the constructor. CustomAlgorithm is
+    // deleted through the Algorithm base pointer (e.g. by CollectivePhase),
+    // so the destructor must release et_feeder here or every custom
+    // collective leaks one ETFeeder.
+    ~CustomAlgorithm() override;
 
     // Runs the collective algorithm. This function is only called once to start
     // the algorithm.
@@ -56,8 +61,6 @@ class CustomAlgorithm : public Algorithm {
     void issue(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
     void issue_dep_free_nodes();
 
-    // Rank Id
-    int id;
     // ET Feeder for the Chakra ET for this specific communication & rank.
     // This is separate from the ET Feeder in the Workload layer, which is used
     // to traverse the whole workload Chakra ET.

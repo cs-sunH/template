@@ -12,7 +12,9 @@
 #
 # granularity 纪律：本层只产最细粒度（逐请求/逐事件），一律不传分桶/聚合
 # 参数（backlog 不传 --bucket-ns）；任何粗化（分桶、p90-负载曲线换粒度）
-# 留给下游画图脚本，保证后续任意再加工不需要重跑仿真。
+# 留给下游画图脚本，保证后续任意再加工不需要重跑仿真。（C16 增补：
+# domain_metrics 的 D_econ δ 主臂/敏感性倍数取自 slo_params_manifest.json
+# B 类参数，不经本层旗标——同 granularity 纪律，参数唯一来源。）
 #
 # 自动提取清单（输入全部 run_dir 本地可得；A4/2026-08-29 起由
 # slo_tools/slo_postprocess_driver.py 单进程单遍执行——9 步的产物集/
@@ -37,6 +39,23 @@
 #                                                 csv 已退役)
 #                                                 + slo_hbm_watermark_
 #                                                 instances.csv
+#   10. domain_metrics.py（C16，2026-09-22；joint 专属条件步）→
+#                                                 slo_domain_requests.csv
+#                                                 (三口径逐请求) +
+#                                                 slo_domain_instances.csv
+#                                                 (双域同图/内外等值线/
+#                                                 瓶颈/配额 NA 标注) +
+#                                                 slo_domain_summary.json
+#                                                 (四动作计数/δ 敏感性重
+#                                                 定价/home 迁移轨迹/口径
+#                                                 登记与叙事纪律注释)
+#                                                 ——仅当 decision log 含
+#                                                 joint_admission 行时执
+#                                                 行并落步（其余仓/非
+#                                                 joint run 完全静默跳过，
+#                                                 共链字节对拍契约零扰动；
+#                                                 详见 slo_tools/
+#                                                 domain_metrics.py 头注）
 #
 # hbm_watermark 四层可信度（P1，2026-08-30）：run_dir 含 results/
 # kv_delta_journal.jsonl 时走 journal 权威重放（含 checksum 证书时

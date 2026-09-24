@@ -61,6 +61,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# uutils date 0.8.0 treats %3N as an untruncated nanosecond field, which makes
+# elapsed-millisecond arithmetic overflow or report absurd values.  Use a
+# monotonic clock with explicit integer conversion on every supported host
+# (same as run_online_idle_fixture.sh).
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+
 start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   local run_dir=$1
   rm -rf "${run_dir}"
@@ -139,7 +147,7 @@ if ! kill -0 "${PY_PID}" 2>/dev/null; then
 fi
 echo "[fixture] IDLE held ~1s (processes alive); injecting 1 request"
 
-inject_ms=$(date +%s%3N)
+inject_ms=$(monotonic_ms)
 exec 3>"${run_dir}/cmd.fifo"
 echo '{"kind":"Submit","session_id":"stm_s0","turn_index":0,"request_id":"stm_s0_r0","prefill_length":4096,"decode_length":128,"arrival_world_ns":'"${T_NS}"',"inter_request_interval_ns":0}' >&3
 
@@ -164,7 +172,7 @@ while ! grep -q "ACTIVE -> IDLE" "${run_dir}/cpp.log"; do
     exit 1
   fi
 done
-echo "[fixture] request completed at +$(( $(date +%s%3N) - inject_ms ))ms; injecting CloseInput"
+echo "[fixture] request completed at +$(( $(monotonic_ms) - inject_ms ))ms; injecting CloseInput"
 echo '{"kind":"CloseInput"}' >&3
 exec 3>&-
 wait_for_exits "${run_dir}" scenario1

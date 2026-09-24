@@ -19,6 +19,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest 的 prepend 导入（tests/ 带 __init__.py，模块名变 tests.test_*）只把
+# slo_tools/ 放上 sys.path；本模块目录（tests/）须自行入径，`import synthetic`
+# 才与直跑 / unittest discover 两条口径一致。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import SloToolError  # noqa: E402

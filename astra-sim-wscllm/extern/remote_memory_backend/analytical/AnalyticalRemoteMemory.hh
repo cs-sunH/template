@@ -48,8 +48,14 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI, public Ast
   uint64_t get_remote_mem_runtime(uint64_t tensor_size);
 
   // R3 (方案 §3.6 / 阶段 E): read-only export helpers for the sensing
-  // ledger output -- single source of truth next to the port_index
-  // resolution itself (main_online must not re-derive either string).
+  // ledger output, kept next to the port_index resolution itself so any
+  // future consumer never re-derives either string.
+  //
+  // Dead accessors (2026-09 deep-dive): the consumer the earlier comment
+  // advertised does not exist -- zero callers in this repo nor in any of
+  // the sibling repositories (face carries no remote_memory_backend at
+  // all). Kept as part of the R3 observation layer for cross-repo parity
+  // of the synced backend pair.
   const char* architecture_name() const;
   std::string port_mapping_rule() const;
 

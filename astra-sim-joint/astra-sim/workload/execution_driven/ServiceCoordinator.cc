@@ -48,18 +48,6 @@ void ServiceCoordinator::on_alarm_scheduled() {
     ++pending_alarm_count_;
 }
 
-void ServiceCoordinator::on_fence_scheduled() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    ++pending_fence_count_;
-}
-
-void ServiceCoordinator::on_fence_resolved() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    assert(pending_fence_count_ > 0);
-    --pending_fence_count_;
-    maybe_finish();
-}
-
 void ServiceCoordinator::mark_input_closed(const InputCloseReason reason) {
     std::lock_guard<std::mutex> lock(mtx_);
     // Phase-7 §10.7: record the close source BEFORE the state transitions
@@ -120,9 +108,20 @@ bool ServiceCoordinator::checked_wait_deadline(
     if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
         return false;
     }
+    // Bound-check in the TICK domain: scale seconds into the duration's
+    // unit as a double FIRST and compare that against max().count().
+    // Comparing raw seconds against the nanosecond-domain max() count
+    // (the old form) mixed unit domains and let (9.2e9, 9.2e18]-second
+    // timeouts reach the float->integer conversion and overflow int64
+    // (UB). ">=" because the double image of int64 max rounds up to
+    // 2^63, which is itself not representable as a duration count.
     const double duration_max_count = static_cast<double>(
         std::chrono::steady_clock::duration::max().count());
-    if (timeout_s > duration_max_count) {
+    using period = std::chrono::steady_clock::duration::period;
+    const double timeout_ticks =
+        timeout_s * (static_cast<double>(period::den) /
+                     static_cast<double>(period::num));
+    if (timeout_ticks >= duration_max_count) {
         return false;  // could not be represented as a duration at all
     }
     const std::chrono::steady_clock::duration timeout =
@@ -203,13 +202,6 @@ uint64_t ServiceCoordinator::pending_alarm_count() const {
     return pending_alarm_count_;
 }
 
-uint64_t ServiceCoordinator::pending_fence_count() const {
-    // P0-2 (2026-08-31): read-only diagnostics accessor (step-1-5 counter;
-    // no behavior change).
-    std::lock_guard<std::mutex> lock(mtx_);
-    return pending_fence_count_;
-}
-
 void ServiceCoordinator::set_state(const ServiceState next) {
     // caller holds mtx_
     const ServiceState prev = state_;
@@ -239,22 +231,21 @@ void ServiceCoordinator::maybe_finish() {
         return;
     }
     // Step 1-10 (合同② 目标 5 五态迁移): the input is still open and every
-    // accepted/active request has drained (active==0, no pending alarm or
-    // fence) -- the service returns to IDLE and keeps waiting for the next
+    // accepted/active request has drained (active==0, no pending alarm)
+    // -- the service returns to IDLE and keeps waiting for the next
     // external injection (IDLE --ACTIVE--> ... --complete--> IDLE). The
     // official runners close the input at startup, so this branch is
     // unreachable there (input_open_ is false); it is the IDLE fixture's
     // contract.
     if (input_open_ && active_request_count_ == 0 &&
-        pending_alarm_count_ == 0 && pending_fence_count_ == 0 &&
-        state_ == ServiceState::ACTIVE) {
+        pending_alarm_count_ == 0 && state_ == ServiceState::ACTIVE) {
         set_state(ServiceState::IDLE);
     }
 }
 
 bool ServiceCoordinator::finished_locked() const {
     return !input_open_ && active_request_count_ == 0 &&
-           pending_alarm_count_ == 0 && pending_fence_count_ == 0;
+           pending_alarm_count_ == 0;
 }
 
 }  // namespace ExecutionDriven

@@ -80,12 +80,14 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 448,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 408,
               "OnlineNode layout anchor for this toolchain (see the mirror "
-              "assert above for the ABI-agnostic bound; 448 after the sh_2.0 "
-              "HBM tail fields is_local_hbm_kv_restore + hbm_access_mode "
-              "landed at the struct tail -- sanctioned by the R2 report's "
-              "update-the-number rule for per-repo layout anchors)");
+              "assert above for the ABI-agnostic bound; 408 after the "
+              "deep-dive doc §2-47 removal of the write-only "
+              "OnlineStatisticsState optionals operation_intensity / "
+              "is_memory_bound / network_bandwidth (GCC 15 / libstdc++ "
+              "x86-64, std::vector = 40) -- number re-proved per the R2 "
+              "report's update-the-number rule for per-repo layout anchors)");
 
 namespace AstraSim {
 

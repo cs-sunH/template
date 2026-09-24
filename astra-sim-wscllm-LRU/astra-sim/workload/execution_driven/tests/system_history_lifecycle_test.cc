@@ -6,8 +6,8 @@ maps had no production consumers: ask_for_schedule already proves readiness by
 checking every rank's ready-list front, and ready_counter/suspended_streams
 have no writers/readers.  This fixture proves the retained ready-list decision
 is exact, including subgroup-shaped lifetimes and same-local-id collisions,
-then stress-constructs one million streams.  It also checks that online
-UsageTracker keeps its precise level without retaining transition history.
+then stress-constructs one million streams.  It also checks that UsageTracker
+keeps its precise level with O(1) state on every execution mode.
 *******************************************************************************/
 
 #include <unistd.h>
@@ -19,7 +19,6 @@ UsageTracker keeps its precise level without retaining transition history.
 #include <cstring>
 #include <list>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -288,59 +287,42 @@ void test_stream_lifecycle_stress(const std::array<AstraSim::Sys*, 4>& ranks) {
 }
 
 void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
-    // The default constructor remains history preserving for static/reporting
-    // paths, including the legacy transition contents.
+    // UsageTracker keeps only the current level.  The transition-history
+    // report chain (Usage records, CSVWriter output) had no production
+    // consumer and grew without bound, so it was retired entirely.
     AstraSim::UsageTracker history(2);
     history.increase_usage();
+    expect(history.current_level == 1,
+           "UsageTracker increase_usage raises the current level");
+    history.increase_usage();
+    expect(history.current_level == 1,
+           "UsageTracker level stays bounded by levels - 1");
     history.decrease_usage();
-    expect(history.current_level == 0 && history.usage.size() == 2,
-           "default UsageTracker preserves legacy transition history");
-    const auto& first = history.usage.front();
-    const auto& second = history.usage.back();
-    expect(first.level == 0 && first.start == 0 && first.end == 0 &&
-               second.level == 1 && second.start == 0 && second.end == 0,
-           "default UsageTracker record contents remain unchanged");
+    history.decrease_usage();
+    history.decrease_usage();
+    expect(history.current_level == 0,
+           "UsageTracker decrease_usage floors the current level at zero");
+    history.set_usage(2);
+    expect(history.current_level == 2,
+           "UsageTracker set_usage stores the requested level");
 
     auto& online = ranks[0]->scheduler_unit->usage.at(0);
     online.set_usage(1);
-    expect(online.current_level == 1 && online.usage.empty(),
-           "online scheduler changes level without retaining history");
+    expect(online.current_level == 1,
+           "scheduler UsageTracker changes level");
     online.set_usage(0);
-
-    const int level_before_report = online.current_level;
-    const AstraSim::Tick tick_before_report = online.last_tick;
-    bool report_failed_closed = false;
-    try {
-        online.report(nullptr, 0);
-    } catch (const std::logic_error&) {
-        report_failed_closed = true;
-    }
-    expect(report_failed_closed,
-           "online UsageTracker::report rejects unavailable history");
-
-    bool percentage_failed_closed = false;
-    try {
-        (void)online.report_percentage(100);
-    } catch (const std::logic_error&) {
-        percentage_failed_closed = true;
-    }
-    expect(percentage_failed_closed,
-           "online UsageTracker::report_percentage rejects unavailable history");
-    expect(online.current_level == level_before_report &&
-               online.last_tick == tick_before_report && online.usage.empty(),
-           "rejected online history reports do not mutate live state");
 
     constexpr uint64_t kIterations = 1000000;
     for (uint64_t index = 0; index < kIterations; ++index) {
         online.increase_usage();
         online.decrease_usage();
         if ((index & 65535u) == 0) {
-            expect(online.current_level == 0 && online.usage.empty(),
+            expect(online.current_level == 0,
                    "online UsageTracker remains O(1) during stress");
         }
     }
-    expect(online.current_level == 0 && online.usage.empty(),
-           "online run-end retains zero UsageTracker history");
+    expect(online.current_level == 0,
+           "online run-end UsageTracker level returns to zero");
 }
 
 }  // namespace

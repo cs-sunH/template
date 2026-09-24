@@ -14,7 +14,7 @@ int MemMovRequest::id = 0;
 MemMovRequest::MemMovRequest(int request_num,
                              Sys* sys,
                              LogGP* loggp,
-                             int size,
+                             uint64_t size,
                              int latency,
                              Callable* callable,
                              bool processed,

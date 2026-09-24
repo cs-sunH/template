@@ -87,7 +87,7 @@ committer's own domain rules must still reject them).
 Build: the CMake target
 AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest (build with
 cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-face):
+Run (from template/astra-sim-face-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
 Exit code 0 on ALL PASS.

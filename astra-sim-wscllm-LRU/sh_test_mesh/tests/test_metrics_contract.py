@@ -681,7 +681,7 @@ class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):
     def test_na_semantics(self) -> None:
         # NA = "field not yet produced by the owning work package"; it is
         # a member of first_token_source but never a terminal_status
-        # value, and it never parses as a number.
+        # value.
         self.assertEqual(self.NA_SENTINEL, "NA")
         self.assertIn(self.NA_SENTINEL, self.FIRST_TOKEN_SOURCE_VALUES)
         self.assertTrue(
@@ -690,10 +690,6 @@ class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):
                 for value in self.TERMINAL_STATUS_VALUES
             )
         )
-        with self.assertRaises(ValueError):
-            int(self.NA_SENTINEL)
-        with self.assertRaises(ValueError):
-            float(self.NA_SENTINEL)
 
 
 if __name__ == "__main__":

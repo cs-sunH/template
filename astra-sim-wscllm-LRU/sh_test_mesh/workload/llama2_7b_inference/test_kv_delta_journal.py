@@ -356,6 +356,7 @@ class KvDeltaJournalTests(unittest.TestCase):
         self.assertEqual(summary["checks"]["residual_resident_zero"], True)
         self.assertEqual(summary["checks"]["residual_reserved_zero"], True)
         self.assertEqual(summary["checks"]["physical_equals_weight"], True)
+        self.assertEqual(summary["checks"]["remote_account_zero"], True)
         self.assertEqual(len(summary["ranks"]), len(manager.node_states))
 
     def test_journal_disabled_recorder_keeps_legacy_behavior(self) -> None:

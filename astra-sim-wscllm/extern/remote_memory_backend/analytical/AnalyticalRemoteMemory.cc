@@ -59,6 +59,20 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
     if (j.contains("num-npus-per-node")) {
       num_npus_per_node = j["num-npus-per-node"];
     }
+    // Fail-closed on missing/non-positive keys: num_npus_per_node is the
+    // port-map divisor in issue() (division by zero) and num_nodes sizes
+    // the per-port containers (empty container -> out-of-range access).
+    if (num_nodes <= 0) {
+      cerr << "num-nodes must be positive for PER_NODE_MEMORY_EXPANSION"
+           << endl;
+      exit(1);
+    }
+    if (num_npus_per_node <= 0) {
+      cerr << "num-npus-per-node must be positive for "
+              "PER_NODE_MEMORY_EXPANSION"
+           << endl;
+      exit(1);
+    }
   } else if (mem_type == PER_NPU_MEMORY_EXPANSION &&
              j.contains("npu-ids")) {
     per_npu_ids_configured = true;

@@ -68,7 +68,6 @@ file(GLOB srcs
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/native_collectives/collective_algorithm/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/astraccl/custom_collectives/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/memory/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/system/scheduling/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/astra-sim/common/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/src/third_party/utils/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extern/graph_frontend/chakra/schema/protobuf/*.cc"
@@ -114,16 +113,3 @@ set_target_properties(AstraSim
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
 )
 
-option(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST
-       "Build the communicator-scoped OfflineGreedy schedule journal test" OFF)
-if(ASTRA_SIM_BUILD_OFFLINE_GREEDY_SCHEDULE_TEST)
-    enable_testing()
-    add_executable(AstraSim_OfflineGreedyScheduleJournalTest
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/OfflineGreedyScheduleJournalTest.cc)
-    target_link_libraries(AstraSim_OfflineGreedyScheduleJournalTest
-        PRIVATE AstraSim)
-    target_include_directories(AstraSim_OfflineGreedyScheduleJournalTest
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern/helper)
-    add_test(NAME AstraSim_OfflineGreedyScheduleJournalTest
-        COMMAND AstraSim_OfflineGreedyScheduleJournalTest)
-endif()

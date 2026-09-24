@@ -376,7 +376,7 @@ def run(run_dir: Path) -> int:
         # P1（2026-08-30）：decision-log 重放的容量参数恒传（诊断计数）；
         # 正式判决只由 journal 路径（per_rank_total_hbm_certified 层）给出。
         scan = hbm_watermark.WatermarkScan(
-            run_dir, repo_variant, prep["mapping"], prep["tokens"],
+            run_dir, prep["mapping"], prep["tokens"],
             prep["coef"], prep["capacity"])
         return {"repo_variant": repo_variant, "prep": prep, "scan": scan}
 

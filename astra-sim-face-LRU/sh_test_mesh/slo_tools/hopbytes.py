@@ -123,7 +123,10 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
     无物理传输时空列表）。基线事实核对（60s 窗）：decode 1244 条
     shards/hops 长度零错位、每条 hops 全等；prefill 1079 条 hops 全等。
     聚合口径：
-      decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确）；
+      decode  = -LRU 契约行列表：Σ 行 total_bytes × hops[0]（local_hit
+      段不计数；行无 shards 键，face 实例同构 rank 块 hops 恒一致，
+      与逐 shard 求和严格相等）；旧 dict 产物仍按 shards[i].bytes ×
+      hops[i] 逐 shard 精确。
       prefill = history_transfer_bytes × hops[0]（per-shard hops 全等
       ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布）。
     旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低）。
@@ -158,26 +161,55 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
     elif kind == "decode":
         transfer = decision.get("prefill_decode_transfer")
         hops = decision.get("kv_noc_hops")
-        shards = (transfer or {}).get("shards") if isinstance(
-            transfer, dict) else None
-        if isinstance(shards, list) and isinstance(hops, list) \
-                and len(shards) == len(hops):
-            for shard, hop in zip(shards, hops):
-                nbytes = (shard or {}).get("bytes")
+        if isinstance(transfer, list):
+            # -LRU 新产物：prefill_decode_transfer 为契约行列表
+            # （face_online_scheduler._transfer_rows，行结构无 shards
+            # 键）——local_hit 段无物理搬移不计数（同 hbm_watermark
+            # 口径）；迁移行 total_bytes × hops[0]（face 实例为同构
+            # rank 块，_kv_noc_hops 逐 shard 跳数恒一致 ⇒ 与逐 shard
+            # bytes×hops 求和严格相等，同 prefill 分支论证）。
+            for row in transfer:
+                if not isinstance(row, dict) or row.get(
+                        "kind") in ("local_hit", "LOCAL_HIT"):
+                    continue
+                nbytes = row.get("total_bytes")
                 if not isinstance(nbytes, int) or nbytes <= 0:
                     continue
-                if isinstance(hop, int) and hop >= 0:
+                if isinstance(hops, list) and hops and all(
+                        isinstance(h, int) and h >= 0 for h in hops):
+                    hop_bytes = nbytes * hops[0]
                     slot = _slot()
                     slot["actions"] += 1
-                    slot["hop_bytes"] += nbytes * hop
+                    slot["hop_bytes"] += hop_bytes
                     slot["bytes_with"] += nbytes
                     acc["actions_with_hops"] += 1
-                    acc["hop_bytes_total"] += nbytes * hop
+                    acc["hop_bytes_total"] += hop_bytes
                     acc["bytes_with_hops"] += nbytes
                 else:
                     slot = _slot()
                     slot["bytes_without"] += nbytes
                     acc["bytes_without_hops"] += nbytes
+        else:
+            shards = (transfer or {}).get("shards") if isinstance(
+                transfer, dict) else None
+            if isinstance(shards, list) and isinstance(hops, list) \
+                    and len(shards) == len(hops):
+                for shard, hop in zip(shards, hops):
+                    nbytes = (shard or {}).get("bytes")
+                    if not isinstance(nbytes, int) or nbytes <= 0:
+                        continue
+                    if isinstance(hop, int) and hop >= 0:
+                        slot = _slot()
+                        slot["actions"] += 1
+                        slot["hop_bytes"] += nbytes * hop
+                        slot["bytes_with"] += nbytes
+                        acc["actions_with_hops"] += 1
+                        acc["hop_bytes_total"] += nbytes * hop
+                        acc["bytes_with_hops"] += nbytes
+                    else:
+                        slot = _slot()
+                        slot["bytes_without"] += nbytes
+                        acc["bytes_without_hops"] += nbytes
 
 
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:

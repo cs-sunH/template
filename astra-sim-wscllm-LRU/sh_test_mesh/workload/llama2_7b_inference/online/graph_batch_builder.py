@@ -3,7 +3,7 @@
 
 阶段 1 最关键的对齐点:复用共享发射原语的节点结构。per-request 发射
 (generate_wsc_llm_trace.py 模块级函数)由
-助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
+助手函数组成(_paired_transfer / _emit_prefill_stage /
 transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
@@ -342,12 +342,6 @@ class OnlineTraceBuilder:
             # B3:同上(过路/目标写由 restore 承担的接收端零计费位)。
             node["comm"]["hbm_charge"] = False
 
-    # ------------------------------------------------------------- 只读属性 --
-
-    @property
-    def node_count_total(self) -> int:
-        return self.node_count
-
 
 class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
@@ -384,12 +378,12 @@ class GraphBatchBuilder:
         # barrier 口径;joiner decode_evictions 的触发门来源)。
         self._prefill_segment_ends = {}
         # ---- 逐出旁路支链(2026-09-13)store→restore 前递登记表 ----
-        # session_id -> [(edge_rank, mem_store_node_id, source_ack_recv_
-        # node_id)]——该会话全部在飞逐出 store 支链的池写尾部。同会话
-        # 两段式逐出(suffix/full)各登记一条;回迁(remote_load)发射前
-        # 查表补 store→restore 依赖边(主方案 §3.3);retire_terminal_
-        # session 边界(retire_completion_gate)清除。懒处理:store 早已
-        # 物理完成时补的边即刻满足,无额外时延。
+        # session_id -> [(edge_rank, mem_store_node_id)]——该会话全部
+        # 在飞逐出 store 支链的池写尾部。同会话两段式逐出(suffix/full)
+        # 各登记一条;回迁(remote_load)发射前查表补 store→restore 依赖
+        # 边(主方案 §3.3);retire_terminal_session 边界(retire_
+        # completion_gate)清除。懒处理:store 早已物理完成时补的边即刻
+        # 满足,无额外时延。
         self.pending_store_tails = {}
         self._tag_allocator = TransferTagAllocator()
         # 每 request 的 action_sequence 账本(action 名含 _action{seq:03d}_,
@@ -620,9 +614,9 @@ class GraphBatchBuilder:
 
     def _register_store_tails(self, records) -> None:
         """逐出发射后登记该会话的在飞 store 支链尾部(§3.3):每条
-        remote_store shard 记 (edge_rank, 边缘 mem_store 节点, 源端
-        ack_recv 节点)。两段式逐出的 suffix/full 各登记一条;restore
-        须等齐(两笔写层区间互不相交,但 restore 读全区间)。"""
+        remote_store shard 记 (edge_rank, 边缘 mem_store 节点)。两段式
+        逐出的 suffix/full 各登记一条;restore 须等齐(两笔写层区间互不
+        相交,但 restore 读全区间)。"""
         for record in records:
             if record.get("kind") != "remote_store":
                 continue
@@ -635,7 +629,6 @@ class GraphBatchBuilder:
                 tails.append((
                     shard["edge_rank"],
                     shard["edge_store_node_id"],
-                    shard.get("source_ack_recv_node_id"),
                 ))
 
     def _arm_store_tail_dependencies(self, transfer: KVTransfer,
@@ -666,7 +659,7 @@ class GraphBatchBuilder:
         # 回迁链之前),后 arm 同缘依赖——保证同缘 arm 恰好落在回迁链
         # 首节点上,不被中继 recv 抢先消费。
         direct_tails = []
-        for edge_rank, store_node_id, _ack_node_id in tails:
+        for edge_rank, store_node_id in tails:
             if edge_rank in shard_edges:
                 direct_tails.append((edge_rank, store_node_id))
                 continue

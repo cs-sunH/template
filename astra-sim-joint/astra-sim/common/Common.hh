@@ -18,7 +18,9 @@ constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
 
 enum time_type_e { SE = 0, MS, US, NS, FS };
 
-enum req_type_e { UINT8 = 0, BFLOAT16, FP32 };
+// Every communication request in the simulator carries UINT8 payload
+// granularity; no wider dtype is produced by any code path.
+enum req_type_e { UINT8 = 0 };
 
 struct timespec_t {
     time_type_e time_res;
@@ -55,21 +57,6 @@ enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
 
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
 
-enum class IntraDimensionScheduling {
-    FIFO = 0,
-    RG,
-    SmallestFirst,
-    LessRemainingPhaseFirst
-};
-
-enum class InterDimensionScheduling {
-    Ascending = 0,
-    OnlineGreedy,
-    RoundRobin,
-    OfflineGreedy,
-    OfflineGreedyFlex
-};
-
 enum class InjectionPolicy {
     Infinite = 0,
     Aggressive,
@@ -77,8 +64,6 @@ enum class InjectionPolicy {
     ExtraAggressive,
     Normal
 };
-
-enum class PacketRouting { Hardware = 0, Software };
 
 enum class BusType { Both = 0, Shared, Mem };
 

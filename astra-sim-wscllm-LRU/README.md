@@ -164,8 +164,11 @@ sh_2.0 N-way 模型重写），本 rank 的全部 HBM 用户按**六类 JobKind*
 3. **KV restore DMA（RESTORE）**：`local_hbm_kv_restore` 节点（节点级
    `is_local_hbm_kv_restore=true`）＝远端回迁目标端的唯一数据计费；每 rank
    `hbm_dma` 单槽（同一 rank 同时至多一个在飞 restore）；system 键
-   `hbm-kv-restore-bandwidth-sharing: 1` 使 restore 进入共享模型（contention 与
-   sharing 均关时走单槽闭式时长 `local_mem_latency + bytes/bw`）。
+   `hbm-kv-restore-bandwidth-sharing` 决定 restore 是否进入共享模型：`1`
+   进入（contention 下随六类作业 N-way 均分；contention 关时与 COMP 两用户
+   50/50 A/B 基线）；`0` 时无论 contention 均走单槽闭式时长
+   `local_mem_latency + bytes/bw`（不与推理共享带宽；零字节 restore 亦走闭式
+   定长，不建 HBM 作业）。
 4. **池流量端点（POOL_READ / POOL_WRITE）**：直连池端点的
    `mem_store(hbm_access_mode=1)` 记 POOL_READ（池写时的本地 HBM 读一次）——
    仅当逐出/回迁源 rank 本身是边缘 rank 时发生；借道链路的边缘端
@@ -232,11 +235,12 @@ comm_write / restore / pool_read / pool_write）、`hbm_peak_concurrent_jobs`、
 - 位置值域（决策日志 `history_location_before`）：`local_hbm` /
   `partial_hbm_remote` / `remote_memory`。
 
-**去类型化两段式 LRU 逐出**（触发点与 wscllm 原仓完全一致的**五处**：prefill
-准入 `prepare_history`、decode 准入 P→D 交接 `move_prefill_to_decode`、容量增长
-`grow_prefill`/`grow_decode`、decode 终态净额预占 `reserve_request_capacity`、
-净额回补 `extend_request_capacity`——后两处为 wscllm 生产链路真实使用；
-**不新增触发位置，完成路径零逐出**）：
+**去类型化两段式 LRU 逐出**（触发点与 wscllm 原仓完全一致的**四处收敛点**：
+prefill 准入 `prepare_history`、decode 准入 P→D 交接 `move_prefill_to_decode`、
+容量增长 `grow_prefill`/`grow_decode`、decode 终态净额预占
+`reserve_request_capacity`——净额预占为 wscllm 生产链路真实使用；净额回补
+`extend_request_capacity` 仅增量记账、不触发逐出收敛（resident→reserved
+1:1 换位保证不超订）；**不新增触发位置，完成路径零逐出**）：
 
 1. 候选池 = 本实例上"已完成（`last_completion_ns` 非空）且非 active"的驻留会话，
    **不按 human/tool 分类**（无 `next_request_type`、请求 CSV 维持 8 列）；
@@ -297,8 +301,10 @@ comm_write / restore / pool_read / pool_write）、`hbm_peak_concurrent_jobs`、
 
 本拓扑 9×6 网格的 decode 实例居内部，逐出源多为非边缘 rank → 借道链 A 为主
 （直连链 B 仅当逐出源 rank 本身在 mesh 周界时发生；POOL_WRITE 路径 sh 发射端
-本就不使用）。KV 传输 tag 由 `TransferTagAllocator` 从 **10,000,000** 起单调分配
-（错开既有 `queue_index*10000+{1000,1900,3000}` 段）；新节点命名避开
+本就不使用）。KV 传输 tag 由 `TransferTagAllocator` 从 **100,000,000** 起单调分配
+（错开既有 `queue_index*10000+{1000,1900,3000}` 段；H8 修正 2026-09-24：原基址
+10,000,000 只对 <1000 行队列成立——30s 窗口源 trace 实测 1177 行已段重叠，基址
+上移后队列 ≤9999 行两段不相交，且 `_stage_tag` 补了越界 fail-closed 守卫）；新节点命名避开
 `first_token` / `batch_train_` C++ 名字锚点子串。
 
 **逐出旁路支链（2026-09-13，KV 逐出与 request 推理并行化）**：三个逐出发射点
@@ -550,7 +556,8 @@ WP9 退回处置：拆分缺省关 + train-interpolated proxy（B4，2026-08-26�
   - **换算权威**：W_bytes/KV_bytes 用本仓
     `wsc_llm_scheduler.estimate_model_weight_bytes` /
     `kv_cache_bytes_for_tokens`（trace_config.csv 参数：swiglu →
-    13476831232 / 524288 B/token，test_wsc_llm_scheduler.py:646 冻结；
+    13476831232 / 524288 B/token，由 test_wsc_llm_scheduler.py 的
+    test_llama2_7b_tp6_partition_is_exact_without_model_padding 冻结；
     与 face_scheduler 同源同构），不另行编造。
   - **运行内 CSV 保持 NA**（ledger 归档前不可得，instructions 记
     `proxy_unavailable:no_train_ledger(results/)`）；对归档 run 离线
@@ -584,7 +591,9 @@ iterations−1）+ exit/哨兵/end barrier（挂点语义不变）。P 侧 `emit
 tick 差，相对 ≤6.6e-5）、GraphBatch 增量 = debut 请求数。metrics_schema 事件码
 8 常量 `EVENT_FIRST_TOKEN_COMPLETE`（complete 边、service 码集）。prefill 决策
 对 history NOC_MIGRATE 迁移附加 `noc_hops` 输出字段（实例图最短路，Hop-Bytes
-覆盖 70.4%→满覆盖；基线对拍剥离项）。
+history 迁移纳入覆盖（原记「70.4%→满覆盖」；2026-09-24 M29 修复起 hopbytes
+另将逐出/回迁契约行计入 bytes_without_hops——契约行无 shard 路由，coverage
+如实低于 1，满覆盖口径已撤）；基线对拍剥离项）。
 
 ### 3.1 在线二进制机制旗标（--online-* 家族）
 
@@ -615,7 +624,8 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   预排为队列事件、健康运行不停车不受影响。显式 `0`=关恢复 `wait_for_work()`
   原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
   墙钟超时即带停泊点诊断
-  （tick/active/pending_alarm/window_occupancy/mailbox 等 12 字段）
+  （tick/active/pending_alarm/window_occupancy/mailbox 等 11 字段——2026-09-24
+  修复删 pending_fence 输出后由 12 减 1）
   `online_fatal` abort（`--idle-` 前缀同受家族未知旗标硬错保护）。
   **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
   空白或符号字符（拒 `" +1"`/`" -1"`）；判界唯一顺序为 `==0` 接受（=关）
@@ -636,7 +646,7 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   不可同时为空）；③Error 终止路径（fail-closed）先于停泊发生。**未来重构
   若打破 pump 后置 drain 次序或 calendar 完整性不变量，必须重做可达性
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
-  （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文已随 A3
+  （含任何未来未知停滞形态）；11 字段 `parking_diagnostics` 报文已随 A3
   移植（`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
 - **window advisory 旋钮已删除（2026-09-05 A.3 清除；原 2026-08-30 P0 fix
   延续裁决）**：`--request-window-rows` 死旋钮已从四仓物理删除——calendar
@@ -758,7 +768,9 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 ## 4. 机制回归 fixtures
 
 `run_online_idle_fixture.sh`（IDLE 五态生命周期）、`run_online_wakeup_guard_fixture.sh`、
-`run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
+`run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`、
+`run_bridge_cpp_death_fixture.sh`（C++ 中途死亡 => Python 侧 BrokenPipe
+fail-closed 退出 1，纯 Python 无需二进制）——机制层健康自检。
 
 另有 C++ 单测 fixtures（`build/astra_analytical/build_congestion_aware/bin/`，无参数直跑）：
 `..._WindowedReaderTest`（P0 turn-0 修复后的日历 reader 单测：索引遍+日历提交/
@@ -776,9 +788,13 @@ hbm-charge=false/中转不计费，2026-09 数据面激活自 sh_2.0 拷入）�
 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退
 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket
 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期
-锁定）、`..._RemoteFifoLedgerTest`（RemoteFifoLedger 按 backend 真实端口记账；自带
-PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记账接线，账本
-不启用）等（后三项 2026-08-29 新增，五仓同构）。Python 侧
+锁定）等（后两项 2026-08-29 新增）；另有 2026-09-24 接入的三件套（此前仅有头注
+手工 g++ 行、未入任何构建，对齐 face M12② 修法）：`..._CliOnlineTest`（R1–R14
+在线 CLI 契约：模式 token/未知项 fail-closed/FP1 无符号整数与 watchdog 词法界域）、
+`..._EventQueueDeferredTest`（EventQueue tick-end 收口 + 同 tick deferred 通道 +
+FluidScheduler deferred-flush 集成 + 1000 次随机操作对照参考实现）、
+`..._IngressIdleTest`（IDLE 五态生命周期/EOF 与 Error 终端/overflow 审计/
+close-vs-submit 竞争线性化）。Python 侧
 `online/test_propagating_tail.py`（`online_scheduler_base.py` 的在途尾部观测器
 PropagatingTailTracker：对到达未完成请求、未 ack 交付、未确认 provisional KV 动作
 三类在途工作记 current/peak/按来源计数，超限 fail-closed 报错、绝不截断；8 用例，
@@ -792,12 +808,13 @@ pytest 或直跑）。
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
-- `sh_test_mesh/tests/` + workload 根：pytest（2026-09 改造后基线：workload
-  `llama2_7b_inference/`（含 online/）= 115 passed；`sh_test_mesh/tests/` =
+- `sh_test_mesh/tests/` + workload 根：pytest（2026-09-24 修复后基线：workload
+  `llama2_7b_inference/`（含 online/）= 126 passed（另 7 subtests passed）；
+  `sh_test_mesh/tests/` =
   49 passed（含 resolver PER_NPU 物化断言，随数据面激活改写）；
-  `slo_tools/tests/` = 123 passed + 1 skipped + 3 预存在环境性失败
-  （driver_parity×2 + LoadImbalance 手算×1，与原仓 astra-sim-wscllm 逐字节
-  同款，非本仓改动引入）；
+  `slo_tools/tests/` = 125 passed + 1 skipped + 1 预存在环境性失败
+  （LoadImbalance 手算×1；driver_parity×2 已随 2026-09-24 夹具
+  train_ledger exits 键补全修正转为通过）；
   §2 ② 物化后 trace_config 指向真实队列时，`test_wsc_llm_scheduler.py` 的
   request-neutral 占位断言红为已知环境效应，与代码态无关——还原裸仓即绿）
 
@@ -839,7 +856,7 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
   首跑提交至 22740 后楔死——4 个终态 85万–105万 token 超长会话被静态 P→D
   路由各钉死在一个 decode 实例，准入重试永 insufficient 且无事件可唤醒重试，
   C++ 侧事件队列+决策邮箱全空后由统一死端守卫 fail-closed
-  （`main_online.cc:1653`，安全网本身正确、未改）。根因是记账错误而非容量
+  （`main_online.cc:1661`，安全网本身正确、未改）。根因是记账错误而非容量
   真不够：准入预占终态全量 KV 时未扣减本会话尚驻留于同一 decode 实例的旧 KV
   （`ensure_physical_fit` 的 remaining 不减自身旧驻留 + `protected_sessions`
   禁逐出自身），tp4 128 KiB/token/rank 下"旧+新"≈260GB ≫ 每 rank 预算
@@ -910,7 +927,7 @@ pass（含 D 实例迭代列车的冻结与发射；`wsc_llm_online_scheduler.py
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
   范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
   64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
-  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:71-81`）。
+  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:105-110`）。
 
 
 ---

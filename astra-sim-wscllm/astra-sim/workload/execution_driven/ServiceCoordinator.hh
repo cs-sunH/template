@@ -13,7 +13,7 @@ Request-neutral lifecycle state machine (方案 §4 步骤 1-2 操作 3):
                 IDLE (五态迁移: IDLE -> ACTIVE -> IDLE -> DRAINING -> FINISHED).
     ACTIVE   -- at least one request accepted / arrival alarm pending.
     DRAINING -- input closed, pending alarms/requests still draining.
-    FINISHED -- input closed && active==0 && no pending alarm/fence.
+    FINISHED -- input closed && active==0 && no pending alarm.
 
 Final end authority belongs exclusively to the ServiceCoordinator
 (总体方案 §5.5): EventQueue empty != FINISHED, and in online mode the
@@ -43,12 +43,13 @@ namespace ExecutionDriven {
 
 enum class ServiceState { IDLE, ACTIVE, DRAINING, FINISHED };
 
-/// Phase-7 §10.7: input-close source (合同② "EOF vs 显式 close vs 异常退出"
-/// 三态区分的审计落地). The producer command queue distinguishes
-/// submit/close/EOF/error; this enum records WHICH terminal command (or the
-/// --close-input CLI / direct close path) closed the input, so a run-end
-/// audit can tell a natural EOF from an explicit close from an error.
-enum class InputCloseReason { ExplicitClose, EndOfFile, Error };
+/// Phase-7 §10.7: input-close source (合同② "EOF vs 显式 close" 的审计落地).
+/// The producer command queue distinguishes submit/close/EOF/error; this
+/// enum records WHICH terminal command (or the --close-input CLI / direct
+/// close path) closed the input, so a run-end audit can tell a natural EOF
+/// from an explicit close. An Error command aborts in the ingress drain and
+/// never reaches the coordinator (no Error reason exists).
+enum class InputCloseReason { ExplicitClose, EndOfFile };
 
 class ServiceCoordinator {
   public:
@@ -76,15 +77,11 @@ class ServiceCoordinator {
     void on_request_completed();
     /// An arrival alarm was queued on the EventQueue (future tick).
     void on_alarm_scheduled();
-    /// A fence is pending (step-1-5 accounting; no behavior yet).
-    void on_fence_scheduled();
-    /// A fence resolved (step-1-5 accounting; no behavior yet).
-    void on_fence_resolved();
     /// Input closed (thread-safe; may be called from the injector/bridge
     /// thread): IDLE/DRAINING transition + maybe FINISHED. Phase-7 §10.7:
     /// `reason` records HOW the input was closed (explicit close command /
-    /// CLI / EOF terminal command / error command) for the run-end
-    /// lifecycle audit (合同② EOF vs 显式 close vs 异常退出 三态区分).
+    /// CLI / EOF terminal command) for the run-end lifecycle audit
+    /// (合同② EOF vs 显式 close 三态区分).
     void mark_input_closed(
         InputCloseReason reason = InputCloseReason::ExplicitClose);
     /// Phase-7 §10.7: how the input was closed (valid once the input is
@@ -148,10 +145,6 @@ class ServiceCoordinator {
     [[nodiscard]] uint64_t completed_request_count() const;
     [[nodiscard]] uint64_t active_request_count() const;
     [[nodiscard]] uint64_t pending_alarm_count() const;
-    /// P0-2 (2026-08-31, 总文档 §4 P0-2.2): read-only accessor for the
-    /// step-1-5 pending-fence counter -- the input-open dead-end
-    /// diagnostics (main_online.cc) print it alongside pending_alarm.
-    [[nodiscard]] uint64_t pending_fence_count() const;
 
   private:
     void set_state(ServiceState next);   // under mtx_: bounded log + hook
@@ -170,7 +163,6 @@ class ServiceCoordinator {
     uint64_t completed_request_count_ = 0;
     uint64_t active_request_count_ = 0;
     uint64_t pending_alarm_count_ = 0;
-    uint64_t pending_fence_count_ = 0;
     std::vector<ServiceState> transition_log_;
     uint64_t transition_log_dropped_ = 0;
     StateTransitionHook transition_hook_;

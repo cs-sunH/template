@@ -29,7 +29,6 @@ class QueueLevels;
 class Workload;
 class LogicalTopology;
 class BasicLogicalTopology;
-class OfflineGreedy;
 
 namespace ExecutionDriven {
 class GraphSource;
@@ -49,7 +48,6 @@ class Sys : public Callable {
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
         void notify_stream_removed(int vnet, Tick running_time);
-        std::vector<double> get_average_latency_per_dimension();
 
         Sys* sys;
         int max_running_streams;
@@ -57,8 +55,6 @@ class Sys : public Callable {
         int queue_threshold;
         std::map<int, int> running_streams;
         std::map<int, std::list<BaseStream*>::iterator> stream_pointer;
-        std::vector<Tick> latency_per_dimension;
-        std::vector<double> total_chunks_per_dimension;
         std::vector<uint64_t> total_active_chunks_per_dimension;
         std::map<int, int> queue_id_to_dimension;
         std::vector<UsageTracker> usage;
@@ -331,10 +327,6 @@ class Sys : public Callable {
     // scheduler
     SchedulerUnit* scheduler_unit;
     QueueLevels* vLevels;
-    OfflineGreedy* offline_greedy;
-    IntraDimensionScheduling intra_dimension_scheduling;
-    InterDimensionScheduling inter_dimension_scheduling;
-    int round_robin_inter_dimension_scheduler;
     int active_chunks_per_dimension;
     int priority_counter;
     uint64_t pending_events;
@@ -345,11 +337,14 @@ class Sys : public Callable {
 
     // for supporting LIFO
     std::list<BaseStream*> ready_list;
-    SchedulingPolicy scheduling_policy;
+    // Class-internal safe initialization: the JSON input must provide
+    // "scheduling-policy" (initialize_sys fails fast when the key is
+    // missing); this default only exists so an unconfigured read can never
+    // observe an indeterminate enum value.
+    SchedulingPolicy scheduling_policy = SchedulingPolicy::None;
     int first_phase_streams;
     int total_running_streams;
     std::map<int, std::list<BaseStream*>> active_Streams;
-    std::map<int, std::list<int>> stream_priorities;
 
     struct ScheduledEvent {
         Callable* callable;
@@ -367,8 +362,6 @@ class Sys : public Callable {
     bool dispatching_events = false;
     Tick dispatching_event_time = 0;
     int total_nodes;
-    int dim_to_break;
-    std::vector<int> logical_broken_dims;
 
     std::vector<int> physical_dims;
     std::vector<int> queues_per_dim;
@@ -378,8 +371,12 @@ class Sys : public Callable {
     int num_streams;
     static uint8_t* dummy_data;
     std::map<std::string, LogicalTopology*> logical_topologies;
-    CollectiveOptimization collectiveOptimization;
-    Tick last_scheduled_collective;
+    // Class-internal safe initialization against an uninitialized read when
+    // the JSON input omits "collective-optimization" (in-repo minimal test
+    // configurations legitimately do so); Baseline keeps the conservative
+    // two-phase-all-dimensions behavior.
+    CollectiveOptimization collectiveOptimization =
+        CollectiveOptimization::Baseline;
 
     // statistics
     bool trace_enabled;

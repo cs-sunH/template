@@ -379,17 +379,6 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     return ordered[index]
 
 
-def percentile_from_sorted(sorted_values: Sequence[int], p: float) -> int:
-    n = len(sorted_values)
-    if n == 0:
-        fail("分位数计算：样本为空")
-    if not 0.0 < p <= 1.0:
-        fail(f"分位数 p 非法：{p}")
-    rank = math.ceil(p * n)
-    index = min(max(rank - 1, 0), n - 1)
-    return sorted_values[index]
-
-
 # ---------------------------------------------------------------------------
 # 有界内存排序（A4，2026-08-29）
 # ---------------------------------------------------------------------------
@@ -526,13 +515,6 @@ def fmt_ratio(value: Optional[float], digits: int = 6) -> str:
     return f"{value:.{digits}f}"
 
 
-def ns_to_ms(value: Optional[int]) -> str:
-    """单位转换只发生在展示层（先分位后转单位）。"""
-    if value is None:
-        return NA
-    return f"{value / 1e6:.3f}"
-
-
 # ---------------------------------------------------------------------------
 # run_dir 事实装载
 # ---------------------------------------------------------------------------
@@ -599,9 +581,14 @@ def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
     with handle:
         for lineno, line in enumerate(handle, start=1):
             stripped = line.strip()
-            if not stripped.startswith("[METRIC]"):
+            # 带空格前缀精确匹配：数据行由写侧恒以 "[METRIC] "+JSON 落盘
+            # （MetricCollector emit_buffer_）；"[METRIC][ERROR]"/
+            # "[METRIC][FATAL]" 是诊断行（同文件 std::cerr），无空格前缀
+            # ——无空格匹配会把它们当数据行解析，带 violations 的 run
+            # 其 [METRIC] 全量扫描必被 JSON 解析失败打断（修 2026-09-24）。
+            if not stripped.startswith("[METRIC] "):
                 continue
-            payload = stripped[len("[METRIC]"):].strip()
+            payload = stripped[len("[METRIC] "):].strip()
             try:
                 record = json.loads(payload)
             except json.JSONDecodeError as exc:

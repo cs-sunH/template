@@ -143,8 +143,6 @@ TRUST_TIER_UPPER_BOUND = "upper_bound_only"
 TRUST_TIER_LIFECYCLE = "lifecycle_replay_exact"
 TRUST_TIER_RESIDENT = "resident_kv_exact"
 TRUST_TIER_CERTIFIED = "per_rank_total_hbm_certified"
-JOURNAL_TIERS = (TRUST_TIER_CERTIFIED, TRUST_TIER_RESIDENT,
-                 TRUST_TIER_LIFECYCLE)
 
 # 绘图 series（P1-④：受全局行预算约束的稠密产物；旧产物名
 # slo_hbm_watermark_series.csv 退役）。
@@ -478,11 +476,12 @@ REPO_VARIANTS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # manager 原函数（逐字拷贝）+ 容量三口径（P1-③）
 # ---------------------------------------------------------------------------
-# 以下六个函数逐字拷贝自仓内 workload/llama2_7b_inference/
+# 以下八个函数逐字拷贝自仓内 workload/llama2_7b_inference/
 # session_kv_manager.py（_require_nonnegative_int / partition_values_exact /
 # attention_heads_by_tp_rank / estimate_model_weight_bytes /
-# model_weight_shard_bytes_by_tp_rank(:185) / kv_cache_shard_bytes_for_
-# tokens(:220)）——manager 是逐 rank HBM 记账的权威实现，本工具不得另立
+# model_weight_shard_bytes_by_tp_rank(:217) / kv_cache_bytes_for_tokens(:252)
+# / kv_cache_shard_bytes_for_tokens(:259) / kv_cache_shard_bytes_for_layer_
+# range(:275)）——manager 是逐 rank HBM 记账的权威实现，本工具不得另立
 # 口径。**同步义务**：session_kv_manager.py 上述函数任何改动必须同步拷贝
 # 到本节（五仓同改，md5 对齐）；函数是五仓共性，模型参数由 run_dir 自带
 # 的 trace_config/hardware 配置实例化（五仓 hardware 配置可不同）。
@@ -575,6 +574,13 @@ def model_weight_shard_bytes_by_tp_rank(model: Any, tp_degree: int) -> tuple[int
     return shards
 
 
+def kv_cache_bytes_for_tokens(model: Any, tokens: int) -> int:
+    """Total (all layers, all heads) KV bytes for ``tokens`` tokens."""
+
+    _require_nonnegative_int(tokens, "tokens")
+    return 2 * model.layers * tokens * model.hidden_size * model.bytes_per_elem
+
+
 def kv_cache_shard_bytes_for_tokens(
     model: Any,
     tokens: int,
@@ -582,18 +588,59 @@ def kv_cache_shard_bytes_for_tokens(
 ) -> tuple[int, ...]:
     """Return exact whole-head KV shard bytes for a complete model cache."""
 
-    _require_nonnegative_int(tokens, "tokens")
+    return kv_cache_shard_bytes_for_layer_range(
+        model,
+        tokens,
+        tp_degree,
+        layer_start=0,
+        layer_end=model.layers,
+    )
+
+
+def kv_cache_shard_bytes_for_layer_range(
+    model: Any,
+    tokens: int,
+    tp_degree: int,
+    *,
+    layer_start: int,
+    layer_end: int,
+) -> tuple[int, ...]:
+    """Return exact whole-head KV bytes for ``[layer_start, layer_end)``.
+
+    Layer ranges are derived from ``model.layers``; bytes scale linearly with
+    the number of layers so a suffix/prefix split is byte-conservative by
+    construction (blueprint sh_2.0 ``face_scheduler.py:400-443``)."""
+
+    if tokens < 0:
+        raise ValueError("KV token count must be non-negative")
+    if (
+        isinstance(layer_start, bool)
+        or isinstance(layer_end, bool)
+        or not isinstance(layer_start, int)
+        or not isinstance(layer_end, int)
+        or not 0 <= layer_start <= layer_end <= model.layers
+    ):
+        raise ValueError("KV layer range must be within the configured model")
     if model.hidden_size % model.num_heads:
         raise ValueError("hidden_size must be divisible by num_heads")
-    head_dim = model.hidden_size // model.num_heads
-    bytes_per_head = 2 * model.layers * tokens * head_dim * model.bytes_per_elem
-    shards = tuple(
-        bytes_per_head * head_count
-        for head_count in attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    heads = attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    bytes_per_head = (
+        2
+        * (layer_end - layer_start)
+        * tokens
+        * (model.hidden_size // model.num_heads)
+        * model.bytes_per_elem
     )
-    expected = 2 * model.layers * tokens * model.hidden_size * model.bytes_per_elem
-    if sum(shards) != expected:
-        raise RuntimeError("whole-head KV shards do not preserve total KV bytes")
+    shards = tuple(head_count * bytes_per_head for head_count in heads)
+    expected_total = (
+        kv_cache_bytes_for_tokens(model, tokens)
+        * (layer_end - layer_start)
+        // model.layers
+    )
+    if sum(shards) != expected_total:
+        raise RuntimeError(
+            "whole-head layer-range KV partition does not preserve total bytes"
+        )
     return shards
 # ----- 逐字拷贝区结束（以上与 session_kv_manager.py 保持字节一致） -----
 
@@ -976,14 +1023,13 @@ class _ChangePoint:
     """单变点：同 tick 的占用事件归并为一行（RLE 的原子；逐出标记在
     _UnitLog.evicts 独立成表，merged_change_points 归并时叠加同 tick 行）。"""
 
-    __slots__ = ("tick", "start", "end", "peak", "delta")
+    __slots__ = ("tick", "start", "end", "peak")
 
     def __init__(self, tick: int, start: int) -> None:
         self.tick = tick
         self.start = start  # 本 tick 首事件前占用
         self.end = start
         self.peak = start  # 本 tick 内事件后占用的最大值（含进入值）
-        self.delta = 0
 
 
 class _UnitLog:
@@ -1017,7 +1063,6 @@ class _UnitLog:
             self.points.append(self.open)
             self.last_tick = tick
         self.occupancy += delta
-        self.open.delta += delta
         self.open.end = self.occupancy
         if self.occupancy > self.open.peak:
             self.open.peak = self.occupancy
@@ -1211,12 +1256,11 @@ def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
 class SessionState:
     """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。"""
 
-    __slots__ = ("instance", "bytes", "tokens")
+    __slots__ = ("instance", "bytes")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
         self.bytes: int = 0
-        self.tokens: int = 0
 
 
 class ReplayReport:
@@ -1246,12 +1290,8 @@ class ReplayReport:
 class WatermarkReplay:
     """按文件顺序重放决策记录，产出逐实例 delta 事件流与违规计数。"""
 
-    def __init__(self, repo_variant: str, mapping: dict, tokens: dict,
-                 coef_bytes_per_token: int,
+    def __init__(self, coef_bytes_per_token: int,
                  capacity_per_instance: Optional[int]) -> None:
-        self.repo_variant = repo_variant
-        self.mapping = mapping
-        self.tokens = tokens
         self.coef = coef_bytes_per_token
         self.capacity = capacity_per_instance
         self.sessions: dict[str, SessionState] = {}
@@ -1316,7 +1356,6 @@ class WatermarkReplay:
                 # 收敛到 0 时同步清跟踪实例：后续 restore 段走远端回载
                 # add-only 分支（不清则会按跨实例搬移在源实例二次扣减）。
                 session.instance = None
-                session.tokens = 0
             self.report.actions["silent_evictions_reconciled"] += 1
             self.report.actions["silent_eviction_bytes"] += excess
 
@@ -1370,7 +1409,6 @@ class WatermarkReplay:
         session.bytes -= action["bytes"]
         if session.bytes == 0:
             session.instance = None
-            session.tokens = 0
         self.report.actions["evictions"] += 1
         self.report.actions["evict_bytes"] += action["bytes"]
 
@@ -1410,7 +1448,6 @@ class WatermarkReplay:
                      f"（tick={action['tick']}）——重放内部状态损坏")
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             source = None
 
         # 显式 kind 优先（S1 的 local_hit.total_bytes 是"本地复用 KV 大小"
@@ -1509,7 +1546,6 @@ class WatermarkReplay:
             self._apply(tick, instance, delta)
             session.bytes += delta
         session.instance = instance
-        session.tokens = tokens
         self.report.actions[label] = self.report.actions.get(label, 0) + 1
 
     def apply_own_relocation(self, tick: int, session_id: str,
@@ -1524,7 +1560,6 @@ class WatermarkReplay:
                 self.report.actions["evict_bytes"] += session.bytes
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             self.report.actions["own_relocation_remote"] += 1
         elif location == "partial_hbm_remote":
             # 分层部分去向：留下/离开比例账本未落——保留 bytes（上界），
@@ -1540,17 +1575,16 @@ class WatermarkReplay:
 class WatermarkScan:
     """A4 driver 复用面：单条决策记录一次 consume，扫完 finish。
 
-    与独立 CLI 的 replay_decision_log 循环体逐语句等价（含 fail 消息与
-    记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
-    consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
+    与独立 CLI cmd_hbm_watermark 的决策日志循环体逐语句等价（含 fail
+    消息与记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。
+    注意 consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
     watermark 必须最后（kv/load/hop 不读该键，注入对其不可见）。
     """
 
-    def __init__(self, run_dir: Path, repo_variant: str, mapping: dict,
+    def __init__(self, run_dir: Path, mapping: dict,
                  tokens: dict, coef: int,
                  capacity: Optional[int]) -> None:
-        self.replay = WatermarkReplay(repo_variant, mapping, tokens, coef,
-                                      capacity)
+        self.replay = WatermarkReplay(coef, capacity)
         self.mapping = mapping
         self.tokens = tokens
         self.seen_kinds: dict[tuple[str, str], int] = {}
@@ -1648,10 +1682,6 @@ class WatermarkScan:
             if field is not None:
                 replay.apply_own_relocation(
                     tick, session_id, decision.get(field))
-            else:
-                session = replay.sessions.get(session_id)
-                if session is not None:
-                    session.tokens = token_row["final_context_tokens"]
 
         # 3) 计数型逐出（S2）：无 victim/bytes，只记事件数（上界重建）。
         for count_field in mapping.get("eviction_count_fields", ()):
@@ -1681,16 +1711,6 @@ class WatermarkScan:
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
         return self.replay
-
-
-def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
-                        tokens: dict, coef: int,
-                        capacity: Optional[int]) -> WatermarkReplay:
-    scan = WatermarkScan(run_dir, repo_variant, mapping, tokens, coef,
-                         capacity)
-    for record in iter_jsonl(scan.log_path):
-        scan.consume(record)
-    return scan.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -2202,7 +2222,7 @@ def cmd_hbm_watermark(args: argparse.Namespace) -> int:
     # 重放的容量参数恒为诊断口径（upper_bound_only 层不出物理违规认证）。
     repo_variant = detect_repo_variant(args.run_dir, args.repo_variant)
     prep = watermark_prepare(args, repo_variant)
-    scan = WatermarkScan(args.run_dir, repo_variant, prep["mapping"],
+    scan = WatermarkScan(args.run_dir, prep["mapping"],
                          prep["tokens"], prep["coef"], prep["capacity"])
     for record in iter_jsonl(scan.log_path):
         scan.consume(record)

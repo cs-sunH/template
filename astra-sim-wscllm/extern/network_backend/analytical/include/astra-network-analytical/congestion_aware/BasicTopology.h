@@ -39,17 +39,26 @@ class BasicTopology : public Topology {
      * as a TopologyBuildingBlock enum class element.
      *
      * @return type of the basic topology
+     *
+     * Dead accessor (2026-09 deep-dive): zero callers in this repo, leaving
+     * basic_topology_type below write-only; kept unchanged from the face
+     * backend for cross-repo parity.
      */
     [[nodiscard]] TopologyBuildingBlock get_basic_topology_type() const noexcept;
 
   protected:
-    /// bandwidth of each link
+    /// bandwidth of each link (write-only: assigned in the constructors, no
+    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
+    /// cross-repo parity)
     Bandwidth bandwidth;
 
-    /// latency of each link
+    /// latency of each link (write-only: assigned in the constructors, no
+    /// reader in this repo -- registered 2026-09 deep-dive, kept for face
+    /// cross-repo parity)
     Latency latency;
 
-    /// basic topology type
+    /// basic topology type (write-only: set by the concrete topologies, only
+    /// read by the dead accessor above)
     TopologyBuildingBlock basic_topology_type;
 };
 

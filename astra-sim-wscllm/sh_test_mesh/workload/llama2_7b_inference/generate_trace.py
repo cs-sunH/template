@@ -52,11 +52,6 @@ REQUEST_QUEUE_COLUMNS = (
     "inter_request_interval_ns",
     "description",
 )
-@dataclass(frozen=True)
-class InferenceGroup:
-    name: str
-    pg_name: str
-    ranks: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -356,10 +351,6 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
     if not requests:
         raise ValueError(f"request queue CSV must contain at least one request: {queue_csv}")
     return tuple(requests)
-
-
-def shard_size(value: int, shards: int) -> int:
-    return (value + shards - 1) // shards
 
 
 def shard_extent(value: int, shards: int, shard_index: int) -> int:

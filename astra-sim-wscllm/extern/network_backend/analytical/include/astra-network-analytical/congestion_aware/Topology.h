@@ -66,6 +66,11 @@ class Topology {
      * Get the number of directed links in the topology.
      *
      * @return number of directed links
+     *
+     * Dead accessor (2026-09 deep-dive): zero callers in this repo, which
+     * makes the whole Topology::get_links_count -> Device::get_links_count
+     * counting chain unreachable; kept unchanged from the face backend for
+     * cross-repo parity.
      */
     [[nodiscard]] int get_links_count() const noexcept;
 

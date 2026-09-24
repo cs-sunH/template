@@ -21,20 +21,20 @@ Cases:
   F. Same-time physical FIFO remains exact with the inline-first EventList:
      callback-appended events run after already queued events in the same pass.
 
-Build (from template/astra-sim-wscllm):
-  g++ -std=c++17 -I extern/network_backend/analytical/include \
-      -I extern/network_backend/analytical/include/astra-network-analytical \
-      astra-sim/workload/execution_driven/tests/event_queue_deferred_test.cc \
-      extern/network_backend/analytical/common/event-queue/EventQueue.cpp \
-      extern/network_backend/analytical/common/event-queue/EventList.cpp \
-      extern/network_backend/analytical/common/event-queue/Event.cpp \
-      extern/network_backend/analytical/common/NetworkFunction.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidScheduler.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidFlow.cpp \
-      extern/network_backend/analytical/congestion_aware/fluid/FluidLinkState.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Link.cpp \
-      extern/network_backend/analytical/congestion_aware/network/Device.cpp \
-      -o /tmp/eq_test && /tmp/eq_test
+Build: registered in the CMake build (face M12② same fix) as target
+  AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest in
+  astra-sim/network_frontend/analytical/CMakeLists.txt (same shared-source +
+  execution_driven recipe as the sibling fixtures; the backend EventQueue and
+  FluidScheduler sources the old manual g++ line listed individually are
+  provided by the linked Analytical_Congestion_Aware static library).
+  Configure per README §2 (the build/astra_analytical aggregation with
+  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON), then:
+    cmake --build build/astra_analytical/build_congestion_aware \
+          --target AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest -j
+    build/astra_analytical/build_congestion_aware/bin/\
+AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+  (the binary is emitted to <build-tree>/bin/ via the targets'
+  RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
 *******************************************************************************/
 
 #include <cassert>
@@ -241,8 +241,12 @@ void test_case_c() {
     std::mt19937 rng(20260815);
     EventQueue eq;
     ReferenceQueue ref;
-    auto real_log = std::vector<int>();
-    auto ref_log = std::vector<int>();
+    std::vector<int> real_log;
+    std::vector<int> ref_log;
+    // Owning pool for the per-event DiffCtx payloads (both queues schedule
+    // the same pointer; the handlers only read it). new without an owner
+    // leaked ~600 DiffCtx per run round -- test-only, but now freed.
+    std::vector<std::unique_ptr<DiffCtx>> ctx_pool;
 
     std::uniform_int_distribution<int> op_dist(0, 99);
     std::uniform_int_distribution<int> id_dist(0, 999);
@@ -256,9 +260,11 @@ void test_case_c() {
             // the list currently being invoked)
             const auto t = eq.get_current_time() +
                            static_cast<EventTime>(time_dist(rng));
-            auto* c = new DiffCtx{id_dist(rng), &real_log, &ref_log};
-            eq.schedule_event(t, diff_handler, c);
-            ref.schedule_event(t, diff_handler, c);
+            auto c = std::make_unique<DiffCtx>(
+                DiffCtx{id_dist(rng), &real_log, &ref_log});
+            eq.schedule_event(t, diff_handler, c.get());
+            ref.schedule_event(t, diff_handler, c.get());
+            ctx_pool.push_back(std::move(c));
         } else {
             // proceed when possible
             if (eq.finished()) {
@@ -359,14 +365,14 @@ void run_fs_scenario(bool deferred_mode) {
     assert(fs.get_active_flow_count() == 0);
 
     std::printf("[case D] PASS: FluidScheduler integration (%s flush mode), "
-                "no :33 assert, flow completed\n",
+                "no :48 assert, flow completed\n",
                 deferred_mode ? "deferred" : "legacy");
 }
 
 // ---------------------------------------------------------------------------
 // case E (map family): fail-fast proof -- schedule_event(current_time) from a
 // tick-end callback inserts a current_time EventList into the main map and the
-// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :31);
+// NEXT proceed() must trip the strict-increase assert (EventQueue.cpp :48);
 // schedule_event(future) from the callback lands in the map normally.
 // ---------------------------------------------------------------------------
 
@@ -420,14 +426,19 @@ void test_case_e() {
     pid_t pid = fork();
     if (pid == 0) {
         const bool reached_end = run_case_e_child(/*bad=*/true);
-        std::_Exit(reached_end ? 0 : 0);  // child exits 0 only if no abort AND completed
+        // Exit code must distinguish "ran through without the abort AND
+        // completed" (0) from "reached this line unexpectedly" (1): the bad
+        // child is expected to die from SIGABRT before ever getting here, so
+        // any exit -- including 1 -- tells the parent the assert did not
+        // fire and the parent's WIFSIGNALED check fails the test.
+        std::_Exit(reached_end ? 0 : 1);
     }
     int status = 0;
     waitpid(pid, &status, 0);
     // the child must have died from the assert (SIGABRT), not exited cleanly
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
     std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
-                "current_time) trips :31 on next proceed; future event OK\n");
+                "current_time) trips :48 on next proceed; future event OK\n");
 }
 
 // ---------------------------------------------------------------------------

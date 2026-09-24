@@ -6,7 +6,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import sys
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -28,14 +27,11 @@ from wsc_llm_scheduler import (  # noqa: E402
     kv_cache_bytes_for_tokens,
 )
 from session_kv_manager import (  # noqa: E402
-    NOC_MIGRATE,
-    RECOMPUTE,
     KVTransfer,
     KVTransferShard,
     physical_edge_ranks,
 )
 from generate_trace import (  # noqa: E402
-    ChakraNode,
     RequestSpec,
     TraceBuilder,
     clean_csv_row,
@@ -110,9 +106,6 @@ OPERATOR_GRANULARITY = (
     "rmsnorm,qkv,qk,scale_mask,softmax,av,out_proj,residual,"
     "mlp_gate_up,swiglu,mlp_down,logits"
 )
-IDLE_SENTINEL_DURATION_NS = 1000
-
-
 @dataclass(frozen=True)
 class WscLlmInferenceGroup:
     name: str
@@ -174,8 +167,12 @@ class WscLlmTraceConfig:
 
 # ---------------------------------------------------------------------------
 # B3(2026-09-06) KV 转移发射三件套(照抄 sh_2.0 generate_face_trace.py
-# :145-167 的类形与语义;契约 §6:tag 基址 10_000_000,与 _stage_tag 的
+# :145-167 的类形与语义;契约 §6:tag 基址与 _stage_tag 的
 # queue_index*10000+{1000,1900,3000} 段错开)。
+# H8(2026-09-24)修正:基址自 10_000_000 上移至 100_000_000——30s 窗口
+# 源 trace 实测 1177 行,queue_index≥1000 的 _stage_tag 已进入旧基址的
+# 分配器独占段;新基址下队列 ≤9999 行时两段保持不相交,且 _stage_tag
+# 侧补了越界 fail-closed 守卫(见 _stage_tag)。
 # ---------------------------------------------------------------------------
 
 
@@ -200,12 +197,15 @@ class TransferTriggerGate:
 
 
 class TransferTagAllocator:
-    """KV 转移通信 tag 单调分配器(基址 10_000_000;上限 0xFFFFFFFF)。
+    """KV 转移通信 tag 单调分配器(基址 100_000_000;上限 0xFFFFFFFF)。
 
     契约 §6 硬约束:sh_2.0 原版从 1 起会撞进本仓 ``queue_index*10000+
-    {1000,1900,3000}`` 的 _stage_tag 段,统一错开到安全高位段。"""
+    {1000,1900,3000}`` 的 _stage_tag 段,统一错开到安全高位段。H8
+    (2026-09-24):基址 10_000_000 只能容纳 <1000 行队列(30s 窗口实测
+    1177 行已重叠),上移至 100_000_000(队列 ≤9999 行不相交;tag 仍处
+    C++ NATIVE 段 [0, 5e8) 内,见 Sys.hh FrontEndSendRecvType)。"""
 
-    _TAG_BASE = 10_000_000
+    _TAG_BASE = 100_000_000
 
     def __init__(self) -> None:
         self._next_tag = self._TAG_BASE
@@ -216,79 +216,6 @@ class TransferTagAllocator:
         tag = self._next_tag
         self._next_tag += 1
         return tag
-
-
-
-def _add_idle_rank_sentinels(
-    builders: dict[int, TraceBuilder],
-) -> tuple[int, ...]:
-    """Give every otherwise-empty rank one root CPU timer for ASTRA compatibility."""
-
-    idle_ranks: list[int] = []
-    for rank in sorted(builders):
-        builder = builders[rank]
-        if builder.nodes:
-            continue
-        node_id = builder.timer_gate(
-            f"wsc_llm_idle_rank_{rank:04d}_sentinel",
-            IDLE_SENTINEL_DURATION_NS,
-        )
-        if node_id is None:
-            raise RuntimeError(f"rank {rank}: idle sentinel timer was not created")
-        idle_ranks.append(rank)
-    return tuple(idle_ranks)
-
-
-def _validate_rank_dag(rank: int, builder: TraceBuilder) -> None:
-    """Validate one rank-local Chakra DAG in O(V+E) time."""
-
-    if not builder.nodes:
-        raise RuntimeError(f"rank {rank}: Chakra ET DAG is empty")
-
-    nodes_by_id: dict[int, ChakraNode] = {}
-    for node in builder.nodes:
-        node_id = int(node.id)
-        if node_id in nodes_by_id:
-            raise RuntimeError(f"rank {rank}: duplicate node ID {node_id}")
-        nodes_by_id[node_id] = node
-
-    indegree = {node_id: 0 for node_id in nodes_by_id}
-    dependents: dict[int, list[int]] = {node_id: [] for node_id in nodes_by_id}
-    for node_id, node in nodes_by_id.items():
-        for raw_dependency_id in node.data_deps:
-            dependency_id = int(raw_dependency_id)
-            if dependency_id == node_id:
-                raise RuntimeError(
-                    f"rank {rank}: node {node_id} has a self-dependency"
-                )
-            if dependency_id not in nodes_by_id:
-                raise RuntimeError(
-                    f"rank {rank}: node {node_id} references missing dependency "
-                    f"{dependency_id}"
-                )
-            indegree[node_id] += 1
-            dependents[dependency_id].append(node_id)
-
-    ready = deque(node_id for node_id, degree in indegree.items() if degree == 0)
-    visited = 0
-    while ready:
-        node_id = ready.popleft()
-        visited += 1
-        for dependent_id in dependents[node_id]:
-            indegree[dependent_id] -= 1
-            if indegree[dependent_id] == 0:
-                ready.append(dependent_id)
-    if visited != len(nodes_by_id):
-        cyclic_ids = [node_id for node_id, degree in indegree.items() if degree > 0]
-        raise RuntimeError(
-            f"rank {rank}: Chakra ET DAG contains a cycle involving node IDs "
-            f"{cyclic_ids}"
-        )
-
-
-def _validate_all_rank_dags(builders: dict[int, TraceBuilder]) -> None:
-    for rank in sorted(builders):
-        _validate_rank_dag(rank, builders[rank])
 
 
 def _resolve_from_sh_test(path: Path) -> Path:
@@ -555,12 +482,15 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
     )
 
 
-
-
-
-
 def _stage_tag(queue_index: int, category: int, relative_rank: int) -> int:
-    return queue_index * 10000 + category + relative_rank
+    tag = queue_index * 10000 + category + relative_rank
+    if tag >= TransferTagAllocator._TAG_BASE:
+        raise OverflowError(
+            f"stage tag {tag} (queue_index={queue_index}) would enter the "
+            "KV transfer allocator's exclusive tag segment "
+            f"[{TransferTagAllocator._TAG_BASE}, 0xFFFFFFFF); shrink the "
+            "request queue or raise the allocator base")
+    return tag
 
 
 def _xy_route(hardware: WscLlmHardware, source: int, target: int) -> list[int]:
@@ -644,49 +574,6 @@ def _paired_transfer(
             }
         )
     return routes
-
-
-
-
-
-
-KV_CACHE_EVENT_COLUMNS = (
-    "event_index", "planner_time_ns", "phase", "event_type", "reason",
-    "trigger_request_id", "session_id", "source_instance_index",
-    "target_instance_index", "context_tokens", "total_bytes", "shard_bytes",
-    "last_completion_ns", "instance_remaining_before_bytes",
-    "instance_remaining_after_bytes", "insufficient_ranks",
-)
-
-
-
-
-def _emit_control_trigger(
-    *,
-    builders: dict[int, TraceBuilder],
-    queue_index: int,
-    name: str,
-    source_group: WscLlmInferenceGroup,
-    target_group: WscLlmInferenceGroup,
-    timer_gates: dict[int, Optional[int]],
-) -> None:
-    """Represent an inter-instance timing dependency as one control byte."""
-
-    if source_group.name == target_group.name:
-        for rank in target_group.ranks:
-            builders[rank].arm_timer_gate(timer_gates.get(rank))
-        return
-    source, target = source_group.ranks[0], target_group.ranks[0]
-    builders[source].arm_timer_gate(timer_gates.get(source))
-    tag = _stage_tag(queue_index, 1900, 0)
-    builders[source].comm_send(
-        f"{name}_control_send_rank{source}_to_rank{target}",
-        src=source, dst=target, comm_size=1, comm_tag=tag,
-    )
-    builders[target].comm_recv(
-        f"{name}_control_recv_rank{source}_to_rank{target}",
-        src=source, dst=target, comm_size=1, comm_tag=tag,
-    )
 
 
 def _emit_prefill_stage(
@@ -823,13 +710,6 @@ def _emit_prefill_stage(
                 f"{prefix}_{stage}_chunks_aggregated_end_barrier", pass_count, group.pg_name
             )
     return {rank: (pair[0], pair[1]) for rank, pair in bounds.items()}
-
-
-
-
-
-
-
 
 
 def _validate_transfer_shard(

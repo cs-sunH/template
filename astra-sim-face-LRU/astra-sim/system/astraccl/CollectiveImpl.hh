@@ -19,8 +19,6 @@ enum class CollectiveImplType {
     OneDirect,
     AllToAll,
     DoubleBinaryTreeLocalAllToAll,
-    LocalRingNodeA2AGlobalDBT,
-    HierarchicalRing,
     DoubleBinaryTree,
     HalvingDoubling,
     OneHalvingDoubling,

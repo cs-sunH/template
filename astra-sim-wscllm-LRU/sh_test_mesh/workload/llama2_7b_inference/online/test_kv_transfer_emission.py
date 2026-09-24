@@ -15,7 +15,7 @@ HBM 计费键(策略文档 §9 地图,计费三险逐节点核对):
       local_hbm_kv_restore 节点(is_local_hbm_kv_restore=True,
       RESTORE 唯一数据计费);
   (d) noc_migrate:send/recv 默认 charged + 1B ack 对;全部转移 tag
-      ≥ 10_000_000(契约 §6 基址,与 _stage_tag 段错开);
+      ≥ 100_000_000(契约 §6 基址,H8 修正后与 _stage_tag 段错开);
   (e) PARTIAL 真流水(REMOTE_LOAD 同实例 / PARTIAL_MIGRATE 跨实例):
       prefix 就绪栅栏 → checkpoint → suffix 远端恢复分支 → suffix
       ready p2p 栅栏 → restore chain;首 chunk 层段拆分(prefix 段
@@ -185,10 +185,10 @@ class RemoteStoreChainTest(unittest.TestCase):
         self.assertEqual(len(_by_name(edge_nodes, "_ack_to_rank5")), 1)
         self.assertEqual(record["source_release_dependency"],
                          "remote_store_ack_recv")
-        # tag 基址:全部转移 tag ≥ 10_000_000(契约 §6)。
+        # tag 基址:全部转移 tag ≥ 100_000_000(契约 §6;H8 修正后基址)。
         for node in source_nodes + edge_nodes:
             if node["comm"]["bytes"] > 0 or "_ack_" in node["name"]:
-                self.assertGreaterEqual(node["comm"]["tag"], 10_000_000)
+                self.assertGreaterEqual(node["comm"]["tag"], 100_000_000)
 
     def test_remote_store_direct_edge_pool_read(self):
         """链 B(source==edge=1):POOL_READ 唯一计费(hbm_access_mode=1)。"""
@@ -276,9 +276,9 @@ class NocMigrateChainTest(unittest.TestCase):
         self.assertEqual(len(_by_name(source_nodes, "_ack_from_rank0")), 1)
         for node in source_nodes + target_nodes:
             self.assertNotIn("hbm_charge", node["comm"])
-        self.assertGreaterEqual(record["data_tag"], 10_000_000)
-        self.assertGreaterEqual(record["ack_tag"], 10_000_000)
-        self.assertEqual(TransferTagAllocator().take(), 10_000_000)
+        self.assertGreaterEqual(record["data_tag"], 100_000_000)
+        self.assertGreaterEqual(record["ack_tag"], 100_000_000)
+        self.assertEqual(TransferTagAllocator().take(), 100_000_000)
 
 
 def _prefill_plan(*, turn_index=0, history_action=None,
@@ -327,13 +327,15 @@ def _suffix_load_transfer(layer_start=2):
 
 
 def _prefix_noc_transfer(suffix_start=2):
-    # 相对 TP rank 保持:decode(5,6) → prefill(0,1)。
+    # 相对 TP rank 保持:decode(5,6) → prefill(0,1)。noc_path 与生产
+    # _xy_route 同序(先列向对齐、后行向):6→1 经 5(col 2→1),再 5→1
+    # (row 1→0);5→0 经 4(col 1→0),再 4→0(row 1→0)。
     return _transfer(
         "noc_migrate",
         [_shard(source_rank=5, target_rank=0, bytes=2500,
                 noc_path=(5, 4, 0), layer_start=0, layer_end=suffix_start),
          _shard(source_rank=6, target_rank=1, bytes=2500,
-                noc_path=(6, 2, 1), layer_start=0, layer_end=suffix_start)],
+                noc_path=(6, 5, 1), layer_start=0, layer_end=suffix_start)],
         source_instance_index=1, target_instance_index=0,
         reason="history_partial_prefix_migrate",
         layer_start=0, layer_end=suffix_start,

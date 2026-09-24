@@ -156,15 +156,6 @@ class Workload : public Callable {
     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
 };
 
-// R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger moved to its
-// own self-contained layer (astra-sim/workload/RemoteFifoLedger.hh/.cc) and
-// is now accounted at the REAL backend ports inside
-// AnalyticalRemoteMemory::issue/call. The Workload layer no longer infers a
-// port from sys_id: under PER_NODE / MEMORY_POOL several ranks share one
-// physical FIFO, and under the configured PER_NPU + sparse npu-ids the port
-// index is the array index, not the rank -- the old per-rank keys mislabeled
-// every architecture and split shared queues into per-rank virtual ledgers.
-
 }  // namespace AstraSim
 
 #endif /* __WORKLOAD_HH__ */

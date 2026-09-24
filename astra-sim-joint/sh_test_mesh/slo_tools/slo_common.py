@@ -521,7 +521,9 @@ def nearest_rank_percentile_many(values: Sequence[int],
 
 
 def fmt_ratio(value: Optional[float], digits: int = 6) -> str:
-    if value is None:
+    # O9：nan/inf 一律 NA（与 iter_jsonl 的 NaN/Inf fail-closed 同教义；
+    # 修前 f"{nan:.6f}" 写成 'nan' 字符串穿透 CSV）。
+    if value is None or not math.isfinite(value):
         return NA
     return f"{value:.{digits}f}"
 
@@ -576,8 +578,19 @@ def iter_jsonl(path: Path) -> Iterator[dict]:
             line = line.strip()
             if not line:
                 continue
+
+            def _reject_constant(text: str) -> None:
+                # O9（2026-09-23）：NaN/Infinity/-Infinity 字面量 fail-
+                # closed——默认 json.loads 会静默收 nan/inf 进统计，下游
+                # write_csv 只 None→NA、nan 写成 'nan' 字符串再被
+                # float() 静默中毒；NA 语义一律走 null/'NA'（与
+                # parse_ns/parse_int 的 fail-closed 同教义）。
+                fail(f"{path}:{lineno}: 非法 JSON 数值字面量 {text!r}"
+                     f"（NaN/Infinity fail-closed；缺失语义请用 null 或 "
+                     f"'NA'）")
+
             try:
-                record = json.loads(line)
+                record = json.loads(line, parse_constant=_reject_constant)
             except json.JSONDecodeError as exc:
                 fail(f"{path}:{lineno}: 非法 JSON（{exc}）")
             if not isinstance(record, dict):
@@ -602,8 +615,26 @@ def read_cpp_metric_records(cpp_log: Path) -> Iterator[dict]:
             if not stripped.startswith("[METRIC]"):
                 continue
             payload = stripped[len("[METRIC]"):].strip()
+
+            def _reject_constant(text: str) -> None:
+                # JSON's default decoder accepts NaN/Infinity extensions; SLO
+                # inputs require missing values to be explicit null/NA.
+                fail(f"{cpp_log}:{lineno}: [METRIC] 非法 JSON 数值字面量 "
+                     f"{text!r}（NaN/Infinity fail-closed）")
+
+            def _parse_finite_float(text: str) -> float:
+                value = float(text)
+                if not math.isfinite(value):
+                    fail(f"{cpp_log}:{lineno}: [METRIC] 非有限 JSON 浮点数 "
+                         f"{text!r}（要求有限数值）")
+                return value
+
             try:
-                record = json.loads(payload)
+                record = json.loads(
+                    payload,
+                    parse_constant=_reject_constant,
+                    parse_float=_parse_finite_float,
+                )
             except json.JSONDecodeError as exc:
                 fail(f"{cpp_log}:{lineno}: [METRIC] 行 JSON 非法（{exc}）")
             if not isinstance(record, dict):

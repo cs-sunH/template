@@ -15,13 +15,16 @@
                     hop，非 rank 级）。2026-08-26 B2wp9py 起 prefill 决策
                     对 history NOC_MIGRATE 迁移附加 noc_hops 字段
                     （实例图最短路，同粒度）→ history 迁移纳入覆盖
-                    （60s 基线覆盖 70.4% → 满覆盖；字段为 A/B 对拍
-                    剥离清单条目）。
-                    2026-09-05 问题 4b 起切 shard 级 mesh 跳口径：decode
-                    行 shards[] 与 prefill 行 history_transfer_shards[]
-                    逐 shard bytes×noc_hops；旧产物（无路由字段）回退
-                    上述聚合口径，数值不变（详见 REPO_HOP_
-                    SOURCES notes）。
+                    （字段为 A/B 对拍剥离清单条目）。
+                    2026-09-05 问题 4b 起 decode 行 prefill_decode_
+                    transfer.shards[] 逐 shard bytes×noc_hops（mesh 跳
+                    口径；旧产物回退聚合口径，数值不变）。
+                    2026-09-24（M29）起逐出/回迁契约行（history_
+                    evictions/prefill_evictions/decode_evictions/
+                    completion_evictions；旧产物 admission_evictions+
+                    decode_target_evictions）计入 bytes_without_hops
+                    ——契约行无 shard 级路由，coverage 如实低于 1
+                    （此前逐出字节整类不进账、notes 误称满覆盖）。
   astra-sim-face    per-TP-shard 级（B2wp9py 起决策日志附带只读
                     hops 列表：prefill=history_noc_hops、decode=
                     kv_noc_hops，与 shards 一一对齐；hops 全等时
@@ -128,7 +131,9 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
     无物理传输时空列表）。基线事实核对（60s 窗）：decode 1244 条
     shards/hops 长度零错位、每条 hops 全等；prefill 1079 条 hops 全等。
     聚合口径：
-      decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确）；
+      decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确；shards/hops
+      长度不齐或字段缺席 → total_bytes/Σshard bytes 计 bytes_without_
+      hops 兜底，不整条丢弃）；
       prefill = history_transfer_bytes × hops[0]（per-shard hops 全等
       ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布）。
     旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低）。
@@ -183,6 +188,29 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
                     slot = _slot()
                     slot["bytes_without"] += nbytes
                     acc["bytes_without_hops"] += nbytes
+        else:
+            # 兜底（修 2026-09-24）：shards/hops 长度不齐、hops 缺席或
+            # shards 缺席时旧实现整条丢弃——该 decode 迁移字节从覆盖
+            # 分母消失。按无路由口径计入 bytes_without_hops（宁缺勿造，
+            # 与本分支 prefill 侧的旧产物向后兼容语义一致）；字节取
+            # total_bytes，缺席时回退 Σ shards[].bytes。
+            nbytes = None
+            if isinstance(transfer, dict):
+                total = transfer.get("total_bytes")
+                if isinstance(total, int) and total > 0:
+                    nbytes = total
+            if nbytes is None and isinstance(shards, list):
+                shard_total = 0
+                for shard in shards:
+                    if isinstance(shard, dict) and isinstance(
+                            shard.get("bytes"), int) and shard["bytes"] > 0:
+                        shard_total += shard["bytes"]
+                if shard_total > 0:
+                    nbytes = shard_total
+            if isinstance(nbytes, int) and nbytes > 0:
+                slot = _slot()
+                slot["bytes_without"] += nbytes
+                acc["bytes_without_hops"] += nbytes
 
 
 def _route_hops(row: dict) -> Optional[int]:
@@ -196,22 +224,77 @@ def _route_hops(row: dict) -> Optional[int]:
     return None
 
 
+def _consume_wscllm_eviction_rows(rows, request_id: str, acc: dict,
+                                  per_request: dict) -> None:
+    """wscllm 逐出/回迁契约行（_kv_transfer_rows 形状：kind/reason/
+    total_bytes/...，无 shard 级路由）→ 覆盖分母 bytes_without_hops
+    （宁缺勿造，不臆造 hop 数）；total_bytes 非正 = 无物理搬移不计。"""
+    for entry in rows or ():
+        if not isinstance(entry, dict):
+            continue
+        nbytes = entry.get("total_bytes")
+        if not isinstance(nbytes, int) or nbytes <= 0:
+            continue
+        slot = per_request.setdefault(
+            request_id, {"actions": 0, "hop_bytes": 0,
+                         "bytes_with": 0, "bytes_without": 0})
+        slot["bytes_without"] += nbytes
+        acc["bytes_without_hops"] += nbytes
+
+
+def _consume_wscllm_evictions(decision: dict, kind, request_id: str,
+                              acc: dict, per_request: dict) -> None:
+    """逐出传输字段消费（M29，2026-09-24）：此前 collect_wscllm 整类
+    不消费，逐出/回迁 NoC 字节既不进 hop_bytes 也不进
+    bytes_without_hops，coverage 分母缺整类。
+
+    新旧产物单键取用（同 kv_cache_adapter/hbm_watermark 的防双计纪律
+    ——admission_evictions 是 history_evictions+prefill_evictions 的
+    union；decode_evictions 与 decode_target_evictions 同内容；B3 起
+    union 与分段字段双序列化，同批消费会双计）：
+      契约分段字段在场（B3+）：prefill 行读 history_evictions+
+      prefill_evictions，decode 行读 decode_evictions，completion 行读
+      completion_evictions；
+      否则（旧产物）：prefill 行读 admission_evictions+decode_target_
+      evictions（准入快照，decode 行不另读），completion 行读
+      completion_evictions。
+    """
+    if kind == "prefill":
+        if ("history_evictions" in decision
+                or "prefill_evictions" in decision):
+            for field in ("history_evictions", "prefill_evictions"):
+                _consume_wscllm_eviction_rows(decision.get(field),
+                                              request_id, acc, per_request)
+        else:
+            for field in ("admission_evictions", "decode_target_evictions"):
+                _consume_wscllm_eviction_rows(decision.get(field),
+                                              request_id, acc, per_request)
+    elif kind == "decode":
+        # 旧产物 decode 行无 decode_evictions 字段（get→None→空操作）；
+        # 旧路径的 decode 侧逐出已按准入快照计入 prefill 行。
+        _consume_wscllm_eviction_rows(decision.get("decode_evictions"),
+                                      request_id, acc, per_request)
+    elif kind == "completion":
+        _consume_wscllm_eviction_rows(decision.get("completion_evictions"),
+                                      request_id, acc, per_request)
+
+
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
-    if record.get("kind") != "decode":
-        # 历史迁移（prefill 决策）：问题 4b（2026-09-05）起 shard 级
-        # mesh 跳口径优先——decision.history_transfer_shards[] 逐 shard
-        # bytes×noc_hops（生成侧序列化 noc_path/noc_hops，count/fallback
-        # 语义同 S1 分支）；字段缺席（旧产物）回退 2026-08-26 B2wp9py
-        # 的聚合口径 history_transfer_bytes×noc_hops（实例图最短路），
-        # 再无该字段时按 bytes_without_hops 处理（向后兼容）。
-        if record.get("kind") == "prefill":
-            shard_rows = decision.get("history_transfer_shards")
-            if isinstance(shard_rows, list) and shard_rows:
-                _accumulate_shard_transfers({"shards": shard_rows},
-                                            request_id, acc, per_request)
-                return
+    kind = record.get("kind")
+    _consume_wscllm_evictions(decision, kind, request_id, acc, per_request)
+    if kind != "decode":
+        # 历史迁移（prefill 决策）：聚合口径 history_transfer_bytes×
+        # noc_hops（实例图最短路，2026-08-26 B2wp9py 起 prefill 决策对
+        # history NOC_MIGRATE 迁移附加 noc_hops 输出字段）；字段缺席
+        # （REMOTE 恢复——远端池无实例语义，或旧产物）按
+        # bytes_without_hops 处理（向后兼容）。曾有 prefill 行
+        # history_transfer_shards[] 的 shard 级分支（2026-09-05 问题 4b
+        # 规划）：写侧从未序列化该字段（生成侧为 history_transfers
+        # 行 + transfer_hop_bytes），对本仓产物恒死，已删除
+        # （2026-09-24）。
+        if kind == "prefill":
             nbytes = decision.get("history_transfer_bytes")
             if isinstance(nbytes, int) and nbytes > 0:
                 hops = decision.get("noc_hops")
@@ -375,17 +458,24 @@ REPO_HOP_SOURCES: dict[str, dict] = {
     },
     "astra-sim-wscllm": {
         "collector": collect_wscllm,
-        "granularity": "shard(noc_path:decode/prefill)"
-                       "+fallback-instance(static_route.hop_count)",
-        "notes": "问题 4b（2026-09-05）起 shard 级 mesh 跳口径：decode 行 "
-                 "prefill_decode_transfer.shards[] 与 prefill 行 "
-                 "history_transfer_shards[] 逐 shard bytes×noc_hops"
-                 "（生成侧 _kv_transfer_dict(hardware=)/调度器序列化 "
-                 "noc_path/noc_hops；count/fallback 语义同 S1）。字段"
-                 "缺席或无路由（旧产物）回退聚合口径（decode="
-                 "total_bytes×static_route.hop_count、prefill="
-                 "history_transfer_bytes×noc_hops，实例级粒度），旧"
-                 "产物数值不变。",
+        "granularity": "shard(noc_path:decode)"
+                       "+instance-aggregate(prefill noc_hops/"
+                       "static_route.hop_count)+evictions(no-route)",
+        "notes": "decode 行 prefill_decode_transfer.shards[] 逐 shard "
+                 "bytes×noc_hops（2026-09-05 问题 4b，mesh 跳口径；"
+                 "count/fallback 语义同 S1），旧产物回退聚合口径 "
+                 "（total_bytes×static_route.hop_count，实例级粒度）；"
+                 "prefill 行 history_transfer_bytes×noc_hops（NOC_"
+                 "MIGRATE 实例图最短路），REMOTE 恢复无 noc_hops 计 "
+                 "bytes_without_hops。2026-09-24（M29）起逐出/回迁契约行"
+                 "（history_evictions/prefill_evictions/decode_evictions/"
+                 "completion_evictions；旧产物 admission_evictions+"
+                 "decode_target_evictions，单键取用防 B3 双序列化双计）"
+                 "计入 bytes_without_hops——契约行无 shard 级路由，"
+                 "coverage 如实低于 1（不臆造 hop 数；此前逐出字节整类"
+                 "不进账）。2026-09-05 规划的 prefill 行 history_transfer_"
+                 "shards[] shard 级分支因写侧零生产（生成侧为 history_"
+                 "transfers 行 + transfer_hop_bytes）删除。",
     },
     "astra-sim-face": {
         "collector": collect_face,

@@ -3,8 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
-Implementation (方案 §4 步骤 1-2 操作 5; CLI rules unit-tested in
-tests/cli_online_test.cc).
+Implementation (方案 §4 步骤 1-2 操作 5).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
@@ -17,7 +16,6 @@ tests/cli_online_test.cc).
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <string>
 
 namespace AstraSim {
@@ -230,12 +228,6 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 bridge_timeout_ms = static_cast<int>(parsed);
             } else {
-                if (parsed > static_cast<unsigned long long>(
-                                 std::numeric_limits<uint64_t>::max())) {
-                    error = "option --request-max-arrival-ns exceeds "
-                            "uint64_t range, got: " + value;
-                    return false;
-                }
                 request_max_arrival_ns = static_cast<uint64_t>(parsed);
             }
         } else if (name == "--idle-watchdog-s") {

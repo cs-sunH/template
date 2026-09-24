@@ -241,7 +241,14 @@ class NocTransferLayerRangeGuardTest(unittest.TestCase):
 
 
 class CopyCompositePricingTest(unittest.TestCase):
-    """R16-3 copy 段：两腿闭式 + LOCAL 逐位一致 + REMOTE 不变。"""
+    """R16-3 copy 段：两腿闭式 + LOCAL 逐位一致 + REMOTE 不变。
+
+    C4 金值重推导（2026-09-22）：C1 三腿 min + A1' 并集除数后，闭式
+    期望值不变——字节均衡（(3000,3000)）+ 空链路 + u_port=0（离线
+    口径）下逐 shard noc 腿 3000/(10/2)=600 与旧聚合 6000/10=600 同
+    wall（A1' 桥接锚）；copy 端点腿 home=3000/100=30、exec 写腿=30
+    （A4' 前即有）< noc 腿不触 max。下述三测试的期望因此逐位保留，
+    手算过程按现行公式写进各用例注释。"""
 
     def test_partial_base_two_legs_closed_form(self):
         model = _model({0: _load(), 1: _load()})
@@ -252,6 +259,12 @@ class CopyCompositePricingTest(unittest.TestCase):
             session=session, request=_request_view(), instance_index=1,
             action="copy", remote_enabled=True)
         self.assertTrue(candidate.applicable)
+        # 手算（现行公式）：NoC 前缀腿逐 shard 字节 3000、并集除数 2
+        # （双 shard 共链 (0,1)）→ noc 腿 = 3000/5 = 600、home 读腿
+        # 3000/100 = 30、exec 写腿 30 → max = 600；wall = 10（单跳
+        # 时延）+ 600 = 610；后缀池腿 = 100 + 2000/5 = 500 →
+        # history_prep = 1110。闭式 _transfer_ns(6000, 除数 1) =
+        # 10 + 600 = 610 逐位同值（A1' 桥接锚）。
         expected = _transfer_ns(
             total_bytes=6000, path_hops=1, divisor=1, rates=model.rates,
             per_hop_latency_ns=None, startup_ns=0)
@@ -263,7 +276,9 @@ class CopyCompositePricingTest(unittest.TestCase):
 
     def test_local_base_bit_identical(self):
         """LOCAL 基（missing=0）：后缀腿守卫为零，与旧整份 NoC 口径
-        逐位一致（旧公式 = _transfer_ns(resident + 0)）。"""
+        逐位一致（旧公式 = _transfer_ns(resident + 0)；现行公式下
+        同值 = A1' 桥接锚：逐 shard 3000/(10/2) ≡ 聚合 6000/10，
+        端点腿 30 各不触 max，wall = 10 + 600 = 610）。"""
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
             session=_session_view(
@@ -277,6 +292,8 @@ class CopyCompositePricingTest(unittest.TestCase):
         self.assertEqual(candidate.breakdown.history_prep_ns, expected)
 
     def test_remote_base_unchanged(self):
+        # REMOTE 基池腿独走（无 NoC 腿——C1/A1'/A4' 均不触及）：
+        # pool(8000) = 100 + 8000/5 = 1700。
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
             session=_session_view(
@@ -290,13 +307,24 @@ class CopyCompositePricingTest(unittest.TestCase):
         self.assertIn("pool_restore_to_target", candidate.breakdown.notes)
 
 
-class MergeSplitPricingTest(unittest.TestCase):
-    """R16-3 merge 段：增量按 base_prefix/L 逐 rank 分裂（K4 同族）。"""
+class MergeV2PricingTest(unittest.TestCase):
+    """merge v2 少并多计价（需求②，2026-09-17《部分层逐出kv管理改造
+    方案》§4.3.4）：merge_ns = min(前向, 反向)；前向 = noc(exec 侧保留
+    量) + home 空间准备等待；反向 = noc(home 侧保留量) + exec 空间准备
+    等待；copy/recompute 反向零字节翻转（=0）；REMOTE 基就地保留（=0）。
+    守恒拆分纪律（prefix = value × p // L）迁移至 remote-read 读流基数
+    （需求①前缀份额）。
+    金样留档（改造前口径，git 9a95e06 可复算）——旧"增量按 base_prefix
+    /L 逐 rank 分裂"五用例期望值：partial 拆分 noc(2250)+pool(750)；
+    LOCAL 逐位一致 noc(3000)；REMOTE 池写 pool(3000)；不可除钉
+    noc(6)+pool(4)；home 等待 noc(2250)+pool(750)+pool(1025)。"""
 
-    def test_partial_base_split_closed_form(self):
-        """PARTIAL 基（p=3, L=4）：inc/rank=1500 → 前缀 1125 + 后缀 375；
-        merge_ns = 前缀 NoC 腿 + 后缀池腿（pool_divisor(exec)=1）+ home
-        等待按前缀增量估缺口（home 充足 → 0）。"""
+    def _noc(self, rates, total_bytes):
+        return _transfer_ns(
+            total_bytes=total_bytes, path_hops=1, divisor=1, rates=rates,
+            per_hop_latency_ns=None, startup_ns=0)
+
+    def test_copy_partial_base_zero_byte_flip(self):
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
             session=_session_view(
@@ -305,87 +333,128 @@ class MergeSplitPricingTest(unittest.TestCase):
                 prefix=3),
             request=_request_view(), instance_index=1,
             action="copy", remote_enabled=True)
-        expected = _transfer_ns(
-            total_bytes=2250, path_hops=1, divisor=1, rates=model.rates,
-            per_hop_latency_ns=None, startup_ns=0)
-        expected += _pool_transfer_ns(
-            total_bytes=750, divisor=1, rates=model.rates)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
+        self.assertTrue(candidate.applicable)
+        self.assertEqual(candidate.breakdown.merge_ns, 0)
+        self.assertIn("merge_v2_zero_byte_flip",
+                      candidate.breakdown.notes)
+
+    def test_remote_read_local_forward_bit_identical(self):
+        """LOCAL 基 remote-read 前向腿数值锚（p=L 退化）：home 保留
+        (4000) ≥ exec 增量 (3000) → 前向胜出，merge_ns = noc(3000)——与
+        改造前 LOCAL 公式逐位一致（旧 prefix = inc × L // L = inc，
+        home 等待充足为 0）。"""
+        model = _model({0: _load(), 1: _load()})
+        candidate = model.estimate_action(
+            session=_session_view(history_bytes=(2000, 2000)),
+            request=_request_view(), instance_index=1,
+            action="remote-read", remote_enabled=True)
+        self.assertTrue(candidate.applicable)
+        self.assertEqual(
+            candidate.breakdown.merge_ns, self._noc(model.rates, 3000))
         self.assertIn("merge_to_home=0", candidate.breakdown.notes)
 
-    def test_local_base_bit_identical(self):
-        """LOCAL 基（p=L）：prefix=inc、suffix=0——与修复前逐位一致
-        （test_joint_review2_fixes.MergeIncrementPricingTest 同型数值）。"""
+    def test_remote_read_local_reverse_when_home_smaller(self):
+        """home 保留 (2000) < exec 增量 (3000) → 反向胜出（少并多翻转，
+        home 迁移 exec 的计价预见）：merge_ns = noc(2000)。"""
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
-            session=_session_view(),     # LOCAL，prefix=4
+            session=_session_view(history_bytes=(1000, 1000)),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
-        expected = _transfer_ns(
-            total_bytes=3000, path_hops=1, divisor=1, rates=model.rates,
-            per_hop_latency_ns=None, startup_ns=0)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
+            action="remote-read", remote_enabled=True)
+        self.assertEqual(
+            candidate.breakdown.merge_ns, self._noc(model.rates, 2000))
 
-    def test_remote_base_pool_caliber_unchanged(self):
-        model = _model({0: _load(), 1: _load()})
-        candidate = model.estimate_action(
-            session=_session_view(
-                home=0, resident=None, history_bytes=(0, 0),
-                missing=(4000, 4000), location="remote_memory", prefix=0),
-            request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
-        expected = _pool_transfer_ns(
-            total_bytes=3000, divisor=1, rates=model.rates)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
-        self.assertIn("merge_to_pool_backing", candidate.breakdown.notes)
-
-    def test_non_divisible_increment_formula_pinned(self):
-        """P2-2 公式钉死：prefix = inc×p//L; suffix = inc−prefix。
-        L=4、p=3、inc/rank=5（L∤inc）→ prefix/rank=3、suffix/rank=2；
-        两腿之和恒等于 inc（守恒）。inc//L×p = 0 会破坏该合成视图。"""
+    def test_remote_read_partial_hybrid_three_segments(self):
+        """PARTIAL 混合形态三段式（需求①）：历史准备 = 后缀池恢复
+        pool(2000)；读流基数层区间化（remote_read_prefix_layers=3）；
+        merge 双向 = noc(S+I=5000) vs noc(H=6000) → 前向胜出 noc(5000)。"""
         model = _model({0: _load(), 1: _load()})
         candidate = model.estimate_action(
             session=_session_view(
                 home=0, resident=0, history_bytes=(3000, 3000),
+                missing=(1000, 1000), location="partial_hbm_remote",
+                prefix=3),
+            request=_request_view(), instance_index=1,
+            action="remote-read", remote_enabled=True)
+        self.assertTrue(candidate.applicable)
+        self.assertEqual(
+            candidate.breakdown.history_prep_ns,
+            _pool_transfer_ns(
+                total_bytes=2000, divisor=1, rates=model.rates))
+        self.assertIn("pool_suffix_restore_hybrid",
+                      candidate.breakdown.notes)
+        self.assertEqual(
+            candidate.breakdown.merge_ns, self._noc(model.rates, 5000))
+        self.assertIn("remote_read_prefix_layers=3",
+                      candidate.breakdown.notes)
+
+    def test_remote_read_partial_reverse_when_home_smaller(self):
+        """PARTIAL 混合形态反向：home (2000) < exec (S+I=5000) →
+        反向 noc(2000) 胜出。"""
+        model = _model({0: _load(), 1: _load()})
+        candidate = model.estimate_action(
+            session=_session_view(
+                home=0, resident=0, history_bytes=(1000, 1000),
+                missing=(1000, 1000), location="partial_hbm_remote",
+                prefix=3),
+            request=_request_view(), instance_index=1,
+            action="remote-read", remote_enabled=True)
+        self.assertEqual(
+            candidate.breakdown.merge_ns, self._noc(model.rates, 2000))
+
+    def test_read_prefix_share_conservation_pinned(self):
+        """读流基数钉（K8 重钉，2026-09-23 外部审计）：D1 口径 read_base
+        = history_bytes_by_tp_rank 账本真值（(3009,3009) → 6018），input/
+        decode 增量本地读取**不计**远读；read_passes = max(1, 0) = 1 →
+        remote_read_ns = noc(6018)。字节取 3009/rank 使截断桶敏感：旧
+        （D1 前）口径 base = 6018 + input 前缀份额 6 = 6024 → noc 桶 602
+        ≠ 601（原 6000/6006 形态两桶同为 600，钉不住任何口径）。"""
+        model = _model({0: _load(), 1: _load()})
+        candidate = model.estimate_action(
+            session=_session_view(
+                home=0, resident=0, history_bytes=(3009, 3009),
                 missing=(1000, 1000), location="partial_hbm_remote",
                 prefix=3),
             request=_request_view(
                 input_tokens=5, decode=0, input_bytes=(5, 5)),
-            instance_index=1,
-            action="copy", remote_enabled=True)
-        expected = _transfer_ns(
-            total_bytes=6, path_hops=1, divisor=1, rates=model.rates,
-            per_hop_latency_ns=None, startup_ns=0)
-        expected += _pool_transfer_ns(
-            total_bytes=4, divisor=1, rates=model.rates)
-        self.assertEqual(candidate.breakdown.merge_ns, expected)
+            instance_index=1, action="remote-read", remote_enabled=True)
+        self.assertEqual(
+            candidate.breakdown.remote_read_ns,
+            self._noc(model.rates, 6018))
+        self.assertNotEqual(
+            candidate.breakdown.remote_read_ns,
+            self._noc(model.rates, 6024))
 
-    def test_home_wait_uses_prefix_increments(self):
-        """home 驱逐等待按前缀增量估缺口：home 仅剩 100 B/rank 时，
-        PARTIAL 基（p=3/4）的等待基数 = 前缀增量 1125 而非整份 1500。"""
+    def test_home_wait_in_forward_formula(self):
+        """前向公式含 home 空间准备等待（基数 = exec 侧保留量）：home 仅
+        剩 100 B/rank → max 缺口 2500−100=2400 按池写回口径估。K5 重钉
+        （2026-09-23 外部审计）：merge 方向 = 字节判据镜像物化侧
+        （Σ exec_retained 5000 ≤ Σ home 6000 → forward，F15 平局含等号
+        取前向）——merge_ns = 前向值 1090（反向 noc(6000)=610 虽更廉，
+        非物化方向不取；容量兜底翻转不可计价）。"""
         tight_home = {0: _load(remaining=(100, 100),
                                reclaimable=(10**9, 10**9)),
                       1: _load()}
         model = _model(tight_home)
-        partial = model.estimate_action(
+        candidate = model.estimate_action(
             session=_session_view(
                 home=0, resident=0, history_bytes=(3000, 3000),
                 missing=(1000, 1000), location="partial_hbm_remote",
                 prefix=3),
             request=_request_view(), instance_index=1,
-            action="copy", remote_enabled=True)
-        expected_transfer = _transfer_ns(
-            total_bytes=2250, path_hops=1, divisor=1, rates=model.rates,
-            per_hop_latency_ns=None, startup_ns=0)
-        expected_pool = _pool_transfer_ns(
-            total_bytes=750, divisor=1, rates=model.rates)
-        expected_wait = _pool_transfer_ns(
-            total_bytes=1125 - 100, divisor=1, rates=model.rates)
-        self.assertEqual(
-            partial.breakdown.merge_ns,
-            expected_transfer + expected_pool + expected_wait)
+            action="remote-read", remote_enabled=True)
+        expected_forward = self._noc(model.rates, 5000) + _pool_transfer_ns(
+            total_bytes=2400, divisor=1, rates=model.rates)
+        expected_reverse = self._noc(model.rates, 6000)
         self.assertIn(
-            "home_merge_eviction_writeback_est", partial.breakdown.notes)
+            "home_merge_eviction_writeback_est",
+            candidate.breakdown.notes)
+        self.assertIn(
+            "merge_v2_direction=forward", candidate.breakdown.notes)
+        self.assertEqual(
+            candidate.breakdown.merge_ns, expected_forward)
+        self.assertNotEqual(
+            candidate.breakdown.merge_ns, expected_reverse)
 
 
 # ===================================================== R16-4-4 图构建 ==
@@ -497,7 +566,12 @@ class CompositeCopyGraphEmissionTest(unittest.TestCase):
         })
         self.assertIn("session_x", builder.pending_store_tails)
         tails = builder.pending_store_tails["session_x"]
-        self.assertEqual({edge for edge, _, _ in tails}, {0, 1})
+        # 前递补边硬化（需求①配套，2026-09-17）：条目 5 元组
+        # （edge, store 节点, ack 节点, layer_start, layer_end）。
+        self.assertEqual({entry[0] for entry in tails}, {0, 1})
+        self.assertTrue(all(
+            len(entry) == 5 and entry[3] == 2 and entry[4] == 4
+            for entry in tails))
 
         # 本轮：跨实例 copy 复合两笔（gate 在源实例 0，prefill 在 1）。
         gate_ids = {}
@@ -584,7 +658,7 @@ class CompositeCopyGraphEmissionTest(unittest.TestCase):
                         frontier.append(parent)
             return seen
 
-        store_ids = {(edge, store) for edge, store, _ in tails}
+        store_ids = {(entry[0], entry[1]) for entry in tails}
         for edge, store in store_ids:
             loads_on_edge = [
                 node for node in nodes
@@ -634,6 +708,19 @@ class CopyAtHomePartialGraphFastPathTest(unittest.TestCase):
         from online.graph_batch_builder import GraphBatchBuilder
         builder = GraphBatchBuilder(_graph_config())
         builder.begin_batch()
+        # 前置：前一轮准入逐出的后缀 store（[2,4) 同缘）——前递补边
+        # fail-closed 硬化后，无登记的 restore 会 raise（需求①配套，
+        # 2026-09-17；物理序列 = 会话先 PARTIAL 化才有后缀可恢复）。
+        builder.emit_admission_batch({
+            "request_id": "r0", "session_id": "other", "turn_index": 0,
+            "queue_index": 0, "prefill_instance_index": 0,
+            "decode_instance_index": 0, "admission_time_ns": 1000,
+            "history_location_before": None, "history_transfer": None,
+            "history_evictions": [_suffix_store("session_x")],
+            "prefill_evictions": [],
+            "history_tokens_before": 0,
+            "prefill_context_tokens": 300,
+        })
         request_id = "s_request_1"
         gate_ids = {}
         for rank in (0, 1):
@@ -750,7 +837,13 @@ class CompositeWatermarkReplayTest(unittest.TestCase):
 
 
 class CompositeCopyMergeRegressionTest(unittest.TestCase):
-    """copy@PARTIAL 完成 → merge 两笔拆分 + 版本键单次。"""
+    """copy@PARTIAL 完成 → merge v2 零字节翻转 + 版本键单次。
+    金样留档（改造前口径，git 9a95e06）：两笔拆分——增量前缀 noc 回
+    home [0,prefix) + 后缀增量 remote_store [prefix,L)，终态 PARTIAL@home。
+    C4 triage（2026-09-22）：C13 copy 块级交接/源端立即释放后，home 基础
+    前缀的释放点自 merge 迁至交接块到达（expand_prefill 的 prefill_drain
+    结算边界 `_settle_copy_handoffs`）——merge 时刻 home 剩余量回升量由
+    base_prefix 改为 0（释放前移、总量守恒不变，断言对象随之刷新）。"""
 
     def test_merge_after_composite_copy(self):
         kv = _manager()
@@ -760,34 +853,44 @@ class CompositeCopyMergeRegressionTest(unittest.TestCase):
             session_id="s", target_instance_index=1, history_tokens=10,
             trigger_request_id="t1", reservation_request_id="t1",
             action="copy")
+        remaining_home_before_expand = kv._effective_remaining_by_tp_rank(0)
         kv.expand_prefill(
             session_id="s", instance_index=1, context_tokens=14,
             trigger_request_id="t1")
+        # C13 源端立即释放：交接块在 prefill_drain 边界结算，home（实例
+        # 0）基础前缀 H = kv(10)@[0,prefix) 于 expand 内释放——不再等
+        # merge（旧口径断言点）。
+        base_prefix = kv_cache_shard_bytes_for_layer_range(
+            kv.model, 10, kv.tp_degree, layer_start=0, layer_end=prefix)
+        self.assertEqual(
+            tuple(after - before for before, after in zip(
+                remaining_home_before_expand,
+                kv._effective_remaining_by_tp_rank(0))),
+            base_prefix)
         remaining_home_before = kv._effective_remaining_by_tp_rank(0)
 
         transfers = kv.merge_back(
             session_id="s", trigger_request_id="t1", new_tokens=4)
 
-        kinds = [(t.kind, t.layer_start, t.layer_end) for t in transfers
-                 if t.kind in ("noc_migrate", "remote_store")]
-        self.assertIn(("noc_migrate", 0, prefix), kinds)
-        self.assertIn(("remote_store", prefix, kv.model.layers), kinds)
+        # 零字节翻转：零传输（无 noc/remote_store——I6 合并零池写）。
+        self.assertEqual(transfers, ())
         session = kv._sessions["s"]
-        # 工作副本释放：回 PARTIAL@home（基础前缀从未离开）。
+        # 工作副本转正：LOCAL@exec（胜者），home 迁移 exec。
         self.assertEqual(session.working_kind, None)
-        self.assertEqual(session.location, kv.PARTIAL_HBM_REMOTE)
-        self.assertEqual(session.instance_index, 0)
-        self.assertEqual(session.resident_prefix_layers, prefix)
+        self.assertEqual(session.location, kv.LOCAL_HBM)
+        self.assertEqual(session.instance_index, 1)
+        self.assertEqual(session.home_instance, 1)
+        self.assertEqual(session.resident_prefix_layers, kv.model.layers)
         self.assertEqual(session.context_tokens, 14)
         self.assertEqual(session.last_merged_request_id, "t1")
-        # home 只并入增量前缀（base 从未离开不得重复加）。
-        increment_prefix = kv_cache_shard_bytes_for_layer_range(
-            kv.model, 4, kv.tp_degree, layer_start=0, layer_end=prefix)
+        # home（实例 0）已在交接结算释放全部基础前缀（上断言）——merge
+        # 时刻零增量（不重复释放已交接源块，C12 §2 规则 4 / C13 守恒式
+        # D_handoff 轮末归零）。
         self.assertEqual(
-            tuple(before - after for before, after in zip(
+            tuple(after - before for before, after in zip(
                 remaining_home_before,
                 kv._effective_remaining_by_tp_rank(0))),
-            increment_prefix)
+            (0, 0))
         # 版本键：同请求重复 merge = 合同类违规。
         with self.assertRaises(RuntimeError):
             kv.merge_back(
@@ -841,14 +944,16 @@ class CopyAtHomePartialDegradeTest(unittest.TestCase):
 
 
 class CompositeCycleSequenceTest(unittest.TestCase):
-    """复合 copy → merge 落回 PARTIAL → 再跨实例 copy 序列。"""
+    """复合 copy → merge v2 零字节翻转（LOCAL@胜者、home 漂移）→ 再跨
+    实例 copy 序列。金样留档（改造前口径，git 9a95e06）：merge 落回
+    PARTIAL@home、home 恒 0；第 2 轮复合两腿 [0,prefix)+[prefix,L)。"""
 
     def test_cycle_sequence(self):
         kv = _manager()
         _make_partial(kv)
         prefix = kv._sessions["s"].resident_prefix_layers
 
-        # 第 1 轮：复合 copy@1 + 增长 + merge 落回 PARTIAL@0。
+        # 第 1 轮：复合 copy@1（两腿）+ 增长 + merge 零字节翻转 LOCAL@1。
         kv.prepare_prefill(
             session_id="s", target_instance_index=1, history_tokens=10,
             trigger_request_id="t1", reservation_request_id="t1",
@@ -857,32 +962,32 @@ class CompositeCycleSequenceTest(unittest.TestCase):
             session_id="s", instance_index=1, context_tokens=14,
             trigger_request_id="t1")
         kv.merge_back(session_id="s", trigger_request_id="t1", new_tokens=4)
-        self.assertEqual(
-            kv._sessions["s"].location, kv.PARTIAL_HBM_REMOTE)
+        self.assertEqual(kv._sessions["s"].location, kv.LOCAL_HBM)
+        self.assertEqual(kv._sessions["s"].instance_index, 1)
+        self.assertEqual(kv._sessions["s"].home_instance, 1)
         self.assertEqual(kv._sessions["s"].context_tokens, 14)
 
-        # 第 2 轮：再跨实例复合 copy（PARTIAL 基）。
+        # 第 2 轮：再跨实例 copy（LOCAL 基@1 → 目标 0）——单腿全层 noc。
         _, transfers, _ = kv.prepare_prefill(
-            session_id="s", target_instance_index=1, history_tokens=14,
+            session_id="s", target_instance_index=0, history_tokens=14,
             trigger_request_id="t2", reservation_request_id="t2",
             action="copy")
         self.assertEqual(
             [(t.kind, t.layer_start, t.layer_end) for t in transfers],
-            [("noc_migrate", 0, prefix),
-             ("remote_load", prefix, kv.model.layers)])
+            [("noc_migrate", 0, kv.model.layers)])
         full14 = kv_cache_shard_bytes_for_tokens(kv.model, 14, kv.tp_degree)
         self.assertEqual(
             sum(t.total_bytes for t in transfers), sum(full14))
         kv.expand_prefill(
-            session_id="s", instance_index=1, context_tokens=18,
+            session_id="s", instance_index=0, context_tokens=18,
             trigger_request_id="t2")
         settled = kv.merge_back(
             session_id="s", trigger_request_id="t2", new_tokens=4)
-        kinds = [(t.kind, t.layer_start, t.layer_end) for t in settled
-                 if t.kind in ("noc_migrate", "remote_store")]
-        self.assertIn(("noc_migrate", 0, prefix), kinds)
-        self.assertIn(("remote_store", prefix, kv.model.layers), kinds)
+        # 零字节翻转（home 漂移 1 → 0）。
+        self.assertEqual(settled, ())
         self.assertEqual(kv._sessions["s"].context_tokens, 18)
+        self.assertEqual(kv._sessions["s"].location, kv.LOCAL_HBM)
+        self.assertEqual(kv._sessions["s"].home_instance, 0)
 
 
 # ===================================================== R16-4-8d 日志形状 ==
@@ -1086,19 +1191,28 @@ class KvEvictionChokePointLogTest(unittest.TestCase):
         scheduler.kv_manager = kv
         scheduler._kv_ledger_epoch = 0
         scheduler._stalled_by_instance = {}
-        scheduler._batch = {"tick": tick, "assignments": []}
+        scheduler._batch = {"tick": tick, "assignments": [], "watches": []}
+        scheduler._pending_eviction_watches = {}
+        scheduler._eviction_watch_seq = {}
         scheduler.online_log_count = 0
         scheduler.decision_log_sink = None
         scheduler.online_log_rows = []
         graph_emitted = []
+        def emit_eviction_side_branch(transfers, event_tick, *, watch_id):
+            graph_emitted.append((tuple(transfers), event_tick))
+            return {"request_id": watch_id,
+                    "owner_request_id": transfers[0].trigger_request_id,
+                    "members": {0: 1}}
+
         scheduler.graph = SimpleNamespace(
-            emit_eviction_side_branch=(
-                lambda transfers, tick: graph_emitted.append(
-                    (tuple(transfers), tick))),
+            emit_eviction_side_branch=emit_eviction_side_branch,
             sync_pending_history_after_evictions=lambda evictions: None,
         )
         # 计价流登记面属 R18 计量批（方案 §7 红线：流登记不在本批）。
         scheduler._register_transfer_flows = lambda transfers, owner: None
+        # 对齐 __init__ 初值（F6 销账：类级软缺省已删；off 档 None，
+        # 替身漏设 = AttributeError）。
+        scheduler._quota_tracker = None
         return scheduler, graph_emitted
 
     def _grower_runtime(self, consumed=250):

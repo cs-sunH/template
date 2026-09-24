@@ -238,10 +238,6 @@ def load_request_queue(queue_csv: Path) -> tuple[RequestSpec, ...]:
     return tuple(requests)
 
 
-def shard_size(value: int, shards: int) -> int:
-    return (value + shards - 1) // shards
-
-
 def shard_extent(value: int, shards: int, shard_index: int) -> int:
     """Return an exact, deterministic uneven TP slice size.
 

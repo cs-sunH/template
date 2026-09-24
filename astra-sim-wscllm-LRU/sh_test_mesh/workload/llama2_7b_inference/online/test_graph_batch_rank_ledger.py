@@ -104,3 +104,19 @@ def test_digest_reuses_public_rank_metadata_without_second_node_scan():
 
     assert digest["ranks"] == [0, 2]
     assert nodes.iteration_count == 0
+
+
+def _run_all():
+    test_collect_tracks_only_ranks_that_emitted_nodes()
+    print("[rank-ledger] case 1 PASS: ledger records only emitting ranks")
+    test_build_reuses_collected_rank_ledger_without_node_scan()
+    print("[rank-ledger] case 2 PASS: assembly reuses the ledger without a "
+          "node scan")
+    test_digest_reuses_public_rank_metadata_without_second_node_scan()
+    print("[rank-ledger] case 3 PASS: digest reuses touched_ranks without a "
+          "second node scan")
+    print("[rank-ledger] all cases PASS")
+
+
+if __name__ == "__main__":
+    _run_all()

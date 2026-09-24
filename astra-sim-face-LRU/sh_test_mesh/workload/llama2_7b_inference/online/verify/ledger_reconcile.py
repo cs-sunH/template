@@ -85,6 +85,7 @@ _ONLINE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ONLINE_DIR not in sys.path:
     sys.path.insert(0, _ONLINE_DIR)
 from bridge_request_journal import iter_request_records  # noqa: E402
+from online_scheduler_base import BATCH_TRAIN_PREFIX  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +147,13 @@ def load_cpp_facts(bridge_dir):
         arrival_epochs += len(req.get("arrivals") or [])
         for group in req.get("completed_groups") or []:
             request_id = group["request_id"]
+            if request_id.startswith(BATCH_TRAIN_PREFIX):
+                # 列车哨兵完成事实(T_max 截断列车/首步拆分唤醒,watch 以
+                # train_id+prefill 注册)不属于任何请求——与调度器完成
+                # 处理(face_online_scheduler 对同组按 BATCH_TRAIN_PREFIX
+                # 路由核销)同款剥离,否则 R0c1/R0c3 把哨兵计入 request
+                # 生命周期事实必然误报失配。
+                continue
             stage = group["stage"]
             fact = {
                 "tick": req["tick"],

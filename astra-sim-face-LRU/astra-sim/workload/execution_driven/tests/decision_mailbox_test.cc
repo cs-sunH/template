@@ -15,12 +15,11 @@ standalone test -- no network simulation, no baseline artifacts touched:
           identities stay; the same identity may legitimately return in a
           later epoch.
   Part C  Counters: event_count / delivery_count / coalescing_ratio /
-          tick_end_without_decision_count / no_decision_python_callback_count
-          / finalize_pending has_decision_work.
+          tick_end_without_decision_count / has_decision_work.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-face-LRU):
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 Exit code 0 on ALL PASS.
@@ -162,29 +161,19 @@ void test_counters() {
     expect(mailbox.coalescing_ratio() == 2.0,
            "C: 2 events batched into 1 delivery epoch -> ratio 2.0");
 
-    // A drain with no events (finalize-only epoch) is not a delivery.
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
+    // A drain with no events is not a delivery epoch.
+    expect(mailbox.drain().empty(), "C: empty drain has no events");
     expect(mailbox.delivery_count() == 1,
            "C: empty drain is not a delivery epoch");
 
-    // Gate counters: no-work ticks increment; the Python-error counter is
-    // only incremented by a buggy entry (phase-1 acceptance: must stay 0).
+    // Gate counter: no-work tick-end gate calls increment it.
     mailbox.count_tick_end_without_decision();
     mailbox.count_tick_end_without_decision();
-    mailbox.count_no_decision_python_callback();
     expect(mailbox.tick_end_without_decision_count() == 2,
            "C: no-work ticks counted");
-    expect(mailbox.no_decision_python_callback_count() == 1,
-           "C: python-error counter incremented explicitly");
 
-    // finalize_pending makes has_decision_work() true with no events; the
-    // drain consumes it (a finalize-only epoch delivers an empty delta).
+    // has_decision_work() tracks the pending event set only.
     expect(!mailbox.has_decision_work(), "C: no work with empty mailbox");
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.has_decision_work(), "C: finalize_pending is decision work");
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
-    expect(!mailbox.has_decision_work(), "C: drain consumed the finalize");
 }
 
 // ---------------------------------------------------------------- Part D --

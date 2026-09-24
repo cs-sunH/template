@@ -124,10 +124,10 @@ void test_event_queue_cancellation() {
 
 constexpr uint64_t kMouseCount = 64;
 constexpr ChunkSize kElephantBytes = 10000;
-// Link accepts binary GB/s (2^30 B/s). This value is exactly 1 B/ns after
-// the backend conversion, keeping the expected integer completion ticks clear.
-constexpr double kOneBytePerNsGbps =
-    1'000'000'000.0 / static_cast<double>(1ULL << 30);
+// Link converts GB/s to B/ns with the SI identity (1 GB/s = 1 B/ns), so
+// this value is exactly 1 B/ns after the backend conversion, keeping the
+// expected integer completion ticks clear.
+constexpr double kOneBytePerNsGbps = 1.0;
 
 struct FluidScenario;
 

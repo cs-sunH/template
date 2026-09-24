@@ -80,20 +80,6 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         last_queue_index_by_session_.clear();
         return;
     }
-    // Checkpoints resume at the NEXT unread line. The old pre-read sample
-    // pointed at the row just consumed and duplicated it after restore.
-    std::streampos next_pos = file_.tellg();
-    if (next_pos == std::streampos(-1) && file_.eof()) {
-        // A final line without a trailing newline may set eofbit even though
-        // getline succeeded. Clear it and recover the byte position at EOF;
-        // the next getline still fails normally from that position.
-        file_.clear();
-        file_.seekg(0, std::ios::end);
-        next_pos = file_.tellg();
-    }
-    if (next_pos != std::streampos(-1)) {
-        last_file_pos_ = static_cast<int64_t>(next_pos);
-    }
     if (line.empty()) {
         return;  // blank line: not a data row, keep the same position
     }
@@ -184,18 +170,12 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         // §5.1; 推进机制统一 2026-08-20 中-3). Counted and never submitted;
         // the row still got its frozen queue_index value and metrics request
         // registration above, but (as a turn-0 row) no future lookup entry.
-        // The rejected row
-        // is marked consumed right here: it will never fire an arrival
-        // alarm, so leaving it un-consumed would pin the window occupancy
-        // at high_water and stall pump() before EOF. Rows are read strictly
-        // in order, so this row currently holds the highest queue index and
-        // advancing the consumed prefix to it is exact. The run-end
-        // completion audit fail-closes on any nonzero count (the drop is
-        // visible, never silent).
+        // The rejected row is retired from the window right here: it will
+        // never fire an arrival alarm, so leaving it outstanding would pin
+        // the window occupancy at high_water and stall pump() before EOF.
+        // The run-end completion audit fail-closes on any nonzero count
+        // (the drop is visible, never silent).
         ++rejected_out_of_range_;
-        if (queue_index > consumed_idx_) {
-            consumed_idx_ = queue_index;
-        }
         outstanding_rows_.erase(queue_index);
         return;
     }
@@ -243,9 +223,6 @@ void LegacyOracleWindowedTraceReader::notify_consumed(const int64_t queue_index)
         std::abort();
     }
     outstanding_rows_.erase(queue_index);
-    if (queue_index > consumed_idx_) {
-        consumed_idx_ = queue_index;
-    }
 }
 
 void LegacyOracleWindowedTraceReader::report(std::ostream& os) const {

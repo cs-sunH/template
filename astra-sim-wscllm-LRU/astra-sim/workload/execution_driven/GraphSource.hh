@@ -109,15 +109,13 @@ struct OnlineStatisticsState {
     bool completed = false;
     bool is_gpu = false;
 
-    // Kept until terminal completion because the online Workload still
-    // calculates p2p/collective bandwidth before the NodeStore record can be
-    // collected.  Only compute/memory utilization is compacted globally.
+    // Retained until terminal completion for the online Workload's
+    // terminal-communication bookkeeping (comm_size: bytes on the live
+    // NodeStore record).  Only compute/memory utilization is compacted
+    // globally.
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
-    std::optional<double> operation_intensity;
-    std::optional<bool> is_memory_bound;
     std::optional<uint64_t> comm_size;
-    std::optional<double> network_bandwidth;
 };
 
 /// The node record / read view. In static mode the ETFeederGraphSource

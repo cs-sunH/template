@@ -10,7 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include <tuple>
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 
 #include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 

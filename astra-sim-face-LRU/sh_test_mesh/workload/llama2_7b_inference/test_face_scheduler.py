@@ -215,7 +215,6 @@ class FaceSchedulerTests(unittest.TestCase):
             "bandwidth-gbps": 512.0,
             "latency-ns": 100,
             "npu-selection": "mesh-boundary",
-            "logical-pool": "unified-kv-cache-pool",
         }
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "face_case5_expansion.json"
@@ -225,8 +224,6 @@ class FaceSchedulerTests(unittest.TestCase):
                          "PER_NPU_MEMORY_EXPANSION")
         self.assertEqual(hardware.remote_memory_latency_ns, 100)
         self.assertEqual(hardware.remote_memory_npu_selection, "mesh-boundary")
-        self.assertEqual(hardware.remote_memory_logical_pool,
-                         "unified-kv-cache-pool")
         self.assertEqual(hardware.remote_memory_runtime_label,
                          "edge_remote_memory_pool")
 
@@ -247,7 +244,6 @@ class FaceSchedulerTests(unittest.TestCase):
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())

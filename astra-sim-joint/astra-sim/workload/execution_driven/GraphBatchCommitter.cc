@@ -469,12 +469,14 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 const int dst = node.comm.dst;
                 const uint64_t tag = node.comm.tag;
                 const uint64_t bytes = node.comm.bytes;
+                // comm.tag is uint32_t (GraphSource.hh CommAttrs), so no
+                // widened upper-bound check can ever fire here (deep-review
+                // 2026-09: the old tag > uint32max leg was dead); only the
+                // src/dst legs are live.
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
-                    dst >= ctx_.num_ranks ||
-                    tag > static_cast<uint64_t>(
-                              std::numeric_limits<uint32_t>::max())) {
+                    dst >= ctx_.num_ranks) {
                     return fail("node[" + std::to_string(node_index) +
-                                "] p2p src/dst/tag out of range");
+                                "] p2p src/dst out of range");
                 }
                 if ((type == 5 && src != rank) ||
                     (type == 6 && dst != rank)) {
@@ -858,11 +860,6 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     return std::nullopt;
 }
 
-bool GraphBatchCommitter::was_json_id_committed(const int rank,
-                                                const uint64_t id) const {
-    return resolve_store_id(rank, id).has_value();
-}
-
 std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
     const int rank, const uint64_t json_id) const {
     if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
@@ -1018,7 +1015,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // parse_graph_batch (sh_3.0's optional "mem" sub-object included
             // -- the old S1 stand-in rebinds are gone); this pass reads the
             // typed attrs directly.
-            // The src/dst/tag range checks are scoped to the comm-typed
+            // The src/dst range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
             // semantically load-bearing. Real batches carry the comm
             // defaults (src=0/dst=0/tag=0) on every node and pass
@@ -1030,18 +1027,12 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             if (type == 5 || type == 6) {
                 const int src = node.comm.src;
                 const int dst = node.comm.dst;
-                const int64_t tag = node.comm.tag;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
                     return "node[" + std::to_string(node_index) +
                            "] comm src/dst out of range: src=" +
                            std::to_string(src) +
                            " dst=" + std::to_string(dst);
-                }
-                if (tag < 0) {
-                    return "node[" + std::to_string(node_index) +
-                           "] comm tag out of range: " +
-                           std::to_string(tag);
                 }
                 if (type == 5 && src != rank) {
                     return "node[" + std::to_string(node_index) +

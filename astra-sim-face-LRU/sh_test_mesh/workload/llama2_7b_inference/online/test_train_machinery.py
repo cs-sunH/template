@@ -262,8 +262,13 @@ class TrainFinalizeTest(unittest.TestCase):
 
     def test_busy_gate_skips_in_flight_instance(self):
         """busy 门:列车在飞的实例不重复发射(_plan_and_emit_trains
-        跳过;graph stub 一旦被调即失败)。"""
+        跳过;graph stub 一旦被调即失败)。frontier 必须含该实例——
+        空 frontier 时循环体不执行,门不在执行路径上(删掉 busy 门
+        该测试仍通过);scanned_entries 断言钉住循环确已访问。"""
         scheduler = _bare_scheduler()
+        scheduler._profile_batch = {
+            "scanned_entries": 0, "full_scan_entries": 0}
+        scheduler._ready_frontier = {0}
         scheduler.graph = SimpleNamespace(
             emit_iteration_train=lambda *_a, **_k: (_ for _ in ()).throw(
                 AssertionError("busy gate violated: emitted a train")))
@@ -273,6 +278,7 @@ class TrainFinalizeTest(unittest.TestCase):
                                  "drain_set": set(),
                                  "prefill_chunk_tokens": []}
         scheduler._plan_and_emit_trains(0)  # 不得发射、不得抛
+        self.assertEqual(scheduler._profile_batch["scanned_entries"], 1)
 
 
 HARDWARE = FaceHardware(

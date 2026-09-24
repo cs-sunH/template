@@ -247,10 +247,6 @@ class GraphBatchCommitter {
     /// One-line run-end counter report ("[online] phase-5 commit counters:").
     std::string counters_report() const;
 
-    /// The sorted unique rank set owning the batch's nodes (pure).
-    static std::vector<int> compute_touched_ranks(const GraphBatch& batch,
-                                                  int num_ranks);
-
     /// A1 (2026-08-28): amortization threshold -- the commit tail drains the
     /// per-rank GC candidate FIFOs only once this many finished nodes have
     /// accumulated since the last collection. 4096 keeps the retained
@@ -308,7 +304,6 @@ class GraphBatchCommitter {
     /// runs unconditionally at the start of commit().
     std::optional<std::string> mandatory_liveness_preflight(
         const StateDelta& delta, const GraphBatch& batch) const;
-    bool was_json_id_committed(int rank, uint64_t id) const;
     void record_affine_node(int rank, uint64_t json_id, uint64_t store_id);
     void commit_after_preflight(const StateDelta& delta, const GraphBatch& batch,
                                 const std::vector<int>& touched_ranks);

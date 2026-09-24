@@ -1062,7 +1062,12 @@ void test_gate_trips_on_delayed_submission() {
         ServiceCoordinator svc2;
         RequestIngress ingress2;
         ingress2.bind(&eq2, &mailbox2, &svc2);
-        WindowedTraceReader reader2(csv, ingress2, 128);
+        // max_arrival_ns = 0 (UNBOUNDED): the "normal path" control arm must
+        // actually SUBMIT both rows (arrivals 1000/2000). The pre-fix 128 was
+        // interpreted as the arrival cap (P0 rewrite changed the third ctor
+        // param from high_water to max_arrival_ns), rejected both rows, and
+        // left the gate assertion below vacuously green on zero submissions.
+        WindowedTraceReader reader2(csv, ingress2, /*max_arrival_ns=*/0);
         reader2.pump();
         ingress2.drain_commands();
         while (!eq2.finished()) {

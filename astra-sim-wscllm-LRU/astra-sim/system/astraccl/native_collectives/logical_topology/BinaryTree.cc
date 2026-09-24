@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/BinaryTree.hh"
 #include "astra-sim/common/Logging.hh"
 
+#include <cstdlib>
 #include <iostream>
 
 using namespace std;
@@ -14,6 +15,15 @@ using namespace AstraSim;
 BinaryTree::BinaryTree(
     int id, TreeType tree_type, int total_tree_nodes, int start, int stride)
     : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::BinaryTree) {
+    if (total_tree_nodes < 1 ||
+        (total_tree_nodes & (total_tree_nodes - 1)) != 0) {
+        LoggerFactory::get_logger("system::topology::BinaryTree")
+            ->critical(
+                "######### Exiting because BinaryTree only supports a "
+                "power-of-two number of nodes, but got: {} #########",
+                total_tree_nodes);
+        std::exit(1);
+    }
     this->total_tree_nodes = total_tree_nodes;
     this->start = start;
     this->tree_type = tree_type;

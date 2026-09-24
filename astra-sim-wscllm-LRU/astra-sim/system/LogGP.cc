@@ -68,8 +68,12 @@ void LogGP::process_next_read() {
     partner->switch_to_receiver(tmp, offset);
     sends.pop_front();
     curState = State::Sending;
+    Tick transfer_delay = 0;
+    if (tmp.size > 0) {
+        transfer_delay = G * (tmp.size - 1);
+    }
     sys->register_event(this, EventType::Send_Finished, nullptr,
-                        offset + (G * (tmp.size - 1)));
+                        offset + transfer_delay);
 }
 void LogGP::request_read(int bytes,
                          bool processed,
@@ -103,8 +107,12 @@ void LogGP::switch_to_receiver(MemMovRequest mr, Tick offset) {
     receives.push_back(mr);
     prevState = curState;
     curState = State::Receiving;
+    Tick transfer_delay = 0;
+    if (mr.size > 0) {
+        transfer_delay = (mr.size - 1) * G;
+    }
     sys->register_event(this, EventType::Rec_Finished, nullptr,
-                        offset + ((mr.size - 1) * G) + L + o);
+                        offset + transfer_delay + L + o);
     subsequent_reads = 0;
 }
 

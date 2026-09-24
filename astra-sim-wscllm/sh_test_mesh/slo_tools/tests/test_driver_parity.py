@@ -35,6 +35,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest 的 prepend 导入（tests/ 带 __init__.py，模块名变 tests.test_*）只把
+# slo_tools/ 放上 sys.path；本模块目录（tests/）须自行入径，`import synthetic`
+# 才与直跑 / unittest discover 两条口径一致。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import (  # noqa: E402
@@ -271,14 +275,17 @@ def build_sh10_run_dir() -> Path:
         "".join(json.dumps(record, sort_keys=True) + "\n"
                 for record in decision_log), encoding="utf-8")
 
-    # -- train_ledger（含 first_step 行以覆盖跳过打印）---------------------
+    # -- train_ledger（含 first_step 行以覆盖跳过打印；2026-09-04 exits
+    #    口径：drains/exits 键齐备，终态归属在 exits，li_collect_drains
+    #    仅从 exits 归集）----------------------------------------------
     (results / "train_ledger.jsonl").write_text(
         json.dumps({"tick": 1100, "instance_index": 0, "first_step": True,
-                    "train_id": "t0", "drains": []}, sort_keys=True) + "\n"
+                    "train_id": "t0", "drains": [], "exits": []},
+                   sort_keys=True) + "\n"
         + json.dumps({"tick": 20_000_001_400, "instance_index": 0, "first_step": False,
-                      "train_id": "t0",
-                      "drains": ["session_A_request_0",
-                                 "session_B_request_0"]},
+                      "train_id": "t0", "drains": [],
+                      "exits": ["session_A_request_0",
+                                "session_B_request_0"]},
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----

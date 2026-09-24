@@ -19,8 +19,44 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 
-RUN_DIR=$1
+RUN_DIR=$(realpath -m -- "${1:?run_dir 必填}")
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:materialize the 20.csv first-30s input via traces/materialize_20_30s.py 后显式传入)"}
+REQUEST_CSV=$(realpath -- "${REQUEST_CSV}")
+
+# 与主 runner、矩阵和容量压力夹具共用仓级锁。必须先锁再读 generated
+# 或清理 run_dir；嵌套入口沿用同一 open-file description，避免自锁。
+SINGLE_SIMULATION_LOCK_PATH="${PROJECT}/sh_test_mesh/runs/.single_simulation.lock"
+SINGLE_SIMULATION_LOCK_FD=""
+acquire_single_simulation_lock() {
+  mkdir -p "${PROJECT}/sh_test_mesh/runs"
+  local inherited_fd="${SH_SINGLE_SIMULATION_LOCK_FD:-}"
+  if [[ -n "${inherited_fd}" ]]; then
+    if [[ ! "${inherited_fd}" =~ ^[0-9]+$ ]]; then
+      echo "[run_online_strategy_sensing] invalid SH_SINGLE_SIMULATION_LOCK_FD=${inherited_fd@Q}" >&2
+      return 1
+    fi
+    local fd_identity lock_identity
+    fd_identity=$(stat -Lc '%d:%i' "/proc/${BASHPID}/fd/${inherited_fd}" 2>/dev/null) || {
+      echo "[run_online_strategy_sensing] inherited simulation lock FD ${inherited_fd} is not open" >&2
+      return 1
+    }
+    lock_identity=$(stat -Lc '%d:%i' "${SINGLE_SIMULATION_LOCK_PATH}") || return 1
+    if [[ "${fd_identity}" != "${lock_identity}" ]] || ! flock -n "${inherited_fd}"; then
+      echo "[run_online_strategy_sensing] inherited simulation lock FD does not hold ${SINGLE_SIMULATION_LOCK_PATH}" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_FD="${inherited_fd}"
+  else
+    exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
+    if ! flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+      exec {SINGLE_SIMULATION_LOCK_FD}>&-
+      echo "[run_online_strategy_sensing] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to start" >&2
+      return 1
+    fi
+  fi
+  export SH_SINGLE_SIMULATION_LOCK_FD="${SINGLE_SIMULATION_LOCK_FD}"
+}
+acquire_single_simulation_lock
 
 # Backport 2026-08-16 (four-tier 3-min comparison test adaptation 5a):
 # resolve the single generated dir dynamically -- the dir name encodes
@@ -33,7 +69,9 @@ if [[ ${#GEN_MATCH[@]} -ne 1 || ! -d "${GEN_MATCH[0]}" ]]; then
 fi
 ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
-RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
+# 与主入口共用运行时硬件目录选择。受控硬件档在 materializer 后通过
+# SH_RUNTIME_RC_DIR 指向实际四件目录；快照中的源 JSON 与执行档才可核对。
+RC="${SH_RUNTIME_RC_DIR:-${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool}"
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正；收尾批
@@ -90,6 +128,47 @@ fi
 
 rm -rf "${RUN_DIR}"
 mkdir -p "${RUN_DIR}"
+
+# 归档本次真正读取的 trace 与硬件原始字节，供 joint 域指标离线复算。
+# 与主 runner 同口径：旧 run 若无快照只给 NA，不借当前 checkout 补值。
+TRACE_CONFIG_SOURCE="${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv"
+python3 - "${TRACE_CONFIG_SOURCE}" "${PROJECT}/sh_test_mesh" "${RUN_DIR}" <<'PY'
+import csv
+import shutil
+import sys
+from pathlib import Path
+
+trace_path, sh_test_mesh, run_dir = map(Path, sys.argv[1:4])
+if not trace_path.is_file():
+    raise SystemExit(f"[run_online_strategy_sensing] missing trace config: {trace_path}")
+hardware_declared = None
+try:
+    with trace_path.open(newline="", encoding="utf-8-sig") as source:
+        for row in csv.DictReader(source):
+            if ((row.get("kind") or "").strip().lower() == "config"
+                    and (row.get("key") or "").strip() == "hardware_config"):
+                hardware_declared = (row.get("value") or "").strip()
+                break
+except (OSError, csv.Error) as error:
+    raise SystemExit(
+        f"[run_online_strategy_sensing] cannot parse {trace_path}: {error}")
+if not hardware_declared:
+    raise SystemExit(
+        f"[run_online_strategy_sensing] trace config has no hardware_config row: "
+        f"{trace_path}")
+hardware_path = Path(hardware_declared)
+if not hardware_path.is_absolute():
+    hardware_path = sh_test_mesh / hardware_path
+if not hardware_path.is_file():
+    raise SystemExit(
+        f"[run_online_strategy_sensing] missing configured hardware JSON: "
+        f"{hardware_path}")
+shutil.copyfile(trace_path, run_dir / "trace_config.csv.snapshot")
+shutil.copyfile(hardware_path, run_dir / "hardware_config.json.snapshot")
+print("[run_online_strategy_sensing] run inputs snapshotted: "
+      f"{run_dir / 'trace_config.csv.snapshot'}, "
+      f"{run_dir / 'hardware_config.json.snapshot'}")
+PY
 cd "${PROJECT}"
 
 # P2(2026-08-28):per-request manifest 拷入 run_dir 根——run_dir 自包含、
@@ -103,6 +182,17 @@ fi
 
 # A1/C1/D3(2026-08-28)降耗开关(runner 默认值,env 可覆盖;同
 # run_online_strategy.sh)。
+# K7 注记(2026-09-23 外部审计):本脚本是 sensing 演示旁路发射路径——
+# 无 F7 耦合断言/无 SH_LINK_TELEMETRY 注入链(那是 run_online_strategy.sh
+# 公共发射路径的职责);quota 实验一律走 runner/主路径,勿以本脚本为
+# 闭环证据。
+# L6 fail-closed(2026-09-23 复核审计):注记只劝不拦——aimd 在本旁路
+# 起跑会静默空转(observer 缺省 0 ⇒ link_telemetry[] 恒空),直接拒绝
+# 启动并指回主路径。
+if [[ "${JOINT_QUOTA_MODE:-off}" == "aimd" ]]; then
+  echo "[run_online_strategy_sensing] FAIL: JOINT_QUOTA_MODE=aimd is not supported on the sensing demo path (no telemetry injection here — AIMD would idle silently); use run_online_strategy.sh / joint_runner.py --quota aimd" >&2
+  exit 1
+fi
 export ASTRA_LINK_OBSERVER="${ASTRA_LINK_OBSERVER:-0}"
 # PYTHONUNBUFFERED（收尾批 2026-09-01 补，与主 runner 对齐）：python3 -u 已
 # 在启动行，此处防御性冗余——确保 Python 侧异常/楔死痕迹及时落 python.log。
@@ -145,7 +235,12 @@ python3 -u online/online_service.py \
   --plan-dir "${ET_DIR}" \
   > "${RUN_DIR}/python.log" 2>&1 || PY_EXIT=$?
 
-wait "${CPP_PID}"; CPP_EXIT=$?
+# L11（2026-09-23 深挖审计，与主 runner L10 同款）：set -e 下裸 wait 在
+# C++ 非零退出时直接终止本脚本，下方失败诊断尾段（log tail /
+# "bridge retained" 提示）不可达——改为 || 捕获退出码（与上方 PY_EXIT
+# 同手法），诊断可达后仍经下方判定 fail-closed 非零退出。
+CPP_EXIT=0
+wait "${CPP_PID}" || CPP_EXIT=$?
 echo "[run_online_strategy_sensing] cpp_exit=${CPP_EXIT} python_exit=${PY_EXIT}"
 if [[ ${CPP_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/cpp.log" >&2

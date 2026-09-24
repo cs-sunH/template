@@ -32,7 +32,6 @@ class Ring : public Algorithm {
     bool ready();
     void exit();
 
-    RingTopology::Direction dimension;
     RingTopology::Direction direction;
     MemBus::Transmition transmition;
     int zero_latency_packets;

@@ -172,17 +172,3 @@ int RingTopology::get_num_of_nodes_in_dimension(int dimension) {
 int RingTopology::get_nodes_in_ring() {
     return total_nodes_in_ring;
 }
-
-bool RingTopology::is_enabled() {
-    assert(offset > 0);
-    int tmp_index = index_in_ring;
-    int tmp_id = id;
-    while (tmp_index > 0) {
-        tmp_index--;
-        tmp_id -= offset;
-    }
-    if (tmp_id == 0) {
-        return true;
-    }
-    return false;
-}

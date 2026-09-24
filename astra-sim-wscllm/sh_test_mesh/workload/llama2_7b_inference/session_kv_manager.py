@@ -294,12 +294,6 @@ class SessionKVSnapshot:
     evicted_by_request_id: Optional[str]
 
     @property
-    def context_tokens(self) -> int:
-        """Compatibility alias used by manifest and small fixture code."""
-
-        return self.logical_context_tokens
-
-    @property
     def total_bytes(self) -> int:
         return sum(self.shard_bytes)
 

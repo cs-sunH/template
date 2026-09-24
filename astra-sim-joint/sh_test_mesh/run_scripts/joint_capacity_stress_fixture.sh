@@ -68,7 +68,11 @@ PROFILE=${2:-stress-28gib}
 EVIDENCE_ROOT=${3:-/home/sunhao/joint_r16_stress_evidence}
 COMBO=${4:-TJE}
 SRC_CSV=${SH_SMOKE_SOURCE_CSV:-/home/sunhao/wsc-simulator/agent-traces/tracelab/astra_compute_20.csv}
-STRESS_JSON="hardware/face_case5_config_c_stress.json"
+# N8（2026-09-23 复核审计8）：SH_STRESS_JSON 可覆盖——C18 三孪生档位
+# 冒烟入口（hardware/face_case5_config_c_d2d_x05.json = 2025 / _d2d_x2
+# = 8100 / _d2d_sub = 1200 GB/s 任一）；缺省 stress JSON 不变（K 批
+# stress 语义零漂移）。
+STRESS_JSON="${SH_STRESS_JSON:-hardware/face_case5_config_c_stress.json}"
 
 if [[ ! -f "${SRC_CSV}" ]]; then
   echo "[stress-fixture] source csv missing: ${SRC_CSV}" >&2
@@ -79,6 +83,44 @@ if [[ ! -x "${BIN}" ]]; then
   echo "[stress-fixture] binary missing: ${BIN}（裸仓交付态——先按 README §4 构建）" >&2
   exit 1
 fi
+
+# 与 joint_runner 共用仓级单仿真锁。压力入口会物化队列、切换 trace_config
+# 并清理 generated；这些副作用都必须发生在锁内。内层 runner 继承 FD 复用
+# 同一 open-file description，不重复抢锁。
+SINGLE_SIMULATION_LOCK_PATH="${PROJECT}/sh_test_mesh/runs/.single_simulation.lock"
+SINGLE_SIMULATION_LOCK_FD=""
+SINGLE_SIMULATION_LOCK_OWNED=0
+acquire_single_simulation_lock() {
+  mkdir -p "${PROJECT}/sh_test_mesh/runs"
+  local inherited_fd="${SH_SINGLE_SIMULATION_LOCK_FD:-}"
+  if [[ -n "${inherited_fd}" ]]; then
+    if [[ ! "${inherited_fd}" =~ ^[0-9]+$ ]]; then
+      echo "[stress-fixture] invalid SH_SINGLE_SIMULATION_LOCK_FD=${inherited_fd@Q}" >&2
+      return 1
+    fi
+    local fd_identity lock_identity
+    fd_identity=$(stat -Lc '%d:%i' "/proc/${BASHPID}/fd/${inherited_fd}" 2>/dev/null) || {
+      echo "[stress-fixture] inherited simulation lock FD ${inherited_fd} is not open" >&2
+      return 1
+    }
+    lock_identity=$(stat -Lc '%d:%i' "${SINGLE_SIMULATION_LOCK_PATH}") || return 1
+    if [[ "${fd_identity}" != "${lock_identity}" ]] || ! flock -n "${inherited_fd}"; then
+      echo "[stress-fixture] inherited simulation lock FD does not hold ${SINGLE_SIMULATION_LOCK_PATH}" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_FD="${inherited_fd}"
+  else
+    exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
+    if ! flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+      exec {SINGLE_SIMULATION_LOCK_FD}>&-
+      echo "[stress-fixture] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to mutate run inputs" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_OWNED=1
+  fi
+  export SH_SINGLE_SIMULATION_LOCK_FD="${SINGLE_SIMULATION_LOCK_FD}"
+}
+acquire_single_simulation_lock
 
 mkdir -p "${EVIDENCE_ROOT}"
 # 物化到固定路径（request_queue_csv 路径进 trace-config digest，换路径会
@@ -114,7 +156,20 @@ PYEOF
 }
 
 restore_config() { cp "${BACKUP}" "${TRACE_CONFIG}"; }
-trap restore_config EXIT
+finish_stress_fixture() {
+  local exit_status=$?
+  if ! restore_config; then
+    echo "[stress-fixture] failed to restore trace_config" >&2
+    [[ ${exit_status} -ne 0 ]] || exit_status=1
+  fi
+  # Restore the shared trace pointer before closing our lock FD. Let inherited
+  # descendants retain the flock if one outlives this shell.
+  if [[ ${SINGLE_SIMULATION_LOCK_OWNED} -eq 1 ]]; then
+    exec {SINGLE_SIMULATION_LOCK_FD}>&-
+  fi
+  return "${exit_status}"
+}
+trap finish_stress_fixture EXIT
 
 # 三行切换：输入队列 → 物化 CSV；硬件源 → stress 孪生；容量档 → 压力档。
 set_config_row request_queue_csv "${REQUEST_CSV}"
@@ -127,7 +182,12 @@ rm -rf "${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_plan_* 2>/
     && python3 plan_materializer.py ) \
   > "${EVIDENCE_ROOT}/plan_materialize.log" 2>&1
 
-RC_DIR="${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c_stress__${PROFILE}__edge_remote_memory_pool"
+# N8：RC 目录名从所选 JSON 基名派生（SH_STRESS_JSON 覆盖孪生档时不再
+# 落 stress 基名；容量档 PROFILE 须在该 JSON 的 capacity-profiles 内
+#——孪生 JSON 继承 base 的 paper-64gib/validation-160gib，无 28gib
+# 压力档——C18 孪生冒烟用 paper-64gib）。
+STRESS_BASENAME=$(basename "${STRESS_JSON}" .json)
+RC_DIR="${PROJECT}/sh_test_mesh/generated/runtime_config/${STRESS_BASENAME}__${PROFILE}__edge_remote_memory_pool"
 if [[ ! -d "${RC_DIR}" ]]; then
   echo "[stress-fixture] runtime config dir missing: ${RC_DIR}" >&2
   ls "${PROJECT}/sh_test_mesh/generated/runtime_config/" >&2 || true
@@ -185,9 +245,16 @@ if log.is_file():
                 hits += 1
 ledgers_path = run_dir / "bridge" / "joint_kv_ledgers.json"
 degrade = deep = None
+export_errors = []
 sidecar_present = ledgers_path.is_file()
 if sidecar_present:
     ledgers = json.loads(ledgers_path.read_text(encoding="utf-8"))
+    # A13'（H1，2026-09-22）：G3 逐键哨兵（<key>_export_error）在场 =
+    # 对应键导出失败——deep/degrade 会落 None，"not deep" 恒真 ⇒ 假
+    # GREEN（证据链断裂）。哨兵扫描进硬门禁，恢复 G3 之前"任一生产
+    # 器失败 ⇒ FAIL"的 fail-closed 强度，且不连坐逐键导出的其余收益。
+    export_errors = sorted(
+        key for key in ledgers if key.endswith("_export_error"))
     degrade = ledgers.get("merge_degrade_events")
     deep = ledgers.get("deep_gap_events")
 degrade_count = len(degrade) if isinstance(degrade, list) else degrade
@@ -216,6 +283,7 @@ summary = {
     "copy_prefill_rows": copies,
     "model_layers": layers,
     "ledger_sidecar_present": sidecar_present,
+    "ledger_export_errors": export_errors,
     "merge_degrade_events": degrade,
     "merge_degrade_disclosure": {
         "count": degrade_count,
@@ -230,10 +298,14 @@ summary = {
 (run_dir / "judge_summary.json").write_text(
     json.dumps(summary, indent=1) + "\n", encoding="utf-8")
 print(json.dumps(summary))
-# 硬门禁 = 命中>0 且侧车在且 deep_gap 空 +（启用时）判据 4 全过；
-# merge_degrade 仅落盘披露（kimi P1）。侧车缺失 = fail-closed（三轮
-# 深审补强：此前缺失时判据 3 空转通过——None 恒过，证据链断裂应 FAIL）。
-sys.exit(0 if (hits > 0 and sidecar_present and not deep and judge4_ok)
+# 硬门禁 = 命中>0 且侧车在且无逐键导出哨兵且 deep_gap 空 +（启用时）
+# 判据 4 全过；merge_degrade 仅落盘披露（kimi P1）。侧车缺失 =
+# fail-closed（三轮深审补强：此前缺失时判据 3 空转通过——None 恒过，
+# 证据链断裂应 FAIL）；侧车在场但 <key>_export_error 哨兵在场 = 同
+# fail-closed（A13'/H1：G3 逐键导出后单键失败不再拆整个侧车，哨兵即
+# 证据链断裂信号——deep_gap 空判据失去证据基础，不得 GREEN）。
+sys.exit(0 if (hits > 0 and sidecar_present and not export_errors
+               and not deep and judge4_ok)
          else 2)
 PYEOF
 

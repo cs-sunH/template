@@ -53,9 +53,13 @@ using json = nlohmann::json;
 // carries the variant-specific MemAttrs member between compute and comm).
 // The mirror assert is the ABI-agnostic proof that the flags landed in the
 // former bool tail padding; the numeric assert anchors the current
-// toolchain value (GCC 15 / libstdc++ x86-64, std::vector = 40; sh_3.0:
-// 456 vs sh_1.0's 448 -- the +8 is this repo's MemAttrs layout, R2 flags
-// still ride the padding).  If a different toolchain changes the numeric
+// toolchain value (GCC 15 / libstdc++ x86-64, std::vector = 40).  Updated
+// 2026-09-24: the dead-field cleanup removed OnlineStatisticsState's four
+// write-only optionals (operation_intensity / is_memory_bound / comm_size /
+// network_bandwidth, 16+8+16+16 = 56 bytes), legitimately shrinking
+// OnlineNode 456 -> 400; the mirror assert still holds the ABI-agnostic
+// equivalence bound, and the numeric anchor was re-proven on this toolchain
+// per the rule below.  If a different toolchain changes the numeric
 // value while the mirror assert still holds, update the number and re-prove
 // -- that failure mode is protective, not an equivalence break.
 // ---------------------------------------------------------------------------
@@ -82,7 +86,7 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 456,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 400,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 

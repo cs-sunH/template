@@ -16,7 +16,14 @@
 #   （build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_
 #    Congestion_Aware_Online）；裸仓交付态须先按 README §4 拼装构建。
 # 覆盖：八组合 + TJE+remote-off + 影子验证跑（SH_ADMIT_GATE_VERIFY=1 +
-#   SH_SNAPSHOT_VERIFY=1 + SH_ONLINE_VALIDATE=1，TJE）= 10 配置。
+#   SH_SNAPSHOT_VERIFY=1 + SH_ONLINE_VALIDATE=1，TJE）= 10 配置；
+#   C19（总收口）扩 3 臂 = 13 配置——TJE_quota_static（JOINT_QUOTA_MODE=
+#   static）/ TJE_quota_aimd（=aimd，F7 自动注入链全程生效）/ TJE_face_
+#   static（--scheduler face_static 对照臂，quota 强制 off 语义入
+#   manifest 注记）。三新臂经 joint_runner.py CLI 面起跑（--quota /
+#   --scheduler），aimd 臂不显式设 SH_LINK_TELEMETRY——由 runner 置位、
+#   run_online_strategy.sh 消费追加 C++ 旗标（注入事实落 invocation.json
+#   的 link_telemetry_injected）。
 # 已知边界：SIGKILL 不还原 trace_config 指针（不可捕获信号）；SIGINT
 #（Ctrl-C）在子进程前台期存在竞态窗口同样可能不还原——两态均以裸仓
 # 终检 clean_test_records.sh 兜底（四审-低4 补登）。
@@ -37,6 +44,44 @@ if [[ ! -x "${BIN}" ]]; then
   echo "[smoke-matrix] binary missing: ${BIN}（裸仓交付态——先按 README §4 构建）" >&2
   exit 1
 fi
+
+# 仓级共享仿真锁：必须先锁再写 evidence、物化输入、清 generated 或切换
+# trace_config。内层 .sh 与 joint_runner 通过此 FD 复用同一 flock OFD，
+# 避免嵌套自锁；只认当前 runs 锁文件的同一 inode，伪造/失效握手 fail-closed。
+SINGLE_SIMULATION_LOCK_PATH="${PROJECT}/sh_test_mesh/runs/.single_simulation.lock"
+SINGLE_SIMULATION_LOCK_FD=""
+SINGLE_SIMULATION_LOCK_OWNED=0
+acquire_single_simulation_lock() {
+  mkdir -p "${PROJECT}/sh_test_mesh/runs"
+  local inherited_fd="${SH_SINGLE_SIMULATION_LOCK_FD:-}"
+  if [[ -n "${inherited_fd}" ]]; then
+    if [[ ! "${inherited_fd}" =~ ^[0-9]+$ ]]; then
+      echo "[smoke-matrix] invalid SH_SINGLE_SIMULATION_LOCK_FD=${inherited_fd@Q}" >&2
+      return 1
+    fi
+    local fd_identity lock_identity
+    fd_identity=$(stat -Lc '%d:%i' "/proc/${BASHPID}/fd/${inherited_fd}" 2>/dev/null) || {
+      echo "[smoke-matrix] inherited simulation lock FD ${inherited_fd} is not open" >&2
+      return 1
+    }
+    lock_identity=$(stat -Lc '%d:%i' "${SINGLE_SIMULATION_LOCK_PATH}") || return 1
+    if [[ "${fd_identity}" != "${lock_identity}" ]] || ! flock -n "${inherited_fd}"; then
+      echo "[smoke-matrix] inherited simulation lock FD does not hold ${SINGLE_SIMULATION_LOCK_PATH}" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_FD="${inherited_fd}"
+  else
+    exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
+    if ! flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+      exec {SINGLE_SIMULATION_LOCK_FD}>&-
+      echo "[smoke-matrix] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to mutate run inputs" >&2
+      return 1
+    fi
+    SINGLE_SIMULATION_LOCK_OWNED=1
+  fi
+  export SH_SINGLE_SIMULATION_LOCK_FD="${SINGLE_SIMULATION_LOCK_FD}"
+}
+acquire_single_simulation_lock
 
 mkdir -p "${EVIDENCE_ROOT}"
 # 物化到固定路径：request_queue_csv 路径进 trace-config digest，换路径
@@ -87,7 +132,21 @@ PYEOF
 # 登记边界）。
 POINTER_ORIGINAL=$(read_pointer)
 restore_pointer() { set_pointer "${POINTER_ORIGINAL}"; }
-trap restore_pointer EXIT
+finish_smoke_matrix() {
+  local exit_status=$?
+  if ! restore_pointer; then
+    echo "[smoke-matrix] failed to restore trace_config pointer" >&2
+    [[ ${exit_status} -ne 0 ]] || exit_status=1
+  fi
+  # Close the owning descriptor only after the EXIT restoration trap. Do not
+  # LOCK_UN: a surviving child inherited the same open-file description and
+  # must keep the repository protected until it exits too.
+  if [[ ${SINGLE_SIMULATION_LOCK_OWNED} -eq 1 ]]; then
+    exec {SINGLE_SIMULATION_LOCK_FD}>&-
+  fi
+  return "${exit_status}"
+}
+trap finish_smoke_matrix EXIT
 set_pointer "${REQUEST_CSV}"
 ( cd "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference" \
     && python3 plan_materializer.py ) \
@@ -118,12 +177,51 @@ run_one() {
   # run_online_strategy.sh 要求恰好一个 generated plan 目录）。
 }
 
+# run_one_runner（C19）：与 run_one 同款证据链，但经 joint_runner.py
+# （D14 推荐入口：仓内 flock/二进制 sha256/invocation.json/env 清洗）
+# 起跑——三新臂走 runner CLI 面（--quota/--scheduler）；本函数无 env
+# 前缀参数，开关证据 = <run_dir>/invocation.json 的 joint_switches +
+# quota_mode_env + link_telemetry_injected（F7 注入事实），env.txt 快照
+# 父进程继承环境备查。
+run_one_runner() {
+  local label=$1; shift
+  local run_dir="${EVIDENCE_ROOT}/${label}"
+  local runner_log="${EVIDENCE_ROOT}/${label}.runner.log"
+  rm -rf "${run_dir}" "${runner_log}"; mkdir -p "${run_dir}"
+  local rc=0
+  python3 "${SCRIPT_DIR}/joint_runner.py" "${run_dir}" "${REQUEST_CSV}" "$@" \
+    > "${runner_log}" 2>&1 || rc=$?
+  mv "${runner_log}" "${run_dir}/run.log"
+  env > "${run_dir}/env.txt" 2>&1 || true
+  echo "${rc}" > "${run_dir}/exit_code"
+  if [[ ${rc} -eq 0 ]]; then
+    echo "[smoke-matrix] ${label}: PASS"
+  else
+    echo "[smoke-matrix] ${label}: FAIL (exit ${rc})——tail run.log:"
+    tail -5 "${run_dir}/run.log" || true
+  fi
+}
+
 for combo in none T J E TJ TE JE TJE; do
   run_one "combo_${combo}" JOINT_ABLATION_COMBO="${combo}"
 done
 run_one "TJE_remote_off" JOINT_ABLATION_COMBO=TJE JOINT_REMOTE_ACTIONS=off
 run_one "TJE_shadow_verify" JOINT_ABLATION_COMBO=TJE \
   SH_ADMIT_GATE_VERIFY=1 SH_SNAPSHOT_VERIFY=1 SH_ONLINE_VALIDATE=1
+# C19 三新臂（13 配置；runner CLI 面）：
+# - TJE_quota_static：JOINT_QUOTA_MODE=static（固定预算配额门，off 臂
+#   决策序列零漂移的对称对照——本臂 port_snapshot 实测值/quota 行键）；
+# - TJE_quota_aimd：=aimd——F7 自动注入链全程生效（runner 置位
+#   SH_LINK_TELEMETRY=1 → .sh 追加 --link-telemetry + K7/P2-9 缺省置
+#   ASTRA_LINK_OBSERVER=1 → C++ 遥测差分有数据源 → AIMD 真闭环；
+#   2026-09-23 前该臂数组恒空 = 无信号空转全绿——现默认真信号路径，
+#   刻意跑 no-signal 对照须显式 ASTRA_LINK_OBSERVER=0）；
+# - TJE_face_static：--scheduler face_static（policy variant，不进八
+#   组合）+ --quota static（演示强制 quota-off：joint_config 显式覆盖
+#   为 off 并 manifest 注记 quota_forced_off——对照臂语义的实证臂）。
+run_one_runner "TJE_quota_static" --combo TJE --quota static
+run_one_runner "TJE_quota_aimd"   --combo TJE --quota aimd
+run_one_runner "TJE_face_static"  --scheduler face_static --quota static
 
 echo "[smoke-matrix] evidence root: ${EVIDENCE_ROOT}"
 echo "[smoke-matrix] summary:"

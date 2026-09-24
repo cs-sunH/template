@@ -32,11 +32,9 @@ otherwise the loop would spin forever (方案 §4 步骤 1-2 操作 5).
 
 #include <chrono>
 #include <condition_variable>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <mutex>
-#include <vector>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -52,11 +50,6 @@ enum class InputCloseReason { ExplicitClose, EndOfFile, Error };
 
 class ServiceCoordinator {
   public:
-    // Fixture-only in-memory prefix. Production observers must use the hook,
-    // which still receives every transition. Keeping a fixed prefix prevents
-    // a long-lived open-input service from retaining one entry per request.
-    static constexpr std::size_t kTransitionLogCapacity = 64;
-
     // Step 1-10: transition observer (fixture/status logging). Invoked from
     // set_state under the internal mutex; the hook MUST NOT call back into
     // the coordinator (documented contract, same as the state queries).
@@ -76,10 +69,6 @@ class ServiceCoordinator {
     void on_request_completed();
     /// An arrival alarm was queued on the EventQueue (future tick).
     void on_alarm_scheduled();
-    /// A fence is pending (step-1-5 accounting; no behavior yet).
-    void on_fence_scheduled();
-    /// A fence resolved (step-1-5 accounting; no behavior yet).
-    void on_fence_resolved();
     /// Input closed (thread-safe; may be called from the injector/bridge
     /// thread): IDLE/DRAINING transition + maybe FINISHED. Phase-7 §10.7:
     /// `reason` records HOW the input was closed (explicit close command /
@@ -135,10 +124,6 @@ class ServiceCoordinator {
     /// Raise the work signal (thread-safe; ingress enqueue / close path).
     void signal_work();
 
-    /// Bounded ordered prefix of state transitions (fixture assertion data).
-    [[nodiscard]] const std::vector<ServiceState>& transition_log() const;
-    /// Number of transitions omitted after the bounded prefix filled.
-    [[nodiscard]] uint64_t transition_log_dropped() const;
     /// Step 1-10: install the transition observer (IDLE/ACTIVE/DRAINING/
     /// FINISHED 迁移日志与时间). Overwrites any previous hook.
     void set_transition_hook(StateTransitionHook hook);
@@ -148,10 +133,6 @@ class ServiceCoordinator {
     [[nodiscard]] uint64_t completed_request_count() const;
     [[nodiscard]] uint64_t active_request_count() const;
     [[nodiscard]] uint64_t pending_alarm_count() const;
-    /// P0-2 (2026-08-31, 总文档 §4 P0-2.2): read-only accessor for the
-    /// step-1-5 pending-fence counter -- the input-open dead-end
-    /// diagnostics (main_online.cc) print it alongside pending_alarm.
-    [[nodiscard]] uint64_t pending_fence_count() const;
 
   private:
     void set_state(ServiceState next);   // under mtx_: bounded log + hook
@@ -170,9 +151,6 @@ class ServiceCoordinator {
     uint64_t completed_request_count_ = 0;
     uint64_t active_request_count_ = 0;
     uint64_t pending_alarm_count_ = 0;
-    uint64_t pending_fence_count_ = 0;
-    std::vector<ServiceState> transition_log_;
-    uint64_t transition_log_dropped_ = 0;
     StateTransitionHook transition_hook_;
 };
 

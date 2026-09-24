@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -272,13 +273,20 @@ def build_sh10_run_dir() -> Path:
                 for record in decision_log), encoding="utf-8")
 
     # -- train_ledger（含 first_step 行以覆盖跳过打印）---------------------
+    # 2026-09-04 口径修正把 load_imbalance 的 drain 源从 drains 键改为
+    # exits 键（load_imbalance.py docstring 自证，缺 exits 数组
+    # fail-closed）——夹具按"与 drains 时刻同语义迁移"补 exits 数组
+    # （形态对齐 test_golden_g1g4.py 新 schema 行）。
     (results / "train_ledger.jsonl").write_text(
         json.dumps({"tick": 1100, "instance_index": 0, "first_step": True,
-                    "train_id": "t0", "drains": []}, sort_keys=True) + "\n"
-        + json.dumps({"tick": 20_000_001_400, "instance_index": 0, "first_step": False,
-                      "train_id": "t0",
-                      "drains": ["session_A_request_0",
-                                 "session_B_request_0"]},
+                    "train_id": "t0", "drains": [], "exits": [],
+                    "joiners": []}, sort_keys=True) + "\n"
+        + json.dumps({"tick": 20_000_001_400, "instance_index": 0,
+                      "first_step": False, "train_id": "t0",
+                      "drains": [],
+                      "exits": ["session_A_request_0",
+                                "session_B_request_0"],
+                      "joiners": []},
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----
@@ -438,31 +446,33 @@ class DriverParityTests(unittest.TestCase):
 
     def _compare(self, tag: str, mutate=None, expect_rc: int = 0):
         run_dir = build_sh10_run_dir()
-        try:
-            if mutate is not None:
-                mutate(run_dir)
-            rc_old = run_old_chain_replica(run_dir)
-            self.assertEqual(rc_old, expect_rc)
-            old_out = run_dir.parent / f"{tag}_old_out"
-            _snapshot(run_dir, old_out)
-            _clear_slo_products(run_dir)
-            rc_new = run_new_chain(run_dir)
-            self.assertEqual(rc_new, expect_rc)
-            new_out = run_dir.parent / f"{tag}_new_out"
-            _snapshot(run_dir, new_out)
-            diffs = []
-            for name in sorted(set(os.listdir(old_out))
-                               | set(os.listdir(new_out))):
-                old_bytes = ((old_out / name).read_bytes()
-                             if (old_out / name).is_file() else None)
-                new_bytes = ((new_out / name).read_bytes()
-                             if (new_out / name).is_file() else None)
-                if old_bytes != new_bytes:
-                    diffs.append(name)
-            self.assertEqual(diffs, [], f"产物字节差: {diffs}")
-            return old_out, new_out
-        finally:
-            pass
+        old_out = run_dir.parent / f"{tag}_old_out"
+        new_out = run_dir.parent / f"{tag}_new_out"
+        # mkdtemp 的 run_dir 与两份对拍快照在用例结束后即清，不留 /tmp
+        # 残骸（ignore_errors 兼容断言早退时目录尚未创建的情形）。
+        self.addCleanup(shutil.rmtree, run_dir, True)
+        self.addCleanup(shutil.rmtree, old_out, True)
+        self.addCleanup(shutil.rmtree, new_out, True)
+        if mutate is not None:
+            mutate(run_dir)
+        rc_old = run_old_chain_replica(run_dir)
+        self.assertEqual(rc_old, expect_rc)
+        _snapshot(run_dir, old_out)
+        _clear_slo_products(run_dir)
+        rc_new = run_new_chain(run_dir)
+        self.assertEqual(rc_new, expect_rc)
+        _snapshot(run_dir, new_out)
+        diffs = []
+        for name in sorted(set(os.listdir(old_out))
+                           | set(os.listdir(new_out))):
+            old_bytes = ((old_out / name).read_bytes()
+                         if (old_out / name).is_file() else None)
+            new_bytes = ((new_out / name).read_bytes()
+                         if (new_out / name).is_file() else None)
+            if old_bytes != new_bytes:
+                diffs.append(name)
+        self.assertEqual(diffs, [], f"产物字节差: {diffs}")
+        return old_out, new_out
 
     def test_happy_path_byte_identical(self):
         old_out, _ = self._compare("happy")

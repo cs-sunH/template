@@ -785,35 +785,52 @@ class HopbytesTests(unittest.TestCase):
         self.assertEqual(acc["bytes_with_hops"], 100)
         self.assertEqual(acc["bytes_without_hops"], 0)
 
-    def test_wscllm_prefill_history_transfer_shards(self):
-        """问题 4b：prefill 行 history_transfer_shards[] 逐 shard 聚合
-        （100B×2 + 50B×3 = 350）；legacy 聚合字段不再叠加（防双计）；
-        无路由 shard 计 bytes_without_hops（宁缺勿造）。"""
+    def test_wscllm_evictions_enter_denominator(self):
+        """M29（2026-09-24）：逐出/回迁契约行计入 bytes_without_hops
+        （此前整类不进账，coverage 分母缺逐出字节）。新旧产物单键取用：
+        契约分段字段在场（B3+）读 history_evictions+prefill_evictions
+        （prefill 行）与 decode_evictions（decode 行）；旧产物读
+        admission_evictions+decode_target_evictions（prefill 行准入
+        快照）——B3 起双序列化，同批消费会双计。"""
         acc = {"actions_with_hops": 0, "hop_bytes_total": 0,
                "bytes_with_hops": 0, "bytes_without_hops": 0}
         per_request: dict = {}
         record = {"kind": "prefill", "request_id": "r0", "tick": 1,
                   "decision": {
-                      "history_transfer_bytes": 250,
-                      "noc_hops": 9,
-                      "history_transfer_shards": [
-                          {"relative_tp_rank": 0, "source_rank": 0,
-                           "target_rank": 5, "bytes": 100,
-                           "noc_hops": 2, "noc_path": [0, 1, 5]},
-                          {"relative_tp_rank": 1, "source_rank": 2,
-                           "target_rank": 7, "bytes": 50,
-                           "noc_path": [2, 3, 6, 7]},
-                          {"relative_tp_rank": 2, "source_rank": 4,
-                           "target_rank": 4, "bytes": 100},
-                      ]}}
+                      "history_transfers": [],
+                      "history_transfer_bytes": 250, "noc_hops": 2,
+                      "history_evictions": [
+                          {"kind": "remote_store", "total_bytes": 300}],
+                      "prefill_evictions": [
+                          {"kind": "remote_store", "total_bytes": 100}],
+                      # B3 双序列化：union 字段在场但单键取用不消费
+                      # （取 999 与分段和 400 区分，防误读 union 也过测）。
+                      "admission_evictions": [
+                          {"kind": "remote_store", "total_bytes": 999}],
+                      "decode_target_evictions": []}}
         hopbytes.collect_wscllm(record, acc, per_request)
-        # 100*2 + 50*(len-1=3) = 350；第三 shard 无路由 → bytes_without。
-        self.assertEqual(acc["hop_bytes_total"], 350)
-        self.assertEqual(acc["actions_with_hops"], 2)
-        self.assertEqual(acc["bytes_with_hops"], 150)
-        self.assertEqual(acc["bytes_without_hops"], 100)
-        self.assertEqual(per_request["r0"]["hop_bytes"], 350)
-        self.assertEqual(per_request["r0"]["bytes_without"], 100)
+        # 250×2 进分子；逐出 300+100 进分母（union 的 999 不消费不双计）。
+        self.assertEqual(acc["hop_bytes_total"], 500)
+        self.assertEqual(acc["bytes_with_hops"], 250)
+        self.assertEqual(acc["bytes_without_hops"], 400)
+        decode_record = {"kind": "decode", "request_id": "r0", "tick": 2,
+                         "decision": {
+                             "decode_evictions": [
+                                 {"kind": "remote_store",
+                                  "total_bytes": 700}]}}
+        hopbytes.collect_wscllm(decode_record, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 1100)
+        # 旧产物（history_transfers 缺席）：prefill 行准入快照口径。
+        old_record = {"kind": "prefill", "request_id": "r1", "tick": 3,
+                      "decision": {
+                          "admission_evictions": [
+                              {"kind": "remote_store", "total_bytes": 90}],
+                          "decode_target_evictions": [
+                              {"kind": "remote_store",
+                               "total_bytes": 10}]}}
+        hopbytes.collect_wscllm(old_record, acc, per_request)
+        self.assertEqual(acc["bytes_without_hops"], 1200)
+        self.assertEqual(per_request["r1"]["bytes_without"], 100)
 
 
 class CliSurfaceTests(unittest.TestCase):

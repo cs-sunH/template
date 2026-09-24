@@ -53,6 +53,11 @@ using json = nlohmann::json;
 // (sizeof unchanged); the sh_2.0 HBM pair (is_local_hbm_kv_restore bool +
 // hbm_access_mode int, B1 2026-09-06) consumed exactly that 4-byte padding,
 // so the flags moved into the new 8-byte block and sizeof grew 440 -> 448.
+// The dead-state sweep then removed the three write-only
+// OnlineStatisticsState fields (operation_intensity, is_memory_bound,
+// network_bandwidth; Workload::record_network_bandwidth survives only as
+// the fail-closed lookup guard), shrinking OnlineStatisticsState
+// 112 -> 72 and OnlineNode 448 -> 408 on the same toolchain.
 // The mirror now locks the FULL current field list (ABI-agnostic against
 // accidental field insertion/removal/reorder); the numeric assert anchors
 // the current toolchain value (GCC 15 / libstdc++ x86-64, std::vector=40).
@@ -86,7 +91,7 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodeLayoutMirror),
               "OnlineNode full-layout mirror: no field was inserted, "
               "removed, or reordered behind this test's back");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 448,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 408,
               "OnlineNode layout anchor for this toolchain (see the mirror "
               "assert above for the ABI-agnostic bound)");
 

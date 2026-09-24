@@ -19,10 +19,6 @@ DeviceId Device::get_id() const noexcept {
     return device_id;
 }
 
-int Device::get_links_count() const noexcept {
-    return static_cast<int>(links.size());
-}
-
 std::shared_ptr<const Link> Device::get_link(const DeviceId next_device_id) const noexcept {
     if (!connected(next_device_id)) {
         return nullptr;

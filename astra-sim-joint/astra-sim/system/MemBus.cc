@@ -40,7 +40,7 @@ MemBus::~MemBus() {
 }
 
 void MemBus::send_from_NPU_to_MA(MemBus::Transmition transmition,
-                                 int bytes,
+                                 uint64_t bytes,
                                  bool processed,
                                  bool send_back,
                                  Callable* callable) {
@@ -64,7 +64,7 @@ void MemBus::send_from_NPU_to_MA(MemBus::Transmition transmition,
 }
 
 void MemBus::send_from_MA_to_NPU(MemBus::Transmition transmition,
-                                 int bytes,
+                                 uint64_t bytes,
                                  bool processed,
                                  bool send_back,
                                  Callable* callable) {

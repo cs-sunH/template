@@ -9,9 +9,9 @@ main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
   - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
     rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
-    takes the mode token replay|strategy; replay serves the offline decision
-    log (LUT clock, step 1-8), strategy runs the real policy scheduler with
-    real physics (step 1-9);
+    takes the single mode token strategy (path-2 removal 2026-08-18 deleted
+    the replay token with the replay route); strategy runs the real policy
+    scheduler with real physics (step 1-9);
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;
   - runs the request-neutral main loop, draining ingress commands before
@@ -44,8 +44,9 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
          (rank, json member id) -> store id translation and the explicit
          satisfying status set;
       4. future_alarms -> RequestIngress::schedule_future_arrival (the
-         next-turn arrival alarm; replay authority = the offline prefill
-         record tick);
+         next-turn arrival alarm; arrival authority = the GraphBatch
+         response's arrival_world_ns, validated >= delta.tick by the
+         committer);
       then the per-rank issue pass (workload->issue_dep_free_nodes()),
       the REQUEST_COMPLETE ServiceCoordinator accounting (after the alarms:
       the last alarm of the batch keeps the service ACTIVE until the next
@@ -151,10 +152,8 @@ struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
     NetworkAnalytical::EventQueue* event_queue = nullptr;
     FileDecisionBridge* bridge = nullptr;
-    RequestIngress* ingress = nullptr;
     ServiceCoordinator* svc = nullptr;
     WatchRegistry* watch_registry = nullptr;
-    std::vector<Sys*>* systems = nullptr;
     // The per-rank NodeStore-backed sources are kept alive here (Sys stores
     // its own shared_ptr; this vector is the commit's access path).
     std::vector<std::shared_ptr<NodeStoreGraphSource>>* graph_sources =
@@ -164,7 +163,6 @@ struct OnlineDriverContext {
     // map, the in-flight request tracking and the phase-5 counters.
     GraphBatchCommitter* committer = nullptr;
     uint64_t delivery_seq = 0;
-    uint64_t expected_requests = 0;  // CSV data rows; run-end assertion target
     // Step 1-11: pending T->T+1 deferral record. Set by the main loop when
     // it schedules the explicit next-decision-boundary wakeup; consumed (and
     // reset) by the next ed_driver_tick_end delivery, which serializes it as
@@ -187,8 +185,8 @@ struct OnlineDriverContext {
     std::vector<int>* affected_ranks_accumulator = nullptr;
     // Phase 6 (方案 §9.1): per-run mechanism counters (C++ side; the bridge
     // round-trip/channel counters live in FileDecisionBridge::Stats and are
-    // fetched through bridge->stats() at run end). See OnlineStatsCounters.hh
-    // for the field semantics.
+    // reported through bridge.stats_report() at run end). See
+    // OnlineStatsCounters.hh for the field semantics.
     OnlineStatsCounters stats;
     // C1 validate switch (2026-08-28, --online-validate), B.2 cleanup
     // (2026-09-05): strict <0|1> enum -- 1 = validate every batch (pre-C1
@@ -756,10 +754,16 @@ static EdgeLinkSet compute_mesh_edge_links(const NetworkParser& parser) {
             break;
         }
         case TopologyBuildingBlock::Ring: {
-            // Ring (incl. the radix==2 mesh fallback): one bidirectional
-            // connect per src; no boundary concept.
+            // Ring: one bidirectional connect per src; no boundary concept.
+            // A width==2 Ring degenerates to the mesh fallback
+            // (MultiDimTopology::connect_ring_dimension), connecting only
+            // the npus/2 address-0 srcs -- npus link ids, not 2*npus.
             saw_non_mesh_dim = true;
-            next_id += 2 * static_cast<LinkId>(npus);
+            if (sizes[d] == 2) {
+                next_id += static_cast<LinkId>(npus);
+            } else {
+                next_id += 2 * static_cast<LinkId>(npus);
+            }
             break;
         }
         case TopologyBuildingBlock::FullyConnected: {
@@ -1123,9 +1127,19 @@ int main(int argc, char* argv[]) {
     // Online service: lifecycle authority + request-neutral ingress. No
     // systems[i]->workload->fire(): in online mode the graph is fed by the
     // dynamic source, not by the ETFeeder.
-    ServiceCoordinator svc;
+    // svc/ingress live on the heap behind scope-lifetime owners: the
+    // detached command-FIFO producer thread (step 1-10, below) holds
+    // references to these two objects and may still be parked inside
+    // enqueue_command()/finished() when main returns -- destroying stack
+    // objects there would be a narrow exit-time UAF. On the FIFO path the
+    // owners are released at run end (process-lifetime objects, reclaimed
+    // at exit); without a FIFO the unique_ptrs destroy them exactly at the
+    // old scope-exit point.
+    auto svc_owner = std::make_unique<ServiceCoordinator>();
     DecisionMailbox mailbox;
-    RequestIngress ingress;
+    auto ingress_owner = std::make_unique<RequestIngress>();
+    ServiceCoordinator& svc = *svc_owner;
+    RequestIngress& ingress = *ingress_owner;
     ingress.bind(event_queue.get(), &mailbox, &svc);
     // Step 1-10: --request-queue-csv is optional (request-neutral default).
     // Absent -> expected_requests = 0 and the service stays IDLE; the CSV
@@ -1325,12 +1339,9 @@ int main(int argc, char* argv[]) {
     driver_ctx.mailbox = &mailbox;
     driver_ctx.event_queue = event_queue.get();
     driver_ctx.bridge = &bridge;
-    driver_ctx.ingress = &ingress;
     driver_ctx.svc = &svc;
     driver_ctx.watch_registry = &watch_registry;
-    driver_ctx.systems = &systems;
     driver_ctx.graph_sources = &graph_sources;
-    driver_ctx.expected_requests = expected_requests;
     // Phase-3 perception feature flag (default off until phase 6; the
     // --sensing-enabled token gates the injected-unfinished summary delivery
     // only -- query/audit data, never a strategy decision input).
@@ -1540,7 +1551,7 @@ int main(int argc, char* argv[]) {
             // parking-point diagnostics for the fail-loud guard below
             // (wall-clock idle watchdog). Every counter the 形态判据
             // reasons over is printed: tick, service counters
-            // (active/pending alarm/fence), reader window state
+            // (active/pending alarm), reader window state
             // (occupancy/rows_read/data_rows/EOF), the input-close knob,
             // and the four emptiness witnesses (mailbox/deferred/commands
             // + the event queue itself, which finished() already proved).
@@ -1549,7 +1560,7 @@ int main(int argc, char* argv[]) {
             // calendar reader's machine states make that shape unreachable
             // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
             // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
-            // 12-field report itself is kept for the A3 watchdog so any
+            // 11-field report itself is kept for the A3 watchdog so any
             // silent-stall family stays attributable. window_occupancy in
             // the calendar reader counts committed-but-untriggered turn-0
             // entries.
@@ -1560,8 +1571,6 @@ int main(int argc, char* argv[]) {
                        std::to_string(svc.active_request_count()) +
                        " pending_alarm=" +
                        std::to_string(svc.pending_alarm_count()) +
-                       " pending_fence=" +
-                       std::to_string(svc.pending_fence_count()) +
                        " window_occupancy=" +
                        std::to_string(
                            windowed.current_window_occupancy()) +
@@ -1640,7 +1649,7 @@ int main(int argc, char* argv[]) {
                 // empty and the queue has nothing left -- yet svc.finished()
                 // is false, i.e. the coordinator still counts pending work
                 // (active request with no in-flight event -- e.g. a request
-                // the strategy deferred / a pending fence with no producer).
+                // the strategy deferred).
                 // No event will ever fire to deliver it and no producer will
                 // ever signal_work() (the official runs never use the
                 // command FIFO): wait_for_work() would block forever -- the
@@ -2008,6 +2017,14 @@ int main(int argc, char* argv[]) {
                   << " (every delivery must commit exactly one GraphBatch)"
                   << std::endl;
         gate_ok = false;
+    }
+    // FIFO producer lifetime (see the svc/ingress owners above): the
+    // detached reader thread may still touch the two objects -- hand the
+    // owners over to the process so the unique_ptrs' destruction at scope
+    // exit can never race the thread.
+    if (!online_cli.command_fifo.empty()) {
+        svc_owner.release();
+        ingress_owner.release();
     }
     if (!gate_ok) {
         print_total_wall_time();

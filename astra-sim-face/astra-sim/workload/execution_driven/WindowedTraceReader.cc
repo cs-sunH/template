@@ -409,9 +409,6 @@ void WindowedTraceReader::submit_from_calendar() {
         if (max_arrival_ns_ > 0 && entry.arrival_ns > max_arrival_ns_) {
             ++rejected_out_of_range_;
             entry.rejected = true;
-            if (entry.queue_index > consumed_idx_) {
-                consumed_idx_ = entry.queue_index;
-            }
             ++calendar_cursor_;
             continue;
         }
@@ -472,9 +469,6 @@ void WindowedTraceReader::notify_consumed(const int64_t queue_index) {
         std::abort();
     }
     outstanding_rows_.erase(queue_index);
-    if (queue_index > consumed_idx_) {
-        consumed_idx_ = queue_index;
-    }
 }
 
 std::vector<WindowedTraceReader::ArrivalAuditEntry>

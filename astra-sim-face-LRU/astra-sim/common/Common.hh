@@ -30,14 +30,11 @@ struct sim_request {
     uint32_t dstRank;
     uint32_t tag;
     req_type_e reqType;
-    uint64_t reqCount;
     uint32_t vnet;
-    uint32_t layerNum;
 };
 
 class MetaData {
   public:
-    timespec_t timestamp;
 };
 
 enum class ComType {
@@ -54,21 +51,6 @@ enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
 enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
 
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
-
-enum class IntraDimensionScheduling {
-    FIFO = 0,
-    RG,
-    SmallestFirst,
-    LessRemainingPhaseFirst
-};
-
-enum class InterDimensionScheduling {
-    Ascending = 0,
-    OnlineGreedy,
-    RoundRobin,
-    OfflineGreedy,
-    OfflineGreedyFlex
-};
 
 enum class InjectionPolicy {
     Infinite = 0,
@@ -108,10 +90,7 @@ enum class EventType {
     Consider_Send_Back,
     StreamInit,
     CommProcessingFinished,
-    CollectiveCommunicationFinished,
-    CompFinished,
-    MemLoadFinished,
-    MemStoreFinished
+    CollectiveCommunicationFinished
 };
 
 }  // namespace AstraSim

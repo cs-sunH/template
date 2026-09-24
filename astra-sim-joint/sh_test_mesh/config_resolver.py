@@ -336,8 +336,11 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
         raise ValueError("Remote-memory expansion requires a configured latency")
     if hardware.remote_memory_npu_selection != "mesh-boundary":
         raise ValueError("Remote-memory expansion requires mesh-boundary selection")
-    if hardware.remote_memory_logical_pool is None:
-        raise ValueError("Remote-memory expansion requires a logical pool")
+    # P11 死键清除（2026-09-23 深挖审计）：logical-pool 曾写入
+    # remote_memory.json，但 C++ 远端内存后端零读取（纯审计键——开关清单
+    # §477 行口径）——写入链连同其专属 fail-closed 守卫一并退役；canonical
+    # 硬件源字段与 ResolvedHardware.remote_memory_logical_pool 保留（源侧
+    # schema/审计用途，不经派生件透传）。
 
     boundary_ranks = []
     for row in range(hardware.mesh_rows):
@@ -348,7 +351,6 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
             }:
                 boundary_ranks.append(row * hardware.mesh_cols + column)
     remote["remote-mem-latency"] = hardware.remote_memory_latency_ns
-    remote["logical-pool"] = hardware.remote_memory_logical_pool
     remote["npu-ids"] = boundary_ranks
     return remote
 
@@ -431,7 +433,9 @@ def materialize_runtime_configs(
     system = dict(system_template)
     system["local-mem-bw"] = hardware.local_hbm_bandwidth_gbps
     system["local-mem-latency"] = hardware.local_hbm_latency_ns
-    system["local-mem-capacity-bytes"] = hardware.local_hbm_capacity_bytes
+    # P11 死键清除（2026-09-23 深挖审计）：local-mem-capacity-bytes 曾在此
+    # 写入 system.json，而 C++ 侧零读取（全仓 grep 无读者）——写入链退役；
+    # _MANAGED_SYSTEM_FIELDS 仍保留该键（模板禁写守卫，防死键回流）。
     system["remote-mem-bw"] = hardware.remote_memory_bandwidth_gbps
     if "remote-mem-latency" in remote_memory:
         system["remote-mem-latency"] = remote_memory["remote-mem-latency"]

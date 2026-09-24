@@ -458,8 +458,15 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             const std::string kind = arrival.at("kind").get<std::string>();
             if (kind == "absolute") {
                 state.arrival.kind = ArrivalSpec::Kind::ABSOLUTE;
-                state.arrival.value_ns =
-                    arrival.at("value_ns").get<Tick>();
+                // Negative manifest values would wrap when narrowed to Tick
+                // (uint64_t); validate in the signed domain first.
+                const int64_t value_ns =
+                    arrival.at("value_ns").get<int64_t>();
+                if (value_ns < 0) {
+                    fatal_metrics_error("negative arrival value_ns: " +
+                                        std::to_string(value_ns));
+                }
+                state.arrival.value_ns = static_cast<Tick>(value_ns);
             } else if (kind == "after_request") {
                 state.arrival.kind = ArrivalSpec::Kind::AFTER_REQUEST;
                 state.arrival.parent_queue_index =
@@ -508,13 +515,25 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                     "node event must be a [node_id, event_code, subject_id] "
                     "triple");
             }
-            const uint64_t node_id = triple[0].get<uint64_t>();
-            const uint8_t event_code = triple[1].get<uint8_t>();
-            const int64_t subject_id = triple[2].get<int64_t>();
-            if (event_code < 1 || event_code > 8) {
-                fatal_metrics_error("invalid node event code: " +
-                                    std::to_string(event_code));
+            // Validate in the wide int64 domain BEFORE narrowing: an event
+            // code like 256 wraps to a legal-looking uint8_t and a negative
+            // node id wraps to a huge uint64_t, so both must be rejected at
+            // full width (a wrapped code would silently attach the metric to
+            // the wrong event edge).
+            const int64_t node_id_wide = triple[0].get<int64_t>();
+            if (node_id_wide < 0) {
+                fatal_metrics_error("negative node id in node event: " +
+                                    std::to_string(node_id_wide));
             }
+            const uint64_t node_id = static_cast<uint64_t>(node_id_wide);
+            const int64_t event_code_wide = triple[1].get<int64_t>();
+            if (event_code_wide < 1 || event_code_wide > 8) {
+                fatal_metrics_error("invalid node event code: " +
+                                    std::to_string(event_code_wide));
+            }
+            const uint8_t event_code =
+                static_cast<uint8_t>(event_code_wide);
+            const int64_t subject_id = triple[2].get<int64_t>();
             NodeMetricEvent event{event_code, subject_id};
             const bool is_issue_edge =
                 (event_code ==
@@ -738,10 +757,6 @@ void MetricCollector::on_compute_issue(int rank, uint64_t num_ops,
     RankMetricState& state = this->rank_states_[rank];
     state.total_num_ops += num_ops;
     state.total_local_bytes += local_tensor_bytes;
-}
-
-void MetricCollector::on_local_hbm_restore_issue(int rank, uint64_t bytes) {
-    this->rank_states_[rank].local_hbm_restore_bytes += bytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -1071,6 +1086,8 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["total_num_ops"] = u128_to_string(rank_state.total_num_ops);
         record["total_local_bytes"] =
             u128_to_string(rank_state.total_local_bytes);
+        // face has no local HBM restore model, so this stays 0 (kept for
+        // cross-repo [METRIC] output schema stability).
         record["local_hbm_restore_bytes"] =
             rank_state.local_hbm_restore_bytes;
 
@@ -2335,26 +2352,19 @@ void MetricCollector::emit_watermark_records(
     // WP8 (CPP_SPEC §B). Instance projection: ranks are grouped by the
     // manifest requests' instance assignments (prefill ranks -> prefill
     // instance, decode ranks -> decode instance; first assignment wins,
-    // conflicts are counted, never silently resolved). Ranks no request
+    // later conflicting assignments are silently ignored). Ranks no request
     // covers map to instance -1 -- online synthetic manifests carry only
     // placeholder instance-0 rank sets, so -1 is the honest label there.
     std::map<int, int64_t> instance_by_rank;
-    uint64_t rank_instance_conflicts = 0;
     for (const auto& state : this->requests_) {
         for (const int rank : state.prefill_ranks) {
-            const auto it = instance_by_rank.find(rank);
-            if (it == instance_by_rank.end()) {
+            if (instance_by_rank.find(rank) == instance_by_rank.end()) {
                 instance_by_rank[rank] = state.prefill_instance;
-            } else if (it->second != state.prefill_instance) {
-                rank_instance_conflicts++;
             }
         }
         for (const int rank : state.decode_ranks) {
-            const auto it = instance_by_rank.find(rank);
-            if (it == instance_by_rank.end()) {
+            if (instance_by_rank.find(rank) == instance_by_rank.end()) {
                 instance_by_rank[rank] = state.decode_instance;
-            } else if (it->second != state.decode_instance) {
-                rank_instance_conflicts++;
             }
         }
     }
@@ -2544,5 +2554,4 @@ void MetricCollector::emit_watermark_records(
         }
         emit_record(record.dump());
     }
-    (void)rank_instance_conflicts;
 }

@@ -138,18 +138,86 @@ def dump_joint_kv_ledgers(scheduler, path: str) -> None:
     终态缺口现场——deep_gap 落账 = run 终止的 K6 语义）。四审-低8：
     原子写（tmp + os.replace）——满盘/SIGKILL 半截文件触发面消除。
     诊断通道尽力而为：落盘自身失败只打印栈、不得改写主路径退出语义。
+
+    合并方向 v2（2026-09-17）：merge_degrade_events 旧机制（R4 分层
+    自降级产出）已退役——台账冻结（旧侧车文件的兼容读取保留：键恒在、
+    新 run 恒空列表），产出端在 kv_manager 侧删除。属性可能随退役被
+    移除，getattr 缺省空序列防 AttributeError（deep_gap 通道不变）。
+
+    C11 rider（C13 移交）：copy_handoff_events（C13 copy 逐 chunk 四步
+    交接的事件级计量——科目 rid#handoff / rid#copy-stream，守恒式
+    H_home + H_exec = H + D_handoff 的被检对象）随本侧车一行落盘；
+    C13 交付期为 __new__ 替身/旧调用方兼容，getattr 缺省空序列。
+
+    F3（C14 §20.6-2 / C16 §22.7-1 移交义务履行）：kv_delta_journal
+    （C14 结算时刻逐请求事实——字段面 = _append_kv_delta_row 冻结口径）
+    随本侧车第四键落盘；行源 = kv_delta_journal_rows()（C14 字段集/
+    seq 链完整性 fail-closed 导出）。两文件同卡落地，无版本偏斜，
+    直接经访问器取行。
+
+    A12'（2026-09-22，§4.3 补遗）：逐键独立导出——单键失败写
+    ``<key>_export_error`` 哨兵字符串（其余键不受连坐；kv_delta_
+    journal 的 seq 断链 fail-closed 经哨兵显式落盘，消费端按最弱层
+    + 明示注记处理），不再被兜底 except 吞成"四键尽失 + 消费端误判
+    零结算"。
     """
+    # A12'：逐键生产隔离。
+    producers = (
+        ("merge_degrade_events",
+         lambda: [dict(event) for event in
+                  getattr(scheduler.kv_manager,
+                          "merge_degrade_events", ())]),
+        ("deep_gap_events",
+         lambda: [dict(event) for event in
+                  scheduler.kv_manager.deep_gap_events]),
+        ("copy_handoff_events",
+         lambda: [dict(event) for event in
+                  getattr(scheduler.kv_manager,
+                          "copy_handoff_events", ())]),
+        ("kv_delta_journal",
+         lambda: [dict(row) for row in
+                  scheduler.kv_manager.kv_delta_journal_rows()]),
+    )
+    payload: dict = {}
+    for key, produce in producers:
+        try:
+            payload[key] = produce()
+        except Exception as exc:  # noqa: BLE001 -- 单键哨兵，不阻断
+            traceback.print_exc()
+            payload[key + "_export_error"] = f"{type(exc).__name__}: {exc}"
     tmp_path = path + ".tmp"
     try:
         with open(tmp_path, "w", encoding="utf-8") as sink:
-            json.dump({
-                "merge_degrade_events": [
-                    dict(event) for event in
-                    scheduler.kv_manager.merge_degrade_events],
-                "deep_gap_events": [
-                    dict(event) for event in
-                    scheduler.kv_manager.deep_gap_events],
-            }, sink, indent=1, sort_keys=True)
+            json.dump(payload, sink, indent=1, sort_keys=True)
+        os.replace(tmp_path, path)
+    except Exception:  # noqa: BLE001 -- 诊断通道不得阻断主异常路径
+        traceback.print_exc()
+
+
+def _update_joint_manifest_telemetry(scheduler, path: str) -> None:
+    """C11 rider（C8-BLOCKED①）：遥测完备性五键回填 manifest 侧车。
+
+    run 全程才能判定的 sticky 事实（键缺席/窗口破损/覆盖终值）在
+    verify_run_end 之后经读-改-写原子更新（tmp + os.replace）落
+    joint_mechanism_manifest.json——G2 门"collective_coverage 翻转条件
+    落 manifest"的侧车半（决策日志收尾行 kind=link_telemetry_coverage
+    为另一半，C8 已交付）。诊断通道尽力而为：失败只打印栈，不改写主
+    路径退出语义。"""
+    payload = {
+        "telemetry_epoch_count": scheduler._link_telemetry_epoch_count,
+        "telemetry_sample_count": scheduler._link_telemetry_sample_count,
+        "telemetry_key_absent_seen": scheduler._telemetry_absent_seen,
+        "telemetry_window_broken": scheduler._telemetry_window_broken,
+        "collective_coverage": (
+            scheduler._joint_flows.collective_coverage),
+    }
+    tmp_path = path + ".tmp"
+    try:
+        with open(path, "r", encoding="utf-8") as source:
+            manifest = json.load(source)
+        manifest["link_telemetry"] = payload
+        with open(tmp_path, "w", encoding="utf-8") as sink:
+            json.dump(manifest, sink, indent=1, sort_keys=True)
         os.replace(tmp_path, path)
     except Exception:  # noqa: BLE001 -- 诊断通道不得阻断主异常路径
         traceback.print_exc()
@@ -240,11 +308,20 @@ def main(argv=None) -> int:
     )
     # joint 开关状态落 run 级 provenance（bridge 目录 manifest 侧车；
     # §7.1：manifest 记录每次运行的三机制开关状态及 off 替代模式）。
+    # C11 rider（C8-BLOCKED① 收口 + F7 注入事实）：
+    # - link_telemetry_injected = SH_LINK_TELEMETRY=1（joint_runner
+    #   --quota aimd 的自动注入交接变量；manifest 记录注入事实）；
+    # - 遥测完备性五键（epoch/sample 计数、键缺席/窗口破损旗标、
+    #   collective_coverage 终值）在 run 结束（verify_run_end 之后）
+    #   经 _update_joint_manifest_telemetry 回填——完备性是 run 全程
+    #   才能判定的事实（sticky 旗标），侧车读-改-写原子更新。
     joint_manifest_path = os.path.join(
         args.bridge_dir, "joint_mechanism_manifest.json")
+    _manifest_payload = scheduler.joint_config.manifest_dict()
+    _manifest_payload["link_telemetry_injected"] = (
+        os.environ.get("SH_LINK_TELEMETRY", "0") == "1")
     with open(joint_manifest_path, "w", encoding="utf-8") as sink:
-        json.dump(scheduler.joint_config.manifest_dict(), sink,
-                  indent=1, sort_keys=True)
+        json.dump(_manifest_payload, sink, indent=1, sort_keys=True)
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
     # 完整 manifest。
     del manifest
@@ -272,6 +349,9 @@ def main(argv=None) -> int:
         scheduler.verify_run_end()
     finally:
         dump_joint_kv_ledgers(scheduler, _ledgers_path)
+    # C11 rider：遥测完备性五键回填 manifest 侧车（verify 之后——
+    # sticky 事实 run 全程判定；C8-BLOCKED① 收口）。
+    _update_joint_manifest_telemetry(scheduler, joint_manifest_path)
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)——M3 起已在 build_graph_batch 逐行流式
     # 写出,此处不再结束一次性写出。

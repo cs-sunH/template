@@ -171,7 +171,7 @@ class TieredEvictionSequenceTests(unittest.TestCase):
             tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
             (360, 360),
         )
-        self.assertGreater(360 - 80, 0)
+        self.assertLess(360 - 80, 300)
         manager.assert_final_state()
 
     def test_tie_break_by_session_id(self):

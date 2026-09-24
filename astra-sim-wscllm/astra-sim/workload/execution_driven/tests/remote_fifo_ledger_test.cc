@@ -190,7 +190,6 @@ const char* kSystemJson = R"({
   "reduce-scatter-implementation": ["ring", "ring"],
   "all-to-all-implementation": ["ring", "ring"],
   "collective-optimization": "localBWAware",
-  "boost-mode": 0,
   "roofline-enabled": 0,
   "replay-only": 0,
   "track-local-mem": 0,

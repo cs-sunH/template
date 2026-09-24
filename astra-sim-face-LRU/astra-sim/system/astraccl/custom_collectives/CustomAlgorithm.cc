@@ -35,6 +35,10 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
     this->id = id;
 }
 
+CustomAlgorithm::~CustomAlgorithm() {
+    delete et_feeder;
+}
+
 int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {
     // In this custom algorithm implementation, we assume the algo ranks are
     // same as real ranks. This may change in the future.

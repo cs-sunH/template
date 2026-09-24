@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "congestion_aware/Ring.h"
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 
 using namespace NetworkAnalyticalCongestionAware;
 
@@ -14,6 +16,20 @@ Ring::Ring(const int npus_count, const Bandwidth bandwidth, const Latency latenc
     assert(npus_count > 0);
     assert(bandwidth > 0);
     assert(latency >= 0);
+
+    // A one-dimensional ring degenerates below 3 NPUs: with 1 NPU the closing
+    // connect(npus_count - 1, 0) becomes a self-loop, and with 2 NPUs the
+    // forward and closing connects request the same links twice (in release
+    // builds Device::connect silently overwrites the duplicate while
+    // directed_links keeps orphan LinkIds, polluting the link table and
+    // per-link telemetry). Fail fast instead of building a corrupt topology.
+    if (npus_count < 3) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "a one-dimensional Ring requires at least 3 NPUs (got " << npus_count
+                  << "); use another topology (e.g. Switch or FullyConnected) for 1-2 NPUs"
+                  << std::endl;
+        std::exit(-1);
+    }
 
     // connect npus in a ring
     for (auto i = 0; i < npus_count - 1; i++) {

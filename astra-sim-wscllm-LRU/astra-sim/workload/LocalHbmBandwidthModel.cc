@@ -33,8 +33,16 @@ LocalHbmBandwidthModel::LocalHbmBandwidthModel(Sys* sys, Workload* workload)
         throw std::invalid_argument("local HBM model requires Sys and Workload");
     }
     if (sys->local_mem_bw <= 0 || sys->peak_perf <= 0) {
-        throw std::invalid_argument(
-            "local HBM sharing requires positive bandwidth and peak compute");
+        // M25: this ctor sits inside the Workload/Sys construction chain,
+        // which has no try/catch -- an escaping exception kills the process
+        // via std::terminate with no diagnostics. Fail closed the same way
+        // the Sys/Workload config guards do (critical log + exit), matching
+        // the closed-form restore path's own zero-rate guard.
+        Sys::sys_panic(
+            "local HBM bandwidth sharing requires positive local-mem-bw and "
+            "peak-perf in the system configuration (local_mem_bw=" +
+            std::to_string(sys->local_mem_bw) + ", peak_perf=" +
+            std::to_string(sys->peak_perf) + ")");
     }
 }
 
@@ -57,7 +65,11 @@ bool LocalHbmBandwidthModel::complete(const Job& job) {
 
 void LocalHbmBandwidthModel::advance_to(Tick now) {
     if (now < last_update_tick) {
-        throw std::runtime_error("local HBM model time moved backwards");
+        // P17: this can fire from inside the transition callback, where
+        // Sys::call_events swallows every std::exception after one critical
+        // line and the model would silently hang with live jobs and no
+        // future transition. Fail closed with an explicit exit instead.
+        Sys::sys_panic("local HBM model time moved backwards");
     }
     const double elapsed_ns = static_cast<double>(now - last_update_tick);
     if (elapsed_ns <= 0) {
@@ -133,7 +145,11 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                 }
             }
             if (!clamped_residue) {
-                throw std::runtime_error(
+                // P17/low: the old defensive throw was swallowed by
+                // Sys::call_events (which only logs critical and keeps
+                // going), leaving active jobs with no scheduled transition
+                // -- a silent hang. Fail closed explicitly instead.
+                Sys::sys_panic(
                     "local HBM model made no progress at a transition");
             }
             continue;
@@ -220,7 +236,10 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     }
 
     if (!std::isfinite(next_ns)) {
-        throw std::runtime_error("local HBM model has no schedulable transition");
+        // P17: same swallowed-throw hazard as the other model guards -- a
+        // panic here is fail-closed, an exception would silently hang the
+        // rank with active jobs.
+        Sys::sys_panic("local HBM model has no schedulable transition");
     }
     Tick delay = static_cast<Tick>(std::ceil(next_ns));
     delay = std::max<Tick>(1, delay);
@@ -237,14 +256,21 @@ void LocalHbmBandwidthModel::issue_job(
     uint64_t num_ops,
     uint64_t tensor_size,
     WorkloadLayerHandlerData* wlhd) {
-    advance_to(Sys::boostedTick());
+    const Tick now = Sys::boostedTick();
+    advance_to(now);
     if (tensor_size == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
         // already guards this); reaching here is a wiring bug, not a data
         // property: fail closed instead of silently stalling the node.
-        throw std::runtime_error(
-            "local HBM model refused a zero-byte job");
+        Sys::sys_panic("local HBM model refused a zero-byte job");
     }
+    // M23: advance_to() can bring jobs to completion at exactly this tick
+    // (their transition event may still be sitting in this tick's queue
+    // behind the event that issued this job). Retire them NOW -- tics,
+    // batch redistribution count, and completion callbacks -- instead of
+    // letting the push below cancel that event and defer the whole
+    // retirement to the next transition point.
+    retire_completed_jobs(now);
     const bool joins_active_jobs = !jobs.empty();
     jobs.push_back(Job{
         kind,
@@ -317,6 +343,18 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
 
     const Tick now = Sys::boostedTick();
     advance_to(now);
+    retire_completed_jobs(now);
+
+    // A completion callback may immediately issue the next job (compute,
+    // restore, comm, or pool), which schedules a transition and advances
+    // the generation.  Do not invalidate that event by scheduling the same
+    // state a second time.
+    if (event_generation == generation) {
+        schedule_next_transition();
+    }
+}
+
+void LocalHbmBandwidthModel::retire_completed_jobs(Tick now) {
     std::vector<Job> completed;
     for (auto it = jobs.begin(); it != jobs.end();) {
         if (complete(*it)) {
@@ -337,22 +375,13 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     }
 
     for (const Job& job : completed) {
-        const uint64_t elapsed = now - job.start_tick;
         if (job.kind == JobKind::COMPUTE) {
+            // tics_gpu_ops is the only live busy-time counter (read by
+            // Workload::report); the HBM-transfer tics counter was
+            // write-only and was removed.
+            const uint64_t elapsed = now - job.start_tick;
             workload->hw_resource->tics_gpu_ops += elapsed;
-        } else {
-            // RESTORE / COMM_* / POOL_* jobs are HBM transfers; their
-            // elapsed time accumulates on the hbm_dma counter.
-            workload->hw_resource->tics_hbm_dma_ops += elapsed;
         }
         job.wlhd->workload->call(EventType::General, job.wlhd);
-    }
-
-    // A completion callback may immediately issue the next job (compute,
-    // restore, comm, or pool), which schedules a transition and advances
-    // the generation.  Do not invalidate that event by scheduling the same
-    // state a second time.
-    if (event_generation == generation) {
-        schedule_next_transition();
     }
 }

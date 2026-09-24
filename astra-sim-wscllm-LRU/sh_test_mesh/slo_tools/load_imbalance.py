@@ -195,7 +195,14 @@ def _interval_covered_buckets(admission_ns: int, drain_ns: int,
 
     与逐桶累加逐语句等价：admission < bucket_end(b) ⟺ b >= first；
     drain > bucket_start(b) ⟺ b < last 或（b == last 且 drain 不落桶边界）。
+
+    零长区间（admission == drain，闭开区间时间重叠为 0）恒计 0 桶：
+    下式对桶边界对齐相位会推出 hi < lo 得 0、非对齐相位得 1 桶
+    （相位不一致），按「时间重叠 >0 才计入」契约前置判零（修
+    2026-09-24；drain < admission 由调用方 skipped_bad_order 拦截）。
     """
+    if drain_ns <= admission_ns:
+        return 0
     first = (admission_ns - span_start) // bucket_ns
     last = (drain_ns - span_start) // bucket_ns
     hi = last - 1 if (drain_ns - span_start) % bucket_ns == 0 else last

@@ -363,7 +363,6 @@ def materialize_runtime_configs(
     system["local-mem-bw"] = hardware.local_hbm_bandwidth_gbps
     system["local-mem-latency"] = hardware.local_hbm_latency_ns
     system["local-mem-capacity-bytes"] = hardware.local_hbm_capacity_bytes
-    system["remote-mem-bw"] = hardware.remote_memory_bandwidth_gbps
     system["peak-perf"] = hardware.peak_perf_tflops
 
     destination = Path(output_dir)

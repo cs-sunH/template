@@ -30,6 +30,16 @@
 空（k=L 是公式边界，不保证物理内存容得下）；无预取且首层需要历史
 时 k=0 通常不能完全隐藏恢复。
 
+C15（2026-09-22，F12）：运行期**事件递推预测器**已交付
+（``joint/event_recursion_predictor.py``）——adaptive 的正式在线实
+现（face_scheduler._adaptive_retention_target_tokens 直连），同公式
+同因果边界（解析例 L=32/c=1ms/q=0/r=0.5|2|4ms → 1/17/25 两径一致）。
+预测器的剪枝下界 = 钉死的逐 rank 独享速率串行累计（§5.2 剪枝段，非
+Σ_j max_r 逐层近似）；本模块的 ``k_hide_deadline`` 保留为 §5.2 闭式
+串行公式的单机实现（零后端解析例回归与对照锚共用），在线路径不再直
+接调用。三模式身份不变（F12：不新增开关、不静默回退；legacy_half /
+minimal_layer_groups 身份不变）。
+
 在线估计（§5.4/§5.5，全部因果：只用已完成轮次的在线统计，禁止预读
 CSV/未来输出长度；改变未来输入行、未来真实输出长度及返回时间，保
 持当前可见状态相同，E 输出与估计器状态必须不变）：
@@ -336,6 +346,12 @@ class VictimView:
     retention_target_layers: int     # 本策略给出的软保留目标（0..L）
     next_request_type: Optional[str] = None
     last_completion_ns: Optional[int] = None
+    # O4（2026-09-23）：软目标惰性求解——在场时由策略按需调用（plan_
+    # release 缺口满足即停的 victim 序下，未消费 victim 不触发 k_hide
+    # 递推；急切求全量时 V×predict_k_hide 为长程墙钟主爆点）。在场时
+    # retention_target_layers 为惰性占位（恒 0），求解结果按 plan 内
+    # session 缓存。缺省 None = 旧急切口径（测试与既有构造零改）。
+    retention_target_layers_fn: Optional[Callable[[], int]] = None
 
 
 @dataclass(frozen=True)
@@ -504,11 +520,31 @@ class LayerEvictionPolicy:
             elif self.mode == LAYER_POLICY_MINIMAL:
                 target = 0
             else:
-                target = max(0, min(current, victim.retention_target_layers))
+                raw = (victim.retention_target_layers
+                       if victim.retention_target_layers_fn is None
+                       else victim.retention_target_layers_fn())
+                target = max(0, min(current, raw))
             targets[victim.session_id] = target
         return targets
 
     # ------------------------------------------------------------ 计划 --
+    def _adaptive_soft_target(
+        self,
+        victim: VictimView,
+        cache: dict[str, int],
+    ) -> int:
+        """adaptive 软目标按需求解（O4 惰性口径）：fn 在场经 thunk、缺省
+        读注入值；结果按 session 缓存于本 plan 内（两轮扫描共享）。"""
+        cached = cache.get(victim.session_id)
+        if cached is not None:
+            return cached
+        raw = (victim.retention_target_layers
+               if victim.retention_target_layers_fn is None
+               else victim.retention_target_layers_fn())
+        target = max(0, min(victim.resident_prefix_layers, raw))
+        cache[victim.session_id] = target
+        return target
+
     def plan_release(
         self,
         *,
@@ -544,7 +580,9 @@ class LayerEvictionPolicy:
                 steps=(),
                 satisfied=True,
                 gap_bytes_by_tp_rank=tuple(gap),
-                released_bytes_by_tp_rank=(),
+                # K8（2026-09-23 外部审计）：早退也回等长零向量——空
+                # 元组会被消费端 zip(gap, released) 静默截断。
+                released_bytes_by_tp_rank=tuple(0 for _ in gap),
                 diagnostics=diagnostics,
             )
 
@@ -616,12 +654,15 @@ class LayerEvictionPolicy:
             diagnostics["scan_rounds"].append("minimal_groups")
 
         else:  # adaptive：两次扫描（§5.6）
-            targets = self.retention_target(victims)
+            # O4：软目标惰性求解——按 victim 序按需计算、plan 内缓存；缺口
+            # 满足即停 ⇒ 未消费 victim 不触发 k_hide 递推（急切全量求解时
+            # V×predict_k_hide 为长程墙钟主爆点，O 批 P1-④）。
+            targets: dict[str, int] = {}
             # 第一轮：各对象的目标外后缀 k_hide+1..h（高→低，完整层组）。
             for victim in victims:
                 if _check_gap_met(gap, released):
                     break
-                soft_target = targets[victim.session_id]
+                soft_target = self._adaptive_soft_target(victim, targets)
                 _release_prefix_groups(
                     victim=victim,
                     low_bound=soft_target,
@@ -638,7 +679,7 @@ class LayerEvictionPolicy:
                 for victim in victims:
                     if _check_gap_met(gap, released):
                         break
-                    soft_target = targets[victim.session_id]
+                    soft_target = self._adaptive_soft_target(victim, targets)
                     _release_prefix_groups(
                         victim=victim,
                         low_bound=0,

@@ -243,7 +243,11 @@ def classify_differences(baseline, sensing):
       categories:  {类别: 计数}
       differences: [ {类别, seq, request_id, 说明, 证据} ]
     无差异行不产出差异条目;仅差异行进入分类。"""
-    categories = {"无差异": 0, "真实完成事件时序": 0, "排队状态差异": 0}
+    # 决策行数不一致(M31 修复)独立成类:此前折入"排队状态差异"后与
+    # docstring 契约"行数对不上 → 退出 1"矛盾(DEFECT 级别全仓零产生点,
+    # 审计器恒假绿)。归入本类的差异在 main 判定为 DEFECT。
+    categories = {"无差异": 0, "真实完成事件时序": 0, "排队状态差异": 0,
+                  "决策行数不一致": 0}
     differences = []
     bl = baseline["decision_log"]
     sn = sensing["decision_log"]
@@ -256,14 +260,14 @@ def classify_differences(baseline, sensing):
             row = bl[idx] if idx < len(bl) else sn[idx]
             request_id = row.get("request_id", "")
             differences.append({
-                "类别": "排队状态差异",
+                "类别": "决策行数不一致",
                 "seq": idx,
                 "request_id": request_id,
                 "说明": "决策行数不一致(决策序列长度不同,感知开/关决策边界数"
                         "不同):baseline={} sensing={}".format(len(bl), len(sn)),
                 "证据": json.dumps(row, sort_keys=True),
             })
-            categories["排队状态差异"] += 1
+            categories["决策行数不一致"] += 1
             continue
         baseline_row = bl[idx]
         sensing_row = sn[idx]
@@ -325,23 +329,39 @@ def main(argv=None) -> int:
     baseline = _load_run(args.baseline_run)
     sensing = _load_run(args.sensing_run)
 
-    findings = []  # (级别, 条目, 证据);级别: PASS / INFO / DIFF / DEFECT
+    findings = []  # (级别, 条目, 证据);级别: PASS / DIFF / DEFECT
 
     # ---- 1. 决策行逐行对平 ----
     categories, differences = classify_differences(baseline, sensing)
-    if differences:
+    row_mismatch = [diff for diff in differences
+                    if diff["类别"] == "决策行数不一致"]
+    if row_mismatch:
+        # 契约(docstring 退出码):行数对不上 → 退出 1。M31 修复:DEFECT
+        # 级别此前全仓零产生点,任意差异/行数不齐一律 exit 0(恒假绿)。
+        findings.append(("DEFECT", "决策行数不一致(行数对不上)",
+                         "baseline={} sensing={} 行,{} 条超界行(契约:行数"
+                         "不齐 → 退出 1)".format(
+                             len(baseline["decision_log"]),
+                             len(sensing["decision_log"]),
+                             len(row_mismatch))))
+    elif differences:
         findings.append(("DIFF", "决策行差异",
                          "{} 条(见分类清单)".format(len(differences))))
     else:
         findings.append(("PASS", "决策行逐字节一致",
                          "{} 行 = 全部无差异".format(len(baseline["decision_log"]))))
 
+    # 载体差异归类口径(M31 修复):存在已归类决策行差异时,载体差异视作
+    # 其下游表现(设计内/事件时序类,DIFF);决策行全同而载体不一致 = 无
+    # 决策级分类可解释 = 无法归类 → DEFECT(退出 1,docstring 契约)。
+    carrier_level = "DIFF" if differences else "DEFECT"
+
     # ---- 2. GraphBatch digest 逐行对平 ----
     if baseline["digests"] == sensing["digests"]:
         findings.append(("PASS", "graph_batch_digests 逐行一致",
                          "{} 行".format(len(baseline["digests"]))))
     else:
-        findings.append(("DIFF", "graph_batch_digests 不一致",
+        findings.append((carrier_level, "graph_batch_digests 不一致",
                          "baseline={} sensing={} 行".format(
                              len(baseline["digests"]), len(sensing["digests"]))))
 
@@ -355,7 +375,7 @@ def main(argv=None) -> int:
                              baseline["kv_rows"],
                              baseline["kv_digest"][:16])))
     else:
-        findings.append(("DIFF", "KV 决策载荷不一致(online_decision_log)",
+        findings.append((carrier_level, "KV 决策载荷不一致(online_decision_log)",
                          "baseline({} 行)={} sensing({} 行)={}".format(
                              baseline["kv_rows"], baseline["kv_digest"][:16],
                              sensing["kv_rows"],
@@ -366,7 +386,7 @@ def main(argv=None) -> int:
                              baseline["assignment_rows"],
                              baseline["assignment_digest"][:16])))
     else:
-        findings.append(("DIFF", "批级 assignment 摘要不一致(graph_batch_digests)",
+        findings.append((carrier_level, "批级 assignment 摘要不一致(graph_batch_digests)",
                          "baseline({} 批)={} sensing({} 批)={}".format(
                              baseline["assignment_rows"],
                              baseline["assignment_digest"][:16],
@@ -391,7 +411,7 @@ def main(argv=None) -> int:
             if baseline["completions"][request_id].get(stage) !=
             sensing["completions"][request_id].get(stage)
         ]
-        findings.append(("DIFF", "C++ 完成事实差异",
+        findings.append((carrier_level, "C++ 完成事实差异",
                          "集合差={} tick差={} 条(首个:{})".format(
                              diff_requests[:5], len(diff_ticks),
                              diff_ticks[0] if diff_ticks else "-")))
@@ -401,22 +421,22 @@ def main(argv=None) -> int:
         findings.append(("PASS", "arrivals 一致", "{} 条".format(
             len(baseline["arrivals"]))))
     else:
-        findings.append(("DIFF", "arrivals 不一致", "baseline={} sensing={}"
+        findings.append((carrier_level, "arrivals 不一致", "baseline={} sensing={}"
                          .format(len(baseline["arrivals"]),
                                  len(sensing["arrivals"]))))
     if baseline["reasons"] == sensing["reasons"]:
         findings.append(("PASS", "reasons 条数一致", "{} 条".format(
             baseline["reasons"])))
     else:
-        findings.append(("DIFF", "reasons 条数不一致", "baseline={} sensing={}"
+        findings.append((carrier_level, "reasons 条数不一致", "baseline={} sensing={}"
                          .format(baseline["reasons"], sensing["reasons"])))
     if baseline["request_digest"] == sensing["request_digest"]:
         findings.append(("PASS", "request_*.json 摘要一致(排除 "
                                  "ledger_summary 载体字段)", "sha256={}".format(
             baseline["request_digest"][:16])))
     else:
-        findings.append(("DIFF", "request_*.json 摘要不一致(排除 "
-                                 "ledger_summary)", "baseline={} sensing={}"
+        findings.append((carrier_level, "request_*.json 摘要不一致(排除 "
+                                        "ledger_summary)", "baseline={} sensing={}"
                          .format(baseline["request_digest"][:16],
                                  sensing["request_digest"][:16])))
 
@@ -425,23 +445,27 @@ def main(argv=None) -> int:
         findings.append(("PASS", "cpp.log 门计数器一致", "{}".format(
             baseline["counters"])))
     else:
-        findings.append(("DIFF", "cpp.log 门计数器不一致", "baseline={} "
-                                 "sensing={}".format(baseline["counters"],
-                                                     sensing["counters"])))
+        findings.append((carrier_level, "cpp.log 门计数器不一致", "baseline={} "
+                                        "sensing={}".format(baseline["counters"],
+                                                            sensing["counters"])))
 
     # ---- 判定 ----
+    # DEFECT 优先(M31 修复):此前 `elif not defects` 恒真(defects 全仓零
+    # 产生点)导致任意差异一律 exit 0;现在行数不齐与无法归类的载体差异
+    # 都会产出 DEFECT 级 finding 并真实走到退出码 1。
     defects = [finding for finding in findings if finding[0] == "DEFECT"]
     diffs = [finding for finding in findings if finding[0] == "DIFF"]
-    if not differences and not diffs:
+    if defects:
+        verdict = "存在无法归类的差异或行数不齐(DEFECT):{} 条".format(
+            len(defects))
+        ok = False
+    elif not diffs:
         verdict = "全部无差异:感知开/关决策序列逐字节一致,差异已全部归类并解释"
         ok = True
-    elif not defects:
+    else:
         verdict = ("差异均已归类并解释(无缺陷差异):决策差异 {} 条,其余载体"
                    "差异均为设计内/事件时序类".format(len(differences)))
         ok = True
-    else:
-        verdict = "存在无法归类的缺陷差异:{} 条".format(len(defects))
-        ok = False
 
     _render(args.report, baseline, sensing, findings, categories,
             differences, verdict, ok)
@@ -476,6 +500,9 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("| 排队状态差异 | {} | 决策输入(排队深度/KV 状态)在决策"
                  "tick 不同(本报告预期 0) |".format(
                      categories.get("排队状态差异", 0)))
+    lines.append("| 决策行数不一致 | {} | 决策序列长度不同(感知开/关决策"
+                 "边界数不同)——契约:行数对不上 → 退出 1(DEFECT) |".format(
+                     categories.get("决策行数不一致", 0)))
     lines.append("")
     lines.append("## 逐项比较")
     lines.append("")
@@ -509,6 +536,7 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("`python3 online/verify/diff_explainability.py "
                  "--baseline-run <off_run> --sensing-run <on_run> "
                  "--report <out>.md`;退出 0 = 全部差异已归类并解释;"
+                 "退出 1 = 存在无法归类的差异或行数不齐(DEFECT);"
                  "退出 2 = 数据源缺失/为空(fail-closed)。")
     lines.append("")
     report_text = "\n".join(lines)

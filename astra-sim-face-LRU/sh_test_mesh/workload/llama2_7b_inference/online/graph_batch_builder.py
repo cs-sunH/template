@@ -3,7 +3,7 @@
 
 阶段 1 最关键的对齐点:复用共享发射原语的节点结构。per-request 发射
 (generate_face_trace.py 模块级函数)由
-助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
+助手函数组成(_emit_control_trigger / _paired_transfer /
 transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
@@ -72,7 +72,7 @@ from generate_face_trace import (  # noqa: E402
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
 )
-from generate_face_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
+from generate_face_trace import NOC_MIGRATE  # noqa: E402
 from session_kv_manager import (  # noqa: E402
     KVTransfer,
     KVTransferShard,
@@ -449,9 +449,8 @@ class GraphBatchBuilder:
         self.completion_gates = {}
         # ---- B3(2026-09-06,sh :439-461):三态 KV 发射账本 ----
         # 跨请求 history location 链(face 适配:face 的 interval gates 在
-        # 下一 turn 准入时发射,pending_history 门不跨批驻留,location 链
-        # 经 deferred_session_locations 承载,见 note_request_complete)。
-        self.pending_history = {}          # request_id -> PendingHistoryGate
+        # 下一 turn 准入时发射,history 门不跨批驻留,location 链经
+        # deferred_session_locations 承载,见 note_request_complete)。
         self.pending_request_by_session = {}
         self.deferred_session_locations = {}
         # request_id -> {"seg1": {rank: node_id|None}, "seg2": {rank: node_id|None}}
@@ -1134,17 +1133,11 @@ class GraphBatchBuilder:
         else:
             raise RuntimeError("remote store did not reduce resident KV layers")
         session_id = transfer.session_id
-        pending_request_id = self.pending_request_by_session.get(session_id)
-        if pending_request_id is None:
-            self.deferred_session_locations[session_id] = location
-            return
-        gate = self.pending_history.get(pending_request_id)
-        if gate is None:
-            # face:下一 turn 准入时才构建 pending 门——落 deferred,准入时
-            # 作为 location 链初值(sh turn-0 事故同款语义)。
-            self.deferred_session_locations[session_id] = location
-            return
-        gate.location = location
+        # face:下一 turn 准入时才现场构建 pending 门(PendingHistoryGate),
+        # remote_store 的 location 一律落 deferred、准入时作为 location 链
+        # 初值(sh turn-0 事故同款语义;pending_history 账本在 face 适配下
+        # 零写入恒空,原先对它的双分支查询动作等价,已并为直写)。
+        self.deferred_session_locations[session_id] = location
 
     def emit_eviction_actions(self, request_plan: dict, transfers) -> None:
         """B3:独立逐出动作发射(face 特有路径——admission_blocked 的
@@ -1364,7 +1357,6 @@ class GraphBatchBuilder:
                 request_plan["session_id"], None)
 
         history_before = history_snapshot_from_log(request_plan)
-        request_plan["_history_before"] = history_before
         if history_before is not None and pending_gate.location not in (
                 history_before.location, "new_session") and (
                 history_before.location == "partial_hbm_remote"):

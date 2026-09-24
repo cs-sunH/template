@@ -32,6 +32,7 @@ from face_scheduler import (  # noqa: E402
 from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
     _OnlineRequestRuntime,
+    _TASK_LOAD_CACHE_CAPACITY,  # F6 销账：替身对齐 __init__ 初值
 )
 
 
@@ -61,6 +62,10 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     scheduler.hardware = hardware
     scheduler.model = model
     scheduler._decode_task_load_cache = {}
+    # 对齐 __init__ 初值（F6 销账：软门已删，替身漏设 = AttributeError）。
+    scheduler._prefill_task_cache = {}
+    scheduler._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
+    scheduler._quota_tracker = None  # off 档 __init__ 初值（F6 销账）
     # 改法D 状态（__init__ 同款初值）。N6+F3+M2（2026-09-14 kimi 复审）：
     # 重试键改为 KV 纪元 ⊕ 失败候选集（选中 ∪ applicable 实例，冻结于
     # 失败时刻）纪元的 (kv, ((inst, epoch), ...)) 形态；夹具装配两实例。

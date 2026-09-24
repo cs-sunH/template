@@ -25,6 +25,7 @@
 import os
 import sys
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 _ONLINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -347,10 +348,71 @@ class EvictionSideBranchStructureTest(unittest.TestCase):
             if node["name"].endswith("_remote_store")
             or node["name"].endswith("_edge_store")}
         self.assertEqual(len(store_nodes), 4)
-        for edge_rank, store_id, _ack_id in tails:
+        # §4.2.4（2026-09-17）：条目扩层区间 (edge_rank, store_id,
+        # ack_id, layer_start, layer_end)——逐出池写恒为后缀形 [k, L)。
+        for edge_rank, store_id, _ack_id, _ls, _le in tails:
             self.assertIn((edge_rank, store_id), store_nodes)
         self.assertEqual(
+            sorted((t[3], t[4]) for t in tails),
+            [(0, 2)] * 4)
+        self.assertEqual(
             sorted(t[0] for t in tails), [2, 2, 3, 3])
+
+    def test_admission_watch_members_follow_emitted_nodes(self):
+        """有物理节点的逐出支链返回独立尾标记成员。"""
+        result = self.builder.emit_admission_batch(_admission_plan())
+        watches = result["eviction_watches"]
+        self.assertEqual(
+            {watch["request_id"] for watch in watches},
+            {
+                f"batch_train_evict_{REQUEST_TRIG}_admission_history",
+                f"batch_train_evict_{REQUEST_TRIG}_admission_prefill",
+            },
+        )
+        for watch in watches:
+            self.assertEqual(watch["owner_request_id"], REQUEST_TRIG)
+            self.assertTrue(watch["members"])
+            self.assertEqual(set(watch["members"]), set(self.builder.builders))
+            for rank, node_id in watch["members"].items():
+                marker = next(
+                    node for node in self._nodes()
+                    if node["rank"] == rank and node["id"] == node_id)
+                self.assertIn("eviction_done_rank", marker["name"])
+
+    def test_zero_byte_remote_store_is_rejected_without_watch(self):
+        """非法零字节 shard 在 emitter 校验处 fail-closed，不能留下 watch。"""
+        positive = _remote_store_victim()
+        transfer = replace(
+            positive,
+            total_bytes=0,
+            shards=(replace(positive.shards[0], bytes=0),),
+        )
+        plan = _admission_plan()
+        plan["history_evictions"] = [transfer]
+        plan["prefill_evictions"] = []
+        with self.assertRaisesRegex(ValueError, "positive bytes"):
+            self.builder.emit_admission_batch(plan)
+        self.assertFalse(any(
+            "eviction_done_rank" in node["name"]
+            for builder in self.builder.builders.values()
+            for node in builder.nodes))
+        self.assertFalse(self.builder.pending_store_tails)
+
+    def test_remote_store_with_no_shards_creates_no_watch_or_tail(self):
+        """空 shard 列表无图节点，因此不得返回/登记空成员 watch。"""
+        transfer = replace(
+            _remote_store_victim(), total_bytes=0, shards=())
+        plan = _admission_plan()
+        plan["history_evictions"] = [transfer]
+        plan["prefill_evictions"] = []
+        result = self.builder.emit_admission_batch(plan)
+        self.assertEqual(result["eviction_watches"], [])
+        self.assertFalse(any(
+            "history_evictions" in node["name"]
+            or "eviction_done_rank" in node["name"]
+            for builder in self.builder.builders.values()
+            for node in builder.nodes))
+        self.assertFalse(self.builder.pending_store_tails)
 
     def test_no_eviction_batch_invented(self):
         """逐出节点仍随准入批发射（无独立逐出批）：同一 batch 累加器内。"""
@@ -384,7 +446,12 @@ class EvictionSideBranchStructureTest(unittest.TestCase):
         train_plan["instance_index"] = 1
         train_plan["stage"] = "decode"
         train_plan["joiners"] = [joiner]
-        self.builder.emit_iteration_train(train_plan)
+        result = self.builder.emit_iteration_train(train_plan)
+        eviction_watches = result["eviction_watches"]
+        self.assertEqual(len(eviction_watches), 1)
+        self.assertEqual(
+            eviction_watches[0]["owner_request_id"], joiner["request_id"])
+        self.assertTrue(eviction_watches[0]["members"])
         # decode 逐出支链：分支首节点祖先含 fork 节点（decode rank 的
         # 既有 frontier），不阻塞其后主链（readiness barrier/列车体）。
         for rank in DECODE_RANKS:

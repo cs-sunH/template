@@ -15,6 +15,7 @@ position -- always by the arrival calendar built by the streaming index pass
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -54,6 +55,43 @@ inline uint64_t fnv1a64_byte(uint64_t h, unsigned char b) {
     std::cerr << "[Error] (execution_driven/windowed_reader) " << what
               << std::endl;
     std::exit(EXIT_FAILURE);
+}
+
+// Strict numeric field parser for CSV rows (M10 fix). The request-queue
+// schema writes every numeric column as a non-negative integer, so a value
+// must be non-empty ASCII digits (the online FP1 frozen lexicon -- rejects
+// the " -1" / "+1" shapes strtoull would wrap around) and must parse to its
+// last character with no range overflow. Any other shape -- empty field,
+// sign, whitespace, trailing garbage such as '1000x' -- fail-closes here
+// via reader_fatal: the former raw std::stoi/stoull calls silently
+// truncated trailing garbage into the accounting or threw an uncaught
+// exception past the pump() callers (std::terminate instead of this file's
+// [Error]/exit contract). Narrower type bounds (turn_index's int domain)
+// are checked at the call site.
+uint64_t parse_u64_field(const char* field_name, const std::string& value,
+                         const std::string& session_id,
+                         const int64_t queue_index,
+                         const std::string& csv_path) {
+    bool digits_only = !value.empty();
+    for (const char c : value) {
+        if (c < '0' || c > '9') {
+            digits_only = false;
+            break;
+        }
+    }
+    if (digits_only) {
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long parsed =
+            std::strtoull(value.c_str(), &end, 10);
+        if (errno != ERANGE && end == value.c_str() + value.size()) {
+            return static_cast<uint64_t>(parsed);
+        }
+    }
+    reader_fatal(std::string("malformed CSV field ") + field_name +
+                 " (expected a non-negative integer): \"" + value +
+                 "\" (session_id=" + session_id + " data row " +
+                 std::to_string(queue_index) + " csv=" + csv_path + ")");
 }
 
 // Nearest-rank percentile (workspace convention: the ceil(rank*N)-th
@@ -194,21 +232,39 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     std::getline(row, arrival_s, ',');
     std::getline(row, interval_s, ',');
     ++data_rows_;
-
-    RequestEnvelope env;
-    env.session_id = session_id;
-    env.turn_index = std::stoi(turn_index_s);
-    env.request_id = request_id;
-    env.prefill_length = std::stoull(prefill_s);
-    env.decode_length = std::stoull(decode_s);
-    env.inter_request_interval_ns =
-        interval_s.empty() ? 0 : std::stoull(interval_s);
     // Frozen queue index (CSV data-row order, 0-based). Turn-0 carries it
     // directly in the Submit envelope. Turn>0 rows are ALL pre-registered
     // here during the index pass (O(rows), same order as the metrics side;
     // P0 fix note: this is a full pre-registration, no longer bounded by a
     // row window); schedule_future_arrival consumes the entries one-shot.
+    // Hoisted above the field parsing so strict-parse diagnostics can cite
+    // the row.
     const int64_t queue_index = static_cast<int64_t>(data_rows_) - 1;
+
+    RequestEnvelope env;
+    env.session_id = session_id;
+    const uint64_t turn_index_parsed =
+        parse_u64_field("turn_index", turn_index_s, session_id, queue_index,
+                        csv_path_);
+    if (turn_index_parsed > 2147483647ULL) {
+        reader_fatal("CSV field turn_index exceeds the int range: " +
+                     std::to_string(turn_index_parsed) + " (session_id=" +
+                     session_id + " data row " +
+                     std::to_string(queue_index) + " csv=" + csv_path_ + ")");
+    }
+    env.turn_index = static_cast<int>(turn_index_parsed);
+    env.request_id = request_id;
+    env.prefill_length =
+        parse_u64_field("prefill_length", prefill_s, session_id, queue_index,
+                        csv_path_);
+    env.decode_length =
+        parse_u64_field("decode_length", decode_s, session_id, queue_index,
+                        csv_path_);
+    env.inter_request_interval_ns =
+        interval_s.empty()
+            ? 0
+            : parse_u64_field("inter_request_interval_ns", interval_s,
+                              session_id, queue_index, csv_path_);
     env.queue_index = queue_index;
 
     const bool is_turn0 = !arrival_s.empty();
@@ -282,7 +338,9 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
         } else {
             MetricCollector::instance().online_register_request(
                 queue_index, request_id, session_id, env.turn_index,
-                /*absolute_arrival=*/true, std::stoull(arrival_s),
+                /*absolute_arrival=*/true,
+                parse_u64_field("session_arrival_time_ns", arrival_s,
+                                session_id, queue_index, csv_path_),
                 /*arrival_parent_queue_index=*/-1, 0);
         }
         last_queue_index_by_session_[session_id] = queue_index;
@@ -301,7 +359,9 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     // counted separately for the run-end accepted-accounting invariant
     // (accepted + dropped == turn-0 rows; backport fix 2026-08-16).
     ++turn0_rows_;
-    const uint64_t arrival_ns = std::stoull(arrival_s);
+    const uint64_t arrival_ns = parse_u64_field(
+        "session_arrival_time_ns", arrival_s, session_id, queue_index,
+        csv_path_);
     env.arrival_world_ns = arrival_ns;
 
     if (!have_prev_turn0_) {
@@ -409,9 +469,6 @@ void WindowedTraceReader::submit_from_calendar() {
         if (max_arrival_ns_ > 0 && entry.arrival_ns > max_arrival_ns_) {
             ++rejected_out_of_range_;
             entry.rejected = true;
-            if (entry.queue_index > consumed_idx_) {
-                consumed_idx_ = entry.queue_index;
-            }
             ++calendar_cursor_;
             continue;
         }
@@ -472,9 +529,6 @@ void WindowedTraceReader::notify_consumed(const int64_t queue_index) {
         std::abort();
     }
     outstanding_rows_.erase(queue_index);
-    if (queue_index > consumed_idx_) {
-        consumed_idx_ = queue_index;
-    }
 }
 
 std::vector<WindowedTraceReader::ArrivalAuditEntry>

@@ -403,7 +403,7 @@ void test_communicator_lifetime() {
 
 void test_online_hardware_counters_without_ids() {
     AstraSim::HardwareResource online(
-        1, 7, ExecutionMode::Online);
+        7, ExecutionMode::Online);
     expect(!online.tracks_node_ids(),
            "G: online HardwareResource disables diagnostic ID hashes");
     NodeView first;
@@ -422,7 +422,7 @@ void test_online_hardware_counters_without_ids() {
                online.gpu_ops_node.empty(),
            "G: online releases return the counter to zero");
 
-    AstraSim::HardwareResource static_resource(1, 7);
+    AstraSim::HardwareResource static_resource(7);
     expect(static_resource.tracks_node_ids(),
            "G: static HardwareResource preserves ID diagnostics");
 }

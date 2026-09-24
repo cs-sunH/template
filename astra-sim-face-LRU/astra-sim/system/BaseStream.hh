@@ -43,16 +43,11 @@ class BaseStream : public Callable, public StreamStat {
     Sys* owner;
     DataSet* dataset;
     int steps_finished;
-    int initial_data_size;
     int priority;
     StreamState state;
     bool initialized;
 
     Tick last_phase_change;
-
-    int test;
-    int test2;
-    uint64_t phase_latencies[10];
 
 };
 

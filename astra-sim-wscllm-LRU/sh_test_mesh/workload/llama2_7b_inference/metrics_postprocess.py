@@ -6,16 +6,14 @@ parsed, each holding one single-line JSON record (sec.11.1).  Records are
 grouped into runs (one run per ``init`` record occurrence per log).  When a
 run's init record carries ``manifest_path``, the referenced
 ``metrics_manifest.json`` (microbenchmark point spec) and its sibling
-``manifest.json`` (model/hardware/kv_policy labels) and
-``planner_lut_stats.json`` (doc sec.8.8 aggregates) are read as the run's
+``manifest.json`` (model/hardware/kv_policy labels) are read as the run's
 own declared provenance; all metrics themselves come from the log.
 
 Output (sec.11.2/11.3):
 
 - ``raw_metrics.csv``: one row per measured entity with an explicit ``source``
   column — ``simulator`` (service run latency/tput summary),
-  ``simulator_microbenchmark`` (per benchmark-point iteration rows),
-  ``planner_lut`` (streaming planner iteration aggregates, sec.8.8), and
+  ``simulator_microbenchmark`` (per benchmark-point iteration rows), and
   ``planner_memory_ledger`` (per-rank capacity time-average and peak rows,
   sec.7.8/7.7).
 - ``normalized_metrics.csv``: per comparison group, the two frozen methods
@@ -41,7 +39,9 @@ Failure conditions (sec.11.4, all abort with a non-zero exit):
 5. a summary whose completed/incomplete counts are not backed by the run's
    request records (an incomplete request silently counted as complete);
 6. mixed metric definition (schema) versions inside one run or one
-   comparison group.
+   comparison group;
+7. a run whose collector consistency verdict is not clean (sec.12.6 gate:
+   the ``type=consistency`` record's ``ok``/``violations``/``dropped_events``).
 """
 
 from __future__ import annotations
@@ -72,7 +72,6 @@ SUPPORTED_SCHEMA = 1
 
 SOURCE_SIMULATOR = "simulator"
 SOURCE_MICROBENCHMARK = "simulator_microbenchmark"
-SOURCE_PLANNER_LUT = "planner_lut"
 SOURCE_PLANNER_MEMORY = "planner_memory_ledger"
 
 # kv_policy label 取值集（A.5/2026-09-05：legacy 与 relevant 两个历史
@@ -168,7 +167,6 @@ class Run:
     iterations: list[dict[str, Any]] = field(default_factory=list)
     capacity_timeavg: list[dict[str, Any]] = field(default_factory=list)
     planner_peaks: list[dict[str, Any]] = field(default_factory=list)
-    planner_lut: list[dict[str, Any]] = field(default_factory=list)
     consistency: list[dict[str, Any]] = field(default_factory=list)
     schema_versions: set[int] = field(default_factory=set)
 
@@ -234,8 +232,6 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                     current.capacity_timeavg.append(record)
                 elif record_type == "planner_memory_peaks":
                     current.planner_peaks.append(record)
-                elif record_type == "planner_lut_iteration_stats":
-                    current.planner_lut.append(record)
                 elif record_type == "consistency":
                     current.consistency.append(record)
                 # memory_anchor and unknown types are tolerated but unused.
@@ -259,15 +255,14 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
     return runs
 
 
-def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-    """Return (metrics_manifest, service manifest.json, planner_lut records)."""
+def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (metrics_manifest, service manifest.json)."""
 
     metrics_manifest: dict[str, Any] = {}
     service_manifest: dict[str, Any] = {}
-    lut_records: list[dict[str, Any]] = []
     manifest_path = run.init.get("manifest_path")
     if not manifest_path:
-        return metrics_manifest, service_manifest, lut_records
+        return metrics_manifest, service_manifest
     path = Path(manifest_path)
     try:
         metrics_manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -279,19 +274,7 @@ def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], l
         )
     except (OSError, json.JSONDecodeError):
         service_manifest = {}
-    if not run.planner_lut:
-        try:
-            sidecar = json.loads(
-                (path.parent / "planner_lut_stats.json").read_text(encoding="utf-8")
-            )
-            lut_records = [
-                record
-                for record in sidecar.get("records", [])
-                if record.get("type") == "planner_lut_iteration_stats"
-            ]
-        except (OSError, json.JSONDecodeError):
-            lut_records = []
-    return metrics_manifest, service_manifest, lut_records
+    return metrics_manifest, service_manifest
 
 
 def _check_request_completion(run: Run) -> None:
@@ -316,6 +299,32 @@ def _check_request_completion(run: Run) -> None:
             f"{claimed_incomplete} but the request records show "
             f"{incomplete_records} (sec.11.4)"
         )
+
+
+def _check_consistency(runs: Sequence[Run]) -> None:
+    """sec.12.6 fail-closed gate on the collector's consistency verdict.
+
+    Every ``type=consistency`` record carries the collector's own verdict
+    (``ok`` / ``violations`` / ``dropped_events``).  A run that is not clean
+    aborts here — before raw/normalized/request_metrics are written — so a
+    violating run can never exit 0 with products (the verdict is consumed,
+    never silently dropped).  ``memory_actions_unresolved`` is deliberately
+    not a failure condition: the collector reports it for runs with
+    incomplete requests and keeps it out of ``ok``.
+    """
+
+    for run in runs:
+        for record in run.consistency:
+            violations = record.get("violations") or []
+            dropped = record.get("dropped_events") or 0
+            if record.get("ok") is not True or violations or dropped:
+                raise PostprocessError(
+                    f"run {run.run_id}: collector consistency verdict is "
+                    f"not clean (ok={record.get('ok')!r}, "
+                    f"dropped_events={dropped}): "
+                    f"violations="
+                    f"{json.dumps(violations, ensure_ascii=False)[:400]}"
+                )
 
 
 REQUEST_METRICS_COLUMNS = [
@@ -932,7 +941,7 @@ def write_request_metrics(
             f"run {run.run_id}: request records cannot be joined without "
             "the init record manifest_path (fail-closed)"
         )
-    metrics_manifest, service_manifest, _ = _load_manifest_sidecars(run)
+    metrics_manifest, service_manifest = _load_manifest_sidecars(run)
     entries, counts = _manifest_request_entries(
         run, metrics_manifest, service_manifest
     )
@@ -982,9 +991,10 @@ def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, An
     )
     kv_policy = run_config.get("kv_policy") or service_manifest.get("kv_management", {}).get("policy", "")
     if kv_policy and str(kv_policy) not in KV_POLICY_LABELS:
-        # A.5/2026-09-05：kv_policy label 枚举校验（唯一合法值
-        # session_lru_recompute）；空串=未标注仍放行（既有产物兼容），
-        # 非空未知值 fail-closed。
+        # A.5/2026-09-05：kv_policy label 枚举校验；B2/2026-09 加
+        # session_lru_tiered 后合法值为 session_lru_recompute 与
+        # session_lru_tiered 两个（与上方 KV_POLICY_LABELS 同源）；
+        # 空串=未标注仍放行（既有产物兼容），非空未知值 fail-closed。
         raise PostprocessError(
             f"kv_policy label {kv_policy!r} not in the known set "
             f"{sorted(KV_POLICY_LABELS)} (typo would silently split "
@@ -1097,27 +1107,6 @@ def _microbench_rows(
     return rows
 
 
-def _planner_lut_rows(run: Run, labels: dict[str, str], records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for record in records:
-        row = _base_row(run, labels, SOURCE_PLANNER_LUT)
-        row.update(
-            {
-                "phase": record.get("phase", ""),
-                "tp_degree": record.get("tp_degree", ""),
-                "batch": record.get("batch", ""),
-                "kv_bin": record.get("kv_bin", ""),
-                "prefill_chunk": record.get("prefill_chunk_tokens", ""),
-                "count": record.get("count", ""),
-                "sum_iteration_time_ns": record.get("sum_iteration_time_ns", ""),
-                "min_iteration_time_ns": record.get("min_iteration_time_ns", ""),
-                "max_iteration_time_ns": record.get("max_iteration_time_ns", ""),
-            }
-        )
-        rows.append(row)
-    return rows
-
-
 def _memory_ledger_rows(run: Run, labels: dict[str, str]) -> list[dict[str, Any]]:
     peaks_by_rank = {
         record.get("rank"): record for record in run.planner_peaks
@@ -1176,16 +1165,13 @@ def build_raw_rows(
     rows: list[dict[str, Any]] = []
     for run in runs:
         _check_request_completion(run)
-        metrics_manifest, service_manifest, lut_sidecar = _load_manifest_sidecars(run)
+        metrics_manifest, service_manifest = _load_manifest_sidecars(run)
         labels = _labels(run, service_manifest, run_configs.get(run.run_id, {}))
         run_mode = run.init.get("run_mode", "service")
         if run_mode == "microbenchmark":
             rows.extend(_microbench_rows(run, labels, metrics_manifest))
         else:
             rows.extend(_service_rows(run, labels))
-        rows.extend(
-            _planner_lut_rows(run, labels, run.planner_lut or lut_sidecar)
-        )
         rows.extend(_memory_ledger_rows(run, labels))
     return rows
 
@@ -1535,6 +1521,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         runs = _parse_logs(log_paths)
         if not runs:
             raise PostprocessError("no [METRIC] runs found in the input logs")
+        _check_consistency(runs)
         groups, run_configs = build_groups(runs, group_config)
         raw_rows = build_raw_rows(runs, run_configs)
         normalized_rows = build_normalized_rows(groups, args.normalization, args.baseline)

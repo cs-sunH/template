@@ -17,10 +17,6 @@ enum class CollectiveImplType {
     OneRing,
     Direct,
     OneDirect,
-    AllToAll,
-    DoubleBinaryTreeLocalAllToAll,
-    LocalRingNodeA2AGlobalDBT,
-    HierarchicalRing,
     DoubleBinaryTree,
     HalvingDoubling,
     OneHalvingDoubling,
@@ -36,6 +32,10 @@ class CollectiveImpl {
     CollectiveImpl(CollectiveImplType type) {
         this->type = type;
     };
+    // CollectivePlan deletes its implementations through this base pointer,
+    // and derived implementations (e.g. CustomCollectiveImpl) carry members
+    // (e.g. std::string filename) that need their own destructors.
+    virtual ~CollectiveImpl() = default;
 
     CollectiveImplType type;
 };

@@ -192,25 +192,6 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
     }
 }
 
-void Workload::record_network_bandwidth(uint64_t node_id,
-                                        Tick execution_time) {
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        auto& online_stat = online_statistics_state_or_fail(node_id);
-        if (execution_time > 0 && online_stat.comm_size.has_value()) {
-            online_stat.network_bandwidth =
-                static_cast<double>(online_stat.comm_size.value()) /
-                execution_time;
-        }
-        return;
-    }
-    auto& op_stat = stats->get_operator_statistics(node_id);
-    if (execution_time > 0 && op_stat.comm_size.has_value()) {
-        op_stat.network_bandwidth =
-            static_cast<double>(op_stat.comm_size.value()) / execution_time;
-    }
-}
-
 void Workload::initialize_comm_groups(string comm_group_filename) {
     // communicator group input file is not given
     if (comm_group_filename.find("empty") != std::string::npos) {
@@ -401,11 +382,7 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
 
 void Workload::issue_metadata(const ExecutionDriven::NodeView& node) {
     // TODO: someway to identify this metadata node is a pytorch pg node
-    if (true) {
-        issue_pytorch_pg_metadata(node);
-    } else {
-        throw std::runtime_error("Unknown metadata node type");
-    }
+    issue_pytorch_pg_metadata(node);
     this->skip_invalid(node);  // for proper dependancy resolving
 }
 
@@ -434,7 +411,19 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     if (node.is_cpu_op) {
         throw std::runtime_error("Roofline is only available for GPU nodes");
-        return;
+    }
+
+    // Fail-closed configuration check: roofline is enabled, but its two
+    // divisors below were never configured (Sys defaults both to 0 when the
+    // "peak-perf"/"local-mem-bw" keys are missing or non-positive).  Using
+    // them would produce NaN/Inf perf or utilization values.
+    if (sys->peak_perf <= 0.0 || sys->local_mem_bw <= 0.0) {
+        workload_logger_->critical(
+            "roofline is enabled but peak-perf/local-mem-bw are missing or "
+            "non-positive in the system configuration (peak_perf={}, "
+            "local_mem_bw={})",
+            sys->peak_perf, sys->local_mem_bw);
+        exit(EXIT_FAILURE);
     }
 
     const uint64_t node_num_ops = node.compute.num_ops;
@@ -458,9 +447,16 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                                                      node_tensor_size);
     }
 
-    double operational_intensity = num_ops / tensor_size;
-    double perf = sys->roofline->get_perf(operational_intensity);
-    double compute_elapsed_time = num_ops / perf;  // sec
+    // A zero-FLOP node has no roofline value at all; skip the divisions and
+    // keep benign zeros instead of 0/0 = NaN (perf is 0 at zero intensity).
+    double operational_intensity = 0.0;
+    double perf = 0.0;
+    double compute_elapsed_time = 0.0;  // sec
+    if (node_num_ops != 0ul) {
+        operational_intensity = num_ops / tensor_size;
+        perf = sys->roofline->get_perf(operational_intensity);
+        compute_elapsed_time = num_ops / perf;  // sec
+    }
     if (sys->local_mem_latency > 0) {
         const double compute_only_elapsed_time = num_ops / sys->peak_perf;
         const double local_mem_elapsed_time =
@@ -517,8 +513,13 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
         online_stat.operation_intensity = operational_intensity;
         online_stat.compute_utilization = perf / sys->peak_perf;
-        online_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
+        // Zero-intensity nodes have no memory utilization; leave the field
+        // unset instead of dividing by 0 (a non-finite value fails closed in
+        // the compact online aggregation).
+        if (operational_intensity != 0.0) {
+            online_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         online_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
@@ -529,8 +530,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         online_stat.compute_utilization.value(),
-                        online_stat.memory_utilization.value(), tensor_size,
-                        num_ops);
+                        online_stat.memory_utilization.value_or(0),
+                        tensor_size, num_ops);
         }
     } else {
         // Static ET and history-preserving online microbenchmarks retain the
@@ -538,8 +539,11 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         auto& op_stat = this->stats->get_operator_statistics(node.global_id);
         op_stat.operation_intensity = operational_intensity;
         op_stat.compute_utilization = perf / sys->peak_perf;
-        op_stat.memory_utilization =
-            (perf / operational_intensity) / sys->local_mem_bw;
+        // Same zero-denominator skip as the compact online branch above.
+        if (operational_intensity != 0.0) {
+            op_stat.memory_utilization =
+                (perf / operational_intensity) / sys->local_mem_bw;
+        }
         op_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
@@ -550,7 +554,8 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
                         operational_intensity, perf, elapsed_time,
                         sys->local_mem_latency,
                         op_stat.compute_utilization.value(),
-                        op_stat.memory_utilization.value(), tensor_size, num_ops);
+                        op_stat.memory_utilization.value_or(0), tensor_size,
+                        num_ops);
         }
     }
 }
@@ -876,9 +881,6 @@ void Workload::call(EventType event, CallData* data) {
             }
         }
 
-        // Calculate network bandwidth
-        record_network_bandwidth(node_id, int_data->execution_time);
-
         if (this->sys->track_local_mem) {
             this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());
         }
@@ -1016,32 +1018,6 @@ void Workload::finish_generic_node(uint64_t node_id, EventType event) {
         if (MetricCollector::instance().enabled()) {
             MetricCollector::instance().on_node_complete(
                 sys->id, node->id(), Sys::boostedTick());
-        }
-    }
-
-    // Calculate network bandwidth for point-to-point communications.  For a
-    // joined comm node this runs at the join completion (max of the network
-    // and HBM endpoint times), so the reported bandwidth already reflects
-    // the HBM contention delay -- the endpoint is part of the transfer.
-    if (event == EventType::PacketSent || event == EventType::PacketReceived) {
-        if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-            !stats->online_history_preserved()) {
-            const auto& online_stat = online_statistics_state_or_fail(node_id);
-            if (!online_stat.completed ||
-                online_stat.end_time ==
-                    ExecutionDriven::OnlineStatisticsState::kInvalidTick) {
-                workload_logger_->critical(
-                    "p2p bandwidth requested before compact online completion "
-                    "for node {}",
-                    node_id);
-                std::exit(EXIT_FAILURE);
-            }
-            record_network_bandwidth(
-                node_id, online_stat.end_time - online_stat.start_time);
-        } else {
-            const auto& op_stat = stats->get_operator_statistics(node_id);
-            record_network_bandwidth(
-                node_id, op_stat.end_time - op_stat.start_time);
         }
     }
 

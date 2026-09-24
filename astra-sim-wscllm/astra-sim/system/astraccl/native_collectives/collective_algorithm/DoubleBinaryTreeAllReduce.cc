@@ -14,7 +14,6 @@ DoubleBinaryTreeAllReduce::DoubleBinaryTreeAllReduce(int id,
                                                      BinaryTree* tree,
                                                      uint64_t data_size)
     : Algorithm() {
-    this->id = id;
     this->logical_topo = tree;
     this->data_size = data_size;
     this->state = State::Begin;
@@ -25,7 +24,6 @@ DoubleBinaryTreeAllReduce::DoubleBinaryTreeAllReduce(int id,
     this->type = tree->get_node_type(id);
     this->final_data_size = data_size;
     this->comType = ComType::All_Reduce;
-    this->name = Name::DoubleBinaryTree;
 }
 
 void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {

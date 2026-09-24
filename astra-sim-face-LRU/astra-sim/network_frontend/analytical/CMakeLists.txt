@@ -172,17 +172,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/local_hbm_model_test.cc
             ${srcs_execution_driven})
 
-    # R3 (frozen plan §3.6 / stage E) RemoteFifoLedger real-backend-port
-    # fixture (test-only): PER_NPU with out-of-order npu-ids (key label),
-    # PER_NODE 2x2 (shared-port active/pending/peak), MEMORY_POOL (single
-    # port) -- per-port counters against the backend queue's closed-form
-    # serial service ticks; never part of the baseline gates.
-    add_executable(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
-            ${srcs_congestion_aware_shared}
-            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_fifo_ledger_test.cc
-            ${srcs_execution_driven})
-
-
     # Link libraries
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_Online LINK_PRIVATE Analytical_Congestion_Aware)
@@ -210,8 +199,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmTest LINK_PRIVATE Analytical_Congestion_Aware)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest LINK_PRIVATE AstraSim)
     target_link_libraries(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest LINK_PRIVATE Analytical_Congestion_Aware)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE AstraSim)
-    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest LINK_PRIVATE Analytical_Congestion_Aware)
 
     # Include directories
     target_include_directories(AstraSim_Analytical_Congestion_Aware_Online PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
@@ -253,9 +240,6 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_LocalHbmModelTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
-    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
 
     # Properties
     # TODO: Switch to OFF after binary_function deprecation has been resolved
@@ -348,13 +332,56 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
-    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemoteFifoLedgerTest
-            PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
-    )
+    # Standalone-test fixture staging (bin/-relative runs).  The three
+    # fixtures below resolve their inputs via paths RELATIVE to the CWD
+    # (bridge_echo.py / sh_test_mesh/generated/local_hbm_fixture /
+    # sh_test_mesh/generated/completion_fixture), so they also pass when
+    # invoked bare from the binary output directory (gate style: run every
+    # bin/ executable with no arguments).  Staging is additive: the
+    # documented run-from-repo-root protocol keeps working (the generator
+    # writes into the source tree's gitignored sh_test_mesh/generated first,
+    # exactly as the manual protocol does, then the copy mirrors it under
+    # bin/).  bridge_echo.py additionally needs its sibling python modules
+    # (decision_bridge.py + bridge_request_journal.py) one directory up from
+    # verify/ -- it sys.path-inserts its parent to import them.
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        add_custom_command(TARGET AstraSim_Analytical_Congestion_Aware_BridgeLoopbackTest POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py
+                        ${CMAKE_CURRENT_BINARY_DIR}/../bin/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/workload/llama2_7b_inference/online/bridge_request_journal.py
+                        ${CMAKE_CURRENT_BINARY_DIR}/../bin/sh_test_mesh/workload/llama2_7b_inference/online/bridge_request_journal.py
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py
+                        ${CMAKE_CURRENT_BINARY_DIR}/../bin/sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py
+                COMMENT "Staging bridge_echo.py fixture under bin/"
+                VERBATIM)
+        add_custom_command(TARGET AstraSim_Analytical_Congestion_Aware_LocalHbmTest POST_BUILD
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/make_local_hbm_fixture_et.py
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                        ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/generated/local_hbm_fixture
+                        ${CMAKE_CURRENT_BINARY_DIR}/../bin/sh_test_mesh/generated/local_hbm_fixture
+                COMMENT "Generating + staging local_hbm_fixture under bin/"
+                VERBATIM)
+        # The completion fixture additionally needs the upstream
+        # runtime_config comm_group.json (generated/ is gitignored and its
+        # producer chain lives in sh_test_mesh), so stage it only when that
+        # input exists; otherwise node_store_test skips part C (see its
+        # main: a missing fixture is a SKIP, not a failure).
+        if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool/comm_group.json)
+            add_custom_command(TARGET AstraSim_Analytical_Congestion_Aware_NodeStoreTest POST_BUILD
+                    COMMAND ${Python3_EXECUTABLE}
+                            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/make_completion_fixture_et.py
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory
+                            ${CMAKE_CURRENT_SOURCE_DIR}/../../../sh_test_mesh/generated/completion_fixture
+                            ${CMAKE_CURRENT_BINARY_DIR}/../bin/sh_test_mesh/generated/completion_fixture
+                    COMMENT "Generating + staging completion_fixture under bin/"
+                    VERBATIM)
+        endif()
+    endif()
     # Statistics compaction regression: zero-retirement live GPU failures and
     # microbenchmark history preservation. Standalone and test-only.
     add_executable(AstraSim_Analytical_Congestion_Aware_StatisticsCompactionTest

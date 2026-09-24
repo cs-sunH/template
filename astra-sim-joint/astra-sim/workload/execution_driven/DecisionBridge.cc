@@ -460,6 +460,19 @@ void FileDecisionBridge::notify_python() {
     }
 }
 
+void FileDecisionBridge::set_link_telemetry_provider(
+    LinkTelemetryProvider provider) {
+    // C6 (WP2, --link-telemetry): startup-wiring contract -- the online
+    // main installs the provider before the event loop, so a replacement
+    // after deliveries began would silently change the request schema
+    // mid-run. Fail closed instead of accepting the swap.
+    if (stats_.roundtrip_count > 0) {
+        bridge_fatal("set_link_telemetry_provider after the first delivery "
+                     "(the request schema cannot change mid-run)");
+    }
+    link_telemetry_provider_ = std::move(provider);
+}
+
 GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // Phase 6 (方案 §9.1): bridge_ns -- the full blocking round trip from the
     // C++ side (write request + notify + wait for Python + read response).
@@ -467,7 +480,18 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // only counted exit is the successful return.
     const auto bridge_t0 = std::chrono::steady_clock::now();
     const uint64_t seq = delta.delivery_sequence;
-    write_file_atomic(request_path(seq), build_request_json(delta));
+    // C6 (WP2, --link-telemetry): attach the optional top-level
+    // link_telemetry[] array as a sibling of ledger_summary (additive
+    // field; the v0 snapshot reserved object is untouched). Unset provider
+    // (flag off, the fail-closed default) = the field is omitted and the
+    // serialized request bytes are identical to the pre-C6 wire format.
+    // The provider samples the fluid observer's cumulative totals exactly
+    // once per delivery epoch (1:1 backpressure above).
+    nlohmann::json request = build_request_json(delta);
+    if (link_telemetry_provider_) {
+        request["link_telemetry"] = link_telemetry_provider_(delta);
+    }
+    write_file_atomic(request_path(seq), request);
     // Defect-B fix: ensure BOTH long-lived channel ends exist (lazy for
     // fixtures that never call open_notify(); the official entry calls it at
     // startup). The req write open below retries until Python's req reader

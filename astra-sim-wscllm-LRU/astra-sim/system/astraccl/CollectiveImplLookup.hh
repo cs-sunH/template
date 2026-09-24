@@ -3,7 +3,7 @@
 
 #include <json/json.hpp>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 
 using json = nlohmann::json;
@@ -15,8 +15,7 @@ namespace AstraSim {
 // Therefore, set some enumerations to define bypassing rules.
 enum class BypassRule {
     NO_BYPASS = 0,
-    BYPASS_PERNODE_CUSTOM,  // Bypass priority 1. below. Start with looking at global custom algorithm. No current usecase.
-    BYPASS_ALL_CUSTOM, // Bypass priority 1 and 2. below. Look only at native algorithm.
+    BYPASS_ALL_CUSTOM, // Bypass priorities 1. and 2. below. Look only at native algorithm.
 };
 
 /*
@@ -34,6 +33,10 @@ enum class BypassRule {
 class CollectiveImplLookup {
     public:
         CollectiveImplLookup(int rank_);
+        // This class owns every CollectiveImpl stored in the maps below (the
+        // only other deletions happen on plan-owned copies in
+        // CollectivePlan), so free them all on teardown.
+        ~CollectiveImplLookup();
 
         void setup_collective_impl_from_config(json j);
 

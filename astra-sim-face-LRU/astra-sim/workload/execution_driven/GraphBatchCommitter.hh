@@ -308,7 +308,6 @@ class GraphBatchCommitter {
     /// runs unconditionally at the start of commit().
     std::optional<std::string> mandatory_liveness_preflight(
         const StateDelta& delta, const GraphBatch& batch) const;
-    bool was_json_id_committed(int rank, uint64_t id) const;
     void record_affine_node(int rank, uint64_t json_id, uint64_t store_id);
     void commit_after_preflight(const StateDelta& delta, const GraphBatch& batch,
                                 const std::vector<int>& touched_ranks);

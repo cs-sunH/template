@@ -77,8 +77,7 @@ Sys::SchedulerUnit::SchedulerUnit(Sys* sys,
             base++;
         }
         dimension++;
-        UsageTracker u(
-            2, sys->execution_mode_ != ExecutionDriven::ExecutionMode::Online);
+        UsageTracker u(2);
         usage.push_back(u);
     }
 }
@@ -208,12 +207,14 @@ Sys::Sys(int id,
     this->offline_greedy = nullptr;
     this->intra_dimension_scheduling = IntraDimensionScheduling::FIFO;
     this->inter_dimension_scheduling = InterDimensionScheduling::Ascending;
+    this->scheduling_policy = SchedulingPolicy::FIFO;
     this->round_robin_inter_dimension_scheduler = 0;
     this->active_chunks_per_dimension = 1;
     this->priority_counter = 0;
     this->pending_events = 0;
-    this->preferred_dataset_splits = 0;
+    this->preferred_dataset_splits = 1;
 
+    this->collectiveOptimization = CollectiveOptimization::Baseline;
     this->last_scheduled_collective = 0;
 
     this->first_phase_streams = 0;
@@ -330,6 +331,10 @@ Sys::~Sys() {
         delete offline_greedy;
     }
 
+    if (collective_impl_lookup != nullptr) {
+        delete collective_impl_lookup;
+    }
+
     bool shouldExit = true;
     for (auto& a : all_sys) {
         if (a != nullptr) {
@@ -366,6 +371,21 @@ bool Sys::initialize_sys(string name) {
             this->scheduling_policy = SchedulingPolicy::EXPLICIT;
         } else {
             sys_panic("unknown value for scheduling policy in sys input file");
+        }
+    }
+    if (j.contains("inter-dimension-scheduling")) {
+        string inp_inter_dimension_scheduling =
+            j["inter-dimension-scheduling"];
+        if (inp_inter_dimension_scheduling == "Ascending") {
+            inter_dimension_scheduling = InterDimensionScheduling::Ascending;
+        } else if (inp_inter_dimension_scheduling == "RoundRobin") {
+            inter_dimension_scheduling = InterDimensionScheduling::RoundRobin;
+        } else if (inp_inter_dimension_scheduling == "OfflineGreedy") {
+            inter_dimension_scheduling =
+                InterDimensionScheduling::OfflineGreedy;
+        } else {
+            sys_panic("unknown value for inter-dimension-scheduling in sys "
+                      "input file");
         }
     }
     if (j.contains("collective-optimization")) {
@@ -1185,7 +1205,19 @@ CollectivePhase Sys::generate_collective_phase(
 }
 
 uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
+    if (preferred_dataset_splits <= 0) {
+        // Zero/negative splits (e.g. the config key is missing or malformed)
+        // must not reach the division below; fall back to one chunk covering
+        // the whole size.
+        return size;
+    }
     uint64_t chunk_size = size / preferred_dataset_splits;
+    if (type == ComType::All_Gather && chunk_size == 0) {
+        // An All_Gather payload smaller than 'preferred-dataset-splits'
+        // divides into zero-size chunks; ceil(size/0) would then overflow
+        // the stream count. Fall back to one chunk covering the whole size.
+        return size;
+    }
     // We want the collective size to have minimum size, otherwise, there is a
     // possibility of size overflow due to further dividing it to more
     // fine-grained messages
@@ -1350,7 +1382,7 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     if (stream->steps_finished == 1) {
         first_phase_streams--;
     }
-    if (stream->steps_finished != 0) {
+    if (stream->steps_finished != 0 && stream->net_message_counter != 0) {
         stream->net_message_latency.back() /= stream->net_message_counter;
     }
     if (stream->my_current_phase.algorithm != nullptr) {
@@ -1392,11 +1424,8 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     CollectivePhase vi = stream->phases_to_go.front();
     stream->my_current_phase = vi;
     stream->phases_to_go.pop_front();
-    stream->test = 0;
-    stream->test2 = 0;
     stream->initialized = false;
     stream->last_phase_change = Sys::boostedTick();
-    stream->total_packets_sent = 0;
 
     stream->net_message_latency.push_back(0);
     stream->net_message_counter = 0;

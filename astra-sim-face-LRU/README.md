@@ -58,16 +58,16 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 
 ### D. 边缘芯粒、非边缘芯粒与片外统一内存池
 
-- **片外统一内存池（remote memory pool）**：挂在晶圆之外的远端存储，逻辑名
-  `unified-kv-cache-pool`，充当 KV 缓存的冷层。它并不与全部芯粒直连：只有位于 mesh
+- **片外统一内存池（remote memory pool）**：挂在晶圆之外的远端存储，
+  充当 KV 缓存的冷层。它并不与全部芯粒直连：只有位于 mesh
   **物理边界**（mesh 周界）上的芯粒拥有直连远端池的远端内存端口（数量随 mesh 形状自动推导），
   这些芯粒称为**边缘芯粒（edge NPU）**；其余芯粒称为**非边缘芯粒**。
 - **非边缘芯粒借道访问**：非边缘芯粒读写远端池时，数据先经 NoC（XY 路由）送到**最近**
   的边缘芯粒（曼哈顿距离最近、并列取最小 rank），由该边缘芯粒的端口代为完成远端访问，
   再经 NoC 返回。
 - **"统一"的含义**：远端池是统一逻辑地址空间——从边缘芯粒 A 写入的数据可以从另一个
-  边缘芯粒 B 读出、回到片上任意芯粒，写入端口与读出端口可以不同（manifest 字段
-  `logical_pool_shared_across_edges: true`），因此称为统一内存池。
+  边缘芯粒 B 读出、回到片上任意芯粒，写入端口与读出端口可以不同（该统一性为
+  建模语义，全仓无对应配置/manifest 键），因此称为统一内存池。
 - **端口代价模型**：每个边缘端口为严格 FIFO 事务队列，单次访问
   `耗时 = 端口时延 + 字节数 / 端口带宽`（取硬件配置 `remote-memory` 的值）；
   端口之间完全并行，远端池总容量不设限（sh 系仓实现于各自仓的
@@ -75,10 +75,9 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 - **本仓配置**：远端内存已启用（2026-09-06 改造，自 sh_2.0 同步
   `extern/remote_memory_backend/` 现版 + Sys/CLI 接线 + `config_resolver.py`
   PER_NPU 分支）：硬件配置 `sh_test_mesh/hardware/face_case5_config_c.json` 声明
-  `PER_NPU_MEMORY_EXPANSION`（512 GB/s / 100 ns / mesh-boundary /
-  unified-kv-cache-pool），resolver 物化 `remote_memory.json`（RC 目录标签
-  `edge_remote_memory_pool`），在线 runner 以 `--remote-memory-configuration`
-  传入 C++。C++ 引擎对 KV 语义保持 opaque，仅提供 MEM 节点（mem_store /
+  `PER_NPU_MEMORY_EXPANSION`（512 GB/s / 100 ns / mesh-boundary），resolver 物化
+  `remote_memory.json`（RC 目录标签 `edge_remote_memory_pool`），在线 runner 以
+  `--remote-memory-configuration` 传入 C++。C++ 引擎对 KV 语义保持 opaque，仅提供 MEM 节点（mem_store /
   mem_load / local_hbm_kv_restore）的物理计时与 HBM N-way 带宽争用计费；
   本仓策略层（`kv_cache_policy=session_lru_tiered`）实际发射远端逐出/回迁
   链路（见 §1.1 与《request实例映射与KV冷热管理策略说明.md》）。
@@ -187,8 +186,7 @@ local_hbm_restore_bytes_issued）、峰值并发作业数、均分重分配事�
 不变。数值断言级验证见
 `astra-sim/workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc`
 （本仓自研 ET 静态版：1/3 → 1/2 → 全速的均分序列、join 两序、单次触发）与
-`local_hbm_model_test.cc`（6 作业模型权威数值测试，575 行，自 sh_2.0 随迁）、
-`remote_fifo_ledger_test.cc`（远端池端口 FIFO 记账观测件，766 行）。
+`local_hbm_model_test.cc`（6 作业模型权威数值测试，575 行，自 sh_2.0 随迁）。
 
 ## 1. 本仓是什么
 
@@ -686,14 +684,12 @@ OnlineCli 在线家族解析）：
 `run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
 另有 C++ 聚焦单测（target 注册于 `astra-sim/network_frontend/analytical/CMakeLists.txt`，
 随 §2 ① 构建树编译，可执行文件落在 `build/astra_analytical/build_congestion_aware/bin/`，
-无参数直跑；2026-08-29 新增三项，多仓同构；2026-09 -LRU 改造再随迁两项）：
+无参数直跑；2026-08-29 新增两项，多仓同构；2026-09 -LRU 改造再随迁两项）：
 `..._AlarmCancellationTest`（可取消 alarm
 链路：bucket 清空时 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、
 legacy 后端回退 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot
 node bucket 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、
-sizeof 编译期锁定）、`..._RemoteFifoLedgerTest`（RemoteFifoLedger 按 backend 真实端口
-记账；自带 PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记账
-接线，账本不启用）、`..._LocalHbmTest`（本仓自研 ET 静态版 HBM 模型测试，保留）、
+sizeof 编译期锁定）、`..._LocalHbmTest`（本仓自研 ET 静态版 HBM 模型测试，保留）、
 `..._LocalHbmModelTest`（6 作业模型权威数值测试，575 行，2026-09 改造自 sh_2.0 随迁：
 RESTORE/POOL_READ/POOL_WRITE 泳道与 N-way 均分序列的逐数值断言）等。
 Python 侧 `online/test_propagating_tail.py`

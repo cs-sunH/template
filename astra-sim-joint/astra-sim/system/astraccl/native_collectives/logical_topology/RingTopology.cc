@@ -12,8 +12,7 @@ LICENSE file in the root directory of this source tree.
 using namespace std;
 using namespace AstraSim;
 
-RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::Ring) {
+RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs) {
     name = "local";
     if (dimension == Dimension::Vertical) {
         name = "vertical";
@@ -45,8 +44,7 @@ RingTopology::RingTopology(Dimension dimension,
                            int id,
                            int total_nodes_in_ring,
                            int index_in_ring,
-                           int offset)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::Ring) {
+                           int offset) {
     name = "local";
     if (dimension == Dimension::Vertical) {
         name = "vertical";
@@ -171,18 +169,4 @@ int RingTopology::get_num_of_nodes_in_dimension(int dimension) {
 
 int RingTopology::get_nodes_in_ring() {
     return total_nodes_in_ring;
-}
-
-bool RingTopology::is_enabled() {
-    assert(offset > 0);
-    int tmp_index = index_in_ring;
-    int tmp_id = id;
-    while (tmp_index > 0) {
-        tmp_index--;
-        tmp_id -= offset;
-    }
-    if (tmp_id == 0) {
-        return true;
-    }
-    return false;
 }

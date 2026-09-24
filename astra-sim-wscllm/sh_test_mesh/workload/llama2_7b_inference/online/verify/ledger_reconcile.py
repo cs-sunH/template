@@ -294,16 +294,6 @@ def load_cpp_counters(cpp_log_path):
     }
 
 
-def _seq_files(bridge_dir, prefix):
-    seqs = []
-    for name in os.listdir(bridge_dir):
-        if name.startswith(prefix) and name.endswith(".json"):
-            body = name[len(prefix):-len(".json")]
-            if body.isdigit():
-                seqs.append(int(body))
-    return sorted(seqs)
-
-
 # ---------------------------------------------------------------------------
 # 对账
 # ---------------------------------------------------------------------------

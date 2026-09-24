@@ -11,6 +11,9 @@ weight_passes 权重口径单测(拼 batch 改造,2026-08-22;不跑仿真)。
   3. 激活/KV/AllReduce 字节按成员-迭代逐 span 恒等(与 weight_passes
      无关);
   4. weight_passes 越界(> span 数 / 非正)fail-closed。
+
+运行:cd sh_test_mesh/workload/llama2_7b_inference &&
+      python3 online/test_weight_passes.py   （或 pytest 同路径）
 """
 
 import os
@@ -242,3 +245,23 @@ def test_weight_passes_validation_fail_closed():
             continue
         raise AssertionError(
             f"weight_passes={bad} must fail closed (spans=2)")
+
+
+def _run_all():
+    test_default_matches_legacy_reference_byte_exact()
+    print("[weight-passes] case 1 PASS: default weight_passes matches the "
+          "legacy byte-exact reference")
+    test_b2_b1_same_iteration_weight_bytes_equal()
+    print("[weight-passes] case 2 PASS: B=2 and B=1 share iteration weight "
+          "bytes")
+    test_activation_kv_ar_independent_of_weight_passes()
+    print("[weight-passes] case 3 PASS: activation/KV/AR bytes independent "
+          "of weight_passes")
+    test_weight_passes_validation_fail_closed()
+    print("[weight-passes] case 4 PASS: out-of-range weight_passes fails "
+          "closed")
+    print("[weight-passes] all cases PASS")
+
+
+if __name__ == "__main__":
+    _run_all()

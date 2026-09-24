@@ -114,10 +114,7 @@ struct OnlineStatisticsState {
     // collected.  Only compute/memory utilization is compacted globally.
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
-    std::optional<double> operation_intensity;
-    std::optional<bool> is_memory_bound;
     std::optional<uint64_t> comm_size;
-    std::optional<double> network_bandwidth;
 };
 
 /// The node record / read view. In static mode the ETFeederGraphSource

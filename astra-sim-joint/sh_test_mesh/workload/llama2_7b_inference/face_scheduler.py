@@ -13,7 +13,7 @@ from __future__ import annotations
 import heapq
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Sequence
 
 from joint.eviction_priority import (
@@ -25,7 +25,17 @@ from joint.layer_eviction_policy import (
     LayerEvictionPolicy,
     LayerEvictionError,
     VictimView,
-    k_hide_deadline,
+)
+from joint.event_recursion_predictor import (
+    ComputeLayerSegment,
+    EfficiencyFactors as _EfficiencyFactors,
+    EventRecursionError as _EventRecursionError,
+    LayerRecursionPredictor,
+    ResourceSnapshot as _ResourceSnapshot,
+    CommittedFlow as _CommittedFlow,
+    RestoreGroupLeg,
+    ServiceFactorGroup,
+    PREDICTOR_SOURCE_RECURSION,
 )
 
 PREFILL_CHUNK_SIZE = 512
@@ -39,9 +49,10 @@ class KVCapacityError(ValueError):
     已提交的逐出转移（D7 清账语义：调用方捕获后必须 bump 纪元并同步
     图侧 pending store，不得丢弃）。``deep_gap_records`` 携带逐 rank
     缺口记录（K6：容量类失败在 joint 下有多条可恢复捕获路径——准入
-    延迟/merge 自降级/decode 停滞——**raise 时不落 deep_gap_events
-    台账**，仅在确认不可恢复的提交点（死锁守卫/降级耗尽）经
-    ``commit_deep_gap_records`` 落账，恢复"落账 = run 终止"语义）。
+    延迟/merge 方向回退（2026-09-17 起，R4 自降级已删除）/decode 停滞
+    ——**raise 时不落 deep_gap_events 台账**，仅在确认不可恢复的提交
+    点（死锁守卫/merge v2 双侧深缺口）经 ``commit_deep_gap_records``
+    落账，恢复"落账 = run 终止"语义）。
     """
 
     def __init__(self, message: str, *, evictions: tuple = (),
@@ -1169,9 +1180,10 @@ class SessionKVSnapshot:
 
 @dataclass(frozen=True)
 class _BasePrefixView:
-    """R4 自降级路径的基础前缀只读视图（home 侧；primary session 的
-    instance/context 字段此刻描述执行端工作副本，不可直接喂
-    ``_remote_store_transfer``）。"""
+    """home 侧基础前缀只读视图（merge v2 反向腿，2026-09-17；primary
+    session 的 instance/context 字段此刻描述执行端工作副本，不可直接喂
+    ``_noc_transfer``）。字段恰好是 ``_noc_transfer`` 鸭子类型所需的
+    全部：session_id/instance_index/context_tokens/resident_prefix_layers。"""
 
     session_id: str
     instance_index: int
@@ -1215,12 +1227,285 @@ class SessionKVState:
     # merge 事务版本键（R4/N9，2026-09-14）：最近一次已结算的
     # merge_back 触发请求；同请求重复 merge 即合同类违规 fail-closed。
     last_merged_request_id: Optional[str] = None
+    # C13 copy 逐 chunk 四步交接账本（设计文档 §2.3；None = 本轮非
+    # copy 跨实例或已闭合）。轮内权威：home 侧残量的唯一事实源。
+    copy_handoff: Optional["CopyHandoffJournal"] = None
+    # C15 后缀逐组恢复区间账本（守恒科目 rid#restore；None = 本轮无
+    # 后缀池恢复）。issue 于准入相，complete 于 prefill drain/merge。
+    restore_journal: Optional["RestoreGroupJournal"] = None
 
     @property
     def working_instance_index(self) -> Optional[int]:
         if self.working_kind is None:
             return None
         return self.instance_index
+
+
+#: C13 copy 逐 chunk 交接的块层跨度目标（确定性切分：块跨度 = 8 层，
+#: n = ceil(base_prefix / 8)；base_prefix ≤ 8 时单块 = 旧单笔口径
+#: 回归锚——test_face_scheduler 的两腿/单腿结构断言依赖单块形态）。
+COPY_HANDOFF_CHUNK_LAYERS = 8
+
+#: C15 后缀逐组恢复的组层跨度目标（确定性切分，与 C13 同款规划器形
+#: 状；消费顺序 = 层自低向高）。后缀 ≤ 8 层时单组 = 旧单笔口径回归锚
+#: （transfers 数量/区间不变，仅多 restore_group 标记）。
+RESTORE_GROUP_LAYERS = 8
+
+
+def plan_suffix_restore_groups(
+    suffix_start: int, model_layers: int,
+) -> tuple[tuple[int, int], ...]:
+    """C15：后缀 [suffix_start, model_layers) 的消费顺序层组切分。
+
+    与 plan_copy_handoff_layer_chunks 同款确定性规划：组数 n =
+    ceil(后缀层数 / RESTORE_GROUP_LAYERS)，组内跨度均衡；返回
+    [(layer_start, layer_end), ...]（层自低向高 = 消费顺序）。
+    """
+    span_total = model_layers - suffix_start
+    if span_total <= 0:
+        return ()
+    group_count = -(-span_total // RESTORE_GROUP_LAYERS)
+    span = -(-span_total // group_count)
+    ranges: list[tuple[int, int]] = []
+    start = suffix_start
+    while start < model_layers:
+        end = min(start + span, model_layers)
+        ranges.append((start, end))
+        start = end
+    return tuple(ranges)
+
+
+def plan_copy_handoff_layer_chunks(
+    base_prefix_layers: int,
+) -> tuple[tuple[int, int], ...]:
+    """C13：copy 驻留前缀 [0, base_prefix) 的消费顺序层块切分。
+
+    消费顺序 = 层自 0 向上（transformer 深度序）；块数 n =
+    ceil(base_prefix / COPY_HANDOFF_CHUNK_LAYERS)，块内跨度均衡
+    （span = ceil(base_prefix / n)）。确定性、无运行期状态输入。
+    """
+    if base_prefix_layers <= 0:
+        return ()
+    chunk_count = -(-base_prefix_layers // COPY_HANDOFF_CHUNK_LAYERS)
+    span = -(-base_prefix_layers // chunk_count)
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < base_prefix_layers:
+        end = min(start + span, base_prefix_layers)
+        ranges.append((start, end))
+        start = end
+    return tuple(ranges)
+
+
+@dataclass
+class CopyHandoffChunk:
+    """单个 KV 层块的四步交接状态（PENDING → HANDED_OFF）。"""
+
+    index: int
+    layer_start: int
+    layer_end: int
+    shard_bytes: tuple[int, ...]
+    state: str = "PENDING"
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(self.shard_bytes)
+
+
+@dataclass
+class CopyHandoffJournal:
+    """C13 copy 块级交接账本（设计文档 §2.3 守恒式的被检对象）。
+
+    逐 chunk 四步协议的账本侧：准入相（prepare_prefill）落实安全前提
+    与目标空间并登记块序列；每个交接完成事件在同一事件内完成"目标侧
+    权威化 + home 侧立即释放"（不等轮末）；轮末（merge_back）断言闭
+    合。守恒式（逐 rank 线性算术精确、fail-closed）：
+
+        H_home(t) + H_exec(t) = H + D_handoff(t)
+
+    其中 H = 本次迁移的基础历史（驻留前缀）；H_home = 尚未释放的块字
+    节；H_exec = 执行端已物化的迁移历史（本仓口径：工作副本在准入相
+    即物化入执行端容量账——容量保守上界，物理到达时刻由图侧逐块门
+    控）；D_handoff = 已形成但尚未释放的重复有效载荷（该口径下 =
+    H_home：准入物化 ∧ 未释放）。事件级计量入 ``events``（科目
+    ``rid#handoff`` / ``rid#copy-stream``，与 R15 流登记 owner 串同
+    命名纪律）。
+    """
+
+    session_id: str
+    trigger_request_id: str
+    home_instance: int
+    exec_instance: int
+    base_history_tokens: int
+    chunks: tuple[CopyHandoffChunk, ...]
+    events: list[dict] = field(default_factory=list)
+    # 独立维护的守恒计数器（与 chunks 状态交叉核验，防漂移）：
+    # h_home 随释放递减；h_exec 在 launch 时置 H（准入物化口径）。
+    h_home_shards: tuple[int, ...] = ()
+    h_exec_shards: tuple[int, ...] = ()
+    released_indices: set = field(default_factory=set)
+
+    @property
+    def total_shards(self) -> tuple[int, ...]:
+        if not self.chunks:
+            return ()
+        return tuple(
+            sum(chunk.shard_bytes[rank] for chunk in self.chunks)
+            for rank in range(len(self.chunks[0].shard_bytes)))
+
+    def home_shards(self) -> tuple[int, ...]:
+        """H_home(t)：home 侧尚未释放的残量（= Σ 未释放块）。"""
+        if not self.chunks:
+            return ()
+        return tuple(
+            sum(chunk.shard_bytes[rank] for chunk in self.chunks
+                if chunk.index not in self.released_indices)
+            for rank in range(len(self.chunks[0].shard_bytes)))
+
+    def released_shards(self) -> tuple[int, ...]:
+        if not self.chunks:
+            return ()
+        return tuple(
+            sum(chunk.shard_bytes[rank] for chunk in self.chunks
+                if chunk.index in self.released_indices)
+            for rank in range(len(self.chunks[0].shard_bytes)))
+
+    def d_handoff_shards(self) -> tuple[int, ...]:
+        """D_handoff(t)：已物化（准入）∧ 尚未释放的重复有效载荷。"""
+        total = self.total_shards
+        released = self.released_shards()
+        return tuple(t - r for t, r in zip(total, released))
+
+    def pending_chunks(self) -> tuple[CopyHandoffChunk, ...]:
+        return tuple(chunk for chunk in self.chunks
+                     if chunk.state == "PENDING")
+
+    def next_pending_index(self) -> Optional[int]:
+        pending = self.pending_chunks()
+        return pending[0].index if pending else None
+
+    def all_settled(self) -> bool:
+        return all(chunk.state == "HANDED_OFF" for chunk in self.chunks)
+
+    def assert_conservation(self) -> None:
+        """守恒式逐 rank 精确断言 + 计数器/块状态交叉核验（fail-closed）。"""
+        total = self.total_shards
+        h_home = self.home_shards()
+        d_handoff = self.d_handoff_shards()
+        for rank, (home_bytes, exec_bytes, d_bytes, total_bytes) in enumerate(
+                zip(h_home, self.h_exec_shards, d_handoff, total)):
+            if home_bytes + exec_bytes != total_bytes + d_bytes:
+                raise RuntimeError(
+                    f"copy handoff conservation failed for session "
+                    f"{self.session_id} rank {rank}: H_home({home_bytes}) + "
+                    f"H_exec({exec_bytes}) != H({total_bytes}) + "
+                    f"D_handoff({d_bytes}) -- ledger integrity failure")
+        # 交叉核验：独立计数器与块状态推导一致（计数器漂移 = 账本破损）。
+        if h_home != self.h_home_shards:
+            raise RuntimeError(
+                f"copy handoff home-side counter drifted from chunk states "
+                f"for session {self.session_id}: "
+                f"{self.h_home_shards} != {h_home}")
+        if any(value < 0 for value in d_handoff) or any(
+                value < 0 for value in self.h_home_shards):
+            raise RuntimeError(
+                f"copy handoff released more than the migrated history for "
+                f"session {self.session_id} (double/early release)")
+
+
+@dataclass
+class RestoreGroupEntry:
+    """C15：单个后缀恢复组的区间账本条目（ISSUED → CONSUMED）。"""
+
+    index: int
+    layer_start: int
+    layer_end: int
+    shard_bytes: tuple[int, ...]
+    state: str = "ISSUED"
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(self.shard_bytes)
+
+
+@dataclass
+class RestoreGroupJournal:
+    """C15 逐组恢复区间账本（守恒科目 ``rid#restore`` issue/complete）。
+
+    准入相（prepare_prefill）按消费顺序登记后缀恢复组（issue）；各组
+    物理到达由图侧逐组就绪门控（GB ``_suffix_restore_arms``——列车体
+    按层段消费）；结算边界（prefill drain；merge 兜底）把全部已登记组
+    置 CONSUMED（complete）。守恒式（逐 rank 精确、fail-closed）：
+
+        Σ issued_bytes = Σ in_flight_bytes + Σ consumed_bytes
+
+    迟到组的消费等待如实由图依赖承载（该层段消费等待入账，运行期不补
+    救：不切读路径、不在线调参——§5.6）。
+    """
+
+    session_id: str
+    trigger_request_id: str
+    target_instance_index: int
+    suffix_start: int
+    entries: tuple[RestoreGroupEntry, ...]
+    events: list[dict] = field(default_factory=list)
+
+    def in_flight_bytes_by_rank(self) -> tuple[int, ...]:
+        pending = [e for e in self.entries if e.state == "ISSUED"]
+        if not pending:
+            return ()
+        return tuple(
+            sum(e.shard_bytes[rank] for e in pending)
+            for rank in range(len(pending[0].shard_bytes)))
+
+    def consumed_bytes_by_rank(self) -> tuple[int, ...]:
+        done = [e for e in self.entries if e.state == "CONSUMED"]
+        if not done:
+            return ()
+        return tuple(
+            sum(e.shard_bytes[rank] for e in done)
+            for rank in range(len(done[0].shard_bytes)))
+
+    def issued_bytes_by_rank(self) -> tuple[int, ...]:
+        if not self.entries:
+            return ()
+        return tuple(
+            sum(e.shard_bytes[rank] for e in self.entries)
+            for rank in range(len(self.entries[0].shard_bytes)))
+
+    def all_consumed(self) -> bool:
+        return all(e.state == "CONSUMED" for e in self.entries)
+
+    def settle(self, boundary: str) -> None:
+        """结算边界：全部已登记组置 CONSUMED（重复结算 fail-closed）。"""
+        if self.all_consumed() and self.entries:
+            raise RuntimeError(
+                f"restore group journal for {self.session_id} settled "
+                f"twice (boundary {boundary!r})")
+        for entry in self.entries:
+            if entry.state != "ISSUED":
+                raise RuntimeError(
+                    f"restore group {entry.index} of {self.session_id} has "
+                    f"illegal state {entry.state!r}")
+            entry.state = "CONSUMED"
+        self.events.append({
+            "subject": f"{self.trigger_request_id}#restore",
+            "event": "complete",
+            "boundary": boundary,
+            "groups": len(self.entries),
+            "issued_bytes": sum(self.issued_bytes_by_rank()),
+        })
+
+    def assert_conservation(self) -> None:
+        issued = self.issued_bytes_by_rank()
+        in_flight = self.in_flight_bytes_by_rank()
+        consumed = self.consumed_bytes_by_rank()
+        for rank, (i, f, c) in enumerate(zip(issued, in_flight, consumed)):
+            if i != f + c:
+                raise RuntimeError(
+                    f"restore group conservation failed for session "
+                    f"{self.session_id} rank {rank}: issued({i}) != "
+                    f"in_flight({f}) + consumed({c})")
 
 
 @dataclass(frozen=True)
@@ -1230,6 +1515,9 @@ class KVCapacityReservation:
     instance_index: int
     final_context_tokens: int
     final_shard_bytes: tuple[int, ...]
+    action: Optional[str] = None
+    suffix_history_tokens: Optional[int] = None
+    suffix_start_layer: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -1265,6 +1553,16 @@ class KVTransfer:
     layer_end: int
     resident_prefix_layers_before: int
     resident_prefix_layers_after: int
+    # C13 copy 逐 chunk 交接：本传输承载的交接块序号（0 基，消费顺序）。
+    # None = 非交接块（stay/remote-read/recompute 腿、copy 的池恢复后缀
+    # 腿等）。块 0 = 准入主链头块（readiness barrier 只等它——不设
+    # "先整份搬运后计算"串行段）；块 ≥ 1 由构图器旁挂支链流水发射。
+    handoff_chunk: Optional[int] = None
+    # C15 逐组恢复：本传输承载的后缀恢复组序号（0 基，消费顺序 = 层自
+    # 低向高）。None = 非逐组恢复腿（旧单笔口径/逐出写回/交接腿）。
+    # 构图器按组旁挂恢复支链（rank 内串行链），列车体按层段就绪门控
+    # 消费——替换"整列车等整段后缀"的保守门（GB _suffix_restore_arms）。
+    restore_group: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.kind not in {
@@ -1297,6 +1595,24 @@ class KVTransfer:
             for shard in self.shards
         ):
             raise ValueError("KV transfer shards must use the transfer layer range")
+
+
+#: C14 kv_delta_journal 行的冻结字段面（F3 序列化导出口径；构造序 =
+#: _append_kv_delta_row 的 append 序，§20.3 落字字段名不发明新口径：
+#: trigger_request_id=请求标识、direction=方向（stay|forward|reverse|
+#: in_place）、transferred_bytes=delta 字节、winner/loser/home_before/
+#: home_after/home_migration=home 迁移轨迹、两侧 retained=new_tokens
+#: 后两侧实际保留量、staging_return_bytes=F14 恒 0 披露位）。
+#: journal 为**逐请求结算行**——rank/层区间不在 C14 记账结构（copy 块层
+#: 区间在 copy_handoff_events、后缀恢复组层区间在 restore_events，各有
+#: 其科目），序列化导出不代拟逐 rank/逐层拆分。
+KV_DELTA_JOURNAL_FIELDS = (
+    "seq", "session_id", "trigger_request_id", "working_kind",
+    "direction", "zero_byte_flip", "winner_instance", "loser_instance",
+    "home_before", "home_after", "home_migration", "transferred_bytes",
+    "home_side_retained_bytes", "exec_side_retained_bytes", "new_tokens",
+    "staging_return_bytes",
+)
 
 
 class KVCacheManager:
@@ -1423,8 +1739,48 @@ class KVCacheManager:
         # 不可恢复（死锁守卫/降级耗尽提交；GREEN run 恒空，可恢复失败
         # 经 KVCapacityError.deep_gap_records 携带不入账）。
         self.deep_gap_events: list[dict[str, object]] = []
-        # R4 (2026-09-14)：merge 自降级事件台账（消融归因不隐身）。
+        # R4 (2026-09-14)：merge 自降级事件台账——**已冻结**（2026-09-17
+        # 裁定④：merge v2 上线、R4 自降级整段删除，属性仅为历史 run 侧车
+        # 兼容读取保留，恒空、不再 append）。
         self.merge_degrade_events: list[dict[str, object]] = []
+        # 合并方向 v2（2026-09-17，§4.3.2）：每次 merge_back（含 stay 早退）
+        # 结束前设置的披露快照——键 session_id/direction("stay"|"forward"|
+        # "reverse"|"in_place")/zero_byte_flip/winner_instance/loser_instance/
+        # transferred_bytes/home_flipped；供调度器完成行日志与水印重放消费。
+        self.last_merge_outcome: Optional[dict] = None
+        # C13（2026-09-22）：copy 块级交接守恒科目台账——全部会话的
+        # #handoff / #copy-stream 事件流（launch/handoff/close；与
+        # deep_gap_events 同披露纪律：GREEN run 亦保留——守恒审计输入，
+        # 非失败台账）。科目 owner 串与 R15 流登记（rid#readplan /
+        # rid#decode#j / rid#merge）同命名纪律。
+        self.copy_handoff_events: list[dict[str, object]] = []
+        # C15：后缀逐组恢复的 issue/complete 审计台账（科目 rid#restore）。
+        self.restore_events: list[dict[str, object]] = []
+        # C15：adaptive 决策披露侧车（不改 SH 的通道）——预测器来源
+        # （递推/解析）与覆盖状态逐决策落账（PROVENANCE §23）。
+        self.adaptive_decisions: list[dict[str, object]] = []
+        # C15：η/γ 在线效率估计组（§5.4 因果更新；逐扫描点重置 = 新
+        # manager 实例，同 run 持续更新）。缺可分离样本保持原估计并
+        # 标记不可观测（mark_unobservable）。
+        self.service_factors = ServiceFactorGroup()
+        # C14（2026-09-22）：kv_delta_journal——结算时刻逐请求事实侧车
+        # （披露接口声明，C14 步骤 5）：每次 merge_back 成功结算（含 stay
+        # 早退的本地提交）恰追加一行；失败结算（双侧深缺口 fail-closed）
+        # 不追加——行存在 ⇔ 结算完成，失败分类另走 deep_gap_events，两
+        # 科目互斥闭合。字段面向 C16 消费面（home 迁移轨迹 = session_id +
+        # home_before/home_after/home_migration + trigger_request_id）与
+        # 逐请求合并披露（merge_direction/zero_byte_flip/传输字节/两侧
+        # 实际保留量）。**不进 C5 冻结的 decision-log schema**（决策时刻
+        # 记录）；run 级 sidecar 序列化按 C13 (a) 同款登记归
+        # online_service 属主（C16/C19 顺带；F3 已履行——行源 =
+        # kv_delta_journal_rows，第四键落 dump_joint_kv_ledgers）。
+        # staging_return_bytes 恒 0
+        # = F14 无留存型暂存的"暂存归还 = 无操作"披露位（§15.6）。
+        self.kv_delta_journal: list[dict[str, object]] = []
+        # O5: trigger_request_id → 最新结算行索引（热路径 kv_delta_find
+        # O(1)——原 reversed() 线性扫全 run O(n²)；仅 _append_kv_delta_row
+        # 唯一写点维护，append-only 账本索引只增不改，语义=最新命中）。
+        self._kv_delta_index: dict[str, dict[str, object]] = {}
         if self._metrics_recorder is not None:
             for rank in sorted(self._rank_states):
                 self._metrics_recorder.initialize_rank(
@@ -1501,14 +1857,22 @@ class KVCacheManager:
         self,
         reservation: KVCapacityReservation,
     ) -> tuple[int, ...]:
-        local_shards = self._local_session_shards(
+        suffix_shards = self._reservation_suffix_shards(reservation)
+        local_shards = self._reservation_local_shards(
             reservation.session_id,
             reservation.instance_index,
+        )
+        reserved_final = tuple(
+            final_bytes + suffix_bytes
+            for final_bytes, suffix_bytes in zip(
+                reservation.final_shard_bytes,
+                suffix_shards,
+            )
         )
         extra = tuple(
             final_bytes - local_bytes
             for final_bytes, local_bytes in zip(
-                reservation.final_shard_bytes,
+                reserved_final,
                 local_shards,
             )
         )
@@ -1518,6 +1882,103 @@ class KVCacheManager:
                 "its resident KV"
             )
         return extra
+
+    def _reservation_local_shards(
+        self,
+        session_id: str,
+        instance_index: int,
+    ) -> tuple[int, ...]:
+        session = self._sessions.get(session_id)
+        if (
+            session is not None
+            and session.instance_index == instance_index
+            and session.location != self.REMOTE_MEMORY
+            and self._working_copy_uses_shard_truth(session)
+        ):
+            # A PARTIAL remote-read working copy carries the restored history
+            # suffix in shard_bytes while context_tokens tracks input only.
+            # Count physical bytes so materialization consumes its reservation.
+            return tuple(int(value) for value in session.shard_bytes)
+        return self._local_session_shards(session_id, instance_index)
+
+    def _reservation_suffix_shards(
+        self,
+        reservation: KVCapacityReservation,
+    ) -> tuple[int, ...]:
+        if (
+            reservation.suffix_history_tokens is None
+            and reservation.suffix_start_layer is None
+        ):
+            return tuple(0 for _ in range(self.tp_degree))
+        if (
+            reservation.action != "remote-read"
+            or reservation.suffix_history_tokens is None
+            or reservation.suffix_start_layer is None
+            or reservation.suffix_history_tokens <= 0
+            or not 0 < reservation.suffix_start_layer < self.model.layers
+        ):
+            raise RuntimeError("HBM reservation has invalid suffix metadata")
+        return kv_cache_shard_bytes_for_layer_range(
+            self.model,
+            reservation.suffix_history_tokens,
+            self.tp_degree,
+            layer_start=reservation.suffix_start_layer,
+            layer_end=self.model.layers,
+        )
+
+    def _partial_remote_read_suffix(
+        self,
+        *,
+        session: Optional[SessionKVState],
+        history_tokens: int,
+        action: Optional[str],
+        target_instance_index: int,
+    ) -> tuple[tuple[int, ...], Optional[int], Optional[int]]:
+        """Return the separately reserved hot suffix for PARTIAL remote-read.
+
+        LOCAL-base remote-read keeps its input-only footprint. A PARTIAL base
+        must restore its missing suffix on a remote execution instance, so
+        capacity decisions include those exact per-rank bytes alongside the
+        input-token reservation.
+        """
+        zero = tuple(0 for _ in range(self.tp_degree))
+        if action != "remote-read" or session is None:
+            return zero, None, None
+        if session.working_kind is None:
+            base_location = session.location
+            base_instance = session.instance_index
+            suffix_start = session.resident_prefix_layers
+        else:
+            base_location = session.base_location
+            base_instance = session.home_instance
+            suffix_start = session.base_resident_prefix_layers
+        if base_location != self.PARTIAL_HBM_REMOTE:
+            return zero, None, None
+        if base_instance is None or suffix_start is None:
+            raise RuntimeError("PARTIAL remote-read base lost its home metadata")
+        if target_instance_index == base_instance:
+            return zero, None, None
+        suffix = kv_cache_shard_bytes_for_layer_range(
+            self.model,
+            history_tokens,
+            self.tp_degree,
+            layer_start=suffix_start,
+            layer_end=self.model.layers,
+        )
+        return suffix, history_tokens, suffix_start
+
+    def _reservation_capacity_bytes(
+        self,
+        *,
+        basis_shards: Sequence[int],
+        suffix_shards: Sequence[int],
+    ) -> tuple[int, ...]:
+        if len(basis_shards) != self.tp_degree or len(suffix_shards) != self.tp_degree:
+            raise RuntimeError("HBM reservation shard count does not match TP")
+        return tuple(
+            int(basis) + int(suffix)
+            for basis, suffix in zip(basis_shards, suffix_shards)
+        )
 
     def _reserved_bytes_by_tp_rank(
         self,
@@ -1611,9 +2072,11 @@ class KVCacheManager:
         """R1' 动作感知预约足迹的单源口径（feasible / reserve /
         eventually_feasible 三处共用，防口径分叉）。
 
-        * remote-read：工作副本只承载新增量（input；decode 按实际进展
-          因果增长、不预约，§3.1）——消灭 F1 幻影预约（整份 history+input
-          预约虚增占用、污染其他请求的可行性判定与 hbm_remaining 视图）；
+        * remote-read：该 token 基数只承载新增量（input；decode 按实际
+          进展因果增长、不预约，§3.1）。PARTIAL 基跨实例时，缺失历史后缀
+          另按逐 rank 字节预约，不折进 token 基数；
+        * 这样避免 F1 幻影预约（整份 history+input 预约虚增占用、污染
+          其他请求的可行性判定与 hbm_remaining 视图）；
         * 其余动作（stay/copy/recompute）：终态工作副本 = history+input
           整份（驻留前缀复用部分经 ``final − local`` 自然扣除）。
         ``action=None`` 保留基底调用面（final = history+input 全量）。
@@ -1637,7 +2100,8 @@ class KVCacheManager:
         Existing local or partially resident KV already consumes HBM on its
         resident instance, so only the missing bytes are required there.  A
         different instance must admit the complete final KV.  ``action``
-        narrows the required basis per R1'（remote-read 仅 input 增量）。
+        narrows the required basis per R1'（remote-read 的 token 基数为
+        input 增量；PARTIAL 跨实例另计后缀物化字节）。
 
         joint R1'（去钉扎，总纲 §13.1/设计方案 §1.1）：PARTIAL 驻留不再
         构成实例亲和掩码——容量只影响所需字节（final − resident），不做
@@ -1671,23 +2135,32 @@ class KVCacheManager:
                 if session.instance_index is None:
                     raise RuntimeError("resident KV session has no instance")
                 resident_instance_index = session.instance_index
-                resident_shards = kv_cache_shard_bytes_for_layer_range(
-                    self.model,
-                    history_tokens,
-                    self.tp_degree,
-                    layer_start=0,
-                    layer_end=session.resident_prefix_layers,
+                resident_shards = self._reservation_local_shards(
+                    session_id,
+                    resident_instance_index,
                 )
             elif session.location != self.REMOTE_MEMORY:
                 raise RuntimeError(f"unknown KV location: {session.location}")
 
         feasible: list[bool] = []
         for instance in self.topology.instances:
+            suffix_shards, _suffix_history_tokens, _suffix_start_layer = (
+                self._partial_remote_read_suffix(
+                    session=session,
+                    history_tokens=history_tokens,
+                    action=action,
+                    target_instance_index=instance.index,
+                )
+            )
+            required_basis = self._reservation_capacity_bytes(
+                basis_shards=basis_shards,
+                suffix_shards=suffix_shards,
+            )
             if instance.index == resident_instance_index:
                 required = tuple(
                     basis_bytes - local_bytes
                     for basis_bytes, local_bytes in zip(
-                        basis_shards,
+                        required_basis,
                         resident_shards,
                     )
                 )
@@ -1696,12 +2169,12 @@ class KVCacheManager:
                         # remote-read @ 驻留实例 = 不适用组合（适用性已
                         # 排除；本函数对全实例求值时允许到达）。驻留前缀
                         # 不参与复用，需求退化为整份 input 基数。
-                        required = basis_shards
+                        required = required_basis
                     else:
                         raise ValueError(
                             "request final KV is smaller than resident KV")
             else:
-                required = basis_shards
+                required = required_basis
             reclaimable = self._instance_reclaimable_capacity_by_tp_rank(
                 instance.index,
                 exclude_session_id=session_id,
@@ -1729,8 +2202,8 @@ class KVCacheManager:
 
         This distinguishes a temporary active-session capacity conflict from a
         request whose final KV can never fit on an otherwise empty instance.
-        R1'：动作感知口径（remote-read 仅 input 增量）+ 去 PARTIAL 钉扎
-        ——"整份放不下但 input 放得下"的会话在 remote-read 下物理可行。
+        R1'：动作感知口径（remote-read 的 input 基数 + PARTIAL 跨实例
+        后缀）+ 去 PARTIAL 钉扎。可行性按每个目标实例分别计入其物理足迹。
         """
 
         session = self._sessions.get(session_id)
@@ -1756,12 +2229,24 @@ class KVCacheManager:
 
         feasible: list[bool] = []
         for instance in self.topology.instances:
+            suffix_shards, _suffix_history_tokens, _suffix_start_layer = (
+                self._partial_remote_read_suffix(
+                    session=session,
+                    history_tokens=history_tokens,
+                    action=action,
+                    target_instance_index=instance.index,
+                )
+            )
+            required_basis = self._reservation_capacity_bytes(
+                basis_shards=final_shards,
+                suffix_shards=suffix_shards,
+            )
             feasible.append(
                 all(
                     final_bytes
                     <= self._rank_states[rank].capacity_bytes
                     - self._rank_states[rank].model_weight_bytes
-                    for rank, final_bytes in zip(instance.ranks, final_shards)
+                    for rank, final_bytes in zip(instance.ranks, required_basis)
                 )
             )
         return tuple(feasible)
@@ -1778,7 +2263,8 @@ class KVCacheManager:
         """Commit final local-KV capacity before a request enters Prefill.
 
         R1'：预约量按动作足迹（``joint_reservation_context_tokens`` 单源）
-        ——remote-read 仅 input 增量，其余动作整份；容量不足抛
+        ——remote-read 以 input 为 token 基数，PARTIAL 跨实例另预约后缀；
+        其余动作预约整份。容量不足抛
         ``KVCapacityError``（携带已提交逐出，准入事务 R2 清账）。选中
         不可行实例同样按容量类处理（重选时机由纪元门驱动，非合同违规）。
         """
@@ -1797,6 +2283,23 @@ class KVCacheManager:
             history_tokens=history_tokens,
             input_tokens=max(0, final_context_tokens - history_tokens),
         )
+        basis_shards = kv_cache_shard_bytes_for_tokens(
+            self.model,
+            basis_context,
+            self.tp_degree,
+        )
+        suffix_shards, suffix_history_tokens, suffix_start_layer = (
+            self._partial_remote_read_suffix(
+                session=session,
+                history_tokens=history_tokens,
+                action=action,
+                target_instance_index=instance_index,
+            )
+        )
+        reserved_shards = self._reservation_capacity_bytes(
+            basis_shards=basis_shards,
+            suffix_shards=suffix_shards,
+        )
         feasible = self.request_hbm_feasible_instances(
             session_id=session_id,
             final_context_tokens=final_context_tokens,
@@ -1807,15 +2310,11 @@ class KVCacheManager:
             raise KVCapacityError(
                 f"request {request_id} was reserved on an infeasible "
                 f"instance {instance_index} (action={action!r})")
-        final_shards = kv_cache_shard_bytes_for_tokens(
-            self.model,
-            basis_context,
-            self.tp_degree,
-        )
-        local_shards = self._local_session_shards(session_id, instance_index)
+        local_shards = self._reservation_local_shards(
+            session_id, instance_index)
         required = tuple(
             final_bytes - local_bytes
-            for final_bytes, local_bytes in zip(final_shards, local_shards)
+            for final_bytes, local_bytes in zip(reserved_shards, local_shards)
         )
         if any(value < 0 for value in required):
             raise ValueError("request final KV is smaller than resident KV")
@@ -1832,7 +2331,10 @@ class KVCacheManager:
             session_id=session_id,
             instance_index=instance_index,
             final_context_tokens=basis_context,
-            final_shard_bytes=final_shards,
+            final_shard_bytes=basis_shards,
+            action=action,
+            suffix_history_tokens=suffix_history_tokens,
+            suffix_start_layer=suffix_start_layer,
         )
         self._check_invariants_after_mutation(reservation_ids=(request_id,))
         if self._metrics_recorder is not None:
@@ -1923,20 +2425,27 @@ class KVCacheManager:
         if session_id not in self._sessions:
             raise KeyError(f"unknown KV session: {session_id}")
         state = self._sessions[session_id]
-        local_shard_bytes = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            state.context_tokens,
-            self.tp_degree,
-            layer_start=0,
-            layer_end=state.resident_prefix_layers,
-        )
-        remote_shard_bytes = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            state.context_tokens,
-            self.tp_degree,
-            layer_start=state.resident_prefix_layers,
-            layer_end=self.model.layers,
-        )
+        if self._working_copy_uses_shard_truth(state):
+            # D1 两口径分离（2026-09-17）：混合形态 primary 驻留取
+            # shard_bytes 物理真值（context_tokens 为增量口径）；池侧
+            # 旧 backing 为陈旧副本，账面忽略（§4.3.1）。
+            local_shard_bytes = tuple(state.shard_bytes)
+            remote_shard_bytes = tuple(0 for _ in state.shard_bytes)
+        else:
+            local_shard_bytes = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                state.context_tokens,
+                self.tp_degree,
+                layer_start=0,
+                layer_end=state.resident_prefix_layers,
+            )
+            remote_shard_bytes = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                state.context_tokens,
+                self.tp_degree,
+                layer_start=state.resident_prefix_layers,
+                layer_end=self.model.layers,
+            )
         rank_bytes: tuple[tuple[int, int], ...] = ()
         if state.location in {self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE}:
             if state.instance_index is None:
@@ -2002,6 +2511,21 @@ class KVCacheManager:
         self._refresh_incremental_sessions(self._sessions)
         self._refresh_incremental_reservations(self._reservations)
 
+    def _working_copy_uses_shard_truth(self, session: SessionKVState) -> bool:
+        """混合形态（remote-read×PARTIAL 基，2026-09-17 用户裁定）判定。
+
+        D1 两口径分离：该形态下 primary ``shard_bytes`` 是物理真值（准入相
+        池恢复的后缀 S ＋ 增量），而 ``context_tokens`` 是增量 token 口径
+        （0 起步）——审计/快照派生期望驻留字节时必须取 shard_bytes，否则
+        exec 侧驻留被低估（不变量误报泄漏）。LOCAL 基 remote-read 两口径
+        恒等（shard_bytes == kv(context_tokens)@全层），无需特判；copy/
+        recompute 的 context 覆盖完整上下文，亦恒等。"""
+        return (
+            session.working_kind == "remote-read"
+            and session.base_location == self.PARTIAL_HBM_REMOTE
+            and 0 < session.base_resident_prefix_layers < self.model.layers
+        )
+
     def _incremental_session_contribution(
         self, session: SessionKVState
     ) -> Optional[tuple[int, tuple[int, ...]]]:
@@ -2016,13 +2540,16 @@ class KVCacheManager:
                 return None
         elif not 0 < session.resident_prefix_layers < self.model.layers:
             return None
-        local_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            session.context_tokens,
-            self.tp_degree,
-            layer_start=0,
-            layer_end=session.resident_prefix_layers,
-        )
+        if self._working_copy_uses_shard_truth(session):
+            local_shards = tuple(int(value) for value in session.shard_bytes)
+        else:
+            local_shards = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                session.context_tokens,
+                self.tp_degree,
+                layer_start=0,
+                layer_end=session.resident_prefix_layers,
+            )
         return session.instance_index, tuple(int(value) for value in local_shards)
 
     def _incremental_base_contribution(
@@ -2040,6 +2567,14 @@ class KVCacheManager:
             self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE,
         }:
             return None
+        journal = session.copy_handoff
+        if journal is not None:
+            # C13：copy 的 home 侧残量以交接账本为准（逐块释放不等轮末；
+            # 全部释放后贡献为零——不重复释放已交接源块）。
+            shards = journal.home_shards()
+            if not any(shards):
+                return None
+            return session.home_instance, shards
         prefix = session.base_resident_prefix_layers
         if prefix <= 0:
             return None
@@ -2184,6 +2719,10 @@ class KVCacheManager:
             raise RuntimeError("HBM reservation key does not match request ID")
         if len(reservation.final_shard_bytes) != self.tp_degree:
             raise RuntimeError("HBM reservation shard count does not match TP")
+        if reservation.action not in {
+            None, "stay", "copy", "recompute", "remote-read",
+        }:
+            raise RuntimeError("HBM reservation has an unknown action")
         expected_final = kv_cache_shard_bytes_for_tokens(
             self.model,
             reservation.final_context_tokens,
@@ -2191,6 +2730,7 @@ class KVCacheManager:
         )
         if reservation.final_shard_bytes != expected_final:
             raise RuntimeError("HBM reservation final KV metadata is inconsistent")
+        self._reservation_suffix_shards(reservation)
 
     def _check_invariants_after_mutation(
         self,
@@ -2286,15 +2826,31 @@ class KVCacheManager:
             instance = self.topology.instance(session.instance_index)
             if len(session.shard_bytes) != instance.size:
                 raise RuntimeError("KV shard count does not match TP instance")
-            local_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model,
-                session.context_tokens,
-                self.tp_degree,
-                layer_start=0,
-                layer_end=session.resident_prefix_layers,
-            )
+            if self._working_copy_uses_shard_truth(session):
+                # D1 两口径分离（2026-09-17）：混合形态 primary 驻留取
+                # shard_bytes 物理真值（context_tokens 为增量口径）。
+                local_shards = tuple(session.shard_bytes)
+            else:
+                local_shards = kv_cache_shard_bytes_for_layer_range(
+                    self.model,
+                    session.context_tokens,
+                    self.tp_degree,
+                    layer_start=0,
+                    layer_end=session.resident_prefix_layers,
+                )
             for rank, shard_bytes in zip(instance.ranks, local_shards):
                 expected_kv[rank] += shard_bytes
+            # 跨实例执行期间 home 侧基础驻留（与增量通道
+            # _incremental_base_contribution 同式）：全量审计补齐——旧代码
+            # 无 strict+working 可达组合掩盖了缺口，merge v2/混合形态改造
+            # 后 strict 档必须与增量通道一致（2026-09-17）。
+            base_contribution = self._incremental_base_contribution(session)
+            if base_contribution is not None:
+                base_instance = self.topology.instance(base_contribution[0])
+                for rank, shard_bytes in zip(
+                    base_instance.ranks, base_contribution[1]
+                ):
+                    expected_kv[rank] += shard_bytes
 
         for rank, state in self._rank_states.items():
             if state.kv_cache_bytes != expected_kv[rank]:
@@ -2314,6 +2870,10 @@ class KVCacheManager:
                 raise RuntimeError("HBM reservation key does not match request ID")
             if len(reservation.final_shard_bytes) != self.tp_degree:
                 raise RuntimeError("HBM reservation shard count does not match TP")
+            if reservation.action not in {
+                None, "stay", "copy", "recompute", "remote-read",
+            }:
+                raise RuntimeError("HBM reservation has an unknown action")
             expected_final = kv_cache_shard_bytes_for_tokens(
                 self.model,
                 reservation.final_context_tokens,
@@ -2321,6 +2881,7 @@ class KVCacheManager:
             )
             if reservation.final_shard_bytes != expected_final:
                 raise RuntimeError("HBM reservation final KV metadata is inconsistent")
+            self._reservation_suffix_shards(reservation)
         for instance in self.topology.instances:
             effective = self._effective_remaining_by_tp_rank(instance.index)
             if any(value < 0 for value in effective):
@@ -2565,6 +3126,65 @@ class KVCacheManager:
         else:
             self._metrics_parts.pop(session_id, None)
 
+    def _metrics_prefix_release_parts(
+        self,
+        session_id: str,
+        layer_end: int,
+        *,
+        instance_index: int,
+        anchor_kind: str,
+        request_id: str,
+        cause: str,
+    ) -> None:
+        """C13（2026-09-22）：home 侧**前缀**段释放——_metrics_suffix_
+        evict_parts 的前缀镜像。
+
+        copy 交接按消费顺序自层 0 向上释放（transformer 深度序），home
+        侧保留的是高层段 [layer_end, L)：本方法把该实例上每个 part 截
+        到其与 [layer_end, L) 的交（移除 [part_start, layer_end) 精确
+        分布，永不合并猜测——与 suffix 版同纪律）。
+        """
+        if self._metrics_recorder is None:
+            return
+        parts = self._metrics_parts.get(session_id, [])
+        kept_parts: list[dict[str, Any]] = []
+        for part in parts:
+            if part["instance_index"] != instance_index:
+                kept_parts.append(part)
+                continue
+            new_layer_start = max(part["layer_start"], layer_end)
+            if new_layer_start >= part["layer_end"]:
+                removed = part["shards"]
+                new_shards = None
+            else:
+                new_shards = kv_cache_shard_bytes_for_layer_range(
+                    self.model,
+                    part["tokens"],
+                    self.tp_degree,
+                    layer_start=new_layer_start,
+                    layer_end=part["layer_end"],
+                )
+                removed = tuple(
+                    old - new for old, new in zip(part["shards"], new_shards)
+                )
+            if any(removed):
+                self._metrics_remove_part(
+                    session_id,
+                    part,
+                    removed,
+                    anchor_kind=anchor_kind,
+                    request_id=request_id,
+                    cause=cause,
+                )
+            if new_shards is not None:
+                part["layer_start"] = new_layer_start
+                part["shards"] = new_shards
+                kept_parts.append(part)
+        if kept_parts:
+            self._metrics_parts[session_id] = kept_parts
+        else:
+            self._metrics_parts.pop(session_id, None)
+
     def _metrics_move_session_parts(
         self,
         session_id: str,
@@ -2683,6 +3303,7 @@ class KVCacheManager:
         target_instance_index: int,
         layer_start: int,
         layer_end: int,
+        handoff_chunk: Optional[int] = None,
     ) -> KVTransfer:
         """R16-1（2026-09-15）：层区间 NoC 迁移原语。
 
@@ -2745,6 +3366,7 @@ class KVCacheManager:
             layer_end=layer_end,
             resident_prefix_layers_before=layer_start,
             resident_prefix_layers_after=layer_end,
+            handoff_chunk=handoff_chunk,
         )
 
     def _remote_load_transfer(
@@ -2757,6 +3379,7 @@ class KVCacheManager:
         target_instance_index: int,
         layer_start: int,
         layer_end: int,
+        restore_group: Optional[int] = None,
     ) -> KVTransfer:
         target = self.topology.instance(target_instance_index)
         transfer_shards = kv_cache_shard_bytes_for_layer_range(
@@ -2799,7 +3422,83 @@ class KVCacheManager:
             layer_end=layer_end,
             resident_prefix_layers_before=layer_start,
             resident_prefix_layers_after=layer_end,
+            restore_group=restore_group,
         )
+
+    def _plan_suffix_restore_transfers(
+        self,
+        *,
+        session: SessionKVState,
+        trigger_request_id: str,
+        target_instance_index: int,
+        suffix_start: int,
+        history_tokens: int,
+        reason: str,
+    ) -> tuple[KVTransfer, ...]:
+        """C15：后缀 [suffix_start, L) 的逐组恢复发射计划 + 区间账本。
+
+        按 plan_suffix_restore_groups 切分（消费顺序 = 层自低向高；
+        后缀 ≤ RESTORE_GROUP_LAYERS 时单组 = 旧单笔口径回归锚——
+        transfers 数量/区间/字节不变，仅多 restore_group 标记）。账本
+        科目 ``rid#restore`` 的 issue 事件在此落账（complete 于 prefill
+        drain/merge 兜底；守恒断言见 RestoreGroupJournal）。逐组物理
+        到达由构图器旁挂恢复支链承载（GB _suffix_restore_arms），列车
+        体按层段就绪门控消费——替换"整列车等整段后缀"的保守门。
+        """
+        group_ranges = plan_suffix_restore_groups(
+            suffix_start, self.model.layers)
+        if not group_ranges:
+            return ()
+        transfers: list[KVTransfer] = []
+        entries: list[RestoreGroupEntry] = []
+        for group_index, (layer_start, layer_end) in enumerate(group_ranges):
+            shard_bytes = kv_cache_shard_bytes_for_layer_range(
+                self.model, history_tokens, self.tp_degree,
+                layer_start=layer_start, layer_end=layer_end)
+            transfers.append(self._remote_load_transfer(
+                phase="history",
+                reason=reason,
+                session=session,
+                trigger_request_id=trigger_request_id,
+                target_instance_index=target_instance_index,
+                layer_start=layer_start,
+                layer_end=layer_end,
+                restore_group=group_index,
+            ))
+            entries.append(RestoreGroupEntry(
+                index=group_index,
+                layer_start=layer_start,
+                layer_end=layer_end,
+                shard_bytes=shard_bytes,
+            ))
+        journal = RestoreGroupJournal(
+            session_id=session.session_id,
+            trigger_request_id=trigger_request_id,
+            target_instance_index=target_instance_index,
+            suffix_start=suffix_start,
+            entries=tuple(entries),
+        )
+        journal.assert_conservation()
+        journal.events.append({
+            "subject": f"{trigger_request_id}#restore",
+            "event": "issue",
+            "session_id": session.session_id,
+            "target_instance": target_instance_index,
+            "suffix_start": suffix_start,
+            "groups": [
+                {"index": e.index, "layer_start": e.layer_start,
+                 "layer_end": e.layer_end, "bytes": e.total_bytes}
+                for e in entries],
+            "issued_bytes": sum(journal.issued_bytes_by_rank()),
+        })
+        if session.restore_journal is not None and not (
+                session.restore_journal.all_consumed()):
+            raise RuntimeError(
+                f"session {session.session_id} re-issued a suffix restore "
+                "while the previous journal is unsettled (double issue)")
+        session.restore_journal = journal
+        self.restore_events.extend(journal.events)
+        return tuple(transfers)
 
     def _remote_store_transfer(
         self,
@@ -3056,9 +3755,10 @@ class KVCacheManager:
         """K6：把确认不可恢复的容量缺口记录落 deep_gap_events 台账。
 
         记录由 KVCapacityError.deep_gap_records 携带（raise 时不落账）；
-        仅终态确认点调用——R14 死锁守卫（全停滞无事件源）、R4 降级
-        耗尽。可恢复捕获路径（准入延迟/停滞/降级成功）不调用，台账
-        保持"落账 = run 终止"语义。"""
+        仅终态确认点调用——R14 死锁守卫（全停滞无事件源）、merge v2
+        双侧深缺口（2026-09-17 起，R4 降级耗尽路径已删除）。可恢复捕获
+        路径（准入延迟/停滞/merge 方向回退成功）不调用，台账保持
+        "落账 = run 终止"语义。"""
         self.deep_gap_events.extend(records)
 
     def _ensure_capacity(
@@ -3136,9 +3836,13 @@ class KVCacheManager:
                     layer_group_bytes_fn=(
                         lambda start, end, s=session: layer_group_bytes(
                             s.context_tokens, start, end)),
-                    retention_target_layers=self._adaptive_retention_target_tokens(
-                        session.session_id, session.context_tokens,
-                        instance_index),
+                    retention_target_layers=0,
+                    retention_target_layers_fn=(
+                        lambda sid=session.session_id,
+                        ctx=session.context_tokens,
+                        inst=instance_index:
+                        self._adaptive_retention_target_tokens(
+                            sid, ctx, inst)),
                     next_request_type=session.next_request_type,
                     last_completion_ns=session.last_completion_ns,
                 )
@@ -3192,9 +3896,10 @@ class KVCacheManager:
             )
             # D4 (2026-09-05) + K6 (2026-09-14)：deep-gap 缺口记录随异常
             # 携带、raise 时不落 deep_gap_events 台账——joint 下容量类
-            # 失败有多条可恢复捕获路径（准入延迟/R4 自降级/R14 停滞），
-            # 只有确认不可恢复的提交点（死锁守卫/降级耗尽）才落账，
-            # 台账保持"落账 = run 终止"语义（可恢复事件不得污染）。
+            # 失败有多条可恢复捕获路径（准入延迟/merge 方向回退（v2，
+            # 2026-09-17 起）/R14 停滞），只有确认不可恢复的提交点（死锁
+            # 守卫/双侧深缺口）才落账，台账保持"落账 = run 终止"语义
+            #（可恢复事件不得污染）。
             gap_records = tuple({
                 "instance_index": instance_index,
                 "rank": rank,
@@ -3218,9 +3923,10 @@ class KVCacheManager:
                 f"required={required_bytes_by_tp_rank[self._rank_relative_index[rank]]}"
                 for rank in insufficient
             )
-            # N3'：容量类异常（准入语境可转 False 延迟、merge 语境可降级
-            # R4、decode 语境停滞 R14）；evictions 携带 raise 前已提交的
-            # 逐出（D7 清账：调用方须 bump 纪元 + 同步图侧）。
+            # N3'：容量类异常（准入语境可转 False 延迟、merge 语境可回退
+            # 另一方向（2026-09-17 起 v2；R4 自降级已删除）、decode 语境
+            # 停滞 R14）；evictions 携带 raise 前已提交的逐出（D7 清账：
+            # 调用方须 bump 纪元 + 同步图侧）。
             raise KVCapacityError(
                 f"insufficient target HBM in instance {instance_index}; "
                 f"{details}",
@@ -3296,9 +4002,13 @@ class KVCacheManager:
         * ``recompute``：不搬运历史；工作副本从 0 起步，由重算 prefill
           逐 chunk 物化（expand_prefill 增长）。调度器须同时把历史
           token 折入 prefill 工作量。
-        * ``remote-read``：基础历史留在 home 不动（执行期逐迭代远读，
-          由构图器发射流）；工作副本只承载新增量（working context 从
-          0 起步 = 新增 token 的 KV）。
+        * ``remote-read``：基础前缀留在 home 不动（执行期 decode 相逐迭代
+          远读 [0, p) 层，由构图器发射流）。LOCAL 基（p == L，回归锚）：
+          工作副本零化起算，仅增量驻留执行端；PARTIAL 基（p < L，混合
+          形态，N1(a) 解除 2026-09-17）：缺失后缀 [p, L) 准入相从池恢复
+          物化为热 KV（工作副本初始 = S）＋增量——两口径分离（D1）：
+          ``shard_bytes`` 为物理真值 S＋增量，``context_tokens`` 为增量
+          token 数（0 起步）。
 
         返回 ``(before, transfers, evictions)``：transfers 为需要物理
         发射的 KV 传输序列（stay-local 为空）；home 语义见 §2.1——
@@ -3395,14 +4105,13 @@ class KVCacheManager:
                     trigger_request_id=trigger_request_id,
                     reservation_request_id=reservation_request_id,
                 ))
-                transfers.append(self._remote_load_transfer(
-                    phase="history",
-                    reason="history_remote_suffix_restore",
+                transfers.extend(self._plan_suffix_restore_transfers(
                     session=session,
                     trigger_request_id=trigger_request_id,
                     target_instance_index=exec_instance,
-                    layer_start=suffix_start,
-                    layer_end=self.model.layers,
+                    suffix_start=suffix_start,
+                    history_tokens=history_tokens,
+                    reason="history_remote_suffix_restore",
                 ))
                 self._add_local_shards(exec_instance, suffix_shards)
                 session.location = self.LOCAL_HBM
@@ -3465,14 +4174,13 @@ class KVCacheManager:
                 trigger_request_id=trigger_request_id,
                 reservation_request_id=reservation_request_id,
             ))
-            transfers.append(self._remote_load_transfer(
-                phase="history",
-                reason="history_remote_suffix_restore",
+            transfers.extend(self._plan_suffix_restore_transfers(
                 session=session,
                 trigger_request_id=trigger_request_id,
                 target_instance_index=exec_instance,
-                layer_start=suffix_start,
-                layer_end=self.model.layers,
+                suffix_start=suffix_start,
+                history_tokens=history_tokens,
+                reason="history_remote_suffix_restore",
             ))
             self._add_local_shards(exec_instance, suffix_shards)
             session.location = self.LOCAL_HBM
@@ -3555,14 +4263,13 @@ class KVCacheManager:
                     trigger_request_id=trigger_request_id,
                     reservation_request_id=reservation_request_id,
                 ))
-                transfers.append(self._remote_load_transfer(
-                    phase="history",
-                    reason="history_pool_restore_working_copy",
+                transfers.extend(self._plan_suffix_restore_transfers(
                     session=session,
                     trigger_request_id=trigger_request_id,
                     target_instance_index=exec_instance,
-                    layer_start=0,
-                    layer_end=self.model.layers,
+                    suffix_start=0,
+                    history_tokens=history_tokens,
+                    reason="history_pool_restore_working_copy",
                 ))
                 self._add_local_shards(exec_instance, full_shards)
                 session.shard_bytes = full_shards
@@ -3614,26 +4321,110 @@ class KVCacheManager:
                 # R16-2：前缀腿只传驻留前缀 [0, base_prefix)——R16-1
                 # 层区间化后 PARTIAL 基不再撞全驻留守卫；LOCAL 基
                 # （base_prefix == L）与旧全层口径逐位一致。
-                transfers.append(self._noc_transfer(
-                    phase="history",
-                    reason="history_prefix_working_copy",
-                    session=session,
+                # C13（2026-09-22）：前缀腿改为**逐 chunk 交接流**（设计
+                # 文档 §2.3 四步协议）——驻留前缀按消费顺序切成层块：
+                # 块 0 走准入主链（readiness barrier 只等它，计算不等
+                # 整份搬运完成）；块 ≥ 1 由构图器旁挂支链流水发射、逐
+                # 块就绪门控列车体（GB _copy_handoff_arms）。base_prefix
+                # ≤ COPY_HANDOFF_CHUNK_LAYERS 时单块 = 旧单笔口径回归
+                # 锚。账本侧：源块安全前提断言 + 交接 journal 登记；home
+                # 侧字节在逐块交接完成事件中释放（不等轮末）。
+                self._assert_copy_handoff_source_safety(
+                    session, home_side_instance)
+                chunk_ranges = plan_copy_handoff_layer_chunks(base_prefix)
+                chunks = tuple(
+                    CopyHandoffChunk(
+                        index=chunk_index,
+                        layer_start=layer_start,
+                        layer_end=layer_end,
+                        shard_bytes=kv_cache_shard_bytes_for_layer_range(
+                            self.model,
+                            history_tokens,
+                            self.tp_degree,
+                            layer_start=layer_start,
+                            layer_end=layer_end,
+                        ),
+                    )
+                    for chunk_index, (layer_start, layer_end)
+                    in enumerate(chunk_ranges)
+                )
+                for chunk in chunks:
+                    transfers.append(self._noc_transfer(
+                        phase="history",
+                        reason=("history_prefix_working_copy"
+                                if chunk.index == 0
+                                else "history_prefix_handoff_tail"),
+                        session=session,
+                        trigger_request_id=trigger_request_id,
+                        source_instance_index=home_side_instance,
+                        target_instance_index=exec_instance,
+                        layer_start=chunk.layer_start,
+                        layer_end=chunk.layer_end,
+                        handoff_chunk=chunk.index,
+                    ))
+                journal = CopyHandoffJournal(
+                    session_id=session_id,
                     trigger_request_id=trigger_request_id,
-                    source_instance_index=home_side_instance,
-                    target_instance_index=exec_instance,
-                    layer_start=0,
-                    layer_end=base_prefix,
-                ))
+                    home_instance=home_side_instance,
+                    exec_instance=exec_instance,
+                    base_history_tokens=history_tokens,
+                    chunks=chunks,
+                )
+                total = journal.total_shards
+                journal.h_exec_shards = total
+                journal.h_home_shards = total
+                session.copy_handoff = journal
+                journal.assert_conservation()
+                # 守恒科目：launch（#handoff）+ 流计划（#copy-stream——
+                # 被迁移原有历史有效载荷恰好一遍；池恢复后缀/增量/协议
+                # 工作另列分计，不入 payload）。
+                launch_event = {
+                    "subject": f"{trigger_request_id}#handoff",
+                    "event": "launch",
+                    "session_id": session_id,
+                    "home_instance": home_side_instance,
+                    "exec_instance": exec_instance,
+                    "chunks": len(chunks),
+                    "h_bytes": sum(total),
+                    "h_home_bytes": sum(total),
+                    "h_exec_bytes": sum(total),
+                    "d_handoff_bytes": sum(total),
+                }
+                stream_plan_event = {
+                    "subject": f"{trigger_request_id}#copy-stream",
+                    "event": "plan",
+                    "session_id": session_id,
+                    "chunks": [
+                        {"index": chunk.index,
+                         "layer_start": chunk.layer_start,
+                         "layer_end": chunk.layer_end,
+                         "bytes": chunk.total_bytes}
+                        for chunk in chunks],
+                    "payload_bytes": sum(total),
+                    # 另列分计（不入 #copy-stream payload）：
+                    "separate_ledgers": [
+                        "pool_suffix_restore", "incremental_growth",
+                        "hop_transport", "victim_writeback",
+                        "protocol_ack_overhead"],
+                }
+                journal.events.append(launch_event)
+                journal.events.append(stream_plan_event)
+                self.copy_handoff_events.append(launch_event)
+                self.copy_handoff_events.append(stream_plan_event)
             if any(suffix_shards):
-                transfers.append(self._remote_load_transfer(
-                    phase="history",
-                    reason="history_suffix_pool_restore_working_copy",
+                transfers.extend(self._plan_suffix_restore_transfers(
                     session=session,
                     trigger_request_id=trigger_request_id,
                     target_instance_index=exec_instance,
-                    layer_start=suffix_start,
-                    layer_end=self.model.layers,
+                    suffix_start=suffix_start,
+                    history_tokens=history_tokens,
+                    reason="history_suffix_pool_restore_working_copy",
                 ))
+            # C13 口径注记：工作副本（前缀+后缀）在准入相物化入执行端容量
+            # 账（容量保守上界，预约→物化的分配关系经 _reservation_extra_
+            # shards 核账）；**物理到达**由图侧逐块门控（readiness barrier
+            # 只等块 0），home 侧字节则在逐块交接完成事件中释放（prefill
+            # drain 边界结算，不等轮末——_settle_copy_handoffs）。
             self._add_local_shards(exec_instance, working_shards)
             session.shard_bytes = working_shards
             session.total_bytes = sum(working_shards)
@@ -3653,7 +4444,7 @@ class KVCacheManager:
             session.shard_bytes = zero_shards
             session.total_bytes = 0
             session.context_tokens = 0
-        else:  # remote-read：基础留在 home；工作副本仅增量（0 起步）。
+        else:  # remote-read：前缀基础留在 home；后缀按基形态处置。
             if base_instance == exec_instance:
                 # 防御 fail-closed：remote-read 的执行实例不得等于基础
                 # 驻留实例（适用性已排除该组合；到达即选点/适用性合同
@@ -3661,10 +4452,51 @@ class KVCacheManager:
                 raise RuntimeError(
                     "remote-read action requires the base history to stay "
                     "at another instance (exec == resident instance)")
-            zero_shards = tuple(0 for _ in prefix_shards)
-            session.shard_bytes = zero_shards
-            session.total_bytes = 0
-            session.context_tokens = 0
+            if base_location == self.PARTIAL_HBM_REMOTE:
+                # 混合形态（N1(a) 解除，2026-09-17 用户裁定）：PARTIAL 基
+                # 的缺失后缀 [p, L) 在准入相从池恢复物化为热 KV（读流只
+                # 覆盖 home 前缀 [0, p)）。两口径分离（D1 裁决）：
+                # shard_bytes = 物理真值 S（后缀物化入账），context_tokens
+                # = 增量 token 数（0 起步照旧）——merge v2 前向腿按
+                # shard_bytes 真值搬运。
+                evictions.extend(self._ensure_capacity(
+                    exec_instance,
+                    suffix_shards,
+                    phase="history",
+                    reason="history_suffix_target_capacity",
+                    trigger_request_id=trigger_request_id,
+                    reservation_request_id=reservation_request_id,
+                ))
+                transfers.extend(self._plan_suffix_restore_transfers(
+                    session=session,
+                    trigger_request_id=trigger_request_id,
+                    target_instance_index=exec_instance,
+                    suffix_start=base_prefix,
+                    history_tokens=history_tokens,
+                    reason="history_suffix_pool_restore_working_copy",
+                ))
+                self._add_local_shards(exec_instance, suffix_shards)
+                session.shard_bytes = suffix_shards
+                session.total_bytes = sum(suffix_shards)
+                session.context_tokens = 0
+                self._metrics_add_segment(
+                    session_id,
+                    exec_instance,
+                    history_tokens,
+                    base_prefix,
+                    self.model.layers,
+                    suffix_shards,
+                    anchor_kind="transfer_complete",
+                    request_id=trigger_request_id,
+                    cause="history_suffix_pool_restore_working_copy",
+                )
+            else:
+                # LOCAL 基（回归锚）：工作副本零化起算，逐字节与旧口径
+                # 一致——仅增量驻留执行端（新增 token 的 KV，从 0 增长）。
+                zero_shards = tuple(0 for _ in prefix_shards)
+                session.shard_bytes = zero_shards
+                session.total_bytes = 0
+                session.context_tokens = 0
 
         session.location = self.LOCAL_HBM
         session.instance_index = exec_instance
@@ -3691,9 +4523,44 @@ class KVCacheManager:
             raise RuntimeError(
                 f"session {session_id} is not local to instance {instance_index}"
             )
-        new_shards = kv_cache_shard_bytes_for_tokens(
-            self.model, context_tokens, self.tp_degree
-        )
+        if phase == "prefill":
+            # C13：prefill drain 边界（expand_prefill 的唯一在线调用面 =
+            # _on_prefill_drain，全部 prefill 列车已核销）结算 copy 逐块
+            # 交接——home 侧在此逐块释放（不等轮末；decode 相中段的
+            # expand_decode 不是安全边界，见 _settle_copy_handoffs）。
+            self._settle_copy_handoffs(
+                session_id,
+                boundary="prefill_drain",
+                trigger_request_id=trigger_request_id,
+            )
+            # C15：同边界结算后缀逐组恢复（rid#restore complete——逐组
+            # 就绪门控的消费保证已在图侧兑现）。
+            self._settle_restore_groups(
+                session_id, boundary="prefill_drain")
+        if self._working_copy_uses_shard_truth(session):
+            # 混合形态（D1 两口径分离，2026-09-17）：工作副本物理量 =
+            # 池恢复后缀（冻结于 base_history_tokens 的 [p, L) 层——历史
+            # 后缀不随增量增长）＋ 增量全层 kv(context_tokens)（此处
+            # context_tokens 为增量 token 口径）。delta 仍恰为增量增长。
+            restored_suffix = kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                session.base_history_tokens,
+                self.tp_degree,
+                layer_start=session.base_resident_prefix_layers,
+                layer_end=self.model.layers,
+            )
+            incremental = kv_cache_shard_bytes_for_tokens(
+                self.model, context_tokens, self.tp_degree
+            )
+            new_shards = tuple(
+                suffix_bytes + incremental_bytes
+                for suffix_bytes, incremental_bytes in zip(
+                    restored_suffix, incremental)
+            )
+        else:
+            new_shards = kv_cache_shard_bytes_for_tokens(
+                self.model, context_tokens, self.tp_degree
+            )
         delta = tuple(
             new_bytes - old_bytes
             for new_bytes, old_bytes in zip(new_shards, session.shard_bytes)
@@ -3823,23 +4690,27 @@ class KVCacheManager:
 
     # ------------------------------------------------ joint 合并事务（§2.2/§3.2） --
 
-    def _increment_noc_transfer(
+    def _working_copy_noc_transfer(
         self,
         *,
         session: SessionKVState,
         trigger_request_id: str,
         source_instance_index: int,
         target_instance_index: int,
-        new_tokens: int,
-        layer_start: int,
-        layer_end: int,
     ) -> KVTransfer:
-        """增量区间 NoC 传输（仅 ``new_tokens`` 的 KV 字节；merge 用）。"""
+        """merge v2 前向腿：整份工作副本 NoC 迁移（exec → home 胜者）。
+
+        逐 rank 字节**直接取 ``session.shard_bytes``**（账本真值；D1 裁决，
+        2026-09-17）——混合形态（remote-read×PARTIAL 基）下 context_tokens
+        是增量口径（0 起步），从 context 派生会丢掉准入相池恢复的后缀字节
+        （LOCAL 基两口径恒等，逐字节与旧增量腿一致）。层区间 [0, L)；
+        ``resident_prefix_layers_before/after`` 沿本仓区间传输惯例 =
+        layer_start/layer_end（:2800/:3924 同例）。
+        """
+        layer_start = 0
+        layer_end = self.model.layers
         source = self.topology.instance(source_instance_index)
         target = self.topology.instance(target_instance_index)
-        transfer_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model, new_tokens, self.tp_degree,
-            layer_start=layer_start, layer_end=layer_end)
         shards = tuple(
             KVTransferShard(
                 source_rank=source_rank,
@@ -3852,18 +4723,18 @@ class KVCacheManager:
                 layer_end=layer_end,
             )
             for source_rank, target_rank, shard_bytes in zip(
-                source.ranks, target.ranks, transfer_shards)
+                source.ranks, target.ranks, session.shard_bytes)
             if shard_bytes > 0
         )
         return KVTransfer(
             kind="noc_migrate",
             phase="completion",
-            reason="merge_increment_to_home",
+            reason="merge_working_copy_to_home",
             session_id=session.session_id,
             trigger_request_id=trigger_request_id,
             source_instance_index=source_instance_index,
             target_instance_index=target_instance_index,
-            total_bytes=sum(transfer_shards),
+            total_bytes=sum(session.shard_bytes),
             shards=shards,
             model_layers=self.model.layers,
             layer_start=layer_start,
@@ -3872,58 +4743,253 @@ class KVCacheManager:
             resident_prefix_layers_after=layer_end,
         )
 
-    def _increment_pool_store_transfer(
+    # ------------------------------------- C13 copy 块级交接（§2.3）--
+
+    def _assert_copy_handoff_source_safety(
         self,
-        *,
         session: SessionKVState,
+        home_instance: int,
+    ) -> None:
+        """四步协议第 (1) 步：源块安全交接前提（C12 冻结规格 §5）。
+
+        * 在途读取：本会话上一轮的工作副本/交接账本必须已闭合
+          （working_kind is None 且 copy_handoff is None）——否则源块仍
+          有上一轮读流在途，动作不适用（fail-closed，不静默排队）。
+        * 共享引用：本账本的 KV 物理块为**会话私有**（无跨会话引用计数
+          /共享前缀机制——C12 §5"不引入新的共享前缀复制机制"，仓库现
+          状即无该机制），源块唯一合法使用者即本会话本轮迁移流；若未
+          来引入共享机制，必须先在此处理引用关系再放行。
+        """
+        if session.working_kind is not None or session.copy_handoff is not None:
+            raise RuntimeError(
+                f"copy handoff for session {session.session_id} launched "
+                "while a previous working copy or handoff journal is still "
+                "open -- source blocks have in-flight readers from an "
+                "earlier round; the copy action is not safely handable in "
+                "this state (C12 frozen spec sec.5: handle the reference "
+                "relation first or mark the action inapplicable)")
+
+    def _settle_copy_handoffs(
+        self,
+        session_id: str,
+        *,
+        boundary: str,
         trigger_request_id: str,
-        new_tokens: int,
-        layer_start: int,
-        layer_end: int,
-        resident_prefix_layers_after: int,
-        reason: str = "merge_increment_pool_store",
-    ) -> KVTransfer:
-        """增量区间池写回（exec rank → 就近边缘端口 → 池 backing）。"""
-        source_instance_index = session.instance_index
-        if source_instance_index is None:
-            raise RuntimeError("cannot store a non-local KV session")
-        source = self.topology.instance(source_instance_index)
-        transfer_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model, new_tokens, self.tp_degree,
-            layer_start=layer_start, layer_end=layer_end)
-        shards = []
-        for source_rank, shard_bytes in zip(source.ranks, transfer_shards):
-            if shard_bytes == 0:
-                continue
-            edge = self.nearest_edge(source_rank)
-            shards.append(
-                KVTransferShard(
-                    source_rank=source_rank,
-                    target_rank=edge,
-                    edge_rank=edge,
-                    bytes=shard_bytes,
-                    noc_path=deterministic_xy_route(
-                        self.topology.hardware, source_rank, edge),
-                    layer_start=layer_start,
-                    layer_end=layer_end,
-                )
+    ) -> int:
+        """在因果安全边界结算全部待交接块（四步协议 (2)+(3) 的账本侧）。
+
+        边界白名单（因果序：块到达已被图侧钉在 prefill 列车体完成之前，
+        两边界均 ≥ 该时刻——**不等轮末**）：
+          * ``"prefill_drain"``：expand_prefill（唯一调用面 = 调度器
+            _on_prefill_drain——全部 prefill 列车核销之后，逐块就绪门
+            控 guarantee 已兑现）；
+          * ``"merge"``：merge_back 头部（防御兜底——正常路径已在
+            drain 边界结算；merge 时仍未结算只可能来自直接 API 调用面）。
+        其余边界（如 decode 相中段 expand_decode）**不是**安全边界：
+        多列车 prefill 下尾块可能仍在途，early release 会被本方法拒绝。
+        """
+        if boundary not in ("prefill_drain", "merge"):
+            raise RuntimeError(
+                f"unknown copy handoff settle boundary {boundary!r}")
+        session = self._sessions[session_id]
+        journal = session.copy_handoff
+        if journal is None:
+            return 0
+        settled = 0
+        while journal.next_pending_index() is not None:
+            self._apply_copy_handoff_event(
+                session,
+                journal.next_pending_index(),
+                boundary=boundary,
+                trigger_request_id=trigger_request_id,
             )
-        return KVTransfer(
-            kind="remote_store",
-            phase="completion",
-            reason=reason,
-            session_id=session.session_id,
-            trigger_request_id=trigger_request_id,
-            source_instance_index=source_instance_index,
-            target_instance_index=None,
-            total_bytes=sum(transfer_shards),
-            shards=tuple(shards),
-            model_layers=self.model.layers,
-            layer_start=layer_start,
-            layer_end=layer_end,
-            resident_prefix_layers_before=layer_start,
-            resident_prefix_layers_after=resident_prefix_layers_after,
+            settled += 1
+        if settled:
+            self._check_invariants_after_mutation(session_ids=(session_id,))
+        return settled
+
+    def _settle_restore_groups(
+        self,
+        session_id: str,
+        *,
+        boundary: str,
+    ) -> int:
+        """C15：后缀逐组恢复的结算边界（科目 rid#restore 的 complete）。
+
+        与 copy 交接同一边界白名单（``prefill_drain`` / ``merge``）：
+        prefill drain = 全部 prefill 列车核销后，逐组就绪门控的消费保
+        证已兑现（迟到组的消费等待已按层段如实入图依赖）；merge = 兜
+        底。结算 = 全部组置 CONSUMED + 守恒断言；完成时未结算 = 账本
+        破损 fail-closed（mark_complete 处检查）。
+        """
+        if boundary not in ("prefill_drain", "merge", "mark_complete"):
+            raise RuntimeError(
+                f"unknown restore group settle boundary {boundary!r}")
+        session = self._sessions[session_id]
+        journal = session.restore_journal
+        if journal is None:
+            return 0
+        journal.settle(boundary)
+        journal.assert_conservation()
+        self.restore_events.extend(journal.events[-1:])
+        session.restore_journal = None
+        return len(journal.entries)
+
+    def _apply_copy_handoff_event(
+        self,
+        session: SessionKVState,
+        chunk_index: int,
+        *,
+        boundary: str,
+        trigger_request_id: str,
+    ) -> None:
+        """单个交接完成事件：目标侧权威化 + home 侧立即释放（同一事件）。
+
+        顺序协议：必须按消费顺序（块 i-1 已交接是块 i 的前提）；重复
+        交接/乱序交接 = 合同类违规 fail-closed。
+        """
+        journal = session.copy_handoff
+        if journal is None:
+            raise RuntimeError(
+                f"copy handoff event for session {session.session_id} "
+                "without an open journal")
+        chunk = journal.chunks[chunk_index]
+        if chunk.state == "HANDED_OFF":
+            raise RuntimeError(
+                f"duplicate copy handoff for chunk {chunk_index} of session "
+                f"{session.session_id} (request {trigger_request_id}) -- "
+                "the chunk was already handed off (contract violation)")
+        if chunk.index != journal.next_pending_index():
+            raise RuntimeError(
+                f"out-of-order copy handoff for chunk {chunk_index} of "
+                f"session {session.session_id}: next pending chunk is "
+                f"{journal.next_pending_index()} (consumption-order "
+                "protocol)")
+        # (2) 目标侧权威化：块位置/所有权转移到执行端，后续读取路由到
+        #     目标有效副本（执行端物理字节已在准入相物化——保守容量
+        #     口径；权威副本自此在执行端）。
+        chunk.state = "HANDED_OFF"
+        # (3) 同一交接完成事件中立即释放 home 侧对应 HBM、撤销驻留占用
+        #     记账（不等轮末）。
+        self._release_copy_handoff_chunk(
+            session, chunk_index,
+            boundary=boundary, trigger_request_id=trigger_request_id)
+        journal.assert_conservation()
+        handoff_event = {
+            "subject": f"{journal.trigger_request_id}#handoff",
+            "event": "handoff",
+            "session_id": session.session_id,
+            "chunk": chunk.index,
+            "layer_start": chunk.layer_start,
+            "layer_end": chunk.layer_end,
+            "bytes": chunk.total_bytes,
+            "boundary": boundary,
+            "h_home_bytes": sum(journal.h_home_shards),
+            "h_exec_bytes": sum(journal.h_exec_shards),
+            "d_handoff_bytes": sum(journal.d_handoff_shards()),
+        }
+        stream_event = {
+            "subject": f"{journal.trigger_request_id}#copy-stream",
+            "event": "stream-once",
+            "session_id": session.session_id,
+            "chunk": chunk.index,
+            "bytes": chunk.total_bytes,
+            "boundary": boundary,
+        }
+        journal.events.append(handoff_event)
+        journal.events.append(stream_event)
+        self.copy_handoff_events.append(handoff_event)
+        self.copy_handoff_events.append(stream_event)
+
+    def _release_copy_handoff_chunk(
+        self,
+        session: SessionKVState,
+        chunk_index: int,
+        *,
+        boundary: str,
+        trigger_request_id: str,
+    ) -> None:
+        """home 侧对应块的立即释放（守卫：交接前释放/双释放均 fail-closed）。"""
+        journal = session.copy_handoff
+        if journal is None:
+            raise RuntimeError(
+                f"copy handoff release for session {session.session_id} "
+                "without an open journal")
+        chunk = journal.chunks[chunk_index]
+        if chunk.state != "HANDED_OFF":
+            raise RuntimeError(
+                f"copy handoff release for chunk {chunk_index} of session "
+                f"{session.session_id} before its handoff completed -- "
+                "releasing the home-side copy before the target-side "
+                "authority transfer is an early release (four-step "
+                "protocol violation)")
+        if chunk_index in journal.released_indices:
+            raise RuntimeError(
+                f"double release of copy handoff chunk {chunk_index} for "
+                f"session {session.session_id} (request {trigger_request_id})"
+                " -- the home-side block was already released")
+        self._remove_local_shards(journal.home_instance, chunk.shard_bytes)
+        journal.released_indices.add(chunk_index)
+        journal.h_home_shards = tuple(
+            home - chunk_bytes for home, chunk_bytes in zip(
+                journal.h_home_shards, chunk.shard_bytes))
+        # 分配关系核账：home 侧不得残留锁定已释放字节的预约（预约挂执
+        # 行实例；结构性断言，防"源块释放后仍被整轮预留锁住"回归）。
+        for reservation in self._reservations.values():
+            if (reservation.session_id == session.session_id
+                    and reservation.instance_index == journal.home_instance):
+                raise RuntimeError(
+                    f"copy handoff released home-side bytes of session "
+                    f"{session.session_id} while a reservation still pins "
+                    "them at the home instance (allocation-relation "
+                    "violation)")
+        self._metrics_prefix_release_parts(
+            session.session_id,
+            chunk.layer_end,
+            instance_index=journal.home_instance,
+            anchor_kind="transfer_complete",
+            request_id=trigger_request_id,
+            cause="copy_handoff_source_release",
         )
+
+    def _close_copy_handoff_journal(
+        self,
+        session: SessionKVState,
+        *,
+        boundary: str,
+    ) -> None:
+        """轮末闭合（merge_back 尾部）：断言轮末闭合 + 清账本。"""
+        journal = session.copy_handoff
+        if journal is None:
+            return
+        if not journal.all_settled():
+            raise RuntimeError(
+                f"copy handoff journal for session {session.session_id} "
+                "did not close at round end -- base history never fully "
+                "landed on the execution instance (copy completion "
+                "requires the full base history resident at the exec side; "
+                "stage names do not substitute for the arrival events)")
+        if any(journal.home_shards()) or any(journal.d_handoff_shards()):
+            raise RuntimeError(
+                f"copy handoff journal for session {session.session_id} "
+                "closed with residual home-side or duplicated bytes "
+                f"(H_home={journal.home_shards()}, "
+                f"D={journal.d_handoff_shards()})")
+        journal.assert_conservation()
+        close_event = {
+            "subject": f"{journal.trigger_request_id}#handoff",
+            "event": "close",
+            "session_id": session.session_id,
+            "boundary": boundary,
+            "chunks": len(journal.chunks),
+            "h_home_bytes": 0,
+            "h_exec_bytes": sum(journal.h_exec_shards),
+            "d_handoff_bytes": 0,
+            "streamed_once_bytes": sum(journal.released_shards()),
+        }
+        journal.events.append(close_event)
+        self.copy_handoff_events.append(close_event)
+        session.copy_handoff = None
 
     def merge_back(
         self,
@@ -3933,30 +4999,47 @@ class KVCacheManager:
         new_tokens: int,
         reservation_request_id: Optional[str] = None,
     ) -> tuple[KVTransfer, ...]:
-        """compute_done 后把本轮新增量归并回 origin_home（§2.2 表）。
+        """compute_done 后的合并事务 v2：少并多（2026-09-17 用户裁定）。
 
         ``new_tokens`` = 本轮新增 token 数（输入 + 实际完成 decode——已
-        观测长度，允许用于实际结算）。工作副本（copy/recompute/remote-
-        read）在执行 instance 的驻留字节中，属于新增量的部分按 home 基
-        础历史的实际驻留拆分归并：
+        观测长度，允许用于实际结算）。方向裁决按完成时刻两侧保留量比
+        大小、小的整份搬给大的（§4.3.1 真值表），结果恒**全层 LOCAL@
+        胜者**、败者侧释放、``home_instance`` 迁移到胜者（I7；全仓第二
+        个赋值点）：
 
-        * 基础 LOCAL：新增量 [0,L) 层经 NoC 回传 home，写入前按 §3.2 真实
-          准备空间（T+E；R4：不足时本会话基础前缀逐层自降池，k=0 兜底
-          落入 REMOTE 归并——永不失败、不触碰其他会话）；
-        * 基础 PARTIAL：新增量的 [0, base_prefix) 层回传 home HBM、
-          [base_prefix, L) 层写回池 backing（两笔传输）；
-        * 基础 REMOTE：整份新增量写回池 backing。
+        * remote-read×LOCAL 基：B（home 全层基础）对 I（exec 增量）——
+          B ≥ I 前向搬 I（与旧 v1 前向腿逐字节一致，回归锚）；B < I
+          翻转搬 B（home→exec 含传输）。
+        * remote-read×PARTIAL 基（混合形态）：H（home 前缀基础）对 S＋I
+          （exec 池恢复后缀＋增量，账本真值 ``shard_bytes``）——
+          H ≥ S＋I 前向；否则翻转搬 H。
+        * copy/recompute（LOCAL/PARTIAL 基）：exec 恒持并集 ⊇ home 侧——
+          **零字节翻转**（无传输，home 侧基础释放，胜者空间准备量 = 0）。
+        * REMOTE 基（无主，裁定③）：**就地保留**（in_place）——零传输
+          零池写，工作副本直接转正，home := exec。
 
-        归并后工作副本（含 copy 的基础历史复份/重算历史复份）在执行端
-        释放——不自动形成永久第二份历史（§2.2）；恰好归并一次由
-        ``last_merged_request_id`` 版本键断言保证（重复写 KV/重复释放源
-        副本/重复计 token 均为合同类违规）。stay 路径（无工作副本）为本
-        地提交，不产生流量。
+        热 KV 裁定（2026-09-17）封死了"执行完再踢出去"：merge 事务**零
+        池写（I6，无 remote_store）**；空间准备只走统一 T+E 逐出（I8，
+        无 merge 专用驱逐）——R4 自降级与 k=0 池归并兜底已按裁定④直接
+        删除（单实现，不设开关）。首选方向容量不可得时改试另一方向
+        （仅 remote-read 两方向均有真实意义；零字节翻转/in_place 的准
+        备量 = 0 不可能失败）；双侧统一逐出耗尽仍不可得 = 双侧深缺口，
+        逐 rank 缺口落账 deep-gap 后 fail-closed——合同从"merge 永不
+        失败"改为"双侧深缺口才失败"。stay 路径（无工作副本）为本地
+        提交，不产生流量；恰好归并一次由 ``last_merged_request_id``
+        版本键断言保证（重复写 KV/重复释放源副本/重复计 token 均为
+        合同类违规）。每次调用（含 stay 早退）结束前设置
+        ``self.last_merge_outcome`` 披露快照（改造二契约，供调度器
+        日志/水印重放消费）。
 
-        N9（2026-09-14）：home==exec 的 working 组合已随 R13 消除
-        （recompute@home 不建工作副本、copy@home 退化 local_hit、
-        remote-read@home 被适用性排除）——结算段对到达该组合直接
-        fail-closed，不得再按旧"remove 全量 + add 增量"口径抹账。
+        N9（2026-09-14，语义收窄 2026-09-17）：home==exec 的 working
+        组合仍是账本破损组合（R13 已消除合法来源：recompute@home 本地
+        提交、copy@home 退化 local_hit、remote-read@home 被适用性排除）
+        ——结算前 fail-closed；翻转/in_place 产生的 home==exec 是合法
+        终态。K5（P2-5，2026-09-23）：pool-only 基（REMOTE 基/前缀 0）
+        豁免 raise——REMOTE 基 ×copy@home 是裁定③就地转正形态（基础
+        不在 home，非 R13 消除的"基础在 home"组合），方向裁决走
+        in_place 免单。
         """
         session = self._sessions[session_id]
         if session.last_merged_request_id == trigger_request_id:
@@ -3969,6 +5052,29 @@ class KVCacheManager:
             # stay：本地提交，无跨 instance 回传（§2.2：执行位置等于
             # home 时数据提交不生成虚构 D2D 流量）。
             session.last_merged_request_id = trigger_request_id
+            self.last_merge_outcome = {
+                "session_id": session_id,
+                "direction": "stay",
+                "zero_byte_flip": False,
+                "winner_instance": None,
+                "loser_instance": None,
+                "transferred_bytes": 0,
+                "home_flipped": False,
+            }
+            self._append_kv_delta_row(
+                session_id=session_id,
+                trigger_request_id=trigger_request_id,
+                working_kind=None,
+                direction="stay",
+                zero_byte_flip=False,
+                winner_instance=None,
+                loser_instance=None,
+                home_before=session.home_instance,
+                transferred_bytes=0,
+                home_side_retained_bytes=int(session.total_bytes),
+                exec_side_retained_bytes=0,
+                new_tokens=new_tokens,
+            )
             return ()
         if new_tokens < 0:
             raise ValueError("new_tokens must be non-negative")
@@ -3978,253 +5084,434 @@ class KVCacheManager:
         home = session.home_instance
         if home is None:
             raise RuntimeError("working copy has no origin home")
-        transfers: list[KVTransfer] = []
-
-        # ---- 容量准备 + 增量传输规划（R4 分层自降级循环）。 ----
-        while True:
-            base_prefix = session.base_resident_prefix_layers
-            base_location_now = session.base_location or self.REMOTE_MEMORY
-            if base_location_now == self.REMOTE_MEMORY or base_prefix == 0:
-                # REMOTE 归并（含自降级 k=0 兜底）：整份新增量写回池。
-                transfers.append(self._increment_pool_store_transfer(
-                    session=session,
-                    trigger_request_id=trigger_request_id,
-                    new_tokens=new_tokens,
-                    layer_start=0,
-                    layer_end=self.model.layers,
-                    resident_prefix_layers_after=0,
-                ))
-                break
-            if home == exec_instance:
-                # N9 防御：home==exec 的 working 组合不应存在（见 docstring），
-                # 到达即选点/结算合同破损——显式 fail-closed 而非按旧口径抹账。
+        if home == exec_instance:
+            # K5（P2-5，2026-09-23 外部审计）：pool-only 基（REMOTE 基/
+            # 前缀 0）豁免——REMOTE 基 ×copy@home 是裁定③的就地转正
+            # 形态（home 侧无基础保留量 ⇒ 方向裁决走 in_place 免单），
+            # 原 N9 对 home==exec 一刀切把该合法来源拦死（确定性
+            # raise）。R13/N9 消除的是"基础在 home 的 copy@home 退化
+            # stay"；无主基不在其列。remote-read 不达此处（适用性排除
+            # REMOTE 基，下方 fail-closed 保持）。
+            # O14：空串 base_location 属会话元数据破损（None=无主基是
+            # 唯一合法未置形态），不得经 `or REMOTE` 静默借道豁免。
+            base_location_n9 = session.base_location
+            if base_location_n9 == "":
+                raise RuntimeError(
+                    f"session {session_id} has empty-string base_location "
+                    "at merge_back -- session metadata corrupt (None is "
+                    "the only legal unset form for a pool-only base)")
+            if base_location_n9 is None:
+                base_location_n9 = self.REMOTE_MEMORY
+            if (base_location_n9 == self.REMOTE_MEMORY
+                    or not session.base_resident_prefix_layers):
+                pass
+            else:
+                # N9 防御：home==exec 的 working 组合不应存在（见
+                # docstring），到达即选点/结算合同破损——显式 fail-closed
+                # 而非按旧口径抹账。
                 raise RuntimeError(
                     f"session {session_id} has a working copy "
                     f"({session.working_kind}) at its own home instance; "
                     "R13 removed this combination (recompute@home settles "
                     "locally, copy@home degenerates to stay)")
-            prefix_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model, new_tokens, self.tp_degree,
+        # C13：copy 逐块交接的轮末兜底结算（正常路径已在 prefill drain
+        # 边界结算；因果序：块到达被图侧钉在 prefill 列车体完成之前 ≤
+        # drain < merge——此处只可能是直接 API 调用面未走 drain）。
+        self._settle_copy_handoffs(
+            session_id, boundary="merge", trigger_request_id=trigger_request_id)
+        # C15：后缀逐组恢复的轮末兜底（同 C13 边界语义）。
+        self._settle_restore_groups(session_id, boundary="merge")
+        # C14：home 侧物理残量快照（结算时刻事实，_close 前捕获）——copy
+        # 逐块交接已在轮内释放的字节不得计入"两侧实际保留量"（C12 §2
+        # 规则 4 的 journal 口径镜像）；无 journal（remote-read/recompute）
+        # 取 None ⇒ 纪录 base 前缀推导值（物理驻留真值）。
+        _copy_journal_at_merge = session.copy_handoff
+        _home_residual_bytes = (
+            sum(_copy_journal_at_merge.home_shards())
+            if _copy_journal_at_merge is not None else None)
+        transfers: list[KVTransfer] = []
+
+        # ---- 方向裁决（§4.3.1 真值表，少并多）。 ----
+        # O14：空串 base_location 显式 fail-closed（同上方 N9 注释）。
+        base_location = session.base_location
+        if base_location == "":
+            raise RuntimeError(
+                f"session {session_id} has empty-string base_location "
+                "at merge_back -- session metadata corrupt (None is "
+                "the only legal unset form for a pool-only base)")
+        if base_location is None:
+            base_location = self.REMOTE_MEMORY
+        base_prefix = session.base_resident_prefix_layers
+        base_history_tokens = session.base_history_tokens
+        if base_location == self.REMOTE_MEMORY or base_prefix == 0:
+            # home 侧基础保留量 H（逐 rank 账本真值；REMOTE 基/前缀 0 → 空）。
+            home_shards: tuple[int, ...] = ()
+        else:
+            home_shards = kv_cache_shard_bytes_for_layer_range(
+                self.model, base_history_tokens, self.tp_degree,
                 layer_start=0, layer_end=base_prefix)
-            if not any(prefix_shards):
-                break
+        # exec 侧工作副本保留量 W（账本真值：混合形态含池恢复后缀 S）。
+        working_shards = tuple(session.shard_bytes)
+        # C14：结算时刻的工作副本类别快照（终态清零 working_kind 之前
+        # 捕获——kv_delta_journal 行的字段来源）。
+        working_kind_at_settlement = session.working_kind
+        zero_byte_flip = session.working_kind in ("copy", "recompute")
+        if not home_shards:
+            if session.working_kind == "remote-read":
+                # 适用性排除 remote-read×REMOTE 基（正常不可达）：远读
+                # 工作副本从不物化基础历史，"就地转正"无从谈起——到达即
+                # 选点/适用性合同破损，fail-closed。
+                raise RuntimeError(
+                    f"session {session_id} merged a remote-read working copy "
+                    "over a pool-only base; remote-read applicability "
+                    "excludes REMOTE bases (no base was ever materialized "
+                    "at the execution instance)")
+            direction = "in_place"
+        elif zero_byte_flip:
+            # copy/recompute：exec 恒持并集 ⊇ home 侧——零字节翻转
+            #（无传输；胜者空间准备量 = 0，不可能失败）。
+            direction = "reverse"
+        else:
+            # remote-read：两侧保留量比大小，小的整份搬给大的（与最小
+            # 传输量选择恒一致——合并零池写前提下无口径分歧，§4.3.1）。
+            direction = (
+                "forward"
+                if sum(working_shards) <= sum(home_shards)
+                else "reverse")
+
+        # ---- 空间准备（I8：统一 T+E 逐出，无 merge 专用驱逐）。 ----
+        def _prepare_winner_capacity(
+            instance_index: int,
+            required_bytes_by_tp_rank: tuple[int, ...],
+        ) -> None:
+            transfers.extend(self._ensure_capacity(
+                instance_index,
+                required_bytes_by_tp_rank,
+                phase="completion",
+                reason="merge_winner_capacity",
+                trigger_request_id=trigger_request_id,
+                reservation_request_id=reservation_request_id,
+            ))
+
+        def _requirement_for(candidate: str) -> tuple[int, tuple[int, ...]]:
+            return (
+                (home, working_shards)
+                if candidate == "forward"
+                else (exec_instance, home_shards))
+
+        if direction in ("forward", "reverse") and not zero_byte_flip:
+            # 仅 remote-read 的两方向有真实容量需求；零字节翻转/in_place
+            # 的准备量 = 0（并集已在胜者侧）。
+            fallback = "reverse" if direction == "forward" else "forward"
             try:
-                # home 合并空间准备（§3.2：不认为"写回免费"）；成功路径的
-                # 逐出转移必须并入返回值（此前返回值被丢弃——被逐会话的
-                # 池写不进图，C++ 水位盲区，2026-09-14 一并修复）。
-                evictions = self._ensure_capacity(
-                    home,
-                    prefix_shards,
-                    phase="completion",
-                    reason="home_merge_capacity",
-                    trigger_request_id=trigger_request_id,
-                    reservation_request_id=reservation_request_id,
-                )
-                transfers.extend(evictions)
-                transfers.append(self._increment_noc_transfer(
-                    session=session,
-                    trigger_request_id=trigger_request_id,
-                    source_instance_index=exec_instance,
-                    target_instance_index=home,
-                    new_tokens=new_tokens,
-                    layer_start=0,
-                    layer_end=base_prefix,
-                ))
-                break
-            except KVCapacityError as exc:
-                # D7 清账：raise 前已提交的逐出并入返回值（同步图侧）。
-                transfers.extend(exc.evictions)
-                degrade = self._self_degrade_base_for_merge(
-                    session,
-                    prefix_shards,
-                    trigger_request_id=trigger_request_id,
-                    reservation_request_id=reservation_request_id,
-                )
-                if degrade is None:
-                    # K6：自降级无步可走（基础前缀已 k=0 仍不满足）——
-                    # 容量缺口确认不可恢复，落账后 fail-closed（raise
-                    # 消息内嵌逐 rank 缺口现场——终态诊断不依赖侧车）。
-                    self.commit_deep_gap_records(exc.deep_gap_records)
+                primary_target, primary_required = _requirement_for(direction)
+                _prepare_winner_capacity(primary_target, primary_required)
+            except KVCapacityError as primary_exc:
+                # D7 清账：raise 前已提交的逐出并入返回值（同步图侧），
+                # 然后改试另一方向（双向二选一兜底）。
+                transfers.extend(primary_exc.evictions)
+                try:
+                    fallback_target, fallback_required = _requirement_for(
+                        fallback)
+                    _prepare_winner_capacity(
+                        fallback_target, fallback_required)
+                except KVCapacityError as fallback_exc:
+                    # 双侧深缺口：合同变更终态（2026-09-17）——两个 exc
+                    # 的逐 rank 缺口都要落账，fail-closed（热 KV 裁定封死
+                    # "执行完再踢出去"的自外迁兜底）。
+                    transfers.extend(fallback_exc.evictions)
+                    self.commit_deep_gap_records(primary_exc.deep_gap_records)
+                    self.commit_deep_gap_records(
+                        fallback_exc.deep_gap_records)
                     raise RuntimeError(
-                        f"self-degrade produced no transfer while base "
-                        f"prefix {base_prefix} > 0 (session {session_id}); "
-                        f"deep_gap_records={exc.deep_gap_records!r}")
-                transfers.append(degrade)
-                # 循环以降级后的 base_prefix 重试（单调递减，≤ L 轮终止）。
+                        "merge_back v2 exhausted unified eviction on both "
+                        f"directions (session {session_id}, request "
+                        f"{trigger_request_id}) -- dual-sided deep gap; "
+                        f"primary {direction}: {primary_exc}; "
+                        f"fallback {fallback}: {fallback_exc}"
+                    ) from fallback_exc
+                direction = fallback
 
-        # ---- 增量后缀层 [final_base_prefix, L) 写回池。 ----
-        final_base_prefix = session.base_resident_prefix_layers
-        final_base_remote = (
-            (session.base_location or self.REMOTE_MEMORY) == self.REMOTE_MEMORY
-            or final_base_prefix == 0)
-        if not final_base_remote and home != exec_instance:
-            suffix_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model, new_tokens, self.tp_degree,
-                layer_start=final_base_prefix, layer_end=self.model.layers)
-            if any(suffix_shards):
-                transfers.append(self._increment_pool_store_transfer(
-                    session=session,
-                    trigger_request_id=trigger_request_id,
-                    new_tokens=new_tokens,
-                    layer_start=final_base_prefix,
-                    layer_end=self.model.layers,
-                    resident_prefix_layers_after=final_base_prefix,
-                    reason="merge_increment_suffix_pool_store",
-                ))
+        # ---- 传输发射（I6：merge 事务零池写——不产生任何 remote_store）。 ----
+        transferred_bytes = 0
+        if direction == "forward":
+            # 一笔 noc_migrate exec→home，逐 rank 字节 = 账本真值
+            # session.shard_bytes（不从 context_tokens 派生——D1）。
+            transfer = self._working_copy_noc_transfer(
+                session=session,
+                trigger_request_id=trigger_request_id,
+                source_instance_index=exec_instance,
+                target_instance_index=home,
+            )
+            transfers.append(transfer)
+            transferred_bytes = transfer.total_bytes
+        elif direction == "reverse" and not zero_byte_flip:
+            # 翻转腿：home 侧基础前缀 [0, base_prefix) 经 NoC 搬到 exec。
+            # 字节从 _BasePrefixView.context_tokens（= base_history_tokens）
+            # 派生——home 侧基础账本即真值。
+            transfer = self._noc_transfer(
+                phase="completion",
+                reason="merge_base_to_exec",
+                session=_BasePrefixView(
+                    session_id=session_id,
+                    instance_index=home,
+                    context_tokens=base_history_tokens,
+                    resident_prefix_layers=base_prefix,
+                ),
+                trigger_request_id=trigger_request_id,
+                source_instance_index=home,
+                target_instance_index=exec_instance,
+                layer_start=0,
+                layer_end=base_prefix,
+            )
+            transfers.append(transfer)
+            transferred_bytes = transfer.total_bytes
 
-        # ---- 账本结算：恢复基础历史状态 + 追加新增量 + 释放工作副本。 ----
-        final_base_tokens = session.base_history_tokens + new_tokens
+        # ---- 账本结算：统一终态 = 全层 LOCAL@胜者，败者侧释放。 ----
+        if direction == "forward":
+            winner, loser = home, exec_instance
+            # 败者 = exec：释放整份工作副本（含混合形态的池恢复后缀）。
+            self._remove_local_shards(exec_instance, working_shards)
+            self._metrics_suffix_evict_parts(
+                session_id,
+                0,
+                anchor_kind=_metrics_anchor_for_phase("completion"),
+                request_id=trigger_request_id,
+                cause="merge_working_copy_release",
+                instance_index=exec_instance,
+            )
+            # 胜者 = home：入账 W。metrics 镜像按 parts 模型拆段——单段
+            # tokens×层区间无法精确表达混合形态的 W（后缀复份段冻结于
+            # base_history_tokens 的 [p, L)，增量段 [0, L)@增量 token；
+            # LOCAL 基 p == L 退化为单增量段，与旧口径同形）。
+            self._add_local_shards(home, working_shards)
+            if 0 < base_prefix < self.model.layers:
+                suffix_shards = kv_cache_shard_bytes_for_layer_range(
+                    self.model, base_history_tokens, self.tp_degree,
+                    layer_start=base_prefix, layer_end=self.model.layers)
+                self._metrics_add_segment(
+                    session_id, home, base_history_tokens,
+                    base_prefix, self.model.layers, suffix_shards,
+                    anchor_kind="completion",
+                    request_id=trigger_request_id,
+                    cause="merge_working_copy_to_home",
+                )
+                increment_shards = tuple(
+                    working - suffix for working, suffix in zip(
+                        working_shards, suffix_shards))
+            else:
+                increment_shards = working_shards
+            if any(increment_shards):
+                self._metrics_add_segment(
+                    session_id, home, session.context_tokens,
+                    0, self.model.layers, increment_shards,
+                    anchor_kind="completion",
+                    request_id=trigger_request_id,
+                    cause="merge_working_copy_to_home",
+                )
+        else:
+            if direction == "reverse":
+                # 翻转（含零字节）：胜者 = exec，败者 = home。
+                winner, loser = exec_instance, home
+                if session.copy_handoff is not None:
+                    # C13：copy 的 home 侧基础已在轮内逐块交接释放（不
+                    # 等轮末）——轮末零字节结算**不重复释放已交接源块**
+                    #（C12 冻结 §2 规则 4）；断言闭合（基础历史最终完整
+                    # 落到执行端是 copy 完成条件）。
+                    journal = session.copy_handoff
+                    if not journal.all_settled():
+                        raise RuntimeError(
+                            f"copy merge for session {session_id} reached "
+                            "settlement with unsettled handoff chunks -- "
+                            "the base history never fully landed on the "
+                            "execution instance (copy completion requires "
+                            "the actual arrival events, not stage names)")
+                    if any(journal.home_shards()):
+                        raise RuntimeError(
+                            f"copy merge for session {session_id} found "
+                            "residual home-side bytes after full handoff "
+                            f"({journal.home_shards()}) -- ledger drift")
+                else:
+                    # recompute（或无 journal 的 copy 形态）：败者 = home
+                    # 释放基础驻留前缀。
+                    self._remove_local_shards(home, home_shards)
+                    self._metrics_suffix_evict_parts(
+                        session_id,
+                        0,
+                        anchor_kind=_metrics_anchor_for_phase("completion"),
+                        request_id=trigger_request_id,
+                        cause="merge_base_release",
+                        instance_index=home,
+                    )
+                if not zero_byte_flip:
+                    # 含传输翻转：胜者 exec 入账 H。
+                    self._add_local_shards(exec_instance, home_shards)
+                    self._metrics_add_segment(
+                        session_id, exec_instance, base_history_tokens,
+                        0, base_prefix, home_shards,
+                        anchor_kind="completion",
+                        request_id=trigger_request_id,
+                        cause="merge_base_to_exec",
+                    )
+            else:
+                # in_place：无释放无入账无传输（无主，裁定③——工作副本
+                # 已在 exec 账上直接转正）。
+                winner, loser = exec_instance, home
+
+        # 守恒断言：胜者侧现有字节合计 == 合并后全量（线性算术应精确
+        # 相等；不等 = 账本破损/调用方口径漂移，fail-closed）。remote-read
+        # 两方向胜者 = 基础＋工作副本之和；零字节翻转（copy/recompute）
+        # 与 in_place 胜者持并集 ⊇ 基础——只核对工作副本本身。
+        final_tokens = base_history_tokens + new_tokens
         full_shards = kv_cache_shard_bytes_for_tokens(
-            self.model, final_base_tokens, self.tp_degree)
-        # 执行端释放整个工作副本（基础复份 + 新增量）。
-        self._remove_local_shards(exec_instance, session.shard_bytes)
-        # 自查 B'（M7 同族，2026-09-15）：执行端工作副本释放镜像 metrics
-        # 通道（该会话 exec 实例 parts 全量移除，layer_start=0；home 侧
-        # 增量并入已有镜像）——漏镜像是 metrics 通道 exec 侧永久高估的
-        # 来源（水印通道正确）。
-        self._metrics_suffix_evict_parts(
-            session_id,
-            0,
-            anchor_kind=_metrics_anchor_for_phase("completion"),
-            request_id=trigger_request_id,
-            cause="merge_working_copy_release",
-            instance_index=exec_instance,
-        )
+            self.model, final_tokens, self.tp_degree)
+        winner_existing = (
+            tuple(home + working for home, working in zip(
+                home_shards, working_shards))
+            if direction in ("forward", "reverse") and not zero_byte_flip
+            else working_shards)
+        if winner_existing != full_shards:
+            raise RuntimeError(
+                f"merge settlement conservation failed for session "
+                f"{session_id}: winner-side per-rank bytes {winner_existing} "
+                f"!= full-history shards {full_shards} "
+                f"(home base {home_shards}, working copy {working_shards}, "
+                f"base_history_tokens={base_history_tokens}, "
+                f"new_tokens={new_tokens}, "
+                f"working context_tokens={session.context_tokens}) -- "
+                "ledger integrity failure")
+
         session.working_kind = None
-        session.context_tokens = final_base_tokens
+        session.location = self.LOCAL_HBM
+        session.instance_index = winner
+        session.resident_prefix_layers = self.model.layers
+        session.context_tokens = final_tokens
         session.total_bytes = sum(full_shards)
         session.shard_bytes = full_shards
-        if final_base_remote:
-            session.location = self.REMOTE_MEMORY
-            session.instance_index = None
-            session.resident_prefix_layers = 0
-        else:
-            # home 侧 HBM 已含基础前缀；仅**新增量**的前缀部分经回传并入
-            # （基础字节从未离开 home，不得重复加入）。
-            session.location = (
-                self.LOCAL_HBM
-                if final_base_prefix == self.model.layers
-                else self.PARTIAL_HBM_REMOTE)
-            session.instance_index = home
-            session.resident_prefix_layers = final_base_prefix
-            increment_prefix_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model, new_tokens, self.tp_degree,
-                layer_start=0, layer_end=final_base_prefix)
-            self._add_local_shards(home, increment_prefix_shards)
-            self._metrics_add_segment(
-                session_id, home, new_tokens, 0, final_base_prefix,
-                increment_prefix_shards,
-                anchor_kind="completion",
-                request_id=trigger_request_id,
-                cause="merge_increment_to_home",
-            )
+        # home 迁移（I7）：事务内一次写——merge v2 的第二个赋值点
+        #（首轮建立 :3323 之外）。
+        session.home_instance = winner
         session.base_location = ""
         session.base_history_tokens = 0
         session.base_resident_prefix_layers = 0
+        session.base_shard_bytes = ()
         session.last_merged_request_id = trigger_request_id
+        # C13：copy 交接账本轮末闭合（断言闭合 + 科目 close 事件 + 清账）。
+        self._close_copy_handoff_journal(session, boundary="merge")
+        self.last_merge_outcome = {
+            "session_id": session_id,
+            "direction": direction,
+            "zero_byte_flip": zero_byte_flip and direction == "reverse",
+            "winner_instance": winner,
+            "loser_instance": loser,
+            "transferred_bytes": transferred_bytes,
+            "home_flipped": winner != home,
+        }
+        # C14：kv_delta_journal 结算行（结算时刻事实；home_before 用局部
+        # 变量 home——session.home_instance 已在上方迁移赋值为胜者）。
+        self._append_kv_delta_row(
+            session_id=session_id,
+            trigger_request_id=trigger_request_id,
+            working_kind=working_kind_at_settlement,
+            direction=direction,
+            zero_byte_flip=zero_byte_flip and direction == "reverse",
+            winner_instance=winner,
+            loser_instance=loser,
+            home_before=home,
+            transferred_bytes=transferred_bytes,
+            home_side_retained_bytes=(
+                _home_residual_bytes
+                if _home_residual_bytes is not None else sum(home_shards)),
+            exec_side_retained_bytes=sum(working_shards),
+            new_tokens=new_tokens,
+        )
         self._check_invariants_after_mutation(session_ids=(session_id,))
         return tuple(transfers)
 
-    def _self_degrade_base_for_merge(
+    def _append_kv_delta_row(
         self,
-        session: SessionKVState,
-        required_bytes_by_tp_rank: Sequence[int],
         *,
+        session_id: str,
         trigger_request_id: str,
-        reservation_request_id: Optional[str] = None,
-    ) -> Optional[KVTransfer]:
-        """R4 自我释放独立事务（红线 1，2026-09-14）。
+        working_kind: Optional[str],
+        direction: str,
+        zero_byte_flip: bool,
+        winner_instance: Optional[int],
+        loser_instance: Optional[int],
+        home_before: Optional[int],
+        transferred_bytes: int,
+        home_side_retained_bytes: int,
+        exec_side_retained_bytes: int,
+        new_tokens: int,
+    ) -> None:
+        """C14 kv_delta_journal 行构造（merge_back 两出口共用；字段面
+        = C16 消费面 + 逐请求合并披露，见 __init__ 处接口声明）。
 
-        merge 空间准备失败时，把**本会话** home 侧基础前缀的真实层经
-        ``layer_policy.plan_release`` 计划后逐层 ``remote_store`` 降池：
-        受限 victim 视图只含本会话基础前缀，**不经**
-        ``_completed_resident_candidates`` victim 池、不触碰任何其他会话
-        （活跃可逐口子不开，设计方案 §3.3 不变量 2 的在用保护无损）。
-        降级层数/字节/触发请求入 ``merge_degrade_events``（消融归因不
-        隐身）；返回 None 表示基础前缀已 k=0（调用方循环转 REMOTE 归并）。
-        plan 无法给出步（异常/空步）时兜底整段降池到 k=0——"永不失败"
-        的兜底路径（§3.5）。
+        home_after/home_migration 由 home_before 与 winner 派生（A12'：
+        winner 缺席 = stay 等无胜者出口，home 不变——home_after 取
+        home_before，不得落 None：消费端把 None 当独立 home 计入集合，
+        sessions_with_multiple_homes 乒乓指标假阳性）；
+        staging_return_bytes 恒 0——F14 无留存型暂存口径下"暂存归还"
+        为无操作（§15.6 披露位，非可变状态）。行一经追加即为冻结事实
+        （append-only，不回写）。
         """
-        home = session.home_instance
-        base_prefix = session.base_resident_prefix_layers
-        tokens = session.base_history_tokens
-        if home is None or base_prefix <= 0:
-            return None
-        effective_remaining = self._effective_remaining_by_tp_rank(
-            home, exclude_request_id=reservation_request_id)
-        gap = tuple(
-            max(0, required - available)
-            for required, available in zip(
-                required_bytes_by_tp_rank, effective_remaining))
-        try:
-            victim = VictimView(
-                session_id=session.session_id,
-                resident_prefix_layers=base_prefix,
-                layer_group_bytes_fn=(
-                    lambda start, end, t=tokens:
-                        kv_cache_shard_bytes_for_layer_range(
-                            self.model, t, self.tp_degree,
-                            layer_start=start, layer_end=end)),
-                retention_target_layers=self._adaptive_retention_target_tokens(
-                    session.session_id, tokens, home),
-                next_request_type=session.next_request_type,
-                last_completion_ns=session.last_completion_ns,
-            )
-            plan = self.layer_policy.plan_release(
-                gap_bytes_by_tp_rank=gap, victims=(victim,))
-            step = plan.steps[0] if plan.steps else None
-        except (LayerEvictionError, IndexError):
-            step = None
-        if step is None or step.layer_start <= 0:
-            # 兜底 k=0：整段降池（plan_release 语义下唯一可信的
-            # "永不失败"路径；layer_start<=0 的步等价整段）。
-            layer_start = 0
-            released = kv_cache_shard_bytes_for_layer_range(
-                self.model, tokens, self.tp_degree,
-                layer_start=0, layer_end=base_prefix)
-        else:
-            layer_start = step.layer_start
-            released = tuple(step.bytes_by_tp_rank)
-        base_view = _BasePrefixView(
-            session_id=session.session_id,
-            instance_index=home,
-            context_tokens=tokens,
-            resident_prefix_layers=base_prefix,
-        )
-        transfer = self._remote_store_transfer(
-            phase="completion",
-            reason="home_merge_base_degrade",
-            session=base_view,
-            trigger_request_id=trigger_request_id,
-            layer_start=layer_start,
-            layer_end=base_prefix,
-            resident_prefix_layers_after=layer_start,
-        )
-        self._remove_local_shards(home, released)
-        session.base_resident_prefix_layers = layer_start
-        # M7（kimi 复审）+ 自查 B（2026-09-15）：账本扣减镜像 metrics
-        # 观测通道（与 _evict_suffix 的 _metrics_suffix_evict_parts 同款），
-        # 且**只截 home 实例的 parts**——本会话在执行端还有工作副本
-        # parts（同 session_id），无实例过滤会把工作副本层一并误截
-        # （metrics 通道 exec 低估；水印通道经 remote_store 已正确）。
-        self._metrics_suffix_evict_parts(
-            session.session_id,
-            layer_start,
-            anchor_kind=_metrics_anchor_for_phase("completion"),
-            request_id=trigger_request_id,
-            cause=f"home_merge_base_degrade:layers{layer_start}-{base_prefix}",
-            instance_index=home,
-        )
-        self.merge_degrade_events.append({
-            "session_id": session.session_id,
+        row = {
+            "seq": len(self.kv_delta_journal),
+            "session_id": session_id,
             "trigger_request_id": trigger_request_id,
-            "home_instance": home,
-            "layer_start": layer_start,
-            "layer_end": base_prefix,
-            "released_bytes": sum(released),
-        })
-        self._check_invariants_after_mutation(session_ids=(session.session_id,))
-        return transfer
+            "working_kind": working_kind,
+            "direction": direction,
+            "zero_byte_flip": zero_byte_flip,
+            "winner_instance": winner_instance,
+            "loser_instance": loser_instance,
+            "home_before": home_before,
+            "home_after": (
+                winner_instance if winner_instance is not None
+                else home_before),
+            "home_migration": (
+                winner_instance is not None
+                and home_before is not None
+                and winner_instance != home_before),
+            "transferred_bytes": transferred_bytes,
+            "home_side_retained_bytes": home_side_retained_bytes,
+            "exec_side_retained_bytes": exec_side_retained_bytes,
+            "new_tokens": new_tokens,
+            "staging_return_bytes": 0,
+        }
+        self.kv_delta_journal.append(row)
+        self._kv_delta_index[trigger_request_id] = row
+
+    def kv_delta_find(self, trigger_request_id: str) -> Optional[dict]:
+        """按触发请求 id 取 kv_delta_journal 结算行（最新命中；无则
+        None）。C14 结算闭合审计（SH merge watch 闭合门）与 C16 消费
+        共用入口。O5：O(1) 索引查询（_kv_delta_index 与账本同源）。"""
+        return self._kv_delta_index.get(trigger_request_id)
+
+    def kv_delta_journal_rows(self) -> tuple[dict[str, object], ...]:
+        """C14 kv_delta_journal 序列化导出（F3：PROVENANCE §20.3/§22.7-1
+        移交义务履行——run 级 sidecar 的行源，与 copy_handoff_events /
+        restore_events 同披露纪律：GREEN run 亦保留，非失败台账）。
+
+        行 = 结算时刻冻结事实（append-only，不回写）；导出为逐行 dict
+        浅拷贝（消费方改写不回写账本）。字段面 = KV_DELTA_JOURNAL_FIELDS
+        （C14 §20.3 冻结口径，见常量处注记）。完整性 fail-closed：字段
+        集漂移/seq 断链 = 账本破损（构造面唯一入口 _append_kv_delta_row
+        保证 seq 恒为追加序号，到达即破损，不得静默降级）。
+        """
+        rows: list[dict[str, object]] = []
+        for index, row in enumerate(self.kv_delta_journal):
+            if tuple(row) != KV_DELTA_JOURNAL_FIELDS:
+                raise RuntimeError(
+                    f"kv_delta_journal row {index} field set drifted from "
+                    f"the C14 frozen schema: {tuple(row)} != "
+                    f"{KV_DELTA_JOURNAL_FIELDS} -- ledger integrity failure")
+            if row["seq"] != index:
+                raise RuntimeError(
+                    f"kv_delta_journal seq chain broken at index {index}: "
+                    f"seq={row['seq']!r} != {index} -- ledger integrity "
+                    f"failure")
+            rows.append(dict(row))
+        return tuple(rows)
 
     def observe_completed_input(
         self,
@@ -4237,6 +5524,37 @@ class KVCacheManager:
         self._input_length_stats.setdefault(session_id, []).append(input_tokens)
         self._run_input_count += 1
         self._run_input_sum += input_tokens
+
+    def observe_valid_service_sample(
+        self,
+        group: str,
+        *,
+        observed_ratio: float,
+        completion_ns: int,
+        service_duration_ns: int,
+    ) -> float:
+        """C15（§5.4）：喂入一个**可分离**的有效服务样本（η/γ 更新）。
+
+        ``observed_ratio`` = 实际量 / 同区间基础模型预测量（分母不含
+        修正因子——避免循环校正）；``service_duration_ns`` = 正服务时
+        长（τ 来源）。仅已完成或已实际发生的服务可入样；受排队/冷 KV
+        等待污染的墙钟**不得**经此入样（调用方保证可分离性——FS 侧
+        的完成时刻默认按不可观测处理，见 mark_complete）。
+        """
+        return self.service_factors.observe_valid_service(
+            group,
+            observed_ratio=observed_ratio,
+            completion_ns=completion_ns,
+            service_duration_ns=service_duration_ns)
+
+    def adaptive_decision_find(
+        self, session_id: str,
+    ) -> Optional[dict]:
+        """按会话取最近一条 adaptive 决策披露行（无则 None）。"""
+        for row in reversed(self.adaptive_decisions):
+            if row["session_id"] == session_id:
+                return row
+        return None
 
     def _estimate_next_input(
         self, session_id: str,
@@ -4262,6 +5580,26 @@ class KVCacheManager:
             )
         return self._prefill_ns_per_token
 
+    def _prefill_chunk_load_ns(self, *, chunk_tokens: int,
+                               context_tokens: int) -> int:
+        """N4：chunk 级 roofline memo（E 递推整段负载的构造件；与 SH
+        _prefill_chunk_task_load_ns 同式——face 侧无 SH 的共享缓存，
+        自带 per-instance 小表，键含 (chunk, context) 全形）。"""
+        cache = getattr(self, "_prefill_chunk_cache", None)
+        if cache is None:
+            cache = {}
+            self._prefill_chunk_cache = cache
+        key = (self.tp_degree, chunk_tokens, context_tokens)
+        if key not in cache:
+            cache[key] = estimate_prefill_task_load_ns(
+                self.topology.hardware,
+                self.model,
+                instance_size=self.tp_degree,
+                chunk_tokens=chunk_tokens,
+                context_tokens=context_tokens,
+            )
+        return cache[key]
+
     def _adaptive_retention_target(self, session: SessionKVState) -> int:
         return self._adaptive_retention_target_tokens(
             session.session_id, session.context_tokens, session.instance_index)
@@ -4282,6 +5620,34 @@ class KVCacheManager:
             divisor = max(1, int(self._pool_divisor_fn(instance_index)))
         return self.pool_bandwidth_gbps / divisor  # 1 GB/s == 1 B/ns
 
+    def _adaptive_reference_ranks(
+        self, instance_index: Optional[int],
+    ) -> tuple[int, ...]:
+        """递推预测的参考 rank 集（instance_index None → 首实例参考，
+        与旧解析口径的"无 divisor 注入 = 单流全带宽"语义对齐）。"""
+        if instance_index is None:
+            return tuple(self.topology.instances[0].ranks)
+        return tuple(self.topology.instance(instance_index).ranks)
+
+    def _record_adaptive_decision(
+        self,
+        session_id: str,
+        *,
+        k_target: int,
+        source: str,
+        statuses,
+        **extra,
+    ) -> None:
+        """决策披露侧车（C15：不改 SH 的通道）——预测器来源（递推/解
+        析）与覆盖状态逐决策落账；无时间戳（确定性测试友好）。"""
+        self.adaptive_decisions.append({
+            "session_id": session_id,
+            "k_target": int(k_target),
+            "source": source,
+            "statuses": list(statuses),
+            **extra,
+        })
+
     def _adaptive_retention_target_tokens(
         self,
         session_id: str,
@@ -4290,14 +5656,19 @@ class KVCacheManager:
     ) -> int:
         """adaptive 软保留目标（§5.5 调用 2：等待 session 的预测目标）。
 
-        均匀层解析模型：c_j = 估计输入的逐层 prefill 服务；r_j = 单层
-        缺失 KV 的池恢复时间（逐 rank 取最慢，**P1：按池端口仲裁份额
-        后的有效速率**——多流共享端口时恢复变慢 → k_hide 目标变大 →
-        保留更多层，消除"恢复显得快 → 保留偏小 → 过度逐出"的系统性
-        乐观）；q = 池端口时延。无样本或缺池速率时保守保留全部 L 层
-        （cold_start_unknown_input）。所得是保留目标预测，非未来严格
-        最小值；返回后按真实请求重算。tokens/instance 参数化供 R4 的
-        基础前缀受限 victim 视图复用（同一会话、home 侧口径）。
+        C15（F12）起由**事件递推预测器**计算——adaptive 的正式在线实
+        现替换原解析在线模型（同公式同因果边界：解析例 L=32/c=1ms/
+        q=0/r=0.5|2|4ms → k=1/17/25 两径一致）：同一只读资源快照的逐
+        层 R/D 递推（写腿×计算 memory 腿同端口仲裁）+ 钉死剪枝（逐
+        rank 独享速率串行累计下界、期限钉在无候选恢复流量的消费时刻）。
+        腿粒度 = 逐层（与 §5.2 公式同粒度；执行侧按 ≤8 层组门控，组内
+        保守方向披露）。输入全为因果可见量：池速率/时延（硬件配置）、
+        逐层字节（区间账本口径 kv_cache_shard_bytes_for_layer_range）、
+        逐层计算（roofline prefill 均摊）、η/γ 在线因子（§5.4 因果更
+        新）。预测器来源与覆盖状态落 adaptive_decisions 侧车。无样本
+        /缺池速率仍保守保留全部 L（cold_start_unknown_input）。tokens/
+        instance 参数化口径沿基础前缀受限 victim 视图的旧复用（R4 已
+        删除，2026-09-17；签名保留供 _ensure_capacity 的 victim 视图）。
         """
         layers = self.model.layers
         if self.layer_policy_mode != "adaptive":
@@ -4306,21 +5677,116 @@ class KVCacheManager:
             return layers
         estimated_input = self._estimate_next_input(session_id)
         if estimated_input is None or estimated_input <= 0:
+            self._record_adaptive_decision(
+                session_id, k_target=layers, source="cold_start",
+                statuses=("cold_start_unknown_input",))
             return layers
         total_context = context_tokens + estimated_input
-        # 单层逐 rank 字节取最慢 rank（恢复完成 = 最慢 rank 完成）。
-        one_layer_shards = kv_cache_shard_bytes_for_layer_range(
+        ranks = self._adaptive_reference_ranks(instance_index)
+        if not ranks:
+            return layers
+        # ---- 只读资源快照（峰值表 + 在册他流）----
+        peaks: dict[str, float] = {}
+        for rank in ranks:
+            edge = self.nearest_edge(rank)
+            peaks[f"pool:{edge}"] = float(self.pool_bandwidth_gbps)
+            peaks[f"port:{rank}"] = float(
+                self.topology.hardware.local_hbm_bandwidth_gbps)
+        pool_divisor = 1
+        if self._pool_divisor_fn is not None and instance_index is not None:
+            pool_divisor = max(
+                1, int(self._pool_divisor_fn(instance_index)))
+        committed: list[_CommittedFlow] = []
+        if pool_divisor > 1:
+            # P1 口径：divisor 含候选自身 +1 → 在册他流 = divisor−1，以
+            # 未知 ETA 提交流入快照（状态标注 unknown_release_eta，不当
+            # 零代价）；该实例涉及的每个池边缘端口各计入（保守披露）。
+            edges = sorted({self.nearest_edge(rank) for rank in ranks})
+            for edge_index, edge in enumerate(edges):
+                for flow_index in range(pool_divisor - 1):
+                    committed.append(_CommittedFlow(
+                        flow_id=(
+                            f"pool-external-i{instance_index}"
+                            f"-e{edge_index}-{flow_index}"),
+                        resources=(f"pool:{edge}",),
+                        release_eta_ns=None))
+        # ---- 恢复腿（逐层；路径 = 池边缘 → 目标端口）与计算段 ----
+        legs = []
+        for layer_index in range(layers):
+            legs.append(RestoreGroupLeg(
+                layer_start=layer_index,
+                layer_end=layer_index + 1,
+                bytes_by_rank=kv_cache_shard_bytes_for_layer_range(
+                    self.model, total_context, self.tp_degree,
+                    layer_start=layer_index, layer_end=layer_index + 1),
+                path_by_rank=tuple(
+                    (f"pool:{self.nearest_edge(rank)}", f"port:{rank}")
+                    for rank in ranks),
+            ))
+        per_layer_kv = kv_cache_shard_bytes_for_layer_range(
             self.model, total_context, self.tp_degree,
             layer_start=0, layer_end=1)
-        bytes_per_ns = self._pool_effective_bytes_per_ns(instance_index)
-        if bytes_per_ns is None or bytes_per_ns <= 0:
+        # N4（2026-09-23 复核审计4）：prefill 整段负载改生产同形——
+        # PREFILL_CHUNK_SIZE 切分 + 累计 context 逐 chunk roofline 求和
+        # （_prefill_ns_per_token_effective 的 context=1/chunk=1 线性
+        # 外推丢二次形状：10 输入+90 历史线性 1800 vs 单 chunk roofline
+        # 4464）。history 基 = session 现有 context（total_context 的
+        # 减侧）；缓存走 _prefill_chunk_load_memo（与 SH 同款）。
+        prefill_total_ns = 0
+        completed = 0
+        while completed < estimated_input:
+            chunk_tokens = min(
+                PREFILL_CHUNK_SIZE, estimated_input - completed)
+            prefill_total_ns += self._prefill_chunk_load_ns(
+                chunk_tokens=chunk_tokens,
+                context_tokens=context_tokens + completed + chunk_tokens)
+            completed += chunk_tokens
+        prefill_total_ns = max(1, prefill_total_ns)
+        c_j = max(1.0, prefill_total_ns / layers)
+        segments = [
+            ComputeLayerSegment(
+                layer=layer,
+                base_ns_by_rank=tuple(c_j for _ in ranks),
+                memory_bytes_by_rank=per_layer_kv,
+                port_by_rank=tuple(f"port:{rank}" for rank in ranks),
+                group="prefill",
+            )
+            for layer in range(1, layers + 1)
+        ]
+        snapshot = _ResourceSnapshot(
+            peak_bytes_per_ns=peaks,
+            committed=tuple(committed),
+            port_telemetry=False,
+            link_model=False,
+        )
+        efficiency = _EfficiencyFactors(
+            eta={"pool": self.service_factors.value("pool")},
+            gamma={"prefill": self.service_factors.value("prefill")},
+        )
+        try:
+            predictor = LayerRecursionPredictor(
+                snapshot, legs, segments,
+                self.pool_latency_ns, efficiency)
+            result = predictor.predict_k_hide()
+        except _EventRecursionError:
+            # fail-closed：保守保留全部层并披露（不当零代价、不删候选）。
+            self._record_adaptive_decision(
+                session_id, k_target=layers, source="recursion_error",
+                statuses=("recursion_fail_closed",),
+                pool_divisor=pool_divisor)
             return layers
-        r_j = max(1, int(max(one_layer_shards) / bytes_per_ns))
-        prefill_total_ns = max(
-            1, int(estimated_input * self._prefill_ns_per_token_effective()))
-        c_j = max(1, prefill_total_ns // layers)
-        result = k_hide_deadline(
-            [c_j] * layers, [r_j] * layers, self.pool_latency_ns)
+        self._record_adaptive_decision(
+            session_id,
+            k_target=result.k_hide,
+            source=result.source,
+            statuses=result.statuses,
+            analytic_min_k=result.analytic_min_k,
+            pool_divisor=pool_divisor,
+            exposed_stall_ns=result.selected_trace.exposed_stall_ns,
+            compute_slowdown_ns=result.selected_trace.compute_slowdown_ns,
+            gamma_prefill=self.service_factors.value("prefill"),
+            eta_pool=self.service_factors.value("pool"),
+        )
         return result.k_hide
 
 
@@ -4362,8 +5828,11 @@ class KVCacheManager:
             )
         session = self._sessions[session_id]
         if session.working_kind is not None:
-            # merge 事务必须先于完成标记（§2.3：service_done 在
-            # merge_done 之后）。
+            # merge 事务必须先于完成标记（结算边界不变量）。09-21 新
+            # §2.3 合同序：service_done（响应完成）在前、merge_done
+            # （结算完成）在后；本标记是 merge_done 之后的收尾点
+            # （session 转为可逐出的 inactive），不是响应完成锚——
+            # 到达时工作副本必须已结算（无未合并副本标记完成）。
             raise RuntimeError(
                 "session completed with an unmerged working copy")
         if session.location not in {
@@ -4375,8 +5844,26 @@ class KVCacheManager:
             and session.instance_index is None
         ):
             raise RuntimeError("resident completed session has no instance")
+        if session.restore_journal is not None and not (
+                session.restore_journal.all_consumed()):
+            # C15：直连 API 调用面可能不经 prefill drain（在线路径的
+            # 正常结算边界）——完成标记兜底结算（因果上 completion 晚
+            # 于 drain/merge，消费保证已兑现；事件按 boundary=
+            # mark_complete 落账披露，与 C13 merge 兜底同款语义）。
+            self._settle_restore_groups(
+                session_id, boundary="mark_complete")
+        if session.restore_journal is not None:
+            raise RuntimeError(
+                f"session {session_id} completed with unsettled restore "
+                "groups (settlement failed at every boundary)")
         session.active = False
         session.last_completion_ns = completion_ns
+        # C15（§5.4 在线效率更新）：完成时刻的墙钟含排队与冷 KV 等待的
+        # 混合等待——无可分离服务区间时不入样：保持原估计并标记不可观
+        # 测（不把受混合等待污染的墙钟当纯服务样本）。可分离样本经
+        # observe_valid_service_sample 因果喂入。
+        self.service_factors.mark_unobservable("prefill")
+        self.service_factors.mark_unobservable("pool")
         # Record the idle session's trigger class so the typed eviction
         # order sees it (the event loop batches mark_complete before later
         # admissions).

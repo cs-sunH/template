@@ -35,17 +35,13 @@ namespace AstraSim {
 namespace ExecutionDriven {
 
 /// Phase-6 (方案 §9.1) per-run mechanism counters, C++ side. All values are
-/// cumulative over the run; reset() for fixture reuse.
+/// cumulative over the run.
 struct OnlineStatsCounters {
     uint64_t global_wakeup_count = 0;   // main-loop T+1 explicit wakeups
     uint64_t graph_validate_count = 0;  // Phase A validate calls
     uint64_t graph_validate_ns = 0;     // cumulative validate wall ns
     uint64_t snapshot_count = 0;        // tick-end sensing summary computations
     uint64_t snapshot_ns = 0;           // cumulative sensing summary wall ns
-
-    void reset() {
-        *this = OnlineStatsCounters{};
-    }
 
     /// One-line report ("[online] phase-6 stats counters:" continuation).
     std::string report() const {

@@ -496,11 +496,33 @@ REPO_VARIANTS: dict[str, dict] = {
         # recompute@home 缺失后缀物化（R13）。决策行的 joint 专属审计行
         # （joint_admission/joint_admission_failed/joint_admission_wait/
         # joint_decode_stall/joint_decode_wake）非账本行，跳过不进重放。
+        # merge v2（2026-09-17《部分层逐出kv管理改造分析方案》需求①②）：
+        # completion 行 merge_direction=forward/reverse/in_place 走 v2
+        # 重放（_joint_completion_v2——零池写断言/方向交叉校验/home 迁移
+        # 计数 joint_home_migration；remote-read PARTIAL 混合形态的准入
+        # 池恢复后缀进期望工作副本基数）；无该字段的旧日志走 legacy。
+        #
+        # C19（2026-09-22，C15 §25.7 登记的跨车道观察项裁置）：C8/C11/
+        # C14 起决策日志新增的**非账本披露行**并入跳过词表——
+        # readplan_reconcile/readplan_settle（C8 #readplan 预登记对账/
+        # 残差核销披露）、quota_oneshot_overflow（C11 配额 oneshot 超
+        # 额披露）、merge_done（C14 合并结算闭合披露行——KV 账本走
+        # completion 行 merge_direction v2 重放，本行仅审计）、
+        # link_telemetry_coverage / joint_decision_metrics（C8/C11 的
+        # run 级收尾披露行，request_id 恒空）。这些行不载运逐出/恢复/
+        # 增长等任何 KV 账本事件，跳过 = 零重放语义差；缺 request_id
+        # 的 run 级行在原 kind 门下会误触 fail-closed（C15 stress 对拍
+        # 实证）。修法约束履行：仅本工具侧 kind 门扩容（C16 domain_
+        # metrics 的非账本行静默跳过同款模式），C5 冻结 schema 与 SH
+        # 零改动；词表仅挂 astra-sim-joint 映射，非 joint 仓零影响。
         "joint": True,
         "joint_audit_kinds": (
             "joint_admission", "joint_admission_failed",
             "joint_admission_wait", "joint_decode_stall",
             "joint_decode_wake",
+            "readplan_reconcile", "readplan_settle",
+            "quota_oneshot_overflow", "merge_done",
+            "link_telemetry_coverage", "joint_decision_metrics",
         ),
     },
 }
@@ -1874,10 +1896,19 @@ class WatermarkScan:
                      f"（session={session_id!r}, bytes={nbytes}）——"
                      f"joint 重放词表未覆盖，拒绝静默丢弃")
         if action == "remote-read":
+            # 混合形态（需求①，2026-09-17）：PARTIAL 基准入相池恢复的后缀
+            # S 是历史形字节（层区间派生），不参与 coef 增量推导——期望
+            # 工作副本 = S（日志真值）＋ coef(增量)。LOCAL 基 restored=0
+            # 零行为差（回归锚）。
+            restored_suffix = sum(
+                transfer["total_bytes"]
+                for transfer in decision.get("history_transfers") or ()
+                if transfer.get("kind") == "remote_load")
             grow_tokens = max(0, prefill_context - history_tokens)
         else:
+            restored_suffix = 0
             grow_tokens = prefill_context
-        desired = replay._expected_bytes(grow_tokens)
+        desired = restored_suffix + replay._expected_bytes(grow_tokens)
         # R17-3（2026-09-16）：对称校验——增长语义只增不减（与 decode_grow
         # 的 apply_grow 负增长 fail 同构）；缩小时静默保留旧值会把逐出缺口
         # 的幻影 bytes 结转下去，必须在产生点 fail-early。
@@ -1915,6 +1946,12 @@ class WatermarkScan:
                           token_row, joint_action) -> None:
         """R12：joint completion 行——merge 流 + 工作副本释放 + base 恢复。
 
+        merge v2（2026-09-17《部分层逐出kv管理改造分析方案》需求②）：
+        携带 ``merge_direction`` 的新行走 v2 重放（forward/reverse/
+        in_place——见 ``_joint_completion_v2``）；"stay" 本地提交；无该
+        字段的旧日志走本方法尾部 legacy 分支（增量拆分归并回 home 的
+        旧语义，金样对照用）。
+
         merge_transfers：noc 增量回传（+home）、池写回（无本地变化）、
         home_merge_base_degrade 自降级（home 侧 base 扣减）。工作副本
         判定（K3）：优先读完成行显式披露的 ``joint_working_copy``（merge
@@ -1923,6 +1960,17 @@ class WatermarkScan:
         留不得释放）；字段缺省（旧日志）回退 origin_home 启发式。home
         侧结算（K2）：基础字节从未离开 home（stash_base 不扣占用账），
         完成时只**并入增量**——不得再加 base，否则逐轮复利双计。"""
+        direction = decision.get("merge_direction")
+        if direction in ("forward", "reverse", "in_place"):
+            self._joint_completion_v2(
+                replay, decision, tick, session_id, token_row, direction)
+            return
+        if direction == "stay":
+            session = replay._session(session_id)
+            session.tokens = token_row["final_context_tokens"]
+            replay.report.actions["joint_merge_stay"] = (
+                replay.report.actions.get("joint_merge_stay", 0) + 1)
+            return
         session = replay._session(session_id)
         merge_home = (
             session.base_instance
@@ -2048,6 +2096,158 @@ class WatermarkScan:
         session.base_bytes = 0
         session.base_prefix_layers = None
         session.tokens = token_row["final_context_tokens"]
+        replay.report.actions["joint_merge_settle"] = (
+            replay.report.actions.get("joint_merge_settle", 0) + 1)
+
+    def _joint_completion_v2(self, replay, decision, tick, session_id,
+                             token_row, direction) -> None:
+        """merge v2 少并多重放（需求②，2026-09-17）。
+
+        占用语义（与物化 face_scheduler.merge_back v2 同构）：
+        * forward：exec 工作副本整份搬 home——exec 释放（−工作副本字节）、
+          home 接收（+noc 字节，恒等于释放量）；base 保留并归位 primary。
+        * reverse：home 侧 base 释放（−base 字节；含传输=noc 搬至 exec /
+          零字节翻转=直接删除——copy/recompute 执行端恒持并集）；exec
+          工作副本**保留**并接收 noc 字节（零字节翻转=0）。
+        * in_place：REMOTE 基无主就地保留——零传输零池写，工作副本直接
+          转正（occupancy 不动），home := exec（重放侧 home 由下一轮
+          准入行 origin_home 重建，无需显式迁移）。
+        I6 断言：merge 事务不得出现本会话 remote_store（合并零池写）；
+        noc 方向按 source_instance_index 与胜者/败者实例交叉校验。
+        终态恒全层 LOCAL@胜者（prefix = model_layers）。
+        """
+        session = replay._session(session_id)
+        exec_instance = session.instance
+        base_instance = session.base_instance
+        if direction == "forward" and base_instance is None:
+            fail(f"merge forward 无 base 记账（session={session_id!r}）"
+                 f"——账本与重放不一致")
+        if direction == "in_place" and base_instance is not None:
+            fail(f"merge in_place 到达但 base 记账存在"
+                 f"（session={session_id!r}）——无主语义与账本矛盾")
+        if direction == "in_place" and exec_instance is None:
+            fail(f"merge in_place 无执行端驻留（session={session_id!r}）")
+        winner = (base_instance if direction == "forward" else exec_instance)
+        # ---- 传输预分类（方向校验＋第三方 victim 逐出＋I6 池写断言）。----
+        noc_bytes = 0
+        third_party_evictions = []
+        for transfer in decision.get("merge_transfers") or ():
+            kind = transfer.get("kind")
+            nbytes = transfer.get("total_bytes")
+            if not isinstance(nbytes, int) or nbytes < 0:
+                fail(f"joint merge transfer total_bytes 必须为非负整数"
+                     f"（session={session_id!r}, kind={kind!r}, "
+                     f"got={nbytes!r}）")
+            if kind == "noc_migrate":
+                source = transfer.get("source_instance_index")
+                if direction == "forward" and source != exec_instance:
+                    fail(f"merge forward 的 noc 源端 {source!r} != 执行端 "
+                         f"{exec_instance!r}（session={session_id!r}）——"
+                         f"方向披露与传输矛盾")
+                if direction == "reverse" and source != base_instance:
+                    fail(f"merge reverse 的 noc 源端 {source!r} != home 端 "
+                         f"{base_instance!r}（session={session_id!r}）——"
+                         f"方向披露与传输矛盾")
+                if direction == "in_place":
+                    fail(f"merge in_place 不得携带 noc 传输"
+                         f"（session={session_id!r}, bytes={nbytes}）")
+                noc_bytes += nbytes
+            elif kind == "remote_store":
+                if transfer.get("session_id") == session_id:
+                    fail(f"merge v2 产生本会话池写（session={session_id!r}, "
+                         f"bytes={nbytes}）——合并零池写（I6）被违反")
+                if transfer.get("session_id") is None:
+                    fail(f"joint merge 逐出传输缺 victim session_id"
+                         f"（session={session_id!r}）")
+                third_party_evictions.append(transfer)
+            elif kind in ("local_hit", "remote_load"):
+                continue
+            else:
+                fail(f"joint merge transfer 出现未知 kind={kind!r}"
+                     f"（session={session_id!r}, bytes={nbytes}）——"
+                     f"joint 重放词表未覆盖，拒绝静默丢弃")
+        for transfer in third_party_evictions:
+            if transfer["total_bytes"]:
+                # 胜者侧 _ensure_capacity 的统一 T+E victim 逐出（R17-4
+                # 层区间/前缀连锁键透传，同 legacy 口径）。
+                replay.apply_evict(
+                    {"session": transfer.get("session_id"), "tick": tick,
+                     "bytes": transfer["total_bytes"], "instance": winner,
+                     "kind": transfer.get("kind"),
+                     "reason": transfer.get("reason"),
+                     "layer_start": transfer.get("layer_start"),
+                     "layer_end": transfer.get("layer_end"),
+                     "resident_prefix_layers_before":
+                         transfer.get("resident_prefix_layers_before"),
+                     "resident_prefix_layers_after":
+                         transfer.get("resident_prefix_layers_after")},
+                    f"joint_merge:{session_id}")
+        full_layers = replay.mapping.get("model_layers")
+        if direction == "in_place":
+            session.tokens = token_row["final_context_tokens"]
+            session.prefix_layers = full_layers
+            replay.report.actions["joint_merge_in_place"] = (
+                replay.report.actions.get("joint_merge_in_place", 0) + 1)
+            if decision.get("home_flipped_to") is not None:
+                replay.report.actions["joint_home_migration"] = (
+                    replay.report.actions.get(
+                        "joint_home_migration", 0) + 1)
+            return
+        if direction == "forward":
+            if exec_instance is None or not session.bytes:
+                fail(f"merge forward 缺执行端工作副本记账"
+                     f"（session={session_id!r}, bytes={session.bytes}）")
+            if noc_bytes != session.bytes:
+                fail(f"merge forward noc 字节 {noc_bytes} != 释放的工作"
+                     f"副本 {session.bytes}（session={session_id!r}）——"
+                     f"两侧账本不一致")
+            replay._apply(tick, exec_instance, -session.bytes)
+            replay.report.actions["joint_working_release"] = (
+                replay.report.actions.get("joint_working_release", 0) + 1)
+            replay.report.actions["joint_working_release_bytes"] = (
+                replay.report.actions.get(
+                    "joint_working_release_bytes", 0) + session.bytes)
+            base_bytes = session.base_bytes
+            if noc_bytes:
+                replay._apply(tick, base_instance, noc_bytes)
+            session.instance = base_instance
+            session.bytes = base_bytes + noc_bytes
+            session.prefix_layers = full_layers
+        else:  # reverse（含零字节翻转）
+            if base_instance is None:
+                fail(f"merge reverse 无 base 记账（session={session_id!r}）")
+            base_bytes = session.base_bytes
+            if noc_bytes and noc_bytes != base_bytes:
+                fail(f"merge reverse noc 字节 {noc_bytes} != 释放的 base "
+                     f"{base_bytes}（session={session_id!r}）——两侧账本"
+                     f"不一致")
+            replay._apply(tick, base_instance, -base_bytes)
+            if noc_bytes:
+                replay._apply(tick, exec_instance, noc_bytes)
+                session.bytes += noc_bytes
+            session.prefix_layers = full_layers
+            replay.report.actions["joint_merge_reverse"] = (
+                replay.report.actions.get("joint_merge_reverse", 0) + 1)
+            replay.report.actions["joint_merge_reverse_bytes"] = (
+                replay.report.actions.get(
+                    "joint_merge_reverse_bytes", 0) + noc_bytes)
+            if not noc_bytes:
+                replay.report.actions["joint_merge_zero_byte_flip"] = (
+                    replay.report.actions.get(
+                        "joint_merge_zero_byte_flip", 0) + 1)
+        session.base_instance = None
+        session.base_bytes = 0
+        session.base_prefix_layers = None
+        session.tokens = token_row["final_context_tokens"]
+        if direction == "forward":
+            replay.report.actions["joint_merge_forward"] = (
+                replay.report.actions.get("joint_merge_forward", 0) + 1)
+            replay.report.actions["joint_merge_forward_bytes"] = (
+                replay.report.actions.get(
+                    "joint_merge_forward_bytes", 0) + noc_bytes)
+        if decision.get("home_flipped_to") is not None:
+            replay.report.actions["joint_home_migration"] = (
+                replay.report.actions.get("joint_home_migration", 0) + 1)
         replay.report.actions["joint_merge_settle"] = (
             replay.report.actions.get("joint_merge_settle", 0) + 1)
 

@@ -104,10 +104,6 @@ class LegacyOracleWindowedTraceReader {
     bool header_seen_ = false;
     bool eof_ = false;
     uint64_t data_rows_ = 0;
-    // Compatibility/audit watermark only. It is NOT used for occupancy:
-    // arrivals may fire out of CSV order, so a maximum index is not a
-    // contiguous consumed prefix.
-    int64_t consumed_idx_ = -1;
     // Exact rows read but not yet consumed. Size is the window occupancy and
     // is therefore bounded by high_water (or explicitly unbounded when 0).
     std::unordered_set<int64_t> outstanding_rows_;
@@ -119,9 +115,6 @@ class LegacyOracleWindowedTraceReader {
     // Previous CSV row per session, for the AFTER_REQUEST metrics
     // registration of turn>0 rows (mirrors the phase-1 loader).
     std::map<std::string, int64_t> last_queue_index_by_session_;
-    // Byte position of the next un-read row (sampled after each successful
-    // checkpoint's file_pos). -1 = never read / stream not open.
-    int64_t last_file_pos_ = -1;
 
     size_t occupancy() const;
     void read_one_row();

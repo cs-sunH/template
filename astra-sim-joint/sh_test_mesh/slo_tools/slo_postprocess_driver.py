@@ -10,11 +10,15 @@ results/online_decision_log.jsonl 全量流 4 次（kv/load/hop/watermark）、
 
   * RunContext 一次装载共享输入（rows / request_manifest / slo_manifest /
     repo_variant 惰性首用缓存；[METRIC] 流只在 restore 步全量读一次）；
-  * decision log 单遍流，每条记录按固定次序喂给四个消费者
-    （kv_cache_adapter → load_imbalance → hopbytes → hbm_watermark；
-    watermark 的会话跟踪态在单循环内保序——记录内「逐出→恢复/迁移→
-    增长」次序与独立遍历逐语句等价）。watermark 必须最后：其对记录
-    注入 session_hint 键（其余 sink 不读该键）；
+  * decision log 单遍流，每条记录按固定次序喂给五个消费者
+    （kv_cache_adapter → load_imbalance → hopbytes → domain_metrics →
+    hbm_watermark；watermark 的会话跟踪态在单循环内保序——记录内
+    「逐出→恢复/迁移→增长」次序与独立遍历逐语句等价）。watermark
+    必须最后：其对记录注入 session_hint 键（其余 sink 不读该键）；
+    domain_metrics（C16，2026-09-22）为 joint 专属条件步——只读
+    joint_admission/completion 行，非 joint run（0 决策行）emit 完全
+    静默跳过、flush 取消（四仓共链字节对拍契约对非 joint 输入零扰动），
+    joint run 正常落 run/ok/FAIL 行与 slo_domain_* 三产物；
   * 各步 stderr 整块捕获后按步序回放——run_slo_postprocess.sh 把本进程
     stdout+stderr 追加进 slo_postprocess.log，块序=链序、块内=工具原生
     序，与九次子命令的 stderr 串联逐字节相同（红线 R5/R8）；
@@ -51,6 +55,7 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import domain_metrics  # noqa: E402
 import hbm_watermark  # noqa: E402
 import hopbytes  # noqa: E402
 import kv_cache_adapter  # noqa: E402
@@ -330,10 +335,11 @@ def run(run_dir: Path) -> int:
             lambda: slo_stats.cmd_warmup(warmup_args, ctx), fail_marker) \
             or any_fail
 
-    # -- 步 5/6/8/9：decision log 单遍 + sink 扇出 ------------------------
+    # -- 步 5/6/8/9/10：decision log 单遍 + sink 扇出 ----------------------
     kv_sink = Sink("kv_cache_adapter.py")
     load_sink = Sink("load_imbalance.py")
     hop_sink = Sink("hopbytes.py")
+    dom_sink = Sink("domain_metrics.py")
     wm_sink = Sink("hbm_watermark.py")
 
     kv_args = _ns(run_dir=run_dir, output="", hit_states="", json="",
@@ -346,6 +352,14 @@ def run(run_dir: Path) -> int:
                   request_manifest=None, trace_config=None,
                   hardware_config=None, intervals_csv="", output="",
                   instances_csv="", json="", repo_variant=None)
+    # domain（C16，2026-09-22）：joint 专属三口径步骤——prepare 恒零耗且
+    # 静默（参数/拓扑解析推迟到 emit）；非 joint run（无 joint_admission
+    # 行）emit 完全静默跳过（flush 被 cancel），四仓共链字节对拍契约
+    # （test_driver_parity 的 sh_1.0 fixture）零扰动。
+    dom_args = _ns(run_dir=run_dir, output="", instances_csv="", json="",
+                   manifest=None, request_manifest=None,
+                   trace_config=None, hardware_config=None,
+                   repo_variant=None, quiet_when_empty=True)
 
     def kv_prepare() -> dict:
         repo_variant = ctx.repo_variant
@@ -368,6 +382,9 @@ def run(run_dir: Path) -> int:
         return {"repo_variant": repo_variant, "source": source, "acc": acc,
                 "per_request": per_request}
 
+    def dom_prepare() -> domain_metrics.DomainScan:
+        return domain_metrics.domain_prepare()
+
     def wm_prepare() -> dict:
         repo_variant = ctx.repo_variant
         prep = hbm_watermark.watermark_prepare(
@@ -386,6 +403,7 @@ def run(run_dir: Path) -> int:
     else:
         load_sink.alive = False  # G4：跳过（说明行由 shell/门控负责）
     hop_sink.prepare(hop_prepare)
+    dom_sink.prepare(dom_prepare)
     if skip_hbm:
         wm_sink.alive = False  # G5：跳过（说明行由 shell/门控负责）
     else:
@@ -406,14 +424,19 @@ def run(run_dir: Path) -> int:
         state["source"]["collector"](record, state["acc"],
                                      state["per_request"])
 
+    def dom_consume(record: dict) -> None:
+        domain_metrics.domain_consume(dom_sink.state, record)
+
     def wm_consume(record: dict) -> None:
         wm_sink.state["scan"].consume(record)
 
-    # sink 次序固定（红线 R8）：kv → load → hop → watermark（watermark
-    # 注入 session_hint，必须最后；其余 sink 互不读对方注键）。
+    # sink 次序固定（红线 R8）：kv → load → hop → domain → watermark
+    # （watermark 注入 session_hint，必须最后；domain 只读 joint_admission/
+    # completion 行、不注入键不读 session_hint，插 hop 后不扰动其余 sink）。
     sinks: list[tuple[Sink, Callable[[dict], None]]] = [
         (kv_sink, kv_consume), (load_sink, load_consume),
-        (hop_sink, hop_consume), (wm_sink, wm_consume)]
+        (hop_sink, hop_consume), (dom_sink, dom_consume),
+        (wm_sink, wm_consume)]
 
     log_path = run_dir / DECISION_LOG_RELPATH
     records = iter_jsonl(log_path)
@@ -451,6 +474,10 @@ def run(run_dir: Path) -> int:
             hop_args, state["repo_variant"], state["source"], state["acc"],
             state["per_request"])
 
+    def dom_finalize() -> int:
+        return domain_metrics.domain_emit(
+            dom_args, ctx.repo_variant, dom_sink.state)
+
     def wm_finalize() -> int:
         state = wm_sink.state
         replay = state["scan"].finish()
@@ -477,6 +504,14 @@ def run(run_dir: Path) -> int:
 
     hop_sink.finish(hop_finalize)
     any_fail = hop_sink.flush(fail_marker) or any_fail
+    # domain（C16）：joint run 恒有决策行 → 正常 flush（run/ok/FAIL 行与
+    # 链上其他步骤同语义）；非 joint run（0 行）→ cancel flush，完全静默
+    # （字节对拍契约：四仓共链对非 joint 输入零扰动）。
+    dom_sink.finish(dom_finalize)
+    if dom_sink.state is not None and dom_sink.state.joint_rows > 0:
+        any_fail = dom_sink.flush(fail_marker) or any_fail
+    else:
+        dom_sink.rc = 0
     if not skip_hbm:
         wm_sink.finish(wm_finalize)
         any_fail = wm_sink.flush(fail_marker) or any_fail

@@ -3,8 +3,10 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 OnlineCli -- execution-driven mechanism layer (wscllm phase 1).
-Implementation (方案 §4 步骤 1-2 操作 5; CLI rules unit-tested in
-tests/cli_online_test.cc).
+Implementation (方案 §4 步骤 1-2 操作 5; CLI rules are contract-documented in
+OnlineCli.hh -- no automated test coverage, the historical
+tests/cli_online_test.cc fixture was an out-of-build orphan and has been
+removed).
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/OnlineCli.hh"
@@ -33,7 +35,12 @@ bool is_online_family(const std::string& token) {
            // (--idle-watchdog-s). Without this prefix the shared parser
            // would silently swallow a typo'd --idle-* flag (the header
            // contract: the online family is parsed fail-closed here).
-           token.rfind("--idle-", 0) == 0;
+           token.rfind("--idle-", 0) == 0 ||
+           // C6 (WP2 link telemetry, joint 遥测改造): the --link- family
+           // (--link-telemetry). Same fail-closed rule as --idle-: a
+           // typo'd --link-* token must hard-error here, never pass
+           // silently to the shared parser.
+           token.rfind("--link-", 0) == 0;
 }
 
 // FP1 (2026-09-01, sync-A16 batch P; contract E25): the frozen unsigned
@@ -102,6 +109,10 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     // behavior for bare invocations); the official runner overrides with
     // "${SH_ONLINE_VALIDATE:-0}".
     int online_validate = 1;
+    // C6 (WP2 link telemetry, joint 遥测改造): default OFF (fail-closed;
+    // F7). Must stay in sync with OnlineCliOptions::link_telemetry --
+    // written back to `out` unconditionally below.
+    bool link_telemetry = false;
 
     for (int i = 1; i < argc; ++i) {
         const std::string token(argv[i]);
@@ -169,6 +180,15 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 return false;
             }
             close_input = true;
+        } else if (name == "--link-telemetry") {
+            // C6 (WP2 link telemetry, joint 遥测改造; default OFF,
+            // fail-closed F7): per-decision-epoch NoC link window telemetry
+            // in the bridge request (link_telemetry[]; see OnlineCli.hh).
+            if (has_inline_value) {
+                error = "flag --link-telemetry takes no value";
+                return false;
+            }
+            link_telemetry = true;
         } else if (name == "--sensing-enabled") {
             // Phase-3 perception feature flag (default off until phase 6).
             if (has_inline_value) {
@@ -241,7 +261,9 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         } else if (name == "--idle-watchdog-s") {
             // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop
             // parking watchdog. Double seconds (sub-second armings are legal
-            // for fixtures; campaigns use >= 600), 0 = off (frozen default).
+            // for fixtures; campaigns use >= 600); the default has been
+            // armed at 1.0 s since 2026-09-05 (see the local above), and
+            // an explicit 0 = off.
             // FP1 (2026-09-01, sync-A16 batch P; E25/E26) frozen lexicon and
             // the ONE ordering that removes the "0 = off" ambiguity:
             //   1) token non-empty, contains no whitespace character, and
@@ -340,6 +362,7 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
     out.sensing_enabled = sensing_enabled;
     out.request_max_arrival_ns = request_max_arrival_ns;
     out.online_validate = online_validate;
+    out.link_telemetry = link_telemetry;
     return true;
 }
 

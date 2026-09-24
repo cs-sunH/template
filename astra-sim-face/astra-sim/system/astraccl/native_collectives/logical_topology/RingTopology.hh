@@ -29,7 +29,6 @@ class RingTopology : public BasicLogicalTopology {
     virtual int get_receiver(int node_id, Direction direction);
     virtual int get_sender(int node_id, Direction direction);
     int get_nodes_in_ring();
-    bool is_enabled();
     Dimension get_dimension();
     int get_index_in_ring();
 

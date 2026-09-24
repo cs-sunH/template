@@ -43,7 +43,6 @@ from slo_common import (  # noqa: E402
 )
 
 MAIN_PCTS = (50, 99)
-APPENDIX_PCTS_DEFAULT = (90, 95)
 
 
 def add_run_dir_arg(parser: argparse.ArgumentParser) -> None:
@@ -195,7 +194,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
     numerator = 0
     no_e2e = 0
     per_status: dict[str, dict[str, int]] = {}
-    deadlines: list[int] = []
     for row in rows:
         status = row["terminal_status"]
         if status not in TERMINAL_STATUSES:
@@ -207,7 +205,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
         e2e = row.get("e2e_ns")
         deadline = request_deadline(row, alpha, prefill_edges,
                                     decode_edges, t_isolated)
-        deadlines.append(deadline)
         if e2e is None:
             no_e2e += 1
             continue  # 非完成终态：计入分母；E2E 不可得，不进分子

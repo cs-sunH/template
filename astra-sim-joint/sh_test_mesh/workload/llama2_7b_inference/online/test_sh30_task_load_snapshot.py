@@ -46,6 +46,7 @@ from online.sh30_online_scheduler import (  # noqa: E402
     Sh30OnlineScheduler,
     _OnlineInstanceState,
     _OnlineRequestRuntime,
+    _TASK_LOAD_CACHE_CAPACITY,  # F6 销账：替身对齐 __init__ 初值
 )
 
 
@@ -95,6 +96,9 @@ def _make_scheduler() -> Sh30OnlineScheduler:
     # 改法A（decode 估算全参 memo）：_task_load_snapshot 的 active_decode 段
     # 改读 _decode_task_load_ns_cached，脚手架同步装配其缓存字典。
     scheduler._decode_task_load_cache = {}
+    # 对齐 __init__ 初值（F6 销账：软门已删，替身漏设 = AttributeError；
+    # BoundedTaskLoadMemoTest.setUp 覆写为 2 验证 FIFO 语义）。
+    scheduler._task_load_cache_capacity = _TASK_LOAD_CACHE_CAPACITY
     # 改法S2（快照纪元缓存 + qp 聚合账本，2026-08-23）：_task_load_snapshot
     # 的缓存包装读 _snapshot_verify，脚手架同步装配（缺省 False = 生产姿态）。
     scheduler._snapshot_verify = False

@@ -46,7 +46,6 @@ class HalvingDoubling : public Algorithm {
     int remained_packets_per_max_count;
     int remained_packets_per_message;
     int parallel_reduce;
-    PacketRouting routing;
     InjectionPolicy injection_policy;
     std::list<MyPacket> packets;
     bool toggle;

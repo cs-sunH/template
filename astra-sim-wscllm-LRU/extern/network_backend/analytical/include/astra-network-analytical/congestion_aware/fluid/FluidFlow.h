@@ -28,7 +28,6 @@ struct LinkMembership {
 
 struct FluidFlow {
     FlowId flow_id;
-    NetworkAnalytical::ChunkSize total_bytes;
     long double remaining_bytes;
 
     NetworkAnalytical::Bandwidth current_rate_Bpns;

@@ -48,7 +48,6 @@ class Sys : public Callable {
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
         void notify_stream_removed(int vnet, Tick running_time);
-        std::vector<double> get_average_latency_per_dimension();
 
         Sys* sys;
         int max_running_streams;
@@ -56,8 +55,6 @@ class Sys : public Callable {
         int queue_threshold;
         std::map<int, int> running_streams;
         std::map<int, std::list<BaseStream*>::iterator> stream_pointer;
-        std::vector<Tick> latency_per_dimension;
-        std::vector<double> total_chunks_per_dimension;
         std::vector<uint64_t> total_active_chunks_per_dimension;
         std::map<int, int> queue_id_to_dimension;
         std::vector<UsageTracker> usage;
@@ -304,7 +301,6 @@ class Sys : public Callable {
     // it (a zero-rate fluid model would stall forever); false restores the
     // legacy closed-form roofline + comm-without-HBM behavior.
     bool hbm_bandwidth_contention;
-    double pipeline_tile_fraction;
 
     // memory bus
     MemBus* memBus;

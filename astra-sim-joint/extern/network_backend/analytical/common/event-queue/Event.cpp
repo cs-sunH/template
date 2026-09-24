@@ -61,11 +61,6 @@ void Event::invoke_event() noexcept {
     (*callback)(callback_arg);
 }
 
-std::pair<Callback, CallbackArg> Event::get_handler_arg() const noexcept {
-    assert(callback != nullptr);
-    return {callback, callback_arg};
-}
-
 QueuedEvent::QueuedEvent(const Callback callback,
                          const CallbackArg callback_arg) noexcept
     : callback_(callback),

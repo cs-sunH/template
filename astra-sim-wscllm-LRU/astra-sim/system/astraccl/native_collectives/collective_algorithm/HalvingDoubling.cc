@@ -31,7 +31,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
     this->toggle = false;
-    this->name = Name::HalvingDoubling;
     if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
         transmition = MemBus::Transmition::Fast;
     } else {
@@ -260,8 +259,7 @@ bool HalvingDoubling::ready() {
     sim_request rcv_req;
     rcv_req.vnet = this->stream->current_queue_id;
     RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
-        stream, stream->owner->id, EventType::PacketReceived,
-        packet.preferred_vnet, packet.stream_id);
+        stream, stream->owner->id, EventType::PacketReceived);
     stream->owner->front_end_sim_recv(
         0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_src,
         stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,

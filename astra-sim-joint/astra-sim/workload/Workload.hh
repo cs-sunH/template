@@ -119,7 +119,6 @@ class Workload : public Callable {
     void complete_online_statistics(const ExecutionDriven::NodeView& node,
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
-    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
 
     // ---------------------------------------------------------------
     // N-way HBM contention endpoint join (system key
@@ -177,15 +176,6 @@ class Workload : public Callable {
     WorkloadLayerHandlerData* last_fired_hbm_side_wlhd_ = nullptr;
     uint64_t last_fired_hbm_join_node_ = 0;
 };
-
-// R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger moved to its
-// own self-contained layer (astra-sim/workload/RemoteFifoLedger.hh/.cc) and
-// is now accounted at the REAL backend ports inside
-// AnalyticalRemoteMemory::issue/call. The Workload layer no longer infers a
-// port from sys_id: under PER_NODE / MEMORY_POOL several ranks share one
-// physical FIFO, and under the configured PER_NPU + sparse npu-ids the port
-// index is the array index, not the rank -- the old per-rank keys mislabeled
-// every architecture and split shared queues into per-rank virtual ledgers.
 
 }  // namespace AstraSim
 

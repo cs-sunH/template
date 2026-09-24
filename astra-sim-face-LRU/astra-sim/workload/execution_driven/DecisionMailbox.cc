@@ -138,16 +138,13 @@ void DecisionMailbox::push(DecisionEvent e) {
 }
 
 bool DecisionMailbox::has_decision_work() const {
-    return !events_.empty() || finalize_pending_;
+    return !events_.empty();
 }
 
 std::vector<DecisionEvent> DecisionMailbox::drain() {
     std::vector<DecisionEvent> result = std::move(events_);
     events_.clear();
     pending_identities_.clear();  // a new dedup epoch starts
-    // The drain delivers ALL pending work: events and/or the finalize flag
-    // (a finalize-only epoch delivers an empty delta).
-    finalize_pending_ = false;
     if (!result.empty()) {
         ++delivery_count_;  // delivery epochs, not events
     }

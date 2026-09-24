@@ -446,13 +446,16 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
             // key typings (compute.hbm_access_mode integer, comm.hbm_charge
             // boolean, node is_local_hbm_kv_restore boolean) and every
             // field's JSON typing were validated once by parse_graph_batch;
-            // this pass reads the typed attrs directly (the non-negative
+            // this pass reads the typed attrs directly (the {0,1,2}
             // hbm_access_mode DOMAIN rule stays here, belt-and-suspenders
-            // against a post-parse mutation).
-            if (node.hbm_access_mode < 0) {
+            // against a post-parse mutation: Workload::issue_remote_mem
+            // bills every mode != 1 as a local-HBM pool WRITE, so an
+            // out-of-domain value must fail closed instead of silently
+            // mis-billing).
+            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 2) {
                 return fail("node[" + std::to_string(node_index) +
-                            "] compute.hbm_access_mode must be a non-negative "
-                            "integer");
+                            "] compute.hbm_access_mode must be 0, 1 or 2 "
+                            "(none/local HBM read/local HBM write)");
             }
             const uint64_t coll_comm_type = node.coll.comm_type;
             const uint64_t coll_bytes = node.coll.bytes;
@@ -469,9 +472,7 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 const uint64_t tag = node.comm.tag;
                 const uint64_t bytes = node.comm.bytes;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
-                    dst >= ctx_.num_ranks ||
-                    tag > static_cast<uint64_t>(
-                              std::numeric_limits<uint32_t>::max())) {
+                    dst >= ctx_.num_ranks) {
                     return fail("node[" + std::to_string(node_index) +
                                 "] p2p src/dst/tag out of range");
                 }
@@ -858,11 +859,6 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
     return std::nullopt;
 }
 
-bool GraphBatchCommitter::was_json_id_committed(const int rank,
-                                                const uint64_t id) const {
-    return resolve_store_id(rank, id).has_value();
-}
-
 std::optional<uint64_t> GraphBatchCommitter::resolve_store_id(
     const int rank, const uint64_t json_id) const {
     if (rank < 0 || rank >= static_cast<int>(rank_affines_.size())) {
@@ -906,18 +902,6 @@ void GraphBatchCommitter::record_affine_node(const int rank,
     }
     ++affine.json_next;
     ++affine.store_next;
-}
-
-std::vector<int> GraphBatchCommitter::compute_touched_ranks(
-    const GraphBatch& batch, const int num_ranks) {
-    std::set<int> ranks;
-    for (const auto& parsed : batch.nodes) {
-        const int rank = parsed.node.rank;
-        if (rank >= 0 && rank < num_ranks) {
-            ranks.insert(rank);
-        }
-    }
-    return std::vector<int>(ranks.begin(), ranks.end());
 }
 
 std::optional<std::string> GraphBatchCommitter::validate_impl(
@@ -1015,12 +999,15 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // C1 (2026-08-29): the compute/comm/coll sub-object shape and
             // every field's JSON typing (incl. the sh_2.0 HBM keys) were
             // validated once by parse_graph_batch; this pass reads the typed
-            // attrs directly (the non-negative hbm_access_mode DOMAIN rule
-            // stays, belt-and-suspenders against a post-parse mutation).
-            if (node.hbm_access_mode < 0) {
+            // attrs directly (the {0,1,2} hbm_access_mode DOMAIN rule
+            // stays, belt-and-suspenders against a post-parse mutation:
+            // Workload::issue_remote_mem bills every mode != 1 as a
+            // local-HBM pool WRITE, so an out-of-domain value must fail
+            // closed instead of silently mis-billing).
+            if (node.hbm_access_mode < 0 || node.hbm_access_mode > 2) {
                 return "node[" + std::to_string(node_index) +
-                       "] compute.hbm_access_mode must be a non-negative "
-                       "integer";
+                       "] compute.hbm_access_mode must be 0, 1 or 2 "
+                       "(none/local HBM read/local HBM write)";
             }
             // The src/dst/tag range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
@@ -1032,18 +1019,12 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             if (type == 5 || type == 6) {
                 const int src = node.comm.src;
                 const int dst = node.comm.dst;
-                const int64_t tag = node.comm.tag;
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
                     return "node[" + std::to_string(node_index) +
                            "] comm src/dst out of range: src=" +
                            std::to_string(src) +
                            " dst=" + std::to_string(dst);
-                }
-                if (tag < 0) {
-                    return "node[" + std::to_string(node_index) +
-                           "] comm tag out of range: " +
-                           std::to_string(tag);
                 }
                 if (type == 5 && src != rank) {
                     return "node[" + std::to_string(node_index) +
@@ -1422,10 +1403,9 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                 return "touched_ranks not sorted unique";
             }
             // S1 (2026-08-23): reuse this validate pass's own touched set
-            // instead of re-walking batch.nodes through
-            // compute_touched_ranks(): by this point every node has an
-            // in-range rank (fail-closed in the node pass above), so the
-            // sorted-unique rank sets are identical by construction.
+            // instead of re-walking batch.nodes: by this point every node
+            // has an in-range rank (fail-closed in the node pass above), so
+            // the sorted-unique rank sets are identical by construction.
             const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;

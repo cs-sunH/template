@@ -300,7 +300,7 @@ class NodeMetricEvent:
         _require_int(self.event_code, "event_code")
         if self.event_code not in EVENT_EDGE_BY_CODE:
             raise MetricsSchemaError(
-                f"event_code {self.event_code} is not in the protocol encoding 1-7"
+                f"event_code {self.event_code} is not in the protocol encoding 1-8"
             )
         _require_int(self.subject_id, "subject_id", 0)
 

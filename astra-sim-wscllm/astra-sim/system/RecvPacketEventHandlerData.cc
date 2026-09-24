@@ -25,6 +25,5 @@ RecvPacketEventHandlerData::RecvPacketEventHandlerData(
     this->custom_algorithm = nullptr;
     this->vnet = vnet;
     this->stream_id = stream_id;
-    this->message_end = true;
     ready_time = Sys::boostedTick();
 }

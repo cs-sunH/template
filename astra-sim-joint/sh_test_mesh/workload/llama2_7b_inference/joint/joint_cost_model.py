@@ -3,10 +3,14 @@
 设计依据：《三机制联合策略_template仓库设计方案》§6、§9.2（实验 joint
 选择性移植的六项缺口修正）与实验总纲 §13.2。
 
-统一预测目标：``cost(instance, action)`` 预测到同一 ``service_done``
+统一预测目标：``cost(instance, action)`` 预测到同一 ``merge_done``
 边界的完成时间——包括目标等待、历史准备、执行期增长、remote 路径、
-compute_done 后的 home 释放与合并（§2.3 三时刻合同）。重叠工作按依赖
-关键路径处理，不机械相加，不把同一拥塞重复计费。
+compute_done 后的 home 释放与合并（F11：预测终点 = merge_done，四动作
+同终点；service_done（响应完成）作为服务指标从事件侧分别报告——本
+docstring 原先的 ``service_done`` 字样为旧版合同术语残留，C4-G2 术语
+rider 统一为 merge_done 终点表述，语义零变更，PROVENANCE §15.3 命名
+映射勘误的移交落地）。重叠工作按依赖关键路径处理，不机械相加，不把
+同一拥塞重复计费。
 
 单位合同（v2 教训，§6）：后端链路带宽换算为十进制 SI，``1 GB/s ==
 1 B/ns``（数值恒等）；``from_gbps`` 是唯一构造路径。bit/s 与 byte/s
@@ -26,20 +30,81 @@ compute_done 后的 home 释放与合并（§2.3 三时刻合同）。重叠工�
 自重叠）；不用 ``B_peak × (1−utilization)``。合并流同样登记。跨
 collective 的观测缺口由调用方以覆盖标记披露（本模型不假定其为零）。
 
-状态（§5.6 表，R15 后 2026-09-14）：本模块按"已实现（解析近似 +
-在线因子）"交付，且在线反馈通道**已接线**——``LinkFlowRegistry`` 由
-调度器在五类传输发射时逐 shard 全路径登记、完成事件注销（F-B 聚合
-除数）；``ServiceFactors`` 三观测入口挂列车完成事件（P3 α 公式；
-transfer 因子保留接口位——节点级传输完成遥测未交付，updates=0 披
-露，传输争用在线修正由除数通道承担）；池端口除数注入（含 E 内核
-r_j，R15-3）。``collective_coverage`` 仍由调用方按遥测覆盖披露。
+状态（§5.6 表，R15 后 2026-09-14；A8' 修订 2026-09-22）：本模块按
+"已实现（解析近似 + 在线因子）"交付，且在线反馈通道**已接线**——
+``LinkFlowRegistry`` 由调度器在五类传输发射时逐 shard 全路径登记、
+完成事件注销（F-B 聚合除数）；``ServiceFactors`` 三观测入口挂列车
+完成事件（P3 α 公式）——transfer 因子的样本源 = SH 侧链路遥测窗口
+（A8' 接线：``_ingest_link_telemetry`` 逐窗口调
+``observe_transfer_from_link_window``，列车核销通道无纯传输段可因果
+分离故不经该通道；仅遥测开启路径有样本，缺省关臂 updates=0 披露）；
+池端口除数注入（含 E 内核 r_j，R15-3）。``collective_coverage`` 仍
+由调用方按遥测覆盖披露。
+
+C1（2026-09-22，WP1a）：NoC 计价四点（copy 前缀腿 / remote-read
+读流与 credit 切块 / merge 双腿）改为**逐 shard 三腿 min**（F1 冻
+结）——noc_stream = bytes_s/(B_link/divisor_multi(候选路径并集))、
+home_read = bytes_s/(B_HBM/(u_home+1))、exec_write 仅 copy/staging；
+wall = max_s(startup + d2d·hops(path_s) + max(腿))，TP 并行不再按
+"聚合字节 ÷ 单链路率"串行放大；``local_hbm_bytes_per_ns`` 自此正式
+消费（端点腿；E12）。D1 读放大因果口径：decode 每步远读基数 = 仍
+位于远端的基础历史，执行端生成的 input/decode 增量本地读取、不计
+作远读；prefill 按实际消费遍数计（设计文档 §1.4）。
+
+保真边界披露（F3/C1）：**池路径 NoC 腿未计价**——``_pool_transfer_ns``
+五消费点（stay 池恢复 / copy 池恢复 / remote 混合后缀 / merge 无 /
+驱逐写回）按池端口口径计价，池↔实例间链路段不叠加链路腿。
+
+C2（2026-09-22，WP1b）：``hbm_port_registry``（HbmPortFlowRegistry，
+WL/joint/hbm_port_flow_registry.py）自本卡起供给端点腿除数 u_home/
+u_exec（F4：活跃 decode 消费流 + 在册传输/远读流；未注入时 u=0，端点
+腿独占——离线/单测口径）。A4' 补价 rider（PROVENANCE §20.1，C14 G1
+裁定 (a)）：kind="read" 增执行端 HBM 写腿——与 copy/staging 第三腿同
+式同源（镜像执行侧 COMM_WRITE 服务类），remote-read 计价自此三腿；
+仅增带宽/服务争用腿，不改 F14 容量半边（credit 在途字节仍不占执行端
+HBM 容量、暂存归还仍无操作）。E4 去重（A1 勘误）：breakdown 的
+contention_divisor 复用主计价腿已算得的并集除数，estimate_action 不
+再对 candidate_paths 二次调用 divisor_multi（stay/recompute 无计价腿
+可复用时维持单次调用）。u_port 分解披露走决策日志 notes 通道（C5 冻
+结 schema 不动；port_snapshot 正式字段位归 C11 步骤 6）。
+
+C7（2026-09-22，WP2，仅 JCM 半）：C++ 侧逐链路窗口遥测（C6
+``link_telemetry[]``）的代价模型消费三件——(1) ``divisor_effective``：
+逐链路有效除数 = ``max(divisor_registered, B_link / 实测有效速率)``
+（``TelemetryLinkFlowView``；取 max 保守合并：注册表漏计时实测抬起、
+多计时不放大——max 而非相加即设计文档 §4.1"自注册计划和遥测若反映
+同一流量，必须去重"）；(2) ``collective_coverage`` 翻 True 条件求值
+（``LinkFlowRegistry.evaluate_collective_coverage`` 纯函数：全程遥测
+开启 ∧ 逐 epoch 窗口序列无空洞；置位/决策日志/manifest 接线在 SH 侧
+C8）；(3) ``transfer_factor`` EWMA 转正（观测入口
+``ServiceFactors.observe_transfer_from_link_window``：遥测链路窗口
+actual=active_ns / base=served/名义速率，样本比 = 名义速率/实测有效
+速率 = 该链路遥测有效除数，≥1 拥胀方向与因子族 actual/base 口径一
+致）。冻结交接接口（C8 联合冻结，kwarg 名对齐）：SH/C8 以
+``link_telemetry_rates = {link_id: 实测有效速率(B/ns)}`` 传入
+``JointCostModel`` 构造；None/空 = 遥测未开启，注册表除数模型零漂
+移。键两形：端点形 ``(src, dst)``/``"src->dst"`` 参与端点除数合并；
+裸整型 LinkId（C8 ``_ingest_link_telemetry`` 的原样键）端点无关消
+费（速率查询/transfer_factor 观测/披露计数），不参与端点除数合并
+——LinkId→有向链路换算需拓扑知识，缺口与转换配方登记见
+``TelemetryLinkFlowView`` docstring 与 C7 BLOCKED。
+
+A8'（2026-09-22，§4.3 补遗，F1）：上件 (3) 的 SH 侧调用落地——
+``_ingest_link_telemetry`` 逐遥测窗口调
+``observe_transfer_from_link_window``（端点键换算复用
+``_telemetry_endpoint_link_key``；名义速率 = noc_link_bytes_per_ns），
+"三件已交付"自本卡起为全链真值（此前 SH 半零调用、transfer_factor
+恒 1.0/updates 恒 0 的名实不符消除；行为面 = 仅遥测开启路径，缺省关
+臂零扰动）。
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence
+from typing import Hashable, Mapping, Optional, Sequence
+
+from joint.joint_config import remote_credit_block_size
 
 ACTION_STAY = "stay"
 ACTION_RECOMPUTE = "recompute"
@@ -177,6 +242,14 @@ class ServiceFactors:
     transfer_factor: float = 1.0
     updates: dict = field(default_factory=dict)
     rejected: dict = field(default_factory=dict)
+    # A12'：亚名义样本钳位 1.0 的披露计数（仅 transfer_factor）。
+    # A14'/H10 计数口径注记：计的是被钳的"同 tick 聚合更新"条数
+    # （_record 的 Σactual/Σbase 汇总纪律 + observe_transfer_from_
+    # link_window 的 base_ns 向下取整）——同 tick 内亚名义链路可被
+    # 拥塞链路稀释为 ≥1 聚合比而不计数、真比值略 <1 的窗口可因 base
+    # 截断偏小逃逸钳位；披露语义是"聚合更新钳位次数"而非"亚名义链
+    # 路窗口数"（因子恒 ≥1 的不变量不受影响）。
+    clamped: dict = field(default_factory=dict)
     # P3 时间衰减状态（组内私有）：上一有效样本的 tick 与正服务时长。
     _last_tick_ns: dict = field(default_factory=dict)
     _last_service_ns: dict = field(default_factory=dict)
@@ -204,6 +277,38 @@ class ServiceFactors:
     ) -> None:
         self._record("transfer_factor", actual_ns, base_ns, service_ns,
                      tick_ns)
+
+    def observe_transfer_from_link_window(
+        self, *, served_bytes: int, active_ns: int,
+        nominal_rate_bytes_per_ns: float, tick_ns: int,
+    ) -> None:
+        """C7（WP2）transfer_factor 转正：遥测链路窗口样本 → observe_transfer。
+
+        观测源 = 遥测有效速率对名义速率之比（C6 ``link_telemetry[]`` 单
+        元的 ``served_bytes``/``active_ns`` ÷ 配置链路峰值速率）。按
+        ``_record`` 既有 actual/base 纪律落样：actual_ns = active_ns（纯
+        服务段实测——链路活跃积分，无排队/merge 尾段混入），base_ns =
+        served_bytes / 名义速率（同字节量在峰值速率下的基准时长）⇒ 样
+        本比 = 名义速率 / 实测有效速率 = 该链路遥测有效除数（与
+        ``divisor_effective`` 的 B_link/measured 同式同源，≥1 拥胀方向；
+        ServiceFactors 因子族口径 = actual/base、1.0 冷启动"乐观可能"，
+        本方向与之一致——亚名义样本（ratio<1）经 ``_apply_pending``
+        钳位 1.0（A12'，§4.3 补遗）并以 clamped 计数披露）。同 tick
+        多链路样本经 ``_record`` 时刻汇总纪律
+        合并为一条更新（Σactual/Σbase）；零字节/零活跃/非有限样本由
+        ``_record`` 既有拒绝计数披露（本入口不预滤，调用方逐链路如实
+        喂入即可）。
+        """
+        if nominal_rate_bytes_per_ns <= 0 or not math.isfinite(
+                nominal_rate_bytes_per_ns):
+            # 名义速率非法 = 配置错误，fail-closed（非样本拒绝路径）。
+            raise JointCostError(
+                "nominal_rate_bytes_per_ns must be a positive finite rate, "
+                f"got {nominal_rate_bytes_per_ns!r}")
+        base_ns = int(served_bytes / nominal_rate_bytes_per_ns)
+        self.observe_transfer(
+            actual_ns=int(active_ns), base_ns=base_ns,
+            service_ns=int(active_ns), tick_ns=int(tick_ns))
 
     def flush(self) -> None:
         """把同时刻汇总缓冲落进因子（决策时刻读因子前调用；幂等）。"""
@@ -244,6 +349,12 @@ class ServiceFactors:
         if not math.isfinite(ratio) or ratio <= 0:
             self.rejected[name] = self.rejected.get(name, 0) + 1
             return
+        if name == "transfer_factor" and ratio < 1.0:
+            # A8'/A12'：transfer 样本方向冻结 = ≥1 拥胀——亚名义样本
+            # （实测快于名义：active_ns 欠计/空闲混入）钳位 1.0 并计数
+            # 披露；prefill/decode 因子不钳（历史口径允许 <1）。
+            ratio = 1.0
+            self.clamped[name] = self.clamped.get(name, 0) + 1
         current = getattr(self, name)
         if self.updates.get(name, 0) == 0:
             # 首样本直接初始化（§5.4）。
@@ -264,6 +375,7 @@ class ServiceFactors:
             "transfer_factor": self.transfer_factor,
             "updates": dict(self.updates),
             "rejected": dict(self.rejected),
+            "clamped": dict(self.clamped),
         }
 
 
@@ -289,6 +401,13 @@ class LinkFlowRegistry:
     归属键），``release_owner`` 在该归属的完成事件（列车核销 / merge
     尾 watch / 实例空闲清扫）注销——登记/注销全部由已观测完成事件
     驱动，决策时刻快照因果可见。
+
+    C7（2026-09-22，WP2）：遥测消费三入口——``with_effective_rates``
+    构造遥测叠加视图（divisor_effective 的 max 去重合并，见
+    ``TelemetryLinkFlowView``）；``evaluate_collective_coverage`` 为
+    ``collective_coverage`` 翻 True 条件的纯函数求值（置位接线在 SH
+    侧 C8，本注册表的 ``collective_coverage`` 属性仍为调用方披露载
+    体、缺省 False）。
     """
 
     def __init__(self) -> None:
@@ -357,6 +476,11 @@ class LinkFlowRegistry:
         return len(flow_ids)
 
     # ------------------------------------------------------------ 除数 --
+    def registered_flows(self, link: tuple[int, int]) -> int:
+        """该有向链路的已登记流数（N2：TelemetryLinkFlowView 合并口径
+        的公共访问器——注册侧旧流并发计量，不含候选自身）。"""
+        return self._flows.get(link, 0)
+
     def divisor(self, path_ranks: Sequence[int], *, include_self: bool,
                 self_overlap: int = 1) -> int:
         """单路线仲裁除数（有向链路 = 已登记流数 + 候选自身占用数；
@@ -380,15 +504,7 @@ class LinkFlowRegistry:
         各 shard 路径共享同一链路时按全部自身流计）；共享 = 已登记流数
         + 自身次数；结果取并集内瓶颈链路最大值。
         """
-        if not paths:
-            return 1
-        self_counts: dict[tuple[int, int], int] = {}
-        for path in paths:
-            if len(path) < 2:
-                continue
-            for index in range(len(path) - 1):
-                key = (path[index], path[index + 1])
-                self_counts[key] = self_counts.get(key, 0) + 1
+        self_counts = _path_union_links(paths)
         if not self_counts:
             return 1
         worst = 1
@@ -401,6 +517,419 @@ class LinkFlowRegistry:
     def snapshot(self) -> dict:
         return {f"{src}->{dst}": count for (src, dst), count
                 in sorted(self._flows.items())}
+
+    def leaked_owners(self) -> dict:
+        """在册归属视图（漏释放审计：结算边界后仍非空 = 泄漏证据）。
+
+        O10③（A19'(j)③，2026-09-23）：与 HbmPortFlowRegistry.
+        leaked_owners 同款语义与返回形态——``{owner: tuple(在途流 id)}``
+        有序 dict，空 = 干净。只统计仍实际在途（流 id 未注销）的流：
+        ``release_flow`` 单独释放的流 id 在 ``_owner_flows`` 的残留
+        不算泄漏（物理链路已注销；生产完成事件全走 ``release_owner``，
+        该过滤为防御纵深）。
+        """
+        leaked = {}
+        for owner, flow_ids in sorted(self._owner_flows.items()):
+            live = tuple(
+                flow_id for flow_id in flow_ids
+                if flow_id in self._flow_links)
+            if live:
+                leaked[owner] = live
+        return leaked
+
+    # ---------------------------------------------------- 遥测（C7） --
+    def with_effective_rates(
+        self,
+        effective_rates: Mapping[Hashable, float],
+        *,
+        link_capacity_bytes_per_ns: float,
+        link_flow_counts: Optional[Mapping[Hashable, float]] = None,
+    ) -> "TelemetryLinkFlowView":
+        """C7：以 ``{link_id: 实测有效速率(bytes/ns)}`` 构造遥测叠加
+        视图（冻结交接接口的 JCM 侧消费原语；JointCostModel.link_
+        telemetry 经本方法接线）。返回视图的 divisor 族按 max 与本注
+        册表合并——本注册表自身状态零变更（决策时点只读快照纪律）。
+
+        M1（2026-09-23 验收审计）：``link_flow_counts`` = C++ 时间加权
+        活跃流数（含 collective）——在场时遥测除数取**流数口径**
+        （物理除数 = 链上流数；合计吞吐无法反推流数——满载链路
+        合计≈容量与流数无关、下游瓶颈流会被 capacity/合计 误读为
+        争用），缺席退 capacity/速率 旧口径（既有测试注入单流速率
+        语义）。
+        """
+        return TelemetryLinkFlowView(
+            self, effective_rates,
+            link_capacity_bytes_per_ns=link_capacity_bytes_per_ns,
+            link_flow_counts=link_flow_counts)
+
+    @staticmethod
+    def evaluate_collective_coverage(
+        *,
+        telemetry_enabled_whole_run: bool,
+        window_bounds: Sequence[tuple[int, int]],
+        run_start_ns: int = 0,
+        run_end_ns: Optional[int] = None,
+    ) -> tuple[bool, dict]:
+        """C7：``collective_coverage`` 翻 True 条件求值（纯函数）。
+
+        条件 = 该 run **全程遥测开启** ∧ **窗口序列无空洞**：
+
+        * ``telemetry_enabled_whole_run``：调用方对 ``--link-telemetry``
+          自 run 起持续供给的布尔汇总（中途开启/中途掉线 = False）；
+        * 无空洞：``window_bounds`` 为**逐 delivery epoch** 的
+          (start_ns, end_ns) 序列——含全闲 epoch（其 ``link_telemetry[]``
+          为空数组但 epoch 存在，界值取该次 delivery 的 tick 元数据；
+          只报非空数组的 epoch 会把全闲 epoch 误判为空洞，属调用方契
+          约违背）。判据：首窗 start == ``run_start_ns``（缺省 0）、相
+          邻窗 start_{i+1} == end_i、给 ``run_end_ns`` 时末窗 end ==
+          run_end_ns；零长窗 [t, t)（同 tick 双 delivery）合法，负长度
+          窗（end < start）计为空洞。
+
+        字段翻转接线（置位本类 ``collective_coverage``、决策日志
+        ``contention_coverage``、manifest 记录遥测完备性）均在 SH 侧
+        C8；本方法只做条件求值。返回 ``(flag, 披露 dict)``，披露含空洞
+        明细（前 8 条）与覆盖跨度，供 manifest 落盘。
+        """
+        bounds = [(int(start), int(end)) for start, end in window_bounds]
+        holes: list = []
+        if bounds:
+            if bounds[0][0] != int(run_start_ns):
+                holes.append(
+                    {"index": 0, "kind": "start",
+                     "expected_start_ns": int(run_start_ns),
+                     "got_start_ns": bounds[0][0]})
+            for index in range(1, len(bounds)):
+                prev_end = bounds[index - 1][1]
+                start, end = bounds[index]
+                if end < start:
+                    holes.append(
+                        {"index": index, "kind": "negative_window",
+                         "start_ns": start, "end_ns": end})
+                if start != prev_end:
+                    holes.append(
+                        {"index": index, "kind": "gap",
+                         "expected_start_ns": prev_end,
+                         "got_start_ns": start})
+            if bounds[0][1] < bounds[0][0]:
+                holes.append(
+                    {"index": 0, "kind": "negative_window",
+                     "start_ns": bounds[0][0], "end_ns": bounds[0][1]})
+            if run_end_ns is not None and bounds[-1][1] != int(run_end_ns):
+                holes.append(
+                    {"index": len(bounds) - 1, "kind": "end",
+                     "expected_end_ns": int(run_end_ns),
+                     "got_end_ns": bounds[-1][1]})
+        covered_span_ns = (
+            bounds[-1][1] - bounds[0][0] if bounds else 0)
+        flag = bool(
+            telemetry_enabled_whole_run and bounds and not holes)
+        return flag, {
+            "telemetry_enabled_whole_run": bool(telemetry_enabled_whole_run),
+            "window_count": len(bounds),
+            "run_start_ns": int(run_start_ns),
+            "run_end_ns": (None if run_end_ns is None else int(run_end_ns)),
+            "covered_span_ns": covered_span_ns,
+            "holes": holes[:8],
+            "hole_count": len(holes),
+        }
+
+
+def _path_union_links(
+    paths: Sequence[Sequence[int]],
+) -> dict[tuple[int, int], int]:
+    """候选路径族的链路并集：``{(src, dst): 自身经过次数}``。
+
+    F-B 口径（LinkFlowRegistry.divisor_multi 的既有循环原样抽出，零
+    语义漂移）：短于 2 的路径无链路不计；共享链路按经过次数累加。
+    """
+    self_counts: dict[tuple[int, int], int] = {}
+    for path in paths:
+        if len(path) < 2:
+            continue
+        for index in range(len(path) - 1):
+            key = (path[index], path[index + 1])
+            self_counts[key] = self_counts.get(key, 0) + 1
+    return self_counts
+
+
+class TelemetryLinkFlowView:
+    """LinkFlowRegistry 的遥测叠加只读视图（C7，WP2：divisor_effective）。
+
+    逐链路有效除数（冻结公式，卡 C7 步骤 1）::
+
+        divisor_effective(link) = max(
+            divisor_registered(link),              # 注册表模型（含自身）
+            link_capacity_Bps / measured_effective_rate(link))  # 遥测实测
+
+    **取 max（保守）**：注册表漏计时实测抬起来，多计时不放大；max 而
+    非相加 = 同一流量不重复计数（设计文档 §4.1"自注册计划和遥测若反
+    映同一流量，必须去重"）。max 的层间可交换性使"逐链路合并后取瓶颈
+    ≡ max(注册表瓶颈, 遥测下界)"——divisor/divisor_multi 据此以一次注
+    册表求值 + 一次遥测下界扫描实现，无逻辑分叉。
+
+    **窗口均值 ≠ 决策瞬时**（A18'(b) 登记补履行，O7④/A19'(g)④，
+    2026-09-23 运行时代码落点）：遥测流数/速率为 C++ 周期采样窗口的
+    时间加权均值，非决策时刻瞬时值；流进出频繁时均值系统性低于瞬时
+    峰值——方向 = 低估旧流并发（乐观向），窗口盲区 ≤1 epoch。改瞬时
+    口径 = 遥测合同侵入（A18'(b) 已否决），此处仅落字披露。
+
+    键两形（冻结接口 ``{link_id: 实测有效速率(B/ns)}`` 的合法键）：
+
+    * **端点形** ``(src_rank, dst_rank)`` 元组 / ``"src->dst"`` 快照字
+      符串——与 LinkFlowRegistry 键同空间，参与端点除数合并（上文公
+      式的完整形态）；
+    * **裸整型 LinkId**（C++ FluidScheduler 链路表下标，C8
+      ``_ingest_link_telemetry`` 的原样键）——**端点无关消费**：速率
+      查询/transfer_factor 观测/披露计数可用，不参与端点除数合并（注
+      册表键是 rank 对，LinkId→有向链路换算需拓扑维序知识，代价模型
+      内不可得）。**已知缺口登记（C7 BLOCKED B3）**：换算配方 = C++
+      ``MultiDimTopology::connect_dimension`` 的确定性枚举（逐维升序
+      遍历 src、connect(src, src+stride[dim], bidirectional) 顺次
+      append 正向/反向两条 LinkId）；归 SH 侧换算或后续卡闭合前，整
+      型键条目在 ``disclosure()["opaque_link_id_entries"]`` 计数披露
+      （可见缺口，非静默不合并）。
+
+    字典中不出现的链路 = 无测量（不抬升，注册表值即有效值）。值域校
+    验 fail-closed：速率须为正有限实数；速率超容量（非物理）不拒绝
+    但合并下界天然被 max(1, ·) 截住。
+    """
+
+    def __init__(
+        self,
+        registry: LinkFlowRegistry,
+        effective_rates: Mapping[Hashable, float],
+        *,
+        link_capacity_bytes_per_ns: float,
+        link_flow_counts: Optional[Mapping[Hashable, float]] = None,
+    ) -> None:
+        capacity = float(link_capacity_bytes_per_ns)
+        if not (capacity > 0) or not math.isfinite(capacity):
+            raise JointCostError(
+                "link_capacity_bytes_per_ns must be a positive finite "
+                f"rate, got {link_capacity_bytes_per_ns!r}")
+        # M1：流数键归一（与速率同一键规则），值须 ≥1 有限（时间加权
+        # 平均流数物理下界 1——活跃窗口内至少一条流）。
+        flow_counts: dict[tuple[int, int], float] = {}
+        for key, count in dict(link_flow_counts or {}).items():
+            if isinstance(count, bool) or not isinstance(count, (int, float)):
+                raise JointCostError(
+                    f"link_flow_counts[{key!r}] must be a real number, "
+                    f"got {count!r}")
+            count_value = float(count)
+            if not (count_value >= 1) or not math.isfinite(count_value):
+                raise JointCostError(
+                    f"link_flow_counts[{key!r}] must be >=1 finite "
+                    f"(time-weighted active flow count), got {count!r}")
+            flow_counts[self._normalize_link_key(key)] = count_value
+        self._registry = registry
+        self._capacity = capacity
+        self._flow_counts = flow_counts
+        self._effective: dict[tuple[int, int], float] = {}
+        self._measured: dict[tuple[int, int], float] = {}
+        self._opaque_measured: dict[int, float] = {}
+        for key, rate in dict(effective_rates).items():
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+                raise JointCostError(
+                    f"link_telemetry_rates[{key!r}] must be a real "
+                    f"number, got {rate!r}")
+            rate_value = float(rate)
+            if not (rate_value > 0) or not math.isfinite(rate_value):
+                raise JointCostError(
+                    f"link_telemetry_rates[{key!r}] must be a positive "
+                    f"finite rate, got {rate_value!r}")
+            if isinstance(key, bool):
+                raise JointCostError(
+                    f"link_telemetry_rates key {key!r} is not a link key "
+                    f"(directed (src, dst) tuple, 'src->dst', or bare "
+                    f"C++ LinkId int)")
+            if isinstance(key, int):
+                # 裸整型 LinkId：端点无关消费（见类 docstring 缺口登记）。
+                self._opaque_measured[key] = rate_value
+                continue
+            link = self._normalize_link_key(key)
+            self._measured[link] = rate_value
+            if link in flow_counts:
+                # M1：流数口径除数（时间加权活跃流数 = 物理除数，含
+                # collective；无"下游瓶颈"歧义），取代 capacity/合计
+                # 速率旧口径（该口径满载退 1、瓶颈误判争用）。
+                self._effective[link] = flow_counts[link]
+            else:
+                self._effective[link] = capacity / rate_value
+        # O7③（A19'(g)③，2026-09-23）：混合形态补漏——_effective 键集
+        # 扩为 rates ∪ flow_counts 并集（与 JointCostModel.__post_init__
+        # 纯仅流数假速率分支同口径）：仅流数链路此前不进 _effective，
+        # _union_floor/telemetry_links/max_effective_divisor 漏计（探针
+        # 实证：(1,2) 仅流数 7.0 时 divisor_effective=8.0 正确、
+        # _union_floor 只给 2.0）。divisor_effective 经 _flow_counts
+        # 优先本已正确，此处只补齐下界/披露键集；纯仅流数形态本就完备。
+        for link, count in flow_counts.items():
+            if link not in self._effective:
+                self._effective[link] = count
+
+    # ------------------------------------------------------------ 键 --
+    @staticmethod
+    def _normalize_link_key(key: Hashable) -> tuple[int, int]:
+        """端点形链路键归一：(src, dst) 元组直过；"src->dst" 字符串解
+        析；其余 fail-closed（整型 LinkId 在 __init__ 分流，不走此处）。"""
+        if isinstance(key, tuple) and len(key) == 2 \
+                and all(isinstance(part, int) and not isinstance(
+                    part, bool) for part in key):
+            return (key[0], key[1])
+        if isinstance(key, str):
+            parts = key.split("->")
+            if len(parts) == 2:
+                try:
+                    return (int(parts[0]), int(parts[1]))
+                except ValueError:
+                    pass
+        raise JointCostError(
+            f"link_telemetry_rates key {key!r} is not a directed link "
+            f"key ((src, dst) tuple or 'src->dst')")
+
+    # ---------------------------------------------------------- 查询 --
+    def measured_effective_rate(
+        self, link: Hashable,
+    ) -> Optional[float]:
+        """该链路的实测有效速率（bytes/ns）；无测量样本返回 None。
+
+        端点形与整型 LinkId 键均可查询（各自键空间）。"""
+        if isinstance(link, bool):
+            return None
+        if isinstance(link, int):
+            return self._opaque_measured.get(link)
+        return self._measured.get(self._normalize_link_key(link))
+
+    def effective_divisor(self, link: Hashable) -> Optional[float]:
+        """该链路的遥测有效除数；无测量返回
+        None（divisor_effective 退化为注册表值）。M1：流数在场取流数
+        口径（时间加权活跃流数 = 物理除数），缺席退 capacity/实测速率。"""
+        if (not isinstance(link, bool) and not isinstance(link, int)):
+            flow_count = self._flow_counts.get(
+                self._normalize_link_key(link))
+            if flow_count is not None:
+                return flow_count
+        rate = self.measured_effective_rate(link)
+        if rate is None:
+            return None
+        return self._capacity / rate
+
+    def divisor_effective(
+        self, link: Hashable, *, include_self: bool = False,
+        self_overlap: int = 0,
+    ) -> float:
+        """单链路有效除数（N2 叠加口径）= max(注册旧流, 遥测旧流) +
+        候选自身占用（include_self 时）。M1：遥测旧流口径优先流数
+        （时间加权活跃流数 = 物理除数，含 collective——合计吞吐无法
+        反推流数），缺席退 capacity/实测速率。
+
+        N2（2026-09-23 复核审计2）：旧合并式 max(注册含候选, 遥测旧流)
+        漏"候选 + 未登记旧流"叠加——遥测不含候选（决策前旧流）、注册
+        不含未登记流（collective 等），两未登记旧流加一条候选时实际并
+        发 3 模型只算 2。正解：旧流并发两口径（注册 flows / 遥测流数）
+        取大者为 base（C7 冻结 max 防漏计保守性保留——哪边更高信哪
+        边），候选份额恒叠加。注册腿 = 该链路已登记流数（不含候选；
+        候选由 self_overlap 承载，与 LinkFlowRegistry.divisor 单链路
+        退化同式）。整型 LinkId 键无注册腿可言（键空间不相交）→ 纯遥
+        测腿（≥1，无候选叠加——端点无关消费语境，调用方自担候选份额）。
+        """
+        if isinstance(link, bool):
+            raise JointCostError(f"invalid link key {link!r}")
+        if isinstance(link, int):
+            telemetry_int = self.effective_divisor(link)
+            if telemetry_int is None:
+                raise JointCostError(
+                    f"no telemetry sample for LinkId {link!r}")
+            return float(max(1.0, telemetry_int))
+        link_key = self._normalize_link_key(link)
+        base_flows = self._registry.registered_flows(
+            (link_key[0], link_key[1]))
+        telemetry = self.effective_divisor(link)
+        base = (base_flows if telemetry is None
+                else max(base_flows, telemetry))
+        share = base + (self_overlap if include_self else 0)
+        return float(max(1, share))
+
+    # ---------------------------------------------------------- 除数 --
+    def divisor(
+        self, path_ranks: Sequence[int], *, include_self: bool,
+        self_overlap: int = 1,
+    ) -> float:
+        """单路线有效除数（N2 叠加口径）：逐链路 max(注册旧流, 遥测
+        旧流) + 候选自身占用（include_self），取路线瓶颈。"""
+        if len(path_ranks) < 2:
+            return 1.0
+        worst = 1.0
+        for index in range(len(path_ranks) - 1):
+            link = (path_ranks[index], path_ranks[index + 1])
+            worst = max(
+                worst, self.divisor_effective(
+                    link, include_self=include_self,
+                    self_overlap=self_overlap))
+        return worst
+
+    def divisor_multi(
+        self, paths: Sequence[Sequence[int]], *, include_self: bool = True,
+    ) -> float:
+        """F-B 聚合有效除数（N2 叠加口径）：逐链路 max(注册旧流, 遥测
+        旧流) + 候选自身路径经过次数（include_self），取并集瓶颈。
+
+        N2 前 = max(注册并集瓶颈含候选, 遥测下界不含候选)——漏候选与
+        未登记旧流的叠加（两未登记流+候选 ⇒ 3 算 2）。"""
+        self_counts = _path_union_links(paths)
+        if not self_counts:
+            return self._union_floor(paths)
+        worst = 1.0
+        for link, self_share in self_counts.items():
+            worst = max(
+                worst, self.divisor_effective(
+                    link, include_self=include_self,
+                    self_overlap=self_share))
+        return worst
+
+    def _union_floor(self, paths: Sequence[Sequence[int]]) -> float:
+        """路径族并集链路上的遥测有效除数下界（无测量 = 1）。
+
+        O7③（A19'(g)③，2026-09-23）：``_effective`` 键集 = rates ∪
+        flow_counts 并集，仅流数链路在下界与披露中同步计入（修前
+        混合形态漏计——探针：(1,2) 仅流数 7.0 时本方法只给 1.0）。
+        """
+        floor = 1.0
+        for link in _path_union_links(paths):
+            telemetry = self._effective.get(link)
+            if telemetry is not None and telemetry > floor:
+                floor = telemetry
+        return floor
+
+    # ---------------------------------------------------------- 披露 --
+    @property
+    def collective_coverage(self) -> bool:
+        """透传底层注册表的覆盖标记（翻转接线在 SH 侧 C8）。"""
+        return self._registry.collective_coverage
+
+    def disclosure(self) -> dict:
+        """遥测消费披露（决策日志/manifest 用）。
+
+        ``opaque_link_id_entries`` = 整型 LinkId 键条目数（端点无关消
+        费，不参与端点除数合并——可见缺口披露，见类 docstring）。
+        """
+        return {
+            "telemetry_links": len(self._effective),
+            "opaque_link_id_entries": len(self._opaque_measured),
+            "max_effective_divisor": (
+                max(self._effective.values()) if self._effective
+                else None),
+            "link_capacity_bytes_per_ns": self._capacity,
+            "collective_coverage": self._registry.collective_coverage,
+            # N3（2026-09-23 复核审计3）：流数覆盖与旧口径退回可辨认——
+            # flow_count_links = 有时间加权流数样本的链路数；legacy_
+            # rate_divisor_links = 无流数样本而退 capacity/合计吞吐
+            # 口径的链路数（旧二进制缺 active_flows 字段的降级可从
+            # 披露辨认，不再物理歧义静默）。
+            "flow_count_links": len(self._flow_counts),
+            "legacy_rate_divisor_links": sum(
+                1 for link in self._measured
+                if link not in self._flow_counts),
+        }
 
 
 # ============================================================ 决策视图 ==
@@ -460,6 +989,10 @@ class RequestView:
     horizon_source: str                 # session_online_mean/run_online_mean/cold_start_default
     # 已知 prefill 输入的逐 rank KV 字节（增量，物理派生）。
     input_kv_bytes_by_tp_rank: tuple[int, ...]
+    # D1（C1）：prefill 对远端基础历史的实际消费遍数估计。None = 因果
+    # 缺省（input_tokens > 0 → 1，否则 0；单遍扫描口径——分块 prefill
+    # 的多遍真值属执行侧事实，在线决策不读，由受控测量/后继卡供给）。
+    prefill_scan_passes: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -475,6 +1008,11 @@ class ActionCostBreakdown:
     contention_divisor: int
     hops: int
     notes: tuple = ()
+    # credit 形态拆分披露（§4.3.1）：首 credit 块暴露时延 + 其余读流的
+    # 纯流送段。serial 形态与非 remote 动作保持缺省 0（字段仅披露 credit
+    # 拆分；remote_read_ns 恒为全流总时延口径，两形态同值）。
+    remote_read_first_credit_ns: int = 0
+    remote_read_stream_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -529,6 +1067,191 @@ def _pool_transfer_ns(
     return rates.pool_latency_ns + data_ns
 
 
+def _shard_endpoint_divisors(
+    port_registry, shard_paths: Sequence[Sequence[int]],
+) -> tuple[int, int]:
+    """逐 shard 端点 HBM 端口除数（u_home, u_exec）——C2 供给。
+
+    ``port_registry`` 为 None（离线/单测未注入）时返回 (0, 0)：端点腿
+    按独占带宽计。HbmPortFlowRegistry（C2，WL/joint/hbm_port_flow_
+    registry.py）注入后按 ``divisor(port_rank)`` 取值：u_home = 源 rank
+    端口的 u_port、u_exec = 目标 rank 端口的 u_port（F4 口径：活跃
+    decode 消费流 + 在册传输/远读流；**不含候选自身 +1**——消费方
+    ``_shard_leg_ns`` 显式加，与 LinkFlowRegistry 的 self_overlap 分离
+    口径一致）。
+    """
+    if port_registry is None:
+        return 0, 0
+    first_path = shard_paths[0] if shard_paths else ()
+    if len(first_path) < 2:
+        return 0, 0
+    return (
+        int(port_registry.divisor(first_path[0])),
+        int(port_registry.divisor(first_path[-1])),
+    )
+
+
+def _shard_hop_latency_ns(
+    rates: JointHardwareRates, shard_paths: Sequence[Sequence[int]],
+) -> int:
+    """单 shard 路线的逐跳累计时延（store-and-forward，跳数线性）。"""
+    return rates.d2d_latency_ns * max(
+        (len(path) - 1 for path in shard_paths if len(path) >= 2), default=0)
+
+
+def _shard_leg_ns(
+    rates: JointHardwareRates,
+    noc_effective: float,
+    port_registry,
+    shard_paths: Sequence[Sequence[int]],
+    shard_bytes: int,
+    kind: str,
+) -> float:
+    """单 shard 三腿（read/copy/merge 为两腿、copy/staging 三腿）的最大
+    腿时（无 startup/逐跳时延；F1 冻结公式）。"""
+    if shard_bytes < 0:
+        raise JointCostError("transfer bytes must be >= 0")
+    u_home, u_exec = _shard_endpoint_divisors(port_registry, shard_paths)
+    legs = (
+        # NoC 流送腿：除数 = divisor_multi(候选路径并集)（含候选自身 TP
+        # 流与他流；共链自身重叠计费保留，divisor_multi 语义不动）。
+        shard_bytes / noc_effective,
+        # 源端 HBM 读腿：local_hbm_bytes_per_ns 正式消费（E12）。
+        shard_bytes / (rates.local_hbm_bytes_per_ns / (u_home + 1)),
+    )
+    if kind in ("read", "copy", "staging"):
+        # 执行端 HBM 写腿：copy/staging 为目标端留存写（"staging" 为
+        # C14/D6 条件项 STAGING_WRITE 复活预留的接口位，未触发前无
+        # 消费者）；"read" 为 A4' 补价 rider（PROVENANCE §20.1，C14 G1
+        # 裁定 (a)，2026-09-22）——执行侧 remote-read 每 credit 块到达
+        # 实计 COMM_WRITE（N-way 严格均分），计价忠实于执行增同式写腿
+        # （u_exec 自 hbm_port_registry；read_passes 倍乘已在调用方字节
+        # 基数内——F14 无留存暂存 ⇒ 每遍重扫的块真实再到达、再写一次）。
+        # kind="merge" 仍无 exec 写腿（C1 冻结：落点空间准备在
+        # _eviction_wait_estimate 单列计价）。
+        legs = legs + (
+            shard_bytes / (rates.local_hbm_bytes_per_ns / (u_exec + 1)),)
+    return max(legs)
+
+
+def _union_noc_divisor(
+    flow_registry: "LinkFlowRegistry | TelemetryLinkFlowView",
+    *,
+    paths_by_rank: Sequence[Sequence[Sequence[int]]],
+    bytes_by_rank: Sequence[int],
+    include_self: bool,
+) -> int:
+    """候选全部 TP 并行流链路并集的瓶颈除数（零字节 shard 无流不计）。
+
+    E4 去重（A1 勘误，C2）：同一路径/字节集合的计价腿族共享一次计算
+    （调用方经 ``noc_divisor`` 参数复用；breakdown 的
+    contention_divisor 同源复用，不再二次调用 divisor_multi）。
+    """
+    return max(1, flow_registry.divisor_multi(
+        [path for paths, shard_bytes in zip(
+            paths_by_rank, bytes_by_rank) if shard_bytes > 0
+         for path in paths],
+        include_self=include_self))
+
+
+def _transfer_ns_shards(
+    rates: JointHardwareRates,
+    flow_registry: "LinkFlowRegistry | TelemetryLinkFlowView",
+    port_registry,
+    *,
+    paths_by_rank: Sequence[Sequence[Sequence[int]]],
+    bytes_by_rank: Sequence[int],
+    include_self: bool,
+    kind: str,                        # "read" | "copy" | "merge" | "staging"
+    startup_ns: int = 0,
+    noc_divisor: Optional[int] = None,
+) -> int:
+    """逐 shard 三腿 min：wall_s = startup + hop_latency(path_s)
+    + max(noc_stream, home_read[, exec_write])；TP 并行取 max over shards。
+
+    C1（F1 冻结）：TP shard 字节向量按 rank 对齐（paths_by_rank[s] =
+    rank s 的路径序列、bytes_by_rank[s] = rank s 字节）；除数取候选
+    全部 TP 并行流链路并集的瓶颈（divisor_multi，含自身与他流）——
+    路径不相交时各 shard 独占链路（wall = 单 shard 时间，非 N×）、
+    共链时自身重叠计费保留。聚合字节 ÷ 单链路率的旧串行口径在此
+    原语处废除（_transfer_ns 保留为测试旧口径参照，无本模块调用点）。
+
+    noc_divisor（E4 去重，C2）：调用方已按同一路径/字节集合算得的并集
+    除数可直接复用，跳过内部重复计算。
+
+    空 shard 契约（F1 小项钉字，2026-09-22）：``paths_by_rank`` 为空
+    序列（无 shard）⇒ **返回 0 且 ``startup_ns`` 不计入**——无 shard
+    即无传输事务，启动时延属"事务发生"的固定成本，不随不存在的流产生
+    （调用方零字节 shard 过滤后自然到达此形态；与
+    ``_shard_stream_ns_shards`` 的 ``default=0`` 同语义族）。当前实现
+    即此行为（max 聚合循环零次），本 docstring 将其登记为冻结契约。
+    """
+    if kind not in ("read", "copy", "merge", "staging"):
+        raise JointCostError(f"unknown transfer kind {kind!r}")
+    if len(paths_by_rank) != len(bytes_by_rank):
+        raise JointCostError(
+            "paths_by_rank/bytes_by_rank must align by TP rank")
+    # 除数并集只计真实发流的 shard（零字节 shard 无流、不争用）。
+    if noc_divisor is None:
+        noc_divisor = _union_noc_divisor(
+            flow_registry, paths_by_rank=paths_by_rank,
+            bytes_by_rank=bytes_by_rank, include_self=include_self)
+    noc_effective = rates.noc_link_bytes_per_ns / max(1, noc_divisor)
+    wall_ns = 0
+    for shard_paths, shard_bytes in zip(paths_by_rank, bytes_by_rank):
+        if shard_bytes <= 0:
+            # M5（2026-09-23 验收审计）：零字节 shard 无流——不计逐跳
+            # 传输时延与流腿（与除数并集过滤 ``if shard_bytes > 0`` 同
+            # 语义族；不过滤时零字节十跳 shard 仍贡献 hop_latency 抬
+            # 高 wall：有数据一跳 10ns 的真实发流被报成 ≈100ns）。
+            # startup_ns 保留计入：F1 冻结契约（"shard 在场即事务发
+            # 生"，对照锚 test_present_shard_keeps_startup_even_with_
+            # zero_bytes）——零字节 shard 的事务固定成本仍在。
+            wall_ns = max(wall_ns, int(startup_ns))
+            continue
+        wall_ns = max(
+            wall_ns,
+            int(int(startup_ns) + _shard_hop_latency_ns(rates, shard_paths)
+                + _shard_leg_ns(
+                    rates, noc_effective, port_registry,
+                    shard_paths, shard_bytes, kind)))
+    return wall_ns
+
+
+def _shard_stream_ns_shards(
+    rates: JointHardwareRates,
+    flow_registry: "LinkFlowRegistry | TelemetryLinkFlowView",
+    port_registry,
+    *,
+    paths_by_rank: Sequence[Sequence[Sequence[int]]],
+    bytes_by_rank: Sequence[int],
+    include_self: bool,
+    kind: str,
+    noc_divisor: Optional[int] = None,
+) -> int:
+    """逐 shard 三腿 max 的纯流送段（无 startup/逐跳时延）——credit
+    其余读流段（remaining_stream_ns）口径：与 ``_transfer_ns_shards``
+    同腿源同除数，仅剥离首块启动时延（§4.3.1 拆分纪律）。noc_divisor
+    复用语义同 ``_transfer_ns_shards``（E4 去重，C2）。"""
+    if kind not in ("read", "copy", "merge", "staging"):
+        raise JointCostError(f"unknown transfer kind {kind!r}")
+    if len(paths_by_rank) != len(bytes_by_rank):
+        raise JointCostError(
+            "paths_by_rank/bytes_by_rank must align by TP rank")
+    # 除数并集只计真实发流的 shard（零字节 shard 无流、不争用）。
+    if noc_divisor is None:
+        noc_divisor = _union_noc_divisor(
+            flow_registry, paths_by_rank=paths_by_rank,
+            bytes_by_rank=bytes_by_rank, include_self=include_self)
+    noc_effective = rates.noc_link_bytes_per_ns / max(1, noc_divisor)
+    return max(
+        (int(_shard_leg_ns(
+            rates, noc_effective, port_registry,
+            shard_paths, shard_bytes, kind))
+         for shard_paths, shard_bytes in zip(paths_by_rank, bytes_by_rank)),
+        default=0)
+
+
 @dataclass
 class JointCostModel:
     """决策时点代价模型（只读快照 -> 每候选完成时间预测）。
@@ -555,6 +1278,42 @@ class JointCostModel:
     # R15-3：池端口仲裁份额（instance_index -> 除数，含自身 +1）；
     # None 时单流全带宽（冷启动）。
     pool_divisor_fn: object = None
+    # C1 接口位 / C2 供给：实例 HBM 端口流注册表（u_port 除数，F4）。
+    # HbmPortFlowRegistry（WL/joint/hbm_port_flow_registry.py）注入后
+    # 端点腿（home_read/exec_write）按 u_home/u_exec+1 计争用；None 时
+    # 端点腿独占带宽（离线/单测口径，u_home=u_exec=0）。
+    hbm_port_registry: object = None
+    # remote-read credit 块大小 K 配置（"auto" | 显式正整数字符串；
+    # joint_config 同源）。执行口径 = 逐 credit 交错流唯一机制
+    # （2026-09-17 用户裁定：v1 串行加法口径删除，不作为开关可选项
+    # 保留），计价恒为流水式 first_credit_ns + max(remaining_stream_ns,
+    # compute_ns)——与执行侧同公式同 K 源，无窗口矛盾。
+    remote_credit_iters: str = "auto"
+    # 需求①（2026-09-17《部分层逐出kv管理改造分析方案》）：PARTIAL 基
+    # remote-read 适用面消融（JOINT_REMOTE_READ_PARTIAL，on|off 缺省
+    # on）。off 只把 PARTIAL 基的 remote-read 移出候选集（copy/recompute
+    # 照常参与比较）——与 remote_actions 能力开关同一消融模式，非旧
+    # 机制回归档（用户裁定④边界澄清）。
+    remote_read_partial: bool = True
+    # C7（WP2，冻结交接接口——kwarg 名与 C8 联合冻结）：逐链路遥测实测
+    # 有效速率 ``{link_id: 实测有效速率(bytes/ns)}``——SH/C8 解析桥请求
+    # ``link_telemetry[]`` 后传入构造（键两形：端点形 (src, dst)/
+    # "src->dst" 参与除数合并；裸整型 LinkId 端点无关消费——见
+    # TelemetryLinkFlowView）。None/空 = 遥测未开启：NoC 除数走原注册
+    # 表模型，行为零漂移（fail-closed 语义在视图构造处）。
+    link_telemetry_rates: Optional[Mapping[Hashable, float]] = None
+    # M1（2026-09-23 验收审计）：C++ 时间加权活跃流数（含 collective）
+    # ——在场时遥测除数取流数口径（物理除数；合计吞吐无法反推流数），
+    # 缺席退 link_telemetry_rates 的 capacity/速率旧口径。
+    link_telemetry_flow_counts: Optional[Mapping[Hashable, float]] = None
+    # N4（2026-09-23 复核审计4）：prefill 整段负载函数（(input_tokens,
+    # history_tokens) -> ns）——生产列车按真实 chunk 切分与累计 context
+    # 求 roofline（二次形状），线性外推（prefill_ns_per_token × tokens）
+    # 丢形状。SH 注入生产同形实现；None 退线性口径（既有测试/离线
+    # 兼容）。recompute 的 history 按 ``_resident_here`` 二分（O1，
+    # A19'(a)，2026-09-23：与执行侧 R13 双分支同判据——驻留目标传
+    # session.history_tokens（span 基=H），异地/REMOTE 副本传 0）。
+    prefill_task_load_ns_fn: object = None
 
     def __post_init__(self) -> None:
         if self.prefill_ns_per_token <= 0 or self.decode_ns_per_token <= 0:
@@ -563,6 +1322,31 @@ class JointCostModel:
             raise JointCostError("layout parameters must be positive")
         # 决策时刻先落盘同时刻汇总样本（P3：读因子前 flush）。
         self.service_factors.flush()
+        # C7：遥测叠加视图——NoC 除数消费点统一走 _noc_registry（无遥
+        # 测 = 原 flow_registry 引用，零漂移；flow_registry 本体状态不
+        # 变，保持决策时点只读快照纪律）。
+        if self.link_telemetry_rates:
+            self._noc_registry = self.flow_registry.with_effective_rates(
+                self.link_telemetry_rates,
+                link_capacity_bytes_per_ns=(
+                    self.rates.noc_link_bytes_per_ns),
+                link_flow_counts=self.link_telemetry_flow_counts)
+        elif self.link_telemetry_flow_counts:
+            # M1：仅流数在场（速率全零窗被丢弃）也可构造流数口径视图。
+            self._noc_registry = self.flow_registry.with_effective_rates(
+                {link: 1.0 for link in self.link_telemetry_flow_counts},
+                link_capacity_bytes_per_ns=(
+                    self.rates.noc_link_bytes_per_ns),
+                link_flow_counts=self.link_telemetry_flow_counts)
+        else:
+            self._noc_registry = self.flow_registry
+
+    def link_telemetry_disclosure(self) -> dict:
+        """C7：遥测消费披露（决策日志/manifest 通道；无遥测 = 关闭态
+        单键）。"""
+        if not isinstance(self._noc_registry, TelemetryLinkFlowView):
+            return {"telemetry": False}
+        return {"telemetry": True, **self._noc_registry.disclosure()}
 
     # ------------------------------------------------------------ 动作 --
     def applicable_actions(
@@ -576,16 +1360,17 @@ class JointCostModel:
         """四动作在 (session, instance) 的适用性（§13.1：某动作不适用
         不等于删除该 instance，其余动作仍参与比较）。
 
-        N1 裁定 (a)（2026-09-14）：remote-read 要求基础历史**全层驻留**
-        home HBM（LOCAL）——PARTIAL 的池后缀不存在"前缀 home + 后缀池"
-        混合读流原语（后端能力边界，非 joint 理论排除；partial 会话跨
-        实例服务走 copy——前缀 NoC + 后缀池恢复，已实现且正确；实现/
-        测试锚点（R16，2026-09-15）：物化 face_scheduler._noc_transfer
-        层区间化 + copy 分支 [0, base_prefix)；计价本函数 ACTION_COPY
-        两腿 noc_prefix+pool_suffix_restore；单测
-        joint/test_joint_review3_fixes.py 22 用例 + 容量压力夹具
-        joint_capacity_stress_fixture.sh）。LOCAL 会话 remote-read 不受
-        影响；README 动作适用性表按此口径披露。
+        N1(a) 解除（2026-09-17《部分层逐出kv管理改造分析方案》需求①）：
+        remote-read 适用面从 LOCAL 基扩至 PARTIAL 基——混合形态 = 准入相
+        后缀 [p,L) 池恢复物化（热 KV，复用 copy 池腿原语/发射/前递补边/
+        空间准备）＋ decode 相前缀 [0,p) credit 读流＋增量驻留执行端；
+        LOCAL 基（p==L）语义逐字节不变（回归锚）。REMOTE 基仍拒（无主
+        session，裁定③走池恢复/重算就地转正）。适用面消融开关
+        ``JOINT_REMOTE_READ_PARTIAL=off`` 时 PARTIAL 基照旧不进候选
+        （拒绝理由 "remote-read for partial sessions disabled"）。
+        历史：N1 裁定 (a)（2026-09-14）当时的排除是"混合读流原语未建"
+        的实现边界而非理论禁令，本案收口（物化/计价锚点沿 R16 层区间
+        化纪律；单测 joint/test_joint_mechanisms.py 适用性表）。
         """
         results = []
         is_home = (
@@ -606,6 +1391,9 @@ class JointCostModel:
         results.append((True, None))
         # copy：存在需要搬运的历史（别处驻留或池 backing）；基础历史
         # 已驻留目标实例时退化为 stay（不构成第二份工作副本）。
+        # K5（P2-5）处置注记：REMOTE 基 ×copy@home（裁定③就地转正形态）
+        # 保持适用——物化侧 merge_back 的 N9 豁免（pool-only 基不 raise，
+        # 走 in_place 免单）与本计价（merge_in_place, merge_ns=0）闭合。
         copy_ok = (
             session.location != "none"
             and session.history_tokens > 0
@@ -615,11 +1403,15 @@ class JointCostModel:
         results.append((
             copy_ok,
             None if copy_ok else "no history to copy"))
-        # remote-read：基础历史全层驻留在别的 instance（直接远读路径，
-        # 读流自 home HBM 全上下文），且 remote 能力开关开启。
+        # remote-read：基础历史驻留前缀在别的 instance（LOCAL 全层
+        # 单源读流；PARTIAL 混合形态——后缀准入相池恢复物化＋前缀
+        # [0,p) 读流，见 docstring），且 remote 能力开关开启。REMOTE
+        # 基（无主）仍拒；PARTIAL 受 JOINT_REMOTE_READ_PARTIAL 消融。
         remote_ok = (
             remote_enabled
-            and session.location == "local_hbm"
+            and session.location in ("local_hbm", "partial_hbm_remote")
+            and (session.location == "local_hbm"
+                 or self.remote_read_partial)
             and session.resident_instance is not None
             and session.resident_instance != instance_index)
         results.append((
@@ -627,9 +1419,12 @@ class JointCostModel:
             None if remote_ok else (
                 "remote actions disabled"
                 if not remote_enabled
-                else "suffix not directly readable at home"
+                else "remote-read for partial sessions disabled"
                 if session.location == "partial_hbm_remote"
-                else "no resident remote history")))
+                and not self.remote_read_partial
+                else "no resident remote history"
+                if session.location != "local_hbm"
+                else "base resident at target instance")))
         del is_home  # 保留参数语义：is_home 影响 merge 计费而非适用性
         return tuple(results)
 
@@ -642,8 +1437,9 @@ class JointCostModel:
         action: str,
         remote_enabled: bool,
     ) -> ActionCandidate:
-        """单候选代价：到 service_done 边界的完成时间预测（关键路径，
-        非机械相加：可重叠段取 max，串行依赖段相加）。
+        """单候选代价：到 merge_done 边界的完成时间预测（关键路径，
+        非机械相加：可重叠段取 max，串行依赖段相加；终点术语 = F11
+        冻结的 merge_done——G2 术语 rider，语义零变更）。
 
         R3'（2026-09-14）：空间准备按动作感知逐 rank 足迹（与 R1' 预约
         足迹同源——stay/recompute@驻留 = final−resident、copy/recompute
@@ -685,11 +1481,22 @@ class JointCostModel:
             base + growth
             for base, growth in zip(space_needed, decode_growth_ranks))
         eviction_wait = self._eviction_wait_estimate(
-            load, space_needed, notes, instance_index=instance_index)
+            load, space_needed, notes, instance_index=instance_index,
+            covered_wait_ns=target_wait)
 
         # ---- 3. 历史准备（依动作而异）。----
         history_prep = 0
         remote_read_ns = 0
+        # credit 拆分段（仅 ACTION_REMOTE 时被赋值；
+        # serial 与非 remote 动作恒 0——breakdown 审计字段同此缺省）。
+        first_credit_ns = 0
+        remaining_stream_ns = 0
+        # E4 去重（A1，C2）：主计价腿（copy 前缀腿 / remote 读流族）算得
+        # 的并集除数——breakdown 的 contention_divisor 复用之；无 NoC
+        # 计价腿的动作（stay/recompute）保持 None，函数尾走单次调用。
+        # C7：遥测叠加时该值为 float（max(注册, 遥测下界)），计价腿直
+        # 用原值；breakdown 披露位函数尾保守取整。
+        priced_divisor: Optional[float] = None
         route_path, hops = self._route(instance_index, session)
         candidate_paths = self._route_paths(instance_index, session)
         pool_divisor = self._pool_divisor(instance_index)
@@ -715,16 +1522,27 @@ class JointCostModel:
                     divisor=pool_divisor, rates=self.rates)
                 notes.append("pool_restore_to_target")
             else:
-                # 后缀腿必须带 missing 守卫：_pool_transfer_ns 对零字节
+                # C1/F1：NoC 前缀腿逐 shard 三腿 min（kind="copy" 含
+                # exec 留存写腿）。后缀腿守卫：_pool_transfer_ns 对零字节
                 # 仍返回端口时延（pool_latency_ns），无守卫会击穿 LOCAL
                 # 基与旧值逐位一致（stay 分支 if missing 即先例）。
-                divisor = self.flow_registry.divisor_multi(
-                    candidate_paths, include_self=True)
-                history_prep = _transfer_ns(
-                    total_bytes=resident_bytes,
-                    path_hops=hops, divisor=divisor,
-                    rates=self.rates, per_hop_latency_ns=None,
-                    startup_ns=0)
+                # C2/F4：端点 u_port 分解披露（notes 通道）+ E4 并集除数
+                # 一次计算（计价腿与 breakdown 共用）。
+                copy_paths_by_rank = self._shard_paths(
+                    candidate_paths, session.history_bytes_by_tp_rank)
+                priced_divisor = _union_noc_divisor(
+                    self._noc_registry,
+                    paths_by_rank=copy_paths_by_rank,
+                    bytes_by_rank=session.history_bytes_by_tp_rank,
+                    include_self=True)
+                history_prep = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=copy_paths_by_rank,
+                    bytes_by_rank=session.history_bytes_by_tp_rank,
+                    include_self=True, kind="copy",
+                    noc_divisor=priced_divisor)
+                self._append_u_port_note(notes, copy_paths_by_rank)
                 if missing:
                     history_prep += _pool_transfer_ns(
                         total_bytes=missing, divisor=pool_divisor,
@@ -736,25 +1554,89 @@ class JointCostModel:
             # 少做的重算或传输）。
             notes.append("recompute_history_in_compute")
         elif action == ACTION_REMOTE:
-            # 执行期间按消费远读历史：dense attention 的重复读取按
-            # 估计 decode 步数计次（§13.2 remote）。N11：计价基数补
-            # input 增量 + 在线 decode 增长（执行侧读终态上下文为后端
-            # 真值，不进决策；此处为因果可见口径）。
-            read_base = (
-                sum(session.history_bytes_by_tp_rank)
-                + sum(session.missing_bytes_by_tp_rank)
-                + sum(request.input_kv_bytes_by_tp_rank)
-                + sum(decode_growth_ranks))
-            divisor = self.flow_registry.divisor_multi(
-                candidate_paths, include_self=True)
-            read_passes = max(
-                1, request.estimated_decode_tokens)
-            remote_read_ns = _transfer_ns(
-                total_bytes=int(read_base) * read_passes,
-                path_hops=hops, divisor=divisor,
-                rates=self.rates, per_hop_latency_ns=None,
-                startup_ns=0)
+            # D1（C1 步骤 2b，设计文档 §1.4）：decode 每步远读基数 =
+            # 仍位于远端的基础历史（history_bytes_by_tp_rank——PARTIAL
+            # 基即驻留前缀 [0,p)）；执行端生成的 input/decode 增量本地
+            # 读取、不计作远读，prefill 读流对基础历史按实际消费遍数计
+            # （read_passes = prefill_scan_passes + decode 步数）。旧口径
+            # "终态全部上下文 × 每步"（N11 的 input+growth 并入）废除。
+            # 需求①混合形态（2026-09-17）：PARTIAL 基后缀 [p,L) 准入相
+            # 池恢复物化仍计入 history_prep（与 ACTION_COPY 池腿同源同
+            # 口径）；LOCAL 基（p==L）missing==0 无池腿（回归锚）。
+            missing = sum(session.missing_bytes_by_tp_rank)
+            if session.location == "partial_hbm_remote" and missing:
+                # 后缀池腿守卫：_pool_transfer_ns 零字节时延陷阱
+                # （copy 分支同因）。
+                history_prep = _pool_transfer_ns(
+                    total_bytes=missing, divisor=pool_divisor,
+                    rates=self.rates)
+                notes.append("pool_suffix_restore_hybrid")
+            if session.location == "partial_hbm_remote":
+                read_prefix_layers = min(
+                    max(session.resident_prefix_layers, 0),
+                    self.model_layers)
+                notes.append(
+                    f"remote_read_prefix_layers={read_prefix_layers}")
+            # 读流逐 shard 化（kind="read" 三腿：A4' 补价 rider 后含
+            # 执行端写腿——镜像执行侧 COMM_WRITE；F14 容量半边不动——
+            # credit 在途字节仍不占执行端 HBM 容量、暂存归还仍无操作）。
+            # C2/F4：端点 u_port 分解披露（notes 通道）+ E4 并集除数
+            # 一次计算（全流/首 credit/其余流送三处腿共享——同路径集、
+            # 同非零过滤，乘数为正标量）。
+            read_base_by_rank = session.history_bytes_by_tp_rank
+            shard_paths = self._shard_paths(
+                candidate_paths, read_base_by_rank)
+            self._append_u_port_note(notes, shard_paths)
+            prefill_scans, decode_steps = self._remote_read_passes(request)
+            read_passes = prefill_scans + decode_steps
+            if read_passes:
+                priced_divisor = _union_noc_divisor(
+                    self._noc_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=read_base_by_rank,
+                    include_self=True)
+            remote_read_ns = _transfer_ns_shards(
+                self.rates, self._noc_registry, self.hbm_port_registry,
+                paths_by_rank=shard_paths,
+                bytes_by_rank=tuple(
+                    shard_bytes * read_passes
+                    for shard_bytes in read_base_by_rank),
+                include_self=True, kind="read",
+                noc_divisor=priced_divisor,
+            ) if read_passes else 0
+            notes.append(f"prefill_scan_passes={prefill_scans}")
             notes.append(f"remote_read_passes={read_passes}")
+            # credit 拆分（§4.3.1 唯一执行口径；C1 逐 shard 化）：读流
+            # 按 shard 字节分布切 credit 块——首块暴露时延与其余读流纯
+            # 流送段均逐 shard 取 max（同腿源同除数）；K 与执行侧切片
+            # 同源（remote_credit_block_size 单一裁决点，逻辑不动）。
+            # 不变量：K >= read_passes（单 credit）时 first_credit_ns ==
+            # remote_read_ns、remaining_stream_ns == 0 ⇒ 合成退化为旧
+            # 加法形态的数值。披露字段口径不变：remote_read_ns 恒为
+            # 全流总时延口径。
+            if read_passes:
+                credit_k = remote_credit_block_size(
+                    self.remote_credit_iters, read_passes)
+                credit_steps = min(credit_k, read_passes)
+                first_credit_ns = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * credit_steps
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                remaining_stream_ns = _shard_stream_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * (read_passes - credit_steps)
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                notes.append(f"remote_credit_k={credit_k}")
         else:  # pragma: no cover - ACTION_ORDER 封闭
             raise JointCostError(f"unknown action {action!r}")
 
@@ -765,102 +1647,171 @@ class JointCostModel:
         if action == ACTION_RECOMPUTE:
             prefill_tokens += self._recompute_missing_tokens(
                 session, instance_index)
+        if self.prefill_task_load_ns_fn is not None:
+            # N4：生产同形整段求值（chunk 切分 + 累计 context roofline）。
+            # O1（A19'(a)，2026-09-23）：recompute span 基按 resident_here
+            # 二分——@驻留目标基 = history_tokens（R13 双分支的驻留腿：
+            # @home 重算仍对驻留前缀 KV 做 attention，roofline attention
+            # 项 ∝ chunk×context，基 0 丢掉整项、低估 1.12–3.7×；与执
+            # 行侧 sh30 ``_recompute_missing_tokens`` 的 resident_here
+            # 判据同字段同值，prefix=L 时与 stay 逐位同值）；异地 /
+            # REMOTE 副本基 = 0（跨实例物化从零计工作上下文，R13 异地腿
+            # 不动）。其余动作真实历史基数。
+            if action == ACTION_RECOMPUTE:
+                history_base = (
+                    session.history_tokens
+                    if self._resident_here(session, instance_index)
+                    else 0)
+            else:
+                history_base = session.history_tokens
+            prefill_base_ns = int(self.prefill_task_load_ns_fn(
+                prefill_tokens, history_base))
+        else:
+            prefill_base_ns = (
+                prefill_tokens * self.prefill_ns_per_token)
         compute_ns = int(
-            prefill_tokens * self.prefill_ns_per_token
+            prefill_base_ns
             * self.service_factors.prefill_factor
             + request.estimated_decode_tokens
             * self.decode_ns_per_token
             * self.service_factors.decode_factor)
 
-        # ---- 5. compute_done 后的合并（§2.2/§3.2：增量回 origin_home；
-        # 执行位置等于 home 的本地提交不生成虚构流量；新会话（home 待
-        # 建立 = 执行实例）同 stay 本地提交）。终审-中3 残角（kimi 三审）：
-        # REMOTE 基 + exec==home 的工作副本组合（copy@home 退化池恢复 /
-        # recompute@home 于 REMOTE 基）执行侧 merge_back 恒走**池写**
-        # （face_scheduler REMOTE 归并分支先于 N9 home==exec 防御），计价
-        # 不得因 home==exec 免单——门控扩为 home != exec **或** REMOTE 基。
+        # ---- 5. compute_done 后的合并（merge v2 少并多，2026-09-17
+        # 用户裁定《部分层逐出kv管理改造分析方案》需求②：两侧保留量比
+        # 大小、小的整份搬给大的、合并零池写、结果恒全层 LOCAL@胜者、
+        # home 迁移胜者；旧机制（增量拆分归并/R4 自降级/k=0 池归并/
+        # REMOTE 写池归并）直接删除、单实现——裁定④，无开关可选项）。
+        # 计价与物化同判据同公式：merge_ns = min(前向, 反向)；物化按实际
+        # 增量 I（已观测 decode 长度），计价按因果估计 I_pred——边界
+        # 差异与 K4 同源披露。REMOTE 基 = 无主就地保留（裁定③，
+        # merge_ns=0，不写池）；copy/recompute 执行端恒持并集 → 反向
+        # 零字节翻转（merge_ns=0、无空间准备）。LOCAL 基 remote-read
+        # 前向腿 = noc(增量) + home 空间准备等待，与旧公式逐位一致
+        # （p==L 退化锚）。
         merge_ns = 0
         if session.home_instance is not None and (
                 session.home_instance != instance_index
                 or session.location == "remote_memory"):
-            # K4（kimi 复审，2026-09-14）+ 自查 C（2026-09-15）+
-            # R16-3（GLM 三审，2026-09-15）：merge 段计价按**基础位置**
-            # 分流——LOCAL/PARTIAL 基 = 增量口径（input + 因果 decode
-            # 增长）按基础驻留前缀**逐 rank 分裂**：前缀增量经 NoC 回
-            # home + 后缀增量写池（执行端池端口）+ home 侧空间准备等待
-            # （与物化 merge_back 的两笔拆分同源；旧"整份增量回传 NoC"
-            # 对 PARTIAL 基是系统性**低估**——池端口单字节速率仅 NoC
-            # 的 ~1/7.9，方向经实配速率核实，非代码注释旧称的"保守
-            # 上界"）；REMOTE 基 = 执行侧 merge_back 走**池写**
-            # （_increment_pool_store_transfer，经执行端池端口），无
-            # home 空间准备（home 不持有基础）。此前统一 NoC→home 口径
-            # 对 REMOTE 基是路由错配（K4 只修了字节口径）。执行端空间
-            # 准备段（space_needed）保持 R3'.2 整份口径不变。
-            merge_increments_by_rank = tuple(
-                input_bytes + growth
-                for input_bytes, growth in zip(
-                    request.input_kv_bytes_by_tp_rank, decode_growth_ranks))
-            increments = sum(merge_increments_by_rank)
             if session.location == "remote_memory":
-                merge_ns = _pool_transfer_ns(
-                    total_bytes=increments,
-                    divisor=self._pool_divisor(instance_index),
-                    rates=self.rates)
-                notes.append("merge_to_pool_backing")
+                # 无主 session：合并就地保留（新 KV 不写池、副本不
+                # 释放），零传输零池写。
+                notes.append("merge_in_place")
             else:
-                # 拆分公式形态钉死（GLM 四审 P2-2）：
-                # prefix = inc × p // L; suffix = inc − prefix——两腿之和
-                # 恒等于 inc（守恒）；LOCAL（p == L）下 prefix = inc、
-                # suffix = 0 与旧值逐位一致；inc // L × p 会在 L∤inc 的
-                # 合成视图下破坏 LOCAL 一致性，两腿独立取整则丢守恒。
-                layers = self.model_layers
-                base_prefix = min(
-                    max(session.resident_prefix_layers, 0), layers)
-                prefix_increments_by_rank = tuple(
-                    increment * base_prefix // layers
-                    for increment in merge_increments_by_rank)
-                prefix_increments = sum(prefix_increments_by_rank)
-                suffix_increments = increments - prefix_increments
-                merge_route, merge_hops = self._route_pair(
-                    instance_index, session.home_instance)
-                merge_divisor = self.flow_registry.divisor_multi(
-                    self._route_paths_pair(
-                        instance_index, session.home_instance),
-                    include_self=True)
-                merge_ns = _transfer_ns(
-                    total_bytes=prefix_increments, path_hops=merge_hops,
-                    divisor=merge_divisor, rates=self.rates,
-                    per_hop_latency_ns=None, startup_ns=0)
-                if suffix_increments > 0:
-                    # 后缀池腿守卫与 copy 段同因：_pool_transfer_ns 零
-                    # 字节时延陷阱；除数挂执行端池端口仲裁（与 REMOTE
-                    # 基分支同源同口径）。
-                    merge_ns += _pool_transfer_ns(
-                        total_bytes=suffix_increments,
-                        divisor=self._pool_divisor(instance_index),
-                        rates=self.rates)
-                # home 侧空间准备：按 home 当前占用估计释放等待（§3.2 不
-                # 认为"写回免费"）；需求 = 前缀增量逐 rank——物化侧
-                # _ensure_capacity(home, prefix_shards) 本就只备前缀，
-                # 同源自洽（后缀实际写池不占 home）。
-                home_load = self.loads.get(session.home_instance)
-                if home_load is not None:
-                    merge_ns += self._eviction_wait_estimate(
-                        home_load, prefix_increments_by_rank, notes,
-                        instance_index=session.home_instance,
-                        prefix="home_merge")
-                notes.append(f"merge_to_home={session.home_instance}")
+                increments_by_rank = tuple(
+                    input_bytes + growth
+                    for input_bytes, growth in zip(
+                        request.input_kv_bytes_by_tp_rank,
+                        decode_growth_ranks))
+                if action == ACTION_REMOTE:
+                    # 执行侧保留量 = 增量（LOCAL 基）或 池恢复后缀＋
+                    # 增量（PARTIAL 混合形态）；home 侧保留量 = 驻留
+                    # 前缀真值（history_bytes_by_tp_rank）。
+                    if session.location == "partial_hbm_remote":
+                        exec_retained_by_rank = tuple(
+                            missing + increment
+                            for missing, increment in zip(
+                                session.missing_bytes_by_tp_rank,
+                                increments_by_rank))
+                    else:
+                        exec_retained_by_rank = increments_by_rank
+                    home_retained_by_rank = tuple(
+                        session.history_bytes_by_tp_rank)
+                    # C1/F1：merge 双腿逐 shard 三腿 min（kind="merge"：
+                    # 无 exec 写腿——落点空间准备在 _eviction_wait_estimate
+                    # 单列计价）。K5（P2-1，2026-09-23 外部审计）：反向腿
+                    # 改用自身方向（home→exec）的路线集合计价——原实现
+                    # 两腿共用前向路线（"方向差异由流登记表的调用方覆盖"
+                    # 无对应实现），反向恰是 charged 腿时自身重叠份额/
+                    # 已登记他流/端口除数全按错误方向计。
+                    forward_paths_by_rank = self._shard_paths(
+                        self._route_paths_pair(
+                            instance_index, session.home_instance),
+                        exec_retained_by_rank)
+                    reverse_paths_by_rank = self._shard_paths(
+                        self._route_paths_pair(
+                            session.home_instance, instance_index),
+                        home_retained_by_rank)
+                    forward_ns = _transfer_ns_shards(
+                        self.rates, self._noc_registry,
+                        self.hbm_port_registry,
+                        paths_by_rank=forward_paths_by_rank,
+                        bytes_by_rank=exec_retained_by_rank,
+                        include_self=True, kind="merge")
+                    reverse_ns = _transfer_ns_shards(
+                        self.rates, self._noc_registry,
+                        self.hbm_port_registry,
+                        paths_by_rank=reverse_paths_by_rank,
+                        bytes_by_rank=home_retained_by_rank,
+                        include_self=True, kind="merge")
+                    # 胜者侧空间准备等待（与物化 _ensure_capacity 同源：
+                    # 前向胜者=home 备 exec 侧保留量；反向胜者=exec 备
+                    # home 侧保留量）。
+                    home_load = self.loads.get(session.home_instance)
+                    if home_load is not None:
+                        forward_ns += self._eviction_wait_estimate(
+                            home_load, exec_retained_by_rank, notes,
+                            instance_index=session.home_instance,
+                            prefix="home_merge")
+                    exec_load = self.loads.get(instance_index)
+                    if exec_load is not None and any(home_retained_by_rank):
+                        reverse_ns += self._eviction_wait_estimate(
+                            exec_load, home_retained_by_rank, notes,
+                            instance_index=instance_index,
+                            prefix="exec_merge")
+                    # K5（P1-④）：方向判据镜像物化侧（face merge_back：
+                    # Σ working ≤ Σ home → forward，F15 平局含等号取
+                    # forward）——原 min(前向, 反向) 是另一套判据，
+                    # "保留量接近 + home 侧空间紧张"场景系统性低估
+                    # remote-read（argmin 偏乐观）。物化的 KVCapacityError
+                    # 容量兜底翻转在决策时点不可计价，note 披露。
+                    selected_forward = (
+                        sum(exec_retained_by_rank)
+                        <= sum(home_retained_by_rank))
+                    merge_ns = int(
+                        forward_ns if selected_forward else reverse_ns)
+                    notes.append(
+                        "merge_v2_direction=forward" if selected_forward
+                        else "merge_v2_direction=reverse")
+                    notes.append(
+                        "merge_v2_direction_rule=byte_le_tie_forward")
+                    notes.append(
+                        f"merge_v2_forward_ns={int(forward_ns)}")
+                    notes.append(f"merge_v2_reverse_ns={int(reverse_ns)}")
+                    notes.append(
+                        f"merge_to_home={session.home_instance}")
+                else:
+                    # copy/recompute：执行端恒持并集（copy 驻留前缀+池
+                    # 恢复后缀 / recompute 重算复份 ＋增量）⊇ home 侧
+                    # → 反向零字节翻转：零传输、零池写、无空间准备。
+                    merge_ns = 0
+                    notes.append("merge_v2_zero_byte_flip")
 
-        # ---- 关键路径合成：目标等待 -> [历史准备 ∥ 空间准备（争用同
-        # 链路，保守串行）] -> 计算（remote 与计算重叠推进、取增量） ->
-        # 合并。可重叠段取 max：remote 读流与计算相互重叠（§5.2 恢复
-        # 争用使计算变慢的口径：以 remote_read 延长计算的保守合成）。
-        effective_compute = compute_ns + remote_read_ns
+        # ---- 关键路径合成：目标等待 -> [历史准备 ∥ 空间准备（max 重叠
+        # 合成——两腿各自计价内已含同链路争用的串行化）] -> 计算（remote
+        # 读流与计算重叠推进） ->
+        # 合并。remote-read 流水式合成（§4.3.1 唯一口径，与 Workload.cc:
+        # 558-566 闭式 first_tile + max(remaining, compute) 同构）：首
+        # credit 块到达后计算起步，其余读流与计算重叠推进——可重叠段
+        # 取 max 即上文注释既定方向。不变量：K >= read_passes（单
+        # credit）时退化为 remote_read_ns + compute_ns（旧加法形态数值）。
+        effective_compute = (
+            first_credit_ns + max(remaining_stream_ns, compute_ns))
         prep = max(history_prep, eviction_wait)
         cost = target_wait + prep + effective_compute + merge_ns
 
-        divisor = self.flow_registry.divisor_multi(
-            candidate_paths, include_self=True)
+        # E4 去重（A1 勘误，C2）：contention_divisor 复用主计价腿已算得
+        # 的并集除数（原此处对 candidate_paths 的第二次 divisor_multi
+        # 调用删除）；stay/recompute 无 NoC 计价腿可复用时维持单次调用
+        # （非重复——该动作族原本也只有这一次）。
+        if priced_divisor is None:
+            priced_divisor = max(1, self._noc_registry.divisor_multi(
+                candidate_paths, include_self=True))
+        divisor = priced_divisor
+        # C7：遥测合并除数可为非整数 float；breakdown 披露位保持 int
+        # （C5 冻结 schema），向上取整（保守侧）——计价腿全程用原值，
+        # 本取整只影响披露字段。
+        if not isinstance(divisor, int):
+            divisor = int(math.ceil(divisor))
         return ActionCandidate(
             instance_index=instance_index,
             action=action,
@@ -877,6 +1828,10 @@ class JointCostModel:
                 contention_divisor=divisor,
                 hops=hops,
                 notes=tuple(notes),
+                # credit 拆分披露：serial / 非 remote 动作下两变量恒 0
+                # （仅 credit 的 ACTION_REMOTE 分支赋值），与缺省一致。
+                remote_read_first_credit_ns=first_credit_ns,
+                remote_read_stream_ns=remaining_stream_ns,
             ),
         )
 
@@ -925,6 +1880,69 @@ class JointCostModel:
             return 1
         return max(1, int(self.pool_divisor_fn(instance_index)))
 
+    def _shard_paths(
+        self,
+        candidate_paths: Sequence[Sequence[int]],
+        bytes_by_rank: Sequence[int],
+    ) -> tuple[tuple[Sequence[int], ...], ...]:
+        """逐 rank 路径对齐（``paths_by_rank`` 口径，C1）。
+
+        route_paths_fn 已注入时逐 rank 一致（每 rank 单路径）；未注入
+        （单测/离线代表路径口径，_route_paths_pair 返回单元素）时代表
+        路径广播到全部 rank——共链自身重叠按 rank 数计，与旧聚合口径
+        在字节均衡、空链路时同 wall 值（K8 订正：有背景流时新旧比 =
+        (f+n)/(n·(f+1)) ≤ 1，广播口径相对旧聚合口径**偏乐观**——原
+        "保守方向"标注方向写反；route_paths_fn 生产恒注入，此口径仅
+        测试/离线代表路径可达）。
+        """
+        size = len(bytes_by_rank)
+        if not candidate_paths:
+            return ((),) * size
+        if len(candidate_paths) == size:
+            return tuple((path,) for path in candidate_paths)
+        representative = (candidate_paths[0],)
+        return tuple(representative for _ in range(size))
+
+    def _append_u_port_note(self, notes: list, shard_paths) -> None:
+        """C2/F4：u_port 分解披露 → 决策日志 notes 通道（C5 冻结 schema
+        不动——正式字段位 port_snapshot 的接通归 C11 步骤 6）。
+
+        取首 shard 路径的端点端口（rank），分解 = 活跃 decode 消费流数
+        ＋ 在册传输/远读流数（HbmPortFlowRegistry.decomposition）。仅
+        主计价腿（copy 前缀腿 / remote 读流族）披露；未注入注册表
+        （离线/单测）时不披露。
+        """
+        registry = self.hbm_port_registry
+        if registry is None:
+            return
+        rank_paths = shard_paths[0] if shard_paths else ()
+        first_path = rank_paths[0] if rank_paths else ()
+        if len(first_path) < 2:
+            return
+        home_rank, exec_rank = first_path[0], first_path[-1]
+        home_active, home_flows = registry.decomposition(home_rank)
+        exec_active, exec_flows = registry.decomposition(exec_rank)
+        notes.append(
+            "u_port_home=r{}:{}act+{}fl".format(
+                home_rank, home_active, home_flows))
+        notes.append(
+            "u_port_exec=r{}:{}act+{}fl".format(
+                exec_rank, exec_active, exec_flows))
+
+    def _remote_read_passes(self, request: RequestView) -> tuple[int, int]:
+        """D1 读放大因果口径：远读遍数 = prefill 消费遍数 + decode 步数。
+
+        prefill 遍数来源 = ``RequestView.prefill_scan_passes``（执行侧
+        /受控测量供给）；缺省因果估计 = input_tokens > 0 ? 1 : 0（单遍
+        扫描）。decode 步数 = 因果时域估计（CausalHorizonEstimator 同
+        源）。两分量均非 oracle：不读真实输出长度。
+        """
+        if request.prefill_scan_passes is not None:
+            prefill_scans = max(0, int(request.prefill_scan_passes))
+        else:
+            prefill_scans = 1 if request.input_tokens > 0 else 0
+        return prefill_scans, max(0, request.estimated_decode_tokens)
+
     def _decode_growth_by_tp_rank(
         self, request: RequestView,
     ) -> tuple[int, ...]:
@@ -935,6 +1953,21 @@ class JointCostModel:
             bytes_by_rank * request.estimated_decode_tokens
             // request.input_tokens
             for bytes_by_rank in request.input_kv_bytes_by_tp_rank)
+
+    @staticmethod
+    def _resident_here(
+        session: SessionKVView, instance_index: int,
+    ) -> bool:
+        """R13/O1：基础历史驻留目标判据——``resident_instance == 目标``
+        ∧ ``location ∈ {local_hbm, partial_hbm_remote}``。与执行侧
+        sh30_online_scheduler.py recompute 分支（R13 双分支）同字段同
+        值；A7' 起 ``_recompute_missing_tokens`` 与本判据同源，O1
+        （A19'(a)，2026-09-23）起 roofline span 基消费点并入同一判据
+        （修前 span 基把 R13 异地腿的"副本 0 基"误泛化到驻留腿）。
+        """
+        return (
+            session.resident_instance == instance_index
+            and session.location in ("local_hbm", "partial_hbm_remote"))
 
     def _space_footprint_by_tp_rank(
         self,
@@ -947,17 +1980,22 @@ class JointCostModel:
 
         stay / recompute@驻留目标：final − resident（驻留前缀复用）；
         copy@异地 / recompute@异地 / REMOTE 基础：整份 final；
-        remote-read：仅 input 增量。
+        remote-read：LOCAL 基仅 input 增量；PARTIAL 混合形态 = 池恢复
+        后缀 [p,L) 物化足迹（热 KV，需求①）＋ input 增量。
         """
         size = self.instance_tp_size
         final_total = sum(session.history_bytes_by_tp_rank) + sum(
             session.missing_bytes_by_tp_rank) + sum(
                 request.input_kv_bytes_by_tp_rank)
         final_ranks = self._per_rank(final_total)
-        resident_here = (
-            session.resident_instance == instance_index
-            and session.location in ("local_hbm", "partial_hbm_remote"))
+        resident_here = self._resident_here(session, instance_index)
         if action == ACTION_REMOTE:
+            if session.location == "partial_hbm_remote":
+                return tuple(
+                    missing + increment
+                    for missing, increment in zip(
+                        session.missing_bytes_by_tp_rank,
+                        request.input_kv_bytes_by_tp_rank))
             return tuple(request.input_kv_bytes_by_tp_rank)
         if resident_here and action in (ACTION_STAY, ACTION_RECOMPUTE):
             return tuple(
@@ -975,17 +2013,33 @@ class JointCostModel:
 
         @驻留目标（含 home）：仅缺失后缀层折算 ceil(H×(L−prefix)/L)；
         @异地 / REMOTE 基础：整份历史 H（工作副本从零物化）。
+
+        A7'（2026-09-22，§4.3 补遗）：``resident_here`` 判据自
+        ``location == "local_hbm"`` 单态修正为 LOCAL/PARTIAL 双态（对齐
+        执行侧 sh30_online_scheduler.py recompute 分支与
+        ``_space_footprint_by_tp_rank`` 的既有双态口径）——修正前
+        PARTIAL 驻留场景下本函数 partial_hbm_remote 的缺失后缀分支为
+        死分支，恒按整份 history 计费，recompute 工作量被系统性高估约
+        2 倍、动作选择偏离（计价忠实于执行：SH 侧重算工作量用含
+        partial 的正确公式）。
+        驻留量折算 = 前缀比例，缺失侧取整：missing =
+        history − floor(H×prefix/L)（等价实现 = ceil(H×(L−prefix)/L)，
+        ceil 在缺失侧、与执行侧逐字节一致）。
         """
         layers = self.model_layers
         history = session.history_tokens
         if history <= 0:
             return 0
-        resident_here = (
-            session.resident_instance == instance_index
-            and session.location == "local_hbm")
+        resident_here = self._resident_here(session, instance_index)
         if resident_here and session.resident_prefix_layers >= layers:
             return 0
-        if resident_here and session.location == "partial_hbm_remote":
+        if resident_here:
+            # A14'（H8，2026-09-22 第三轮复审）：驻留折算对 resident_
+            # here ∧ prefix<L 恒 ceil——去掉 partial_hbm_remote 额外门
+            # （LOCAL 基且 prefix<L 形态被"转 LOCAL 恒置 prefix=layers"
+            # 不变量排除、生产不可达；原该形态落穿 return history 整份
+            # 计费，与"和执行侧逐字节一致"的宣称不符——对齐后不可达
+            # 形态也走与执行侧相同的 ceil 公式）。
             missing_layers = layers - session.resident_prefix_layers
             return (history * missing_layers + layers - 1) // layers
         return history
@@ -998,6 +2052,7 @@ class JointCostModel:
         *,
         instance_index: int = -1,
         prefix: str = "execution_growth",
+        covered_wait_ns: int = 0,
     ) -> int:
         """空间缺口 -> 时间换算（不把无单位容量风险加到延迟上）。
 
@@ -1007,6 +2062,17 @@ class JointCostModel:
         只有活跃完成才能释放）→ ``max(写回估计, 活跃任务剩余负载)``，
         并注记 ``deep_gap_unresolved``（docstring 承诺的观测落盘）——
         §13.1"驱逐压力换算成时间"逐字对齐，因果可观测、无 oracle。
+
+        K5（2026-09-23 外部审计）两处口径修正：
+        - 缺省空 ``reclaimable_bytes_by_tp_rank``（视图缺省构造/测试
+          夹具不供给）按"零可回收"处理（保守侧）——原 ``and
+          reclaimable`` 守卫把"无信息"当"全部可回收"，静默关闭深缺口
+          升级（生产 SH 恒显式供给，缺省臂不可达）。
+        - ``covered_wait_ns``：已在关键路径前段支付的等待（主调用侧 =
+          target_wait——活跃任务排空视界 ⊆ 台账总量）。深缺口分量取
+          ``max(0, active_remaining − covered)``，消除与 target_wait
+          的 running+active 双计（原加法合成重复计、高估）；merge 两
+          腿（他实例空间准备）传 0，语义不变。
         """
         worst_gap = 0
         beyond_reclaimable = 0
@@ -1018,7 +2084,7 @@ class JointCostModel:
                 else 0)
             gap = max(0, needed - remaining)
             worst_gap = max(worst_gap, gap)
-            if gap > 0 and reclaimable:
+            if gap > 0:
                 reclaim = (
                     reclaimable[rank_index]
                     if rank_index < len(reclaimable) else 0)
@@ -1036,9 +2102,15 @@ class JointCostModel:
         if beyond_reclaimable > 0 and (
                 load.running_task_load_ns or load.active_decode_task_load_ns):
             # 深缺口：等活跃任务完成释放——剩余负载峰值（TP 并行下逐
-            # rank 同账）为因果可见的等待下界。
-            active_remaining = (
-                load.running_task_load_ns + load.active_decode_task_load_ns)
+            # rank 同账）为因果可见的等待下界；covered_wait_ns 已含的
+            # 部分不得双计（K5）。注记语义 = 深缺口条件成立（主调用侧
+            # 分量被 target_wait 覆盖时等待不抬升、注记仍在——"深缺口
+            # 存在"与"额外等待"两事实分列）。
+            active_remaining = max(
+                0,
+                load.running_task_load_ns
+                + load.active_decode_task_load_ns
+                - max(0, int(covered_wait_ns)))
             wait = max(wait, active_remaining)
             notes.append(f"{prefix}_deep_gap_unresolved")
         return wait

@@ -8,6 +8,13 @@ LICENSE file in the root directory of this source tree.
 using namespace AstraSim;
 
 Algorithm::Algorithm() {
+    // Initialize every member that derived constructors may leave
+    // uninitialized: CollectivePhase's constructor immediately reads
+    // data_size/final_data_size/comType, and reading them before any
+    // assignment is undefined behavior.
+    data_size = 0;
+    final_data_size = 0;
+    comType = ComType::None;
     enabled = true;
 }
 

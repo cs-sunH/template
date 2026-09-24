@@ -135,9 +135,36 @@ class JointConfigParseTest(unittest.TestCase):
             {"JOINT_REMOTE_ACTIONS": "1"},
             {"JOINT_CATEGORY_MODE": " typed"},
             {"JOINT_SCHEDULER_MODE": ""},
+            {"JOINT_REMOTE_READ_PARTIAL": "maybe"},
+            {"JOINT_REMOTE_READ_PARTIAL": "ON"},
+            {"JOINT_REMOTE_READ_PARTIAL": " on"},
         ):
             with self.assertRaises(JointConfigError, msg=repr(env)):
                 parse_joint_config(env)
+
+    def test_remote_read_partial_switch_chain(self):
+        """需求①开关全链路（kimi 收尾批 2026-09-17）：env→parse→属性→
+        manifest→来源登记。"""
+        default = parse_joint_config({})
+        self.assertEqual(default.remote_read_partial, "on")
+        self.assertTrue(default.remote_read_partial_enabled)
+        self.assertNotIn(
+            "JOINT_REMOTE_READ_PARTIAL", default.manifest_dict()["source_env"])
+        off = parse_joint_config({"JOINT_REMOTE_READ_PARTIAL": "off"})
+        self.assertEqual(off.remote_read_partial, "off")
+        self.assertFalse(off.remote_read_partial_enabled)
+        manifest = off.manifest_dict()
+        self.assertEqual(manifest["remote_read_partial"], "off")
+        self.assertEqual(
+            manifest["source_env"]["JOINT_REMOTE_READ_PARTIAL"], "off")
+
+    def test_manifest_carries_merge_semantics_v2(self):
+        """合并语义版本机读键（§4.5 字面；裁定④：恒单值、非开关——旧
+        机制已物理删除，无候选档位）。"""
+        for env in ({}, {"JOINT_REMOTE_READ_PARTIAL": "off"},
+                    {"JOINT_ABLATION_COMBO": "none"}):
+            manifest = parse_joint_config(env).manifest_dict()
+            self.assertEqual(manifest["merge_semantics"], "v2")
 
     def test_combo_and_explicit_conflict_fails_closed(self):
         with self.assertRaises(JointConfigError):
@@ -390,6 +417,50 @@ class LayerPolicyPlanTest(unittest.TestCase):
         self.assertEqual(plan.target_breach_sessions, ("s",))
         self.assertEqual(plan.steps[0].layer_start, 2)  # 保留前 2 层
 
+    @staticmethod
+    def _lazy_victim(calls, session_id, prefix, per_layer=(100, 150),
+                     target=0):
+        def bytes_fn(a, b):
+            n = b - a
+            return (per_layer[0] * n, per_layer[1] * n)
+
+        def thunk():
+            calls.append(session_id)
+            return target
+
+        return VictimView(
+            session_id=session_id, resident_prefix_layers=prefix,
+            layer_group_bytes_fn=bytes_fn, retention_target_layers=0,
+            retention_target_layers_fn=thunk)
+
+    def test_adaptive_soft_target_resolved_lazily(self):
+        # O4：软目标惰性求解——缺口由前一 victim 满足即停时，后续
+        # victim 的 fn 不得被调用（急切口径全量求解 V×k_hide 递推
+        # 为长程墙钟主爆点）；fn 与注入值同语义（同金值 28 层界）。
+        policy = LayerEvictionPolicy("adaptive", 32)
+        calls = []
+        first = self._lazy_victim(calls, "first", 32, target=28)
+        second = self._lazy_victim(calls, "second", 32, target=28)
+        plan = policy.plan_release(
+            gap_bytes_by_tp_rank=(300, 600), victims=[first, second])
+        self.assertTrue(plan.satisfied)
+        self.assertEqual(calls, ["first"])
+        merged = coalesce_steps(plan.steps)
+        self.assertEqual(merged[0].layer_start, 28)
+
+    def test_adaptive_lazy_cache_reused_across_scans(self):
+        # O4：两轮扫描共享 plan 内缓存（同 victim 不求解两次）；缺口
+        # 超首 victim 全部驻留时第二个 fn 才求解，各恰好一次。
+        policy = LayerEvictionPolicy("adaptive", 32)
+        calls = []
+        first = self._lazy_victim(calls, "first", 32, target=28)
+        second = self._lazy_victim(calls, "second", 32, target=28)
+        plan = policy.plan_release(
+            gap_bytes_by_tp_rank=(6000, 6000), victims=[first, second])
+        self.assertEqual(sorted(calls), ["first", "second"])
+        self.assertEqual(len(calls), len(set(calls)))
+        self.assertTrue(plan.satisfied)
+
     def test_legacy_half_matches_original_two_stage(self):
         policy = LayerEvictionPolicy("legacy_half", 4)
         full = self._victim("full", 4, per_layer=(10, 10))
@@ -626,7 +697,11 @@ class JointSelectionTest(unittest.TestCase):
 
 
 class HomeMergeSemanticsTest(unittest.TestCase):
-    """§2.1/§2.2/§8：home 保持、增量恰好归并一次、无双份驻留。"""
+    """§2.1/§2.2/§8 → merge v2（2026-09-17 需求②）：方向少并多、零池写、
+    恰好归并一次、无双份驻留；copy/recompute 反向零字节翻转（执行端恒持
+    并集→home 迁移 exec、home 侧基础释放、零传输）。
+    金样留档（改造前口径，git 9a95e06）：增量 noc 回 home（1 笔
+    noc_migrate = kv(增量)）、exec 释放、home 保持 0。"""
 
     def _manager(self):
         hardware = _tiny_hardware()
@@ -635,7 +710,7 @@ class HomeMergeSemanticsTest(unittest.TestCase):
             topology, _tiny_model(4), category_mode="typed",
             layer_policy="minimal_layer_groups")
 
-    def test_copy_preserves_home_and_merges_increments_once(self):
+    def test_copy_settles_by_zero_byte_flip_once(self):
         kv = self._manager()
         _seed(kv, "s", 0, 10, 10, "human")
         kv.prepare_prefill(
@@ -654,28 +729,24 @@ class HomeMergeSemanticsTest(unittest.TestCase):
             trigger_request_id="t1")
         merge_transfers = kv.merge_back(
             session_id="s", trigger_request_id="t1", new_tokens=8)
-        self.assertEqual(len(merge_transfers), 1)
-        self.assertEqual(merge_transfers[0].kind, "noc_migrate")
-        # 增量字节 = kv(8 token)，而非整份。
-        increment = kv_cache_shard_bytes_for_layer_range(
-            kv.model, 8, kv.tp_degree, layer_start=0,
-            layer_end=kv.model.layers)
-        self.assertEqual(merge_transfers[0].total_bytes, sum(increment))
+        # copy 零字节翻转：零传输（并集已在执行端，省 D2D 流量）。
+        self.assertEqual(merge_transfers, ())
         merged = kv.session_snapshot("s")
-        self.assertEqual(merged.instance_index, 0)      # home 恢复权威
+        self.assertEqual(merged.instance_index, 1)      # 胜者 = 执行端
         self.assertIsNone(merged.working_kind)
         self.assertEqual(merged.context_tokens, 18)
-        self.assertEqual(merged.home_instance, 0)
-        # 双持有清除：home 侧恰为 base+增量，exec 侧清零。
+        self.assertEqual(merged.home_instance, 1)       # home 迁移胜者
+        self.assertEqual(merged.location, kv.LOCAL_HBM)
+        # 双持有清除：exec 侧恰为 base+增量全层，home 侧清零。
         used = [snapshot.kv_cache_bytes for snapshot in kv.hbm_snapshots()]
-        base_plus_increment = kv_cache_shard_bytes_for_layer_range(
+        full = kv_cache_shard_bytes_for_layer_range(
             kv.model, 18, kv.tp_degree, layer_start=0,
             layer_end=kv.model.layers)
-        self.assertEqual(tuple(used[:2]), tuple(base_plus_increment))
-        self.assertEqual(tuple(used[2:]), (0, 0))
+        self.assertEqual(tuple(used[:2]), (0, 0))
+        self.assertEqual(tuple(used[2:]), tuple(full))
         kv.mark_complete("s", 20, "human")
 
-    def test_recompute_at_remote_instance_merges_increments(self):
+    def test_recompute_at_remote_instance_flips_zero_byte(self):
         kv = self._manager()
         _seed(kv, "s", 0, 10, 10, "human")
         kv.prepare_prefill(
@@ -692,16 +763,12 @@ class HomeMergeSemanticsTest(unittest.TestCase):
         merge_transfers = kv.merge_back(
             session_id="s", trigger_request_id="t1", new_tokens=3)
         merged = kv.session_snapshot("s")
-        self.assertEqual(merged.instance_index, 0)
+        # recompute 零字节翻转：零传输、胜者 = 执行端、home 迁移。
+        self.assertEqual(merge_transfers, ())
+        self.assertEqual(merged.instance_index, 1)
         self.assertEqual(merged.context_tokens, 13)
-        self.assertEqual(merged.home_instance, 0)
-        # 增量 = 3 token（重算历史不重复归并——home 已有权威基础）。
-        if merge_transfers:
-            increment = kv_cache_shard_bytes_for_layer_range(
-                kv.model, 3, kv.tp_degree, layer_start=0,
-                layer_end=kv.model.layers)
-            self.assertEqual(
-                merge_transfers[0].total_bytes, sum(increment))
+        self.assertEqual(merged.home_instance, 1)
+        self.assertEqual(merged.location, kv.LOCAL_HBM)
         kv.mark_complete("s", 20, "human")
 
     def test_remote_read_working_copy_holds_increments_only(self):

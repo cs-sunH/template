@@ -62,8 +62,6 @@ Sys::SchedulerUnit::SchedulerUnit(Sys* sys,
     this->max_running_streams = max_running_streams;
     this->ready_list_threshold = ready_list_threshold;
     this->queue_threshold = queue_threshold;
-    this->latency_per_dimension.resize(queues.size(), 0);
-    this->total_chunks_per_dimension.resize(queues.size(), 0);
     this->total_active_chunks_per_dimension.resize(queues.size(), 0);
 
     int base = 0;
@@ -117,10 +115,6 @@ void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
     }
     running_streams[vnet]--;
 
-    int dimension = this->queue_id_to_dimension[vnet];
-    latency_per_dimension[dimension] += running_time;
-    total_chunks_per_dimension[dimension]++;
-
     if (this->sys->first_phase_streams < ready_list_threshold &&
         this->sys->total_running_streams < max_running_streams) {
         int max = ready_list_threshold - sys->first_phase_streams;
@@ -137,15 +131,6 @@ void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
         running_streams[vnet]++;
         advance(stream_pointer[vnet], 1);
     }
-}
-
-vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() {
-    vector<double> result;
-    result.resize(latency_per_dimension.size(), -1);
-    for (uint64_t i = 0; i < result.size(); i++) {
-        result[i] = latency_per_dimension[i] / total_chunks_per_dimension[i];
-    }
-    return result;
 }
 //-----------------------------------------------------------------------------
 
@@ -181,7 +166,6 @@ Sys::Sys(int id,
     this->local_mem_bw = 0;
     this->local_mem_latency = 0;
     this->hbm_bandwidth_contention = false;
-    this->pipeline_tile_fraction = 0;
 
     this->memBus = nullptr;
     this->inp_L = 0;
@@ -202,12 +186,14 @@ Sys::Sys(int id,
     this->offline_greedy = nullptr;
     this->intra_dimension_scheduling = IntraDimensionScheduling::FIFO;
     this->inter_dimension_scheduling = InterDimensionScheduling::Ascending;
+    this->scheduling_policy = SchedulingPolicy::FIFO;
     this->round_robin_inter_dimension_scheduler = 0;
     this->active_chunks_per_dimension = 1;
     this->priority_counter = 0;
     this->pending_events = 0;
-    this->preferred_dataset_splits = 0;
+    this->preferred_dataset_splits = 1;
 
+    this->collectiveOptimization = CollectiveOptimization::Baseline;
     this->last_scheduled_collective = 0;
 
     this->first_phase_streams = 0;
@@ -324,6 +310,10 @@ Sys::~Sys() {
         delete offline_greedy;
     }
 
+    if (collective_impl_lookup != nullptr) {
+        delete collective_impl_lookup;
+    }
+
     bool shouldExit = true;
     for (auto& a : all_sys) {
         if (a != nullptr) {
@@ -360,6 +350,40 @@ bool Sys::initialize_sys(string name) {
             this->scheduling_policy = SchedulingPolicy::EXPLICIT;
         } else {
             sys_panic("unknown value for scheduling policy in sys input file");
+        }
+    }
+    if (j.contains("inter-dimension-scheduling")) {
+        string inp_inter_dimension_scheduling =
+            j["inter-dimension-scheduling"];
+        if (inp_inter_dimension_scheduling == "Ascending") {
+            inter_dimension_scheduling = InterDimensionScheduling::Ascending;
+        } else if (inp_inter_dimension_scheduling == "RoundRobin") {
+            inter_dimension_scheduling = InterDimensionScheduling::RoundRobin;
+        } else if (inp_inter_dimension_scheduling == "OfflineGreedy") {
+            inter_dimension_scheduling =
+                InterDimensionScheduling::OfflineGreedy;
+        } else {
+            sys_panic("unknown value for inter-dimension-scheduling in sys "
+                      "input file");
+        }
+    }
+    if (j.contains("intra-dimension-scheduling")) {
+        string inp_intra_dimension_scheduling =
+            j["intra-dimension-scheduling"];
+        if (inp_intra_dimension_scheduling == "FIFO") {
+            intra_dimension_scheduling = IntraDimensionScheduling::FIFO;
+        } else if (inp_intra_dimension_scheduling == "RG") {
+            intra_dimension_scheduling = IntraDimensionScheduling::RG;
+        } else if (inp_intra_dimension_scheduling == "SmallestFirst") {
+            intra_dimension_scheduling =
+                IntraDimensionScheduling::SmallestFirst;
+        } else if (inp_intra_dimension_scheduling ==
+                   "LessRemainingPhaseFirst") {
+            intra_dimension_scheduling =
+                IntraDimensionScheduling::LessRemainingPhaseFirst;
+        } else {
+            sys_panic("unknown value for intra-dimension-scheduling in sys "
+                      "input file");
         }
     }
     if (j.contains("collective-optimization")) {
@@ -439,11 +463,6 @@ bool Sys::initialize_sys(string name) {
     }
     if (this->local_mem_bw <= 0) {
         this->hbm_bandwidth_contention = false;
-    }
-    if (j.contains("pipeline-tile-fraction")) {
-        pipeline_tile_fraction = j["pipeline-tile-fraction"];
-        pipeline_tile_fraction =
-            std::max(0.0, std::min(1.0, pipeline_tile_fraction));
     }
     if (j.contains("roofline-enabled")) {
         if (j["roofline-enabled"] != 0) {
@@ -666,9 +685,6 @@ void Sys::handleEvent(void* arg) {
             all_sys[id]->call_events();
         }
         delete ehd;
-    } else if ((event == EventType::NPU_to_MA) ||
-               (event == EventType::MA_to_NPU)) {
-        all_sys[id]->call_events();
     } else if (event == EventType::RendezvousSend) {
         RendezvousSendData* rsd = (RendezvousSendData*)ehd;
         rsd->send.call(EventType::General, nullptr);
@@ -1162,6 +1178,12 @@ CollectivePhase Sys::generate_collective_phase(
 }
 
 uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
+    if (preferred_dataset_splits <= 0) {
+        // Zero/negative splits (e.g. the config key is missing or malformed)
+        // must not reach the division below; fall back to one chunk covering
+        // the whole size.
+        return size;
+    }
     uint64_t chunk_size = size / preferred_dataset_splits;
     // We want the collective size to have minimum size, otherwise, there is a
     // possibility of size overflow due to further dividing it to more
@@ -1327,7 +1349,7 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     if (stream->steps_finished == 1) {
         first_phase_streams--;
     }
-    if (stream->steps_finished != 0) {
+    if (stream->steps_finished != 0 && stream->net_message_counter != 0) {
         stream->net_message_latency.back() /= stream->net_message_counter;
     }
     if (stream->my_current_phase.algorithm != nullptr) {
@@ -1369,8 +1391,6 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     CollectivePhase vi = stream->phases_to_go.front();
     stream->my_current_phase = vi;
     stream->phases_to_go.pop_front();
-    stream->test = 0;
-    stream->test2 = 0;
     stream->initialized = false;
     stream->last_phase_change = Sys::boostedTick();
     stream->total_packets_sent = 0;

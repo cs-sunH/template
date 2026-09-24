@@ -68,10 +68,12 @@ void LogGP::process_next_read() {
     partner->switch_to_receiver(tmp, offset);
     sends.pop_front();
     curState = State::Sending;
+    // size is uint64_t; do the (size - 1) term in the double domain so the
+    // widened type cannot wrap around for a degenerate zero-size request.
     sys->register_event(this, EventType::Send_Finished, nullptr,
-                        offset + (G * (tmp.size - 1)));
+                        offset + (G * (static_cast<double>(tmp.size) - 1)));
 }
-void LogGP::request_read(int bytes,
+void LogGP::request_read(uint64_t bytes,
                          bool processed,
                          bool send_back,
                          Callable* callable) {
@@ -103,8 +105,10 @@ void LogGP::switch_to_receiver(MemMovRequest mr, Tick offset) {
     receives.push_back(mr);
     prevState = curState;
     curState = State::Receiving;
+    // See process_next_read: keep the (size - 1) term in the double domain.
     sys->register_event(this, EventType::Rec_Finished, nullptr,
-                        offset + ((mr.size - 1) * G) + L + o);
+                        offset + ((static_cast<double>(mr.size) - 1) * G) + L +
+                            o);
     subsequent_reads = 0;
 }
 
