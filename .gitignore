@@ -26,3 +26,6 @@ astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/traces/*.provenan
 
 # ================= 阶段基线归档(大目录不入库;PROVENANCE 与 metrics CSV 入库) =================
 **/sh_test_mesh/baseline/**/generated/
+
+# ================= 运行时产物（run_logs：实验运行日志/fifo桥，不入库） =================
+**/run_logs/
