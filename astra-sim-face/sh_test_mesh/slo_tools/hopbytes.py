@@ -125,7 +125,8 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
     聚合口径：
       decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确）；
       prefill = history_transfer_bytes × hops[0]（per-shard hops 全等
-      ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布）。
+      ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布；
+      非同构 hops 一律 fail-closed，不静默算错）。
     旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低）。
     """
     decision = record.get("decision") or {}
@@ -143,6 +144,9 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
         if isinstance(nbytes, int) and nbytes > 0:
             if isinstance(hops, list) and hops and all(
                     isinstance(h, int) and h >= 0 for h in hops):
+                if len(set(hops)) != 1:
+                    fail(f"history_noc_hops 跨 shard 不一致 {hops}"
+                         f"——face 聚合口径要求同构 hops，fail-closed")
                 hop_bytes = nbytes * hops[0]
                 slot = _slot()
                 slot["actions"] += 1

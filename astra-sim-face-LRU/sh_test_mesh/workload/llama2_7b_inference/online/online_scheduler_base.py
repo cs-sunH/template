@@ -456,7 +456,8 @@ class OnlineSchedulerBase:
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
         # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
-        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲,供 dump_profile)。
+        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲在 profile_rows,
+        # 供测试/夹具直读)。
         profile_row = {
             "delivery_sequence": delivery_sequence,
             "tick": self._batch["tick"],
@@ -513,15 +514,6 @@ class OnlineSchedulerBase:
         """记录本决策批的 O(总规模) 全量扫描条目数。§7.3 之后应恒为 0;
         任何 > 0 都意味着索引队列被绕过(profile 审计 fail-closed)。"""
         self._profile_batch["full_scan_entries"] += count
-
-    def dump_profile(self, path: str) -> None:
-        """把每决策批扫描条目数写为 profile.jsonl(阶段 4 §7.3 验收输入)。
-        M3:生产路径由 profile_sink 逐行流式写出(online_service),本方法
-        仅服务缺省缓冲模式(测试/夹具)——流式模式下 rows 为空,
-        不覆写。"""
-        with open(path, "w", encoding="utf-8") as out:
-            for row in self.profile_rows:
-                out.write(json.dumps(row, sort_keys=True) + "\n")
 
     def _validate_schema(self, delta: dict) -> None:
         """schema v1 校验器(阶段 4 §7.1;原契约 §6 各条强制,契约文档已
@@ -877,7 +869,7 @@ class OnlineSchedulerBase:
             if stage == STAGE_REQUEST:
                 del self.in_flight[request_id]
                 self.completed_request_count += 1
-                # 阶段 3 感知:REQUSET_COMPLETE 边界核销 -> completed-unreconciled。
+                # 阶段 3 感知:REQUEST_COMPLETE 边界核销 -> completed-unreconciled。
                 self._ledger_complete(request_id, delta["tick"])
             else:
                 if stage not in pending:

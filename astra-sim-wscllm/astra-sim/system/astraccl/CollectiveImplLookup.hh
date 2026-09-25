@@ -3,7 +3,7 @@
 
 #include <json/json.hpp>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/system/astraccl/CollectiveImpl.hh"
 
 using json = nlohmann::json;

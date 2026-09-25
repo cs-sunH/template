@@ -10,8 +10,6 @@ GraphSources, a real WatchRegistry, a real RequestIngress over an EventQueue
 + DecisionMailbox + ServiceCoordinator -- the alarm path schedules a genuine
 future arrival) through:
 
-  Part A  static/pure checks: compute_touched_ranks (sorted unique, rank
-          filtering).
   Part B  deliberately illegal batches (one per Phase-A rule category:
           epoch, node structure, edge structure, cycle, watch structure /
           eligibility / identity, send-recv pairing, collective split,
@@ -44,7 +42,7 @@ future arrival) through:
           single_node_bridge_count -- the official path asserts this stays
           0 (方案 §8.3), the fixture proves the counter can be exercised.
   Part G  metadata/compute nodes carrying the comm DEFAULTS validate (the
-          comm src/dst/tag range checks are scoped to comm-typed nodes 5/6;
+          comm src/dst range checks are scoped to comm-typed nodes 5/6;
           pre-C1 this case used an EMPTY comm {}, which the C1 parse-layer
           key-set rule now rejects -- the same-tick milestone verify service
           was updated to emit the defaults with it).
@@ -489,21 +487,6 @@ StateDelta baseline_delta() {
     arrival.payload.decode_length = 10;
     d.events.push_back(arrival);
     return d;
-}
-
-// ----------------------------------------------------------- Part A ------
-void test_static_checks(const Fixture& f) {
-    (void)f;
-    const GraphBatch base = baseline_batch();
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 3) ==
-               std::vector<int>({0, 1, 2}),
-           "A: compute_touched_ranks covers all three ranks");
-    expect(GraphBatchCommitter::compute_touched_ranks(base, 2) ==
-               std::vector<int>({0, 1}),
-           "A: compute_touched_ranks filters out-of-range ranks");
-    // C1: non-object entries can no longer reach this pure helper (the
-    // parse layer rejects them); the rank filter above keeps the tolerance
-    // contract for out-of-range typed values.
 }
 
 // ----------------------------------------------------------- Part B ------
@@ -1299,7 +1282,7 @@ void test_single_node_batch(Fixture& f) {
 // ----------------------------------------------------------- Part G ------
 // Fixture-shape compatibility (same-tick milestone fixture): metadata and
 // compute nodes carrying the comm/coll DEFAULTS validate (the comm
-// src/dst/tag range checks are scoped to comm-typed nodes 5/6). Pre-C1 the
+// src/dst range checks are scoped to comm-typed nodes 5/6). Pre-C1 the
 // milestone service emitted an EMPTY comm {}/coll {}; the C1 parse-layer
 // key-set rule requires the four comm keys, and the verify service was
 // updated to emit the defaults with it (same-tick milestone fixture
@@ -2297,7 +2280,6 @@ void test_affine_metadata_under_million_node_pressure() {
 }  // namespace
 int main() {
     Fixture f;
-    test_static_checks(f);
     test_negative_cases(f);
     test_mandatory_liveness_preflight();
     test_validate_and_commit_atomic();

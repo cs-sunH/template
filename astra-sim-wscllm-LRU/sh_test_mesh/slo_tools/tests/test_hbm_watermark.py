@@ -462,7 +462,11 @@ class PerRepoSemanticsTests(unittest.TestCase):
                          ["local_hit_location_mismatch"], 0)
 
     def test_s3_prefix_reconcile(self):
-        """S3 半层恢复：恢复前本地应持有 f(h)−bytes，超出部分对账扣减。"""
+        """S3 半层恢复：恢复前本地应持有 f(h)−bytes，超出部分对账扣减。
+
+        legacy 解析证据：sh_3.0 只读仓的产物仍含 partial_hbm_remote/半层
+        静默释放（本次改造只及两个 -LRU 仓）；本用例锁定工具对旧产物的
+        对账能力，新运行不产生该形状。"""
         reset_seq()
         records = [
             prefill_record("s_r0", 0),
@@ -606,6 +610,10 @@ class PerRepoSemanticsTests(unittest.TestCase):
 
     def test_s2_full_partial_two_stage_migration(self):
         """B3-6：partial 两段式迁移逐段对账（标量聚合会击穿下界）。
+
+        legacy 解析证据：sh_2.0 只读仓的两段式产物（suffix_half 逐出 +
+        prefix/suffix 分段迁移）仍可被逐段对账；新运行（-LRU 仓）不产生
+        该形状，本用例保留为兼容证据。
 
         手算：B turn0 f(1)=100@t5(i1) → f(2)=200@t6；completion@t7 自身
         suffix 逐出 100（i1 余 100）；turn1@t30 跨实例迁 i0：prefix
@@ -1419,11 +1427,14 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
     """B4（-LRU wscllm，2026-09-07）：history_transfers 在场 → wscllm 映射
     升级契约口径（full_reconciled + evict_report_only + location 对账）。
 
+    session 级 Tiered-LRU 新产物形态：整体逐出单条（200 B 全层
+    [0,32)），无 suffix/full 两段拆分。
+
     手算（COEF=100）：
     s0_r0：f(1)=100@t0 inst0 → PD move 100 → inst1 f(2)=200@t10（inst0=0/
     inst1=200）；s1_r0：f(2)=200@t30 inst0 → PD move 200 → inst1（inst0=0/
-    inst1=400）+ decode 行逐出 s0 两笔（suffix 100 + full 100，report-only
-    不动占用）+ decode grow f(3)=300 → inst1=500；s0_r1@t60：location=
+    inst1=400）+ decode 行逐出 s0 一笔（整会话 200，report-only 不动占
+    用）+ decode grow f(3)=300 → inst1=500；s0_r1@t60：location=
     remote_memory → 对账核销 s0 旧代 200@inst1（→300）+ remote_load 只增
     200@inst0；PD move 200 → inst0=0/inst1=500，decode grow f(4)=400 →
     inst1=700。终态：inst0 残留 0、inst1 残留 700（= s0 400 + s1 300 物理
@@ -1443,8 +1454,7 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
             "reason": f"static_decode_final_kv_reservation_{layer_note}",
             "session_id": session, "total_bytes": total,
             "source_instance_index": src, "target_instance_index": None,
-            "layer_start": 16 if layer_note.startswith("suffix") else 0,
-            "layer_end": 32}
+            "layer_start": 0, "layer_end": 32}
         records = [
             prefill_record("s0_r0", 0, instance=0, decision={
                 "history_action": "NO_HISTORY",
@@ -1464,14 +1474,12 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
                 "admission_evictions": [], "decode_target_evictions": []}),
             decode_record("s1_r0", 40, instance=1, decision={
                 "prefill_decode_transfer": pd_move(200, 0, 1),
-                # 契约逐出行 + legacy 同值镜像（B3 双序列化）——升级口径
-                # 单键取用防双计。
-                "decode_evictions": [evict_row("s0", 100, 1, "suffix_half:"
-                                               "layers16-32"),
-                                     evict_row("s0", 100, 1, "full_fallback:"
-                                               "layers0-16")],
+                # 契约逐出行（整体逐出,层域 [0,32)、驻留清零）+ legacy 同值
+                # 镜像（B3 双序列化）——升级口径单键取用防双计。
+                "decode_evictions": [evict_row("s0", 200, 1, "session:"
+                                               "layers0-32")],
                 "decode_target_evictions": [evict_row(
-                    "s0", 100, 1, "suffix_half:layers16-32")]}),
+                    "s0", 200, 1, "session:layers0-32")]}),
             completion_record("s1_r0", 50),
             prefill_record("s0_r1", 60, instance=0, decision={
                 "history_action": "REMOTE_RESTORE",
@@ -1510,9 +1518,11 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
         # 升级口径：full_reconciled（非 S2 的 full——逐出条目 report-only）。
         self.assertEqual(summary["eviction_coverage"], "full_reconciled")
         actions = summary["actions"]
-        # 契约逐出行进报告账（decode_target 镜像不双计）。
-        self.assertEqual(actions["evictions"], 2)
+        # 契约逐出行进报告账（decode_target 镜像不双计）：单笔整会话逐出。
+        self.assertEqual(actions["evictions"], 1)
         self.assertEqual(actions["evict_bytes"], 200)
+        # 新运行整体逐出 = 字节等额（bytes == session.bytes）→ 无部分逐出。
+        self.assertEqual(actions["partial_evictions"], 0)
         # 旧代驻留在 remote_memory 恢复点对账核销。
         self.assertEqual(actions["silent_evictions_reconciled"], 1)
         self.assertEqual(actions["silent_eviction_bytes"], 200)
@@ -1526,7 +1536,7 @@ class WscllmTieredUpgradeTests(unittest.TestCase):
         self.assertEqual(instances["0"]["peak_occupancy_bytes"], 200)
         self.assertEqual(instances["1"]["peak_occupancy_bytes"], 700)
         self.assertEqual(instances["1"]["residual_occupancy_bytes"], 700)
-        self.assertEqual(instances["1"]["evict_events"], 2)
+        self.assertEqual(instances["1"]["evict_events"], 1)
         self.assertEqual(instances["1"]["evict_bytes"], 200)
         with (run_dir / "instances.csv").open(newline="") as handle:
             rows = {r["instance_index"]: r
@@ -1574,10 +1584,11 @@ class JournalSchemaV2Tests(unittest.TestCase):
             journal_row(0, 0, 0, 0, 1000, d_weight=300, schema=2),
             journal_row(1, 10, 0, 0, 1000, weight=300, d_resident=500,
                         schema=2),
-            # remote 进出守恒（逐出 +500 / 核销 -500）。
+            # remote 进出守恒（整会话逐出 +500 / 核销 -500）。
             journal_row(2, 20, 0, 0, 1000, weight=300, resident=500,
                         d_remote=500,
-                        cause="evict_static_suffix_half:layers16-32",
+                        cause="evict_static_decode_final_kv_reservation_"
+                              "session:layers0-32",
                         schema=2),
             journal_row(3, 30, 0, 0, 1000, weight=300, resident=500,
                         remote=500, d_resident=-500, d_remote=-500,

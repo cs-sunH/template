@@ -436,7 +436,8 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             break;
         case NodeKind::MemLoad:
         case NodeKind::MemStore:
-            // issue_remote_mem consumes tensor_size (strict in the baseline).
+            // tensor_size is consumed by the (removed) remote-memory issue
+            // path; the attribute stays parsed so dispatch can fail closed.
             if (node->has_attr("tensor_size")) {
                 nv.compute.tensor_size = node->tensor_size<uint64_t>();
             }

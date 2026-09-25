@@ -35,9 +35,6 @@ class Link {
     /// stable directed-link identifier
     LinkId link_id;
 
-    /// bandwidth of the link in GB/s
-    Bandwidth bandwidth;
-
     /// bandwidth of the link in B/ns, used in actual computation
     Bandwidth bandwidth_Bpns;
 

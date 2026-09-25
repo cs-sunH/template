@@ -97,12 +97,13 @@ def _hit_state_face_wscllm(decision: dict, turn: Optional[int],
     三态映射（照 sh_2.0 :153-157），字段缺失回退 legacy history_action
     四值表（旧产物兼容）。
 
-    -LRU 新产物的 history_action 值域已扩（REMOTE_RESTORE /
-    PARTIAL_MIGRATE 等）且 RECOMPUTE 消失——这些行恒携带
-    history_location_before（NO_HISTORY 恒 None，走回退级恰得 no_history），
-    不需要也不应扩 action 表。五值域不扩（REMOTE→full、PARTIAL→partial；
-    full_local/full_remote 由 evidence 列区分），命中率分子
-    hit_n=full+partial 公式不动。"""
+    session 级 Tiered-LRU 改造后新运行的值域为 {local_hbm, remote_memory}
+    → 恒 full（partial 仅旧产物可达，映射表保留只为旧日志解析）；
+    history_action 值域已扩（REMOTE_RESTORE 等）且 RECOMPUTE 消失——
+    这些行恒携带 history_location_before（NO_HISTORY 恒 None，走回退级
+    恰得 no_history），不需要也不应扩 action 表。五值域不扩（REMOTE→
+    full、PARTIAL→partial；full_local/full_remote 由 evidence 列区分），
+    命中率分子 hit_n=full+partial 公式不动（partial 分支新运行恒空）。"""
     location = decision.get("history_location_before")
     if location is not None:
         resident = decision.get("history_resident_prefix_layers")

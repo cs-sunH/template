@@ -204,8 +204,8 @@ void round_trip(const std::string& echo_script) {
         prefill_ev.generation = 0;
         prefill_ev.payload.watch_member_count = 5;
 
-        const StateDelta delta1 =
-            build_state_delta({arrival_ev, prefill_ev}, 94835000, 0);
+        const StateDelta delta1 = build_state_delta_v1(
+            {arrival_ev, prefill_ev}, 94835000, 0, 0, {}, {});
 
         const GraphBatch batch1 = bridge.deliver_and_receive(delta1);
 
@@ -225,8 +225,8 @@ void round_trip(const std::string& echo_script) {
         // Phase 4 (schema v1): arrivals carry the ingress serial and the
         // frozen queue index; delivery_epoch == delivery_sequence;
         // completed_nodes/affected_ranks empty; snapshot_handle
-        // self-consistent {epoch, tick, kind:""} (compat-built delta gets
-        // the v1 defaults).
+        // self-consistent {epoch, tick, kind:""} (explicit v1 empty
+        // payloads).
         expect(request1_on_disk["arrivals"][0]["ingress_seq"] == 0 &&
                    request1_on_disk["arrivals"][0]["queue_index"] == -1,
                "A: arrivals[] carries ingress_seq/queue_index (v1)");
@@ -311,8 +311,8 @@ void round_trip(const std::string& echo_script) {
         complete_ev.request_id = "s0_r0";
         complete_ev.generation = 1;
 
-        const StateDelta delta2 =
-            build_state_delta({decode_ev, complete_ev}, 94835010, 1);
+        const StateDelta delta2 = build_state_delta_v1(
+            {decode_ev, complete_ev}, 94835010, 1, 0, {}, {});
 
         const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
         expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
@@ -374,7 +374,7 @@ void crash_scenario(const std::string& root) {
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
     const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 0);
+        build_state_delta_v1({arrival_ev}, 12345, 0, 0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: crash scenario "
                          "did not abort\n");
@@ -407,7 +407,7 @@ void timeout_scenario(const std::string& root) {
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
     const StateDelta delta =
-        build_state_delta({arrival_ev}, 12345, 0);
+        build_state_delta_v1({arrival_ev}, 12345, 0, 0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: timeout scenario "
                          "did not abort\n");
@@ -522,11 +522,13 @@ void kill_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta1 = build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta1 =
+        build_state_delta_v1({arrival_ev}, 12345, 0, 0, {}, {});
     (void)bridge.deliver_and_receive(delta1);  // exchange 1 completes
     bridge.send_commit_ack(0, 0, true);
     arrival_ev.request_id = "s0_r1";
-    const StateDelta delta2 = build_state_delta({arrival_ev}, 12346, 1);
+    const StateDelta delta2 =
+        build_state_delta_v1({arrival_ev}, 12346, 1, 0, {}, {});
     (void)bridge.deliver_and_receive(delta2);  // must abort inside (peer dead)
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: kill scenario "
                          "did not abort\n");
@@ -565,7 +567,8 @@ void two_byte_scenario(const std::string& root) {
     arrival_ev.reason = DecisionReason::ARRIVAL;
     arrival_ev.request_id = "s0_r0";
     arrival_ev.payload.arrival_world_ns = 1;
-    const StateDelta delta = build_state_delta({arrival_ev}, 12345, 0);
+    const StateDelta delta =
+        build_state_delta_v1({arrival_ev}, 12345, 0, 0, {}, {});
     (void)bridge.deliver_and_receive(delta);  // must abort inside
     std::fprintf(stderr, "[bridge_loopback_fixture] BUG: two-byte scenario "
                          "did not abort\n");
@@ -654,7 +657,7 @@ void test_malformed_response_abort_messages() {
             arrival_ev.request_id = "s0_r0";
             arrival_ev.payload.arrival_world_ns = 1;
             const StateDelta delta =
-                build_state_delta({arrival_ev}, 12345, 0);
+                build_state_delta_v1({arrival_ev}, 12345, 0, 0, {}, {});
             (void)bridge.deliver_and_receive(delta);  // aborts inside
             _exit(2);
         }

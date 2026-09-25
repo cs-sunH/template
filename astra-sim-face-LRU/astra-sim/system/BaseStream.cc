@@ -26,9 +26,7 @@ BaseStream::BaseStream(int stream_id,
         }
     }
     state = StreamState::Created;
-    preferred_scheduling = SchedulingPolicy::None;
     creation_time = Sys::boostedTick();
-    total_packets_sent = 0;
     current_queue_id = -1;
     priority = 0;
 }

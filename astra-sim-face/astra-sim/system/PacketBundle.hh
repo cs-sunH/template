@@ -10,20 +10,12 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/Common.hh"
 #include "astra-sim/system/MemBus.hh"
-#include "astra-sim/system/MyPacket.hh"
 
 namespace AstraSim {
 
 class Sys;
 class PacketBundle : public Callable {
   public:
-    PacketBundle(Sys* sys,
-                 BaseStream* stream,
-                 std::list<MyPacket*> locked_packets,
-                 bool needs_processing,
-                 bool send_back,
-                 uint64_t size,
-                 MemBus::Transmition transmition);
     PacketBundle(Sys* sys,
                  BaseStream* stream,
                  bool needs_processing,
@@ -35,7 +27,6 @@ class PacketBundle : public Callable {
     void call(EventType event, CallData* data);
 
     Sys* sys;
-    std::list<MyPacket*> locked_packets;
     bool needs_processing;
     bool send_back;
     uint64_t size;

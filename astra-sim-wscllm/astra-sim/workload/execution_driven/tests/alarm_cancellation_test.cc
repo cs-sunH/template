@@ -46,7 +46,6 @@ Exit code 0 on ALL PASS.
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
-#include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <cassert>
 #include <cstdio>
@@ -59,7 +58,6 @@ Exit code 0 on ALL PASS.
 
 using namespace AstraSim;
 using namespace AstraSim::ExecutionDriven;
-using namespace Analytical;
 using namespace AstraSimAnalytical;
 using namespace AstraSimAnalyticalCongestionAware;
 using namespace NetworkAnalytical;
@@ -140,14 +138,6 @@ bandwidth: [ 400.0, 400.0 ]
 latency: [ 5, 5 ]
 )";
 
-const char* kRemoteMemoryJson = R"({
-  "memory-type": "PER_NPU_MEMORY_EXPANSION",
-  "remote-mem-bw": 1000.0,
-  "remote-mem-latency": 100,
-  "npu-ids": [0, 1, 2, 3]
-}
-)";
-
 void write_text(const std::string& path, const std::string& content) {
     std::ofstream out(path);
     assert(out.is_open());
@@ -156,7 +146,6 @@ void write_text(const std::string& path, const std::string& content) {
 
 struct AnalyticalFixture {
     std::shared_ptr<EventQueue> event_queue;
-    std::unique_ptr<AnalyticalRemoteMemory> memory_api;
     // Declared before `sys` dies: Sys::cancel_event re-enters the API while
     // the Workload destructor cancels pending model events, so the API must
     // outlive the Sys (the fixture struct is destroyed only after main()
@@ -183,9 +172,6 @@ AnalyticalFixture make_analytical_fixture(const std::string& config_dir) {
     fluid_scheduler->set_deferred_flush_mode(true);
     CongestionAwareNetworkApi::set_fluid_scheduler(fluid_scheduler);
 
-    fixture.memory_api = std::make_unique<AnalyticalRemoteMemory>(
-        config_dir + "/remote_memory.json");
-
     fixture.network_api = std::make_unique<CongestionAwareNetworkApi>(0);
     auto graph_source = std::make_shared<NodeStoreGraphSource>();
     const auto npus_count_per_dim = network_parser.get_npus_counts_per_dim();
@@ -195,7 +181,7 @@ AnalyticalFixture make_analytical_fixture(const std::string& config_dir) {
     }
     fixture.sys = new Sys(0, config_dir + "/workload", config_dir +
                           "/comm_group.json", config_dir + "/system.json",
-                          fixture.memory_api.get(), fixture.network_api.get(),
+                          fixture.network_api.get(),
                           npus_count_per_dim, queues_per_dim, 1.0, 1.0,
                           false, ExecutionDriven::ExecutionMode::Online,
                           graph_source);
@@ -395,8 +381,7 @@ void test_repeat_cancellation_is_idempotent(AnalyticalFixture& fixture) {
 // the stale guards must drop it without side effects.
 // ===========================================================================
 
-void test_legacy_backend_fallback(const std::string& config_dir,
-                                  AnalyticalRemoteMemory* memory_api) {
+void test_legacy_backend_fallback(const std::string& config_dir) {
     std::printf("[case D] legacy backend fallback + stale guards\n");
     // An independent backend queue: the fake API never touches the shared
     // analytical frontend statics.
@@ -411,7 +396,7 @@ void test_legacy_backend_fallback(const std::string& config_dir,
     }
     auto* const legacy_sys =
         new Sys(1, config_dir + "/workload", config_dir + "/comm_group.json",
-                config_dir + "/system.json", memory_api, legacy_api.get(),
+                config_dir + "/system.json", legacy_api.get(),
                 npus_count_per_dim, queues_per_dim, 1.0, 1.0, false,
                 ExecutionDriven::ExecutionMode::Online, graph_source);
 
@@ -475,7 +460,6 @@ int main() {
     const std::string config_dir(made);
     write_text(config_dir + "/system.json", kSystemJson);
     write_text(config_dir + "/network.yml", kNetworkYaml);
-    write_text(config_dir + "/remote_memory.json", kRemoteMemoryJson);
     write_text(config_dir + "/comm_group.json", "{}");
 
     // ---- cases A-C on the real analytical cancellation chain ----
@@ -490,10 +474,9 @@ int main() {
 
     // ---- case D on a legacy/fake backend; the analytical Sys must retire
     // first because Sys::boostedTick() reads the clock of all_sys[0] ----
-    auto* const memory_api = fixture.memory_api.get();
     delete fixture.sys;
     fixture.sys = nullptr;
-    test_legacy_backend_fallback(config_dir, memory_api);
+    test_legacy_backend_fallback(config_dir);
 
     std::printf("ALL PASS\n");
     std::error_code ec;

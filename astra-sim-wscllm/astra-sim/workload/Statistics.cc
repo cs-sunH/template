@@ -62,11 +62,6 @@ const Statistics::OperatorStatistics& Statistics::get_operator_statistics(
     return operator_statistics.at(node_id);
 }
 
-const std::unordered_map<NodeId, Statistics::OperatorStatistics>& Statistics::
-    get_operator_statistics() const {
-    return operator_statistics;
-}
-
 void Statistics::record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                               Tick start_time) {
     const NodeId& node_id = node->id();
@@ -652,7 +647,17 @@ void Statistics::require_online_compacted_full_window(
 Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
     get_operator_type(const std::shared_ptr<Chakra::ETFeederNode> node) {
     const auto& node_type = node->type();
-    Statistics::OperatorStatistics::OperatorType stat_node_type;
+    // Fix (2026-09-25, workload-F1): METADATA_NODE used to fall to the
+    // default arm, where -DNDEBUG compiled the assert out and the
+    // uninitialized stat_node_type was returned (UB; the garbage type then
+    // entered operator_statistics). It now maps to INVALID, mirroring the
+    // NodeView overload below (NodeKind::Metadata -> INVALID). Intentional
+    // deviation from the frozen static byte-exact baseline, same spirit as
+    // the 2026-09-24 face A.2 alignment: static traces carrying metadata
+    // nodes (Workload::issue dispatches them at issue_metadata) previously
+    // recorded an undefined operator type in Release builds.
+    Statistics::OperatorStatistics::OperatorType stat_node_type =
+        Statistics::OperatorStatistics::OperatorType::INVALID;
     switch (node_type) {
     case ChakraNodeType::MEM_LOAD_NODE:
     case ChakraNodeType::MEM_STORE_NODE:
@@ -671,13 +676,16 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         stat_node_type = Statistics::OperatorStatistics::OperatorType::COMM;
         break;
     case ChakraNodeType::INVALID_NODE:
+    case ChakraNodeType::METADATA_NODE:
         stat_node_type = Statistics::OperatorStatistics::OperatorType::INVALID;
         break;
     default:
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node_type, node.id={}, node.type={}",
                        node->id(), static_cast<uint64_t>(node->type()));
-        assert(false);
+        // Fail closed instead of returning the uninitialized enum (NDEBUG
+        // no longer has an assert to catch this).
+        std::exit(EXIT_FAILURE);
     }
     return stat_node_type;
 }

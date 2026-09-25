@@ -1,6 +1,5 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
-#include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -17,7 +16,7 @@
 #include <algorithm>
 #include <limits>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 
 // Using the new feeder v3 APIs.
@@ -196,7 +195,8 @@ void LocalMemUsageTracker::recordWrites(
       this->memWrites.insert({tensorName, writeActivity});
     } else {
       // each tensor should only be written once.
-      assert(false);
+      throw std::runtime_error("LocalMemUsageTracker: tensor '" +
+                               tensorName + "' written more than once");
     }
   }
 }
@@ -248,11 +248,6 @@ void LocalMemUsageTracker::append_trace_event(const json& event) {
   }
 
   const std::string encoded_event = event.dump(2);
-  if (encoded_event.size() >
-      static_cast<size_t>(std::numeric_limits<uint64_t>::max())) {
-    throw std::runtime_error(
-        "LocalMemUsageTracker trace event is too large for the spool");
-  }
   if (this->trace_spool_event_count_ ==
       std::numeric_limits<uint64_t>::max()) {
     throw std::runtime_error("LocalMemUsageTracker trace event count overflow");
@@ -381,8 +376,7 @@ void LocalMemUsageTracker::dumpMemoryTrace(const std::string& filename) {
        ++event_index) {
     uint64_t encoded_size = 0;
     if (std::fread(&encoded_size, 1, sizeof(encoded_size),
-                   this->trace_spool_) != sizeof(encoded_size) ||
-        encoded_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+                   this->trace_spool_) != sizeof(encoded_size)) {
       AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
           ->error("failed to read trace spool event header");
       file.close();

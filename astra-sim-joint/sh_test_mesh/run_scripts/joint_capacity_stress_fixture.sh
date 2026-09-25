@@ -110,13 +110,26 @@ acquire_single_simulation_lock() {
     fi
     SINGLE_SIMULATION_LOCK_FD="${inherited_fd}"
   else
-    exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
-    if ! flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+    # 上一轮夹具的后台后代（C++/Python 继承锁 fd，见 EXIT trap 注释）可能
+    # 比本壳晚退出：紧邻的下一次夹具调用（stress-r1 紧随门禁内同名夹具、
+    # stress-verify 紧随 stress-rN）会在瞬时持锁期被拒。先做有界等待
+    # （SINGLE_SIMULATION_LOCK_WAIT_S，默认 120s；轮询 2s）——等待发生在
+    # 任何变更（物化/切配置/清 generated）之前，锁真实空闲才继续，超时
+    # 仍被持有则维持原 fail-closed 拒绝，互斥语义不变。
+    local wait_deadline=$(( $(date +%s) + ${SINGLE_SIMULATION_LOCK_WAIT_S:-120} ))
+    while :; do
+      exec {SINGLE_SIMULATION_LOCK_FD}>>"${SINGLE_SIMULATION_LOCK_PATH}"
+      if flock -n "${SINGLE_SIMULATION_LOCK_FD}"; then
+        SINGLE_SIMULATION_LOCK_OWNED=1
+        break
+      fi
       exec {SINGLE_SIMULATION_LOCK_FD}>&-
-      echo "[stress-fixture] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to mutate run inputs" >&2
-      return 1
-    fi
-    SINGLE_SIMULATION_LOCK_OWNED=1
+      if [ "$(date +%s)" -ge "${wait_deadline}" ]; then
+        echo "[stress-fixture] another simulation holds ${SINGLE_SIMULATION_LOCK_PATH}; refusing to mutate run inputs" >&2
+        return 1
+      fi
+      sleep 2
+    done
   fi
   export SH_SINGLE_SIMULATION_LOCK_FD="${SINGLE_SIMULATION_LOCK_FD}"
 }

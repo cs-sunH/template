@@ -66,8 +66,6 @@ from generate_face_trace import (  # noqa: E402
     TransferTriggerGate,
     _emit_control_trigger,
     _emit_kv_transfer,
-    _emit_tp_point_to_point_readiness_barrier,
-    _emit_tp_readiness_barrier,
     _paired_transfer,
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
@@ -78,7 +76,6 @@ from session_kv_manager import (  # noqa: E402
     KVTransferShard,
     LOCAL_HIT,
     NO_HISTORY,
-    _PARTIAL_REMOTE_MIGRATE,
 )
 
 def first_token_split_enabled() -> bool:
@@ -409,7 +406,9 @@ def kv_transfer_from_log(record) -> KVTransfer:
 def history_snapshot_from_log(plan: dict):
     """B3(sh :399-422):重建 history_location_before。face 的 plan
     ["history_location_before"] 直接是 SessionKVSnapshot 对象(字段同名,
-    strategy 模式),原样返回;dict 形状按三字段重建。"""
+    strategy 模式,live 路径),原样返回;dict 形状按三字段重建——仅供
+    旧决策日志(legacy old-log-only)回放解析,新运行不再产生
+    partial_hbm_remote 位置,该推断分支对旧产物只读。"""
     snapshot = plan.get("history_location_before")
     if snapshot is not None and not isinstance(snapshot, dict):
         return snapshot
@@ -458,20 +457,14 @@ class GraphBatchBuilder:
         # barrier(joiner decode_evictions 触发门),seg2 = 退出列车 barrier
         # (completion_gates 的同源口径)。
         self._block_ends = {}
-        # request_id -> partial 恢复两段式流水信息(sh :450-455;admission
-        # 发射 suffix 恢复分支时登记,该请求首 chunk 所在列车消费后弹出):
-        #   suffix_start               驻留前缀层数(层段拆分界)
-        #   suffix_ready_nodes_by_rank suffix 恢复完成门(首 chunk suffix
-        #                             层段的 arm_dependency 目标)
-        self._partial_first_chunk = {}
         # tag 分配器(契约 §6:基址 10_000_000,错开 face 现行
         # queue*10000+{1000,1900,3000} 段)。
         self._tag_allocator = TransferTagAllocator()
         # B4(2026-09-13,逐出支链化):session_id -> [(edge_rank,
         # mem_store_node_id, source_ack_node_id)] 在飞 store 支链尾部
-        # 登记表(主方案 §3.3)。同会话两段式逐出的 suffix store 与 full
-        # store 各登记一条(restore 读全区间须等齐);回迁发射时消费清除,
-        # terminal session 回收时清除。
+        # 登记表(主方案 §3.3)。session 级 Tiered-LRU 下逐出恒为单笔整体
+        # store,每会话同至多一条登记(restore 读全区间须等齐);回迁发射
+        # 时消费清除,terminal session 回收时清除。
         self.pending_store_tails = {}
         # 每 request 的 action_sequence 账本(节点名含 _action{seq:03d}_,
         # 跨该 request 的全部 transfer 递增——保证节点名跨 request 逐字节
@@ -636,29 +629,12 @@ class GraphBatchBuilder:
                 "emit_train_first_step/emit_train_remainder")
         marker = self._mark()
         self._emit_train_head(train_plan)
-        partial_info = self._pop_partial_first_chunk(train_plan)
         self._emit_train_body(
             train_plan, list(train_plan["pass_spans"]),
-            int(train_plan["iterations"]), partial_info)
+            int(train_plan["iterations"]))
         result = self._emit_train_tail_markers(train_plan, first_token)
         self._collect(marker)
         return result
-
-    def _pop_partial_first_chunk(self, train_plan: dict):
-        """B3(sh :687-700):partial 恢复账本弹出(按"首 chunk 所在批"口径;
-        WP9 拆分时首 chunk 批 = 首步批)。非 partial 列车返回 None 并与
-        计划对账。"""
-        prefill_start_member = train_plan.get("prefill_start_member")
-        partial_info = None
-        if prefill_start_member is not None:
-            partial_info = self._partial_first_chunk.pop(
-                prefill_start_member["request_id"], None)
-        partial_count = train_plan.get("partial_first_chunk_count")
-        if (partial_info is None) != (partial_count is None):
-            raise RuntimeError(
-                "partial train plan and admission ledger disagree on the "
-                "first-chunk split")
-        return partial_info
 
     def emit_train_first_step(self, train_plan: dict) -> dict:
         """WP9 首步批发射(2026-08-26;拆分阶段 1;WP9_CONTRACT §2 face
@@ -695,9 +671,8 @@ class GraphBatchBuilder:
                 "emit_train_first_step requires a split first_token plan")
         marker = self._mark()
         self._emit_train_head(train_plan)
-        partial_info = self._pop_partial_first_chunk(train_plan)
         self._emit_train_body(
-            train_plan, list(first_token["first_spans"]), 1, partial_info)
+            train_plan, list(first_token["first_spans"]), 1)
         first_token_members = self._emit_first_token_markers(
             train_plan, first_token["debut_marker_members"])
         group = self.group_by_index[train_plan["instance_index"]]
@@ -734,11 +709,9 @@ class GraphBatchBuilder:
             raise RuntimeError(
                 "emit_train_remainder requires a split first_token plan")
         marker = self._mark()
-        # partial 账本已在首步批弹出(partial 列车 = 首 chunk 批 = 首步批),
-        # 余量体是纯聚合段。
         self._emit_train_body(
             train_plan, list(first_token["rest_spans"]),
-            int(train_plan["iterations"]) - 1, None)
+            int(train_plan["iterations"]) - 1)
         result = self._emit_train_tail_markers(train_plan, first_token)
         self._collect(marker)
         return result
@@ -822,20 +795,15 @@ class GraphBatchBuilder:
                             prefill_start_member["request_id"])))
 
     def _emit_train_body(self, train_plan: dict, pass_spans,
-                         weight_passes: int, partial_info) -> None:
+                         weight_passes: int) -> None:
         """折叠列车体(17 类聚合节点;weight_passes = 权重读取次数)。
 
         拆分时首步批传首步 span 组 + weight_passes=1,余量批传余量组 +
         iterations-1;两批激活/KV/AR 字节按 span 求和与整列一致。
-
-        B3(2026-09-06,sh :763-846 真流水):partial 前缀两段式迁移的请求,
-        其首 chunk 所在列车按层段拆分——prefix 层段(resident 前缀层,已在
-        目标 HBM)不等 suffix 恢复,suffix 层段 arm 依赖 admission 记录的
-        suffix ready 节点(两段式流水);首 chunk + 各成员第 1 迭代 span
-        进前缀组(weight_passes=1 的两段层发射,激活/KV 按层段分列、权重
-        恰一份),其余 span 进剩余段(weight_passes-1)。WP9 拆分与该结构
-        天然对齐:首步批传首步组(partial 列车 = prefix/suffix 组)+
-        weight_passes=1,余量批传余量组 + iterations-1。"""
+        Session-level Tiered-LRU (2026-09-25):partial 恢复列车的首 chunk
+        prefix/suffix 层段两段拆分发射随 PARTIAL 态一并删除——恢复恒为
+        单笔全量 remote_load,列车体统一单一聚合发射(WP9 首步/余量两批
+        机制本身不动,与本改动正交)。"""
         group = self.group_by_index[train_plan["instance_index"]]
         train_id = train_plan["train_id"]
         stage = train_plan["stage"]
@@ -844,92 +812,22 @@ class GraphBatchBuilder:
             builder.set_context(train_id, stage, generation)
         tensor_parallel = len(group.ranks)
         for relative_rank, rank in enumerate(group.ranks):
-            if partial_info is not None:
-                if not pass_spans:
-                    raise RuntimeError(
-                        "partial train carries no first-chunk span")
-                suffix_start = partial_info["suffix_start"]
-                suffix_ready = partial_info["suffix_ready_nodes_by_rank"]
-                if rank not in suffix_ready:
-                    raise RuntimeError(
-                        "partial train rank missing its suffix ready gate")
-                first_group = pass_spans[:int(
-                    train_plan["partial_first_chunk_count"])]
-                rest_spans = pass_spans[int(
-                    train_plan["partial_first_chunk_count"]):]
-                transformer_pass_aggregated(
-                    self.builders[rank],
-                    phase="{}_first_chunk_prefix".format(train_id),
-                    pass_spans=first_group,
-                    layer_start=0,
-                    layer_end=suffix_start,
-                    include_output=False,
-                    weight_passes=1,
-                    layers=self.config.layers,
-                    hidden_size=self.config.hidden_size,
-                    ffn_size=self.config.ffn_size,
-                    tensor_parallel=tensor_parallel,
-                    pg_name=group.pg_name,
-                    vocab_size=self.config.vocab_size,
-                    bytes_per_elem=self.config.bytes_per_elem,
-                    num_heads=self.config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=self.config.mlp_variant,
-                )
-                self.builders[rank].arm_dependency(suffix_ready[rank])
-                transformer_pass_aggregated(
-                    self.builders[rank],
-                    phase="{}_first_chunk_suffix".format(train_id),
-                    pass_spans=first_group,
-                    layer_start=suffix_start,
-                    layer_end=self.config.layers,
-                    include_output=True,
-                    weight_passes=1,
-                    layers=self.config.layers,
-                    hidden_size=self.config.hidden_size,
-                    ffn_size=self.config.ffn_size,
-                    tensor_parallel=tensor_parallel,
-                    pg_name=group.pg_name,
-                    vocab_size=self.config.vocab_size,
-                    bytes_per_elem=self.config.bytes_per_elem,
-                    num_heads=self.config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=self.config.mlp_variant,
-                )
-                if rest_spans:
-                    transformer_pass_aggregated(
-                        self.builders[rank],
-                        phase="{}_remaining_aggregated".format(train_id),
-                        pass_spans=rest_spans,
-                        weight_passes=weight_passes - 1,
-                        layers=self.config.layers,
-                        hidden_size=self.config.hidden_size,
-                        ffn_size=self.config.ffn_size,
-                        tensor_parallel=tensor_parallel,
-                        pg_name=group.pg_name,
-                        vocab_size=self.config.vocab_size,
-                        bytes_per_elem=self.config.bytes_per_elem,
-                        num_heads=self.config.num_heads,
-                        tensor_parallel_rank=relative_rank,
-                        mlp_variant=self.config.mlp_variant,
-                    )
-            else:
-                transformer_pass_aggregated(
-                    self.builders[rank],
-                    phase=train_id,
-                    pass_spans=pass_spans,
-                    weight_passes=weight_passes,
-                    layers=self.config.layers,
-                    hidden_size=self.config.hidden_size,
-                    ffn_size=self.config.ffn_size,
-                    tensor_parallel=tensor_parallel,
-                    pg_name=group.pg_name,
-                    vocab_size=self.config.vocab_size,
-                    bytes_per_elem=self.config.bytes_per_elem,
-                    num_heads=self.config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=self.config.mlp_variant,
-                )
+            transformer_pass_aggregated(
+                self.builders[rank],
+                phase=train_id,
+                pass_spans=pass_spans,
+                weight_passes=weight_passes,
+                layers=self.config.layers,
+                hidden_size=self.config.hidden_size,
+                ffn_size=self.config.ffn_size,
+                tensor_parallel=tensor_parallel,
+                pg_name=group.pg_name,
+                vocab_size=self.config.vocab_size,
+                bytes_per_elem=self.config.bytes_per_elem,
+                num_heads=self.config.num_heads,
+                tensor_parallel_rank=relative_rank,
+                mlp_variant=self.config.mlp_variant,
+            )
 
     def _emit_first_token_markers(self, train_plan: dict,
                                   debut_members) -> dict:
@@ -1098,9 +996,8 @@ class GraphBatchBuilder:
             self.deferred_session_locations.pop(session_id, None)
             self.pending_request_by_session.pop(session_id, None)
             return
-        if completion_location not in {
-            "local_hbm", "partial_hbm_remote", "remote_memory",
-        }:
+        # Session-level Tiered-LRU:two-state location domain only.
+        if completion_location not in {"local_hbm", "remote_memory"}:
             raise RuntimeError("completed request has no valid KV location")
         self.deferred_session_locations[session_id] = completion_location
         self.pending_request_by_session[session_id] = following_request_id
@@ -1125,13 +1022,12 @@ class GraphBatchBuilder:
     def _mark_pending_history_store(self, transfer: KVTransfer) -> None:
         # 与共享 history-gate 账本一致(sh :1262-1292;turn-0 deferred 通道
         # 保留:in-flight turn-0 request 的 session key 无 pending 门,
-        # 逐出标记推迟到 session 完成时结算)。
-        if transfer.resident_prefix_layers_after == 0:
-            location = "remote_memory"
-        elif transfer.resident_prefix_layers_after < transfer.model_layers:
-            location = "partial_hbm_remote"
-        else:
-            raise RuntimeError("remote store did not reduce resident KV layers")
+        # 逐出标记推迟到 session 完成时结算)。Session-level Tiered-LRU:
+        # remote_store 恒为整体外迁(resident_prefix_layers_after == 0),
+        # 部分层域 store fail-closed 拒绝。
+        if transfer.resident_prefix_layers_after != 0:
+            raise RuntimeError("remote store did not fully offload the session")
+        location = "remote_memory"
         session_id = transfer.session_id
         # face:下一 turn 准入时才现场构建 pending 门(PendingHistoryGate),
         # remote_store 的 location 一律落 deferred、准入时作为 location 链
@@ -1201,7 +1097,7 @@ class GraphBatchBuilder:
 
     def _register_store_tails(self, record) -> None:
         """B4(主方案 §3.3):逐出 remote_store 支链的尾部登记——同会话下一
-        轮回迁(全量 remote_load / PARTIAL 后缀恢复)发射时查表补
+        轮回迁(全量 remote_load)发射时查表补
         store→restore 前递依赖。粒度 = 边缘 mem_store 完成(池写落盘);
         source_ack 仅为保守变体备查。"""
         if record.get("kind") != "remote_store":
@@ -1234,8 +1130,8 @@ class GraphBatchBuilder:
             跨 rank 直边,1B p2p 是协议内唯一合法时序载体);同
             (store 边缘 → restore 边缘) 多笔 store 共用一条中继(send
             节点一次消费全部 armed 依赖)。
-        两段式逐出的 suffix store 与 full store 写层区间互不相交但
-        restore 读全区间——本方法把该会话登记整体消费后清除。"""
+        Session-level Tiered-LRU 下逐出恒为单笔整体 store,每会话至多
+        一条登记——本方法把该会话登记整体消费后清除。"""
         tails = self.pending_store_tails.pop(session_id, None)
         if not tails:
             return
@@ -1274,10 +1170,11 @@ class GraphBatchBuilder:
     def _emit_admission_actions(self, request_plan: dict) -> None:
         """发射在线请求的准入动作:到达/interval gates、history 逐出
         (remote_store 链)、history 迁移/恢复(NOC_MIGRATE 1000 类 /
-        remote_load 恢复链 / partial 两段式流水)、prefill 增长逐出与
-        readiness 屏障(拼 batch 改造,2026-08-22;B3 2026-09-06 三态
-        KV 物理链:当前段 chunk 主体移入实例迭代列车,见
-        emit_iteration_train)。
+        remote_load 全量恢复链)、prefill 增长逐出与 readiness 屏障
+        (拼 batch 改造,2026-08-22;B3 2026-09-06 KV 物理链:当前段 chunk
+        主体移入实例迭代列车,见 emit_iteration_train;session 级
+        Tiered-LRU 2026-09-25:partial 恢复流水整段删除,恢复恒单笔
+        全量 remote_load)。
 
         [根因 #5 裁决,strategy 死锁修复统一(2026-08-19)]:strategy 不做
         任何块末恢复/段内清链——per-rank previous_id 无条件接续当前
@@ -1340,8 +1237,8 @@ class GraphBatchBuilder:
                 request_plan["session_id"], None)
             if pending_location is None:
                 pending_location = request_plan.get("kv_location_after_completion")
-            if pending_location not in (
-                    "local_hbm", "partial_hbm_remote", "remote_memory"):
+            # Session-level Tiered-LRU:pending location 值域收敛为两态。
+            if pending_location not in ("local_hbm", "remote_memory"):
                 raise RuntimeError(
                     "later request has no valid pending history location: "
                     "{!r}".format(pending_location))
@@ -1358,10 +1255,10 @@ class GraphBatchBuilder:
 
         history_before = history_snapshot_from_log(request_plan)
         if history_before is not None and pending_gate.location not in (
-                history_before.location, "new_session") and (
-                history_before.location == "partial_hbm_remote"):
-            # partial 恢复:pending location 经 remote_store 折算后应与计划
-            # 一致(sh :1074-1082 同款校验)。
+                history_before.location, "new_session"):
+            # pending location(经 remote_store 折算的 completion 链)必须
+            # 与计划一致(sh :1074-1082 同款校验,收敛为统一 mismatch
+            # raise——session 级 Tiered-LRU 下无 partial 折算特例)。
             raise RuntimeError(
                 "history gate location {!r} does not match planned location "
                 "{!r}".format(
@@ -1389,10 +1286,6 @@ class GraphBatchBuilder:
 
             self._emit_side_branch(_emit_history_evictions)
 
-        partial_history_restore = (
-            history_before is not None
-            and history_before.location == "partial_hbm_remote"
-        )
         # turn-0 的旧 plan 形状(无 history_action 键)按 NO_HISTORY 归一
         # (生产路径调度器恒显式携带 action 值)。
         history_action = request_plan.get("history_action") or NO_HISTORY
@@ -1400,23 +1293,11 @@ class GraphBatchBuilder:
             kv_transfer_from_log(transfer)
             for transfer in request_plan.get("history_transfers") or ()
         )
-        history_prefix_transfer = None
-        history_transfer = None
-        if history_action == _PARTIAL_REMOTE_MIGRATE:
-            if len(history_transfers) != 2:
-                raise RuntimeError(
-                    "cross-instance partial restore needs its two segments")
-            history_prefix_transfer, history_transfer = history_transfers
-        elif history_transfers:
-            history_transfer = history_transfers[0]
-        suffix_ready_nodes_by_rank = {}
+        history_transfer = history_transfers[0] if history_transfers else None
 
         if history_action in (NO_HISTORY, LOCAL_HIT, NOC_MIGRATE):
             # face 既有路径原样保留(策略 §1.4:LOCAL 跨实例整份 NoC 迁移 =
             # face 1000 类路径;时序依赖经 control trigger 跨实例 1B 承载)。
-            if history_prefix_transfer is not None:
-                raise RuntimeError(
-                    "non-partial history has a prefix migration")
             if history_action == NO_HISTORY:
                 if request_plan["turn_index"] != 0:
                     raise RuntimeError(
@@ -1460,17 +1341,14 @@ class GraphBatchBuilder:
                     timer_gates=control_timers,
                 )
         else:
-            # 三态恢复路径(remote_load 族;sh :1123-1135 非 partial 分支):
-            # LOCAL/PARTIAL/REMOTE 一致性经上方的 location 校验承载。
+            # 恢复路径(remote_load 族):session 级 Tiered-LRU 下唯一恢复
+            # 动作 = REMOTE_RESTORE 单笔全量回迁(partial 后缀恢复/两段链
+            # 已随 PARTIAL 态删除)。位置一致性由上方统一 mismatch 校验
+            # 承载。
             if history_transfer is None or history_before is None:
                 raise RuntimeError(
                     "restore history action is missing its transfer or "
                     "location snapshot")
-            if pending_gate.location != history_before.location:
-                raise RuntimeError(
-                    "history gate location {!r} does not match planned "
-                    "location {!r}".format(
-                        pending_gate.location, history_before.location))
 
         # B4(2026-09-13):prefill 增长逐出同款旁路分支(本发射点无触发
         # 门)。到达/间隔门的 pending 依赖属于主链(后续恢复链/readiness
@@ -1488,135 +1366,25 @@ class GraphBatchBuilder:
 
             self._emit_side_branch(_emit_prefill_evictions)
 
-        # ---- PARTIAL 恢复流水 / 其余恢复链 + readiness barrier ----
-        if partial_history_restore:
-            if history_transfer is None:
-                raise RuntimeError("partial history is missing its suffix load")
-            if (history_transfer.kind != "remote_load"
-                    or history_transfer.layer_start != history_before.resident_prefix_layers
-                    or history_transfer.layer_end != config.layers):
-                raise RuntimeError("partial history load does not match its suffix")
-            if history_before.instance_index is None:
-                raise RuntimeError("partial history has no resident source instance")
-            if history_prefix_transfer is None:
-                if request_plan["prefill_instance_index"] != history_before.instance_index:
-                    raise RuntimeError(
-                        "cross-instance partial history is missing its prefix migration"
-                    )
-                # 同实例:resident 前缀已在目标 HBM,interval gates 直挂
-                # (source==target,同 rank 边)。
-                if control_group.ranks != prefill_group.ranks:
-                    raise RuntimeError(
-                        "same-instance partial restore gate is not on its "
-                        "Prefill ranks")
-                for index, rank in enumerate(prefill_group.ranks):
-                    builders[rank].arm_timer_gate(
-                        pending_gate.timer_gates[index])
-                _emit_tp_readiness_barrier(
-                    builders=builders,
-                    group=prefill_group,
-                    name="{}_prefill_resident_prefix_ready_barrier".format(prefix),
-                )
-                prefix_ready_nodes = tuple(
-                    builders[rank].previous_id for rank in prefill_group.ranks
-                )
-            else:
-                resident_prefix_layers = history_before.resident_prefix_layers
-                if (
-                    history_prefix_transfer.kind != "noc_migrate"
-                    or history_prefix_transfer.phase != "history"
-                    or history_prefix_transfer.reason
-                    != "history_partial_prefix_migrate"
-                    or history_prefix_transfer.source_instance_index
-                    != history_before.instance_index
-                    or history_prefix_transfer.target_instance_index
-                    != request_plan["prefill_instance_index"]
-                    or history_prefix_transfer.source_instance_index
-                    == history_prefix_transfer.target_instance_index
-                    or history_prefix_transfer.layer_start != 0
-                    or history_prefix_transfer.layer_end != resident_prefix_layers
-                    or history_prefix_transfer.resident_prefix_layers_before
-                    != resident_prefix_layers
-                    or history_prefix_transfer.resident_prefix_layers_after
-                    != resident_prefix_layers
-                ):
-                    raise RuntimeError("partial history prefix migration is invalid")
-                self._emit_plan_transfer(
-                    request_plan, history_prefix_transfer,
-                    "history_prefix_transfer", gate=pending_gate)
-                prefix_readiness = _emit_tp_point_to_point_readiness_barrier(
-                    builders=builders,
-                    group=prefill_group,
-                    tag_allocator=self._tag_allocator,
-                    name="{}_prefill_prefix_ready_barrier".format(prefix),
-                )
-                prefix_ready_nodes = tuple(
-                    int(node_id)
-                    for _, node_id in prefix_readiness["node_ids_by_rank"]
-                )
-            checkpoints = {
-                rank: builders[rank].chain_checkpoint()
-                for rank in prefill_group.ranks
-            }
-            branch_gate = PendingHistoryGate(
-                source_instance_index=request_plan["prefill_instance_index"],
-                timer_gates=prefix_ready_nodes,
-                location=history_before.location,
-            )
-            # B4(store→restore 前递依赖,主方案 §3.3):suffix 回迁分支发射
-            # 前查表补边——同会话在飞 store 支链的边缘 mem_store 完成门
-            # 挂到本回迁链(同缘直挂 / 跨缘 1B 中继),防池读先于池写。
+        # ---- 全量恢复链 + readiness barrier ----
+        if history_transfer is not None and history_action not in (
+                NO_HISTORY, LOCAL_HIT, NOC_MIGRATE):
+            # 全量远端恢复(REMOTE_RESTORE):remote_load 链挂 pending
+            # gate(interval/到达 gates 为控制源),随后共享 readiness
+            # 屏障(sh :1133-1135)。
+            # B4(store→restore 前递依赖):回迁发射前查表补边——同会话
+            # 在飞 store 支链的边缘 mem_store 完成门挂到本回迁链(同缘
+            # 直挂 / 跨缘 1B 中继),防池读先于池写。
             self._arm_pending_store_tails(
-                request_plan["session_id"], prefix, history_transfer.shards)
-            history_record = self._emit_plan_transfer(
+                request_plan["session_id"], prefix,
+                history_transfer.shards)
+            self._emit_plan_transfer(
                 request_plan, history_transfer, "history_transfer",
-                gate=branch_gate)
-            for shard_record in history_record["shards"]:
-                target_rank = shard_record.get("target_rank")
-                completion_node = shard_record.get("target_hbm_completion_node_id")
-                if not isinstance(target_rank, int) or not isinstance(completion_node, int):
-                    raise RuntimeError("suffix restore is missing a target HBM gate")
-                suffix_ready_nodes_by_rank[target_rank] = completion_node
-            if set(suffix_ready_nodes_by_rank) != set(prefill_group.ranks):
-                raise RuntimeError(
-                    "suffix restore did not cover every Prefill rank; "
-                    "request={}".format(request_plan["request_id"]))
-            suffix_readiness = _emit_tp_point_to_point_readiness_barrier(
-                builders=builders,
-                group=prefill_group,
-                tag_allocator=self._tag_allocator,
-                name="{}_prefill_suffix_ready_barrier".format(prefix),
-            )
-            suffix_ready_nodes_by_rank = {
-                int(rank): int(node_id)
-                for rank, node_id in suffix_readiness["node_ids_by_rank"]
-            }
-            for rank in prefill_group.ranks:
-                builders[rank].restore_chain(checkpoints[rank])
-            # 两段式流水信息登记(sh :1236-1242)——首 chunk 所在列车
-            # (emit_iteration_train)按层段拆分发射,suffix 层段 arm 依赖
-            # suffix ready 节点;列车消费后弹出(恰一次)。
-            self._partial_first_chunk[request_plan["request_id"]] = {
-                "suffix_start": history_before.resident_prefix_layers,
-                "suffix_ready_nodes_by_rank": dict(suffix_ready_nodes_by_rank),
-            }
-        else:
-            if history_transfer is not None and history_action not in (
-                    NO_HISTORY, LOCAL_HIT, NOC_MIGRATE):
-                # 全量远端恢复(REMOTE_RESTORE):remote_load 链挂 pending
-                # gate(interval/到达 gates 为控制源),随后共享 readiness
-                # 屏障(sh :1133-1135)。
-                # B4(store→restore 前递依赖):与 PARTIAL 入口同款查表补边。
-                self._arm_pending_store_tails(
-                    request_plan["session_id"], prefix,
-                    history_transfer.shards)
-                self._emit_plan_transfer(
-                    request_plan, history_transfer, "history_transfer",
-                    gate=pending_gate)
-            for rank in prefill_group.ranks:
-                builders[rank].all_reduce(
-                    "{}_history_tp_ready_barrier".format(prefix), 1,
-                    prefill_group.pg_name)
+                gate=pending_gate)
+        for rank in prefill_group.ranks:
+            builders[rank].all_reduce(
+                "{}_history_tp_ready_barrier".format(prefix), 1,
+                prefill_group.pg_name)
         # prefill 主体(当前段 chunk spans)自拼 batch 改造(2026-08-22)
         # 起移入 emit_iteration_train 的折叠体与 drain 标记;
         # 此处止于准入动作(到达 gates/历史逐出/迁移/恢复/屏障)。

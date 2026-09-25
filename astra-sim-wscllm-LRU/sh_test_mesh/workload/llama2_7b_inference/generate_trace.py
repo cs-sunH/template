@@ -671,15 +671,15 @@ def transformer_pass_aggregated(
     iterations with B decode members carries k+B spans but reads the weights
     only k times (once per iteration, shared by all batch members; 权重只读
     一次 per iteration).  Activation / KV / AllReduce bytes stay per-span
-    exact regardless of ``weight_passes``.  Layer-range calls (partial
-    prefix-restore pipelines) keep the default: one span over a layer slice
-    is exactly one weight-reading pass of that slice.
+    exact regardless of ``weight_passes``.  Layer-range calls keep the
+    default: one span over a layer slice is exactly one weight-reading pass
+    of that slice.
 
     ``layer_start``/``layer_end``/``include_output`` (B3, 2026-09-06;照抄
     sh_2.0 同名参数语义): pass 只覆盖 ``[layer_start, layer_end)`` 层段
     (缺省全层,节点名与字节口径与历史逐字节一致——全层时 layer_label
-    恒为 ``all_layers``、层数乘子为 ``layers``)。层段调用拆分(prefix
-    层段 + suffix 层段)的字节总量与单次全层调用逐项守恒:激活/KV/
+    恒为 ``all_layers``、层数乘子为 ``layers``)。任意层段调用的字节总量
+    与单次全层调用逐项守恒:激活/KV/
     AllReduce/权重分量按 active_layers 比例分列,输出头(final norm +
     logits)仅由 ``include_output=True`` 的末段承载恰一次。
     """

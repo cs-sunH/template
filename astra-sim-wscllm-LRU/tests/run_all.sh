@@ -35,4 +35,18 @@ echo "[$0] Running online KV/scheduler unit tests..."
 (cd "${PROJECT_DIR}" && python3 sh_test_mesh/workload/llama2_7b_inference/online/test_propagating_tail.py) || (echo "Failed." ; exit 1)
 (cd "${PROJECT_DIR}" && python3 sh_test_mesh/workload/llama2_7b_inference/online/test_weight_passes.py) || (echo "Failed." ; exit 1)
 
+echo "[$0] Running sh_test_mesh top-level unit tests..."
+# 与上方 workload 套件同款：unittest 路径式 -m unittest。
+(cd "${PROJECT_DIR}" && python3 -m unittest sh_test_mesh/tests/test_config_resolver.py) || (echo "Failed." ; exit 1)
+(cd "${PROJECT_DIR}" && python3 -m unittest sh_test_mesh/tests/test_first_token_proxy.py) || (echo "Failed." ; exit 1)
+(cd "${PROJECT_DIR}" && python3 -m unittest sh_test_mesh/tests/test_metrics_contract.py) || (echo "Failed." ; exit 1)
+
+echo "[$0] Running SLO tools unit tests..."
+# slo_tools/tests 各文件头声明的运行方式即 unittest discover；逐套 -p
+# 精确收集，套间独立、Ran 计数不混（勿改路径式 -m unittest）。
+(cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_driver_parity.py") || (echo "Failed." ; exit 1)
+(cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_golden_g1g4.py") || (echo "Failed." ; exit 1)
+(cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_hbm_watermark.py") || (echo "Failed." ; exit 1)
+(cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_slo_contract.py") || (echo "Failed." ; exit 1)
+
 echo "[$0] Finished all regression tests."

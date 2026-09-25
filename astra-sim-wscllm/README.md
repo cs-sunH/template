@@ -24,8 +24,9 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
 ### B. NoC（片上网络）
 
 晶圆内部芯粒间的互连：非环绕二维 mesh 上相邻芯粒间的有向链路（die-to-die），
-链路带宽与每跳时延取硬件配置 `d2d` 的值（多跳逐跳累计），XY（维序）确定性路由，逐跳
-store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（拥塞感知）。C++ 侧由
+链路带宽与每跳时延取硬件配置 `d2d` 的值（多跳逐跳累计），XY（维序）确定性路由，同一
+链路的多条数据流由流体调度器（FluidScheduler，fluid-pipelined）做带宽严格均分并行
+推进（拥塞感知，无逐跳 store-and-forward 的 FIFO 串行排队）。C++ 侧由
 分析型网络后端实现（`extern/network_backend/analytical/congestion_aware/`），Python
 规划层有同一语义的确定性 XY 路由函数。注意：这是分析级模型，不建模路由器微架构
 （crossbar / VC / credit），也不做 cycle-accurate 仿真。
@@ -161,8 +162,9 @@ compute 键集内（出现即按未知键 fail-closed，与 builder 从不发射
 `hbm-bandwidth-contention: 0`（或 `local-mem-bw <= 0` 自动回退）＝完全恢复旧行为：
 roofline 闭式公式、comm 立即随网络完成、不计 HBM。指标导出（MetricCollector，
 旧键不变）：每 rank `hbm_busy_ns`、分类 served bytes（comp / comm_read /
-comm_write）、`hbm_peak_concurrent_jobs`、`hbm_redistribution_events`、真实利用率
-`hbm_bw_util = busy_ns / 墙钟窗口`。单测：
+comm_write）、`peak_concurrent_jobs`、`redistribution_events`、真实利用率
+`hbm_busy_util = busy_ns / 墙钟窗口`（勿与 microbench iteration 的
+`hbm_bw_util = bytes/(tp_degree×bw×t)` 混同）。单测：
 `astra-sim/workload/execution_driven/tests/local_hbm_bandwidth_model_test.cc`。
 策略细节见《request实例映射与KV冷热管理策略说明.md》。
 
@@ -237,7 +239,10 @@ python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile
 #    slo_warmup.json；P1/2026-08-30 起 hbm_watermark 按四层可信度分级：
 #    run_dir 含 results/kv_delta_journal.jsonl 时走 journal 权威重放，
 #    含 checksum 证书为 per_rank_total_hbm_certified 层——正式逐 rank
-#    容量判决、违规 exit 3；缺 journal 的旧 run 为 upper_bound_only
+#    容量判决、违规 exit 3（2026-09-25 起该层以 checksum 完整性为前置：
+#    证书 ranks 块非空且逐 rank 终态对账、missing-rank 反查全过才判
+#    certified，ranks 缺失/为空时降级为非 certified、不做 exit 3 判决）；
+#    缺 journal 的旧 run 为 upper_bound_only
 #    上界层，超限只诊断不认证、exit 0），一律不传分桶/聚合参数（粗化
 #    留给下游画图脚本）；
 #    非 full 档依赖 request_metrics.csv 的子命令按设计跳过并写说明；
@@ -564,7 +569,10 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 `run_online_idle_fixture.sh`（IDLE 五态生命周期）、`run_online_wakeup_guard_fixture.sh`、
 `run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
 
-另有 C++ 单测 fixtures（`build/astra_analytical/build_congestion_aware/bin/`，无参数直跑）：
+另有 C++ 单测 fixtures（`build/astra_analytical/build_congestion_aware/bin/`，无参数直跑）。
+构建约束：检查以裸 `assert()` 表达的测试目标（CliOnlineTest / EventQueueDeferredTest /
+AlarmCancellationTest）在 CMake 里已加 `$<$<CONFIG:Release>:-UNDEBUG>` 使断言在
+缺省 Release 构建下常开，否则 -DNDEBUG 会把断言整体编译掉、二进制恒绿：
 `..._WindowedReaderTest`（P0 turn-0 修复后的日历 reader 单测：索引遍+日历提交/
 advisory 窗口/乱序 turn-0/首块超窗/arrival=0 t0 边界/同 tick 按 queue_index 排序/
 provenance 篡改与块结构违例 fail-closed/到达审计门自证）、
@@ -617,7 +625,9 @@ pytest 或直跑）。
 - 仿真输入唯一允许源 = astra_compute_20.csv 前 2 秒（更早的用户指示曾临时
   授权过更大窗口；以当下指示为准）。
 - 缺失输入一律 fail-closed（generate 桩/materializer/runner/GEN_MATCH 均实测 exit=1）。
-- 策略文件（wsc_llm_scheduler.py / session_kv_manager.py）为保留对象，勿改。
+- 策略文件（wsc_llm_scheduler.py / session_kv_manager.py）为保留对象，勿改
+  （2026-09-25 深挖二轮唯一例外：两文件各删一处全仓零引用的死方法
+  `d2d_to_hbm_bandwidth_ratio` / `final_session_counts`，策略语义零改动）。
 - 改动机制层后请跑 §4 fixtures + §2 ⑤ 对账再交付。
 
 ## 7. Online execution adaptation

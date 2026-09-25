@@ -36,18 +36,6 @@ class Cache {
           std::make_pair(std::make_shared<V>(value), --this->lru.end());
     }
   }
-  bool has(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    return this->cache.find(key) != this->cache.end();
-  }
-  std::weak_ptr<const V> get(const K& key) {
-    std::shared_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      throw std::runtime_error("Key not found in cache");
-    }
-    std::weak_ptr<const V> value(this->cache.at(key).first);
-    return value;
-  }
   std::shared_ptr<const V> get_locked(const K& key) {
     std::shared_lock lock(cache_mutex);
     if (this->cache.find(key) == this->cache.end()) {
@@ -69,15 +57,6 @@ class Cache {
       return std::shared_ptr<const V>();
     }
     return this->cache.at(key).first;
-  }
-
-  void remove(const K& key) {
-    std::unique_lock lock(cache_mutex);
-    if (this->cache.find(key) == this->cache.end()) {
-      throw std::runtime_error("Key not found in cache");
-    }
-    this->lru.erase(this->cache[key].second);
-    this->cache.erase(key);
   }
 
   ~Cache() {

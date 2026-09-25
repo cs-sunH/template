@@ -6,7 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/common/Logging.hh"
 
-#include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 using namespace std;
@@ -39,7 +39,12 @@ RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs)
                id, name, total_nodes_in_ring, index_in_ring,
                total_nodes_in_ring);
 
-    assert(index_in_ring >= 0);
+    if (index_in_ring < 0) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("id: {} is not part of its own ring of {} nodes", id,
+                       total_nodes_in_ring);
+        std::exit(1);
+    }
 }
 RingTopology::RingTopology(Dimension dimension,
                            int id,
@@ -78,7 +83,12 @@ RingTopology::RingTopology(Dimension dimension,
 int RingTopology::get_receiver_homogeneous(int node_id,
                                            Direction direction,
                                            int offset) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
+    if (id_to_index.find(node_id) == id_to_index.end()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: unknown node id: {} requested",
+                       name, id, node_id);
+        std::exit(1);
+    }
     int index = id_to_index[node_id];
     if (direction == RingTopology::Direction::Clockwise) {
         int receiver = node_id + offset;
@@ -94,8 +104,8 @@ int RingTopology::get_receiver_homogeneous(int node_id,
                            "id: {}, offset: {}, index_in_ring {} receiver {}",
                            name, id, name, index, node_id, offset,
                            index_in_ring, receiver);
+            std::exit(1);
         }
-        assert(receiver >= 0);
         id_to_index[receiver] = index;
         index_to_id[index] = receiver;
         return receiver;
@@ -113,8 +123,8 @@ int RingTopology::get_receiver_homogeneous(int node_id,
                            "id: {}, offset: {}, index_in_ring {} receiver {}",
                            name, id, name, index, node_id, offset,
                            index_in_ring, receiver);
+            std::exit(1);
         }
-        assert(receiver >= 0);
         id_to_index[receiver] = index;
         index_to_id[index] = receiver;
         return receiver;
@@ -122,7 +132,12 @@ int RingTopology::get_receiver_homogeneous(int node_id,
 }
 
 int RingTopology::get_receiver(int node_id, Direction direction) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
+    if (id_to_index.find(node_id) == id_to_index.end()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: unknown node id: {} requested",
+                       name, id, node_id);
+        std::exit(1);
+    }
     int index = id_to_index[node_id];
     if (direction == RingTopology::Direction::Clockwise) {
         index++;
@@ -140,7 +155,12 @@ int RingTopology::get_receiver(int node_id, Direction direction) {
 }
 
 int RingTopology::get_sender(int node_id, Direction direction) {
-    assert(id_to_index.find(node_id) != id_to_index.end());
+    if (id_to_index.find(node_id) == id_to_index.end()) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {}: unknown node id: {} requested",
+                       name, id, node_id);
+        std::exit(1);
+    }
     int index = id_to_index[node_id];
     if (direction == RingTopology::Direction::Anticlockwise) {
         index++;

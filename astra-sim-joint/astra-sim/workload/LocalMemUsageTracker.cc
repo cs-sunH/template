@@ -1,6 +1,6 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
-#include <cassert>
+#include <charconv>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -84,7 +84,21 @@ uint64_t LocalMemUsageTracker::parseIOInfos(
   for (int i = 0; i < values.size(); i += 2) {
     const TensorId& tensorName = values.Get(i);
     const std::string& sizeStr = values.Get(i + 1);
-    uint64_t size = std::stoull(sizeStr);
+    // Full-consumption numeric validation. The former bare std::stoull
+    // accepted "-5" via unsigned wrap-around and silently truncated
+    // trailing garbage ("12abc" -> 12); from_chars rejects a leading '-'
+    // for unsigned targets by itself, and the ptr check rejects any
+    // non-digit tail.
+    uint64_t size = 0;
+    const char* const begin = sizeStr.data();
+    const char* const end = begin + sizeStr.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, size);
+    if (ec != std::errc() || ptr != end) {
+      throw std::runtime_error(
+          "LocalMemUsageTracker::parseIOInfos: invalid tensor size \"" +
+          sizeStr + "\" at IO pair index " + std::to_string(i / 2) +
+          " (expected a plain non-negative integer)");
+    }
     IOinfos.emplace_back(tensorName, size);
     ++parsedCnt;
   }
@@ -195,8 +209,20 @@ void LocalMemUsageTracker::recordWrites(
       this->tensorSize.insert({tensorName, tensorSize});
       this->memWrites.insert({tensorName, writeActivity});
     } else {
-      // each tensor should only be written once.
-      assert(false);
+      // A tensor name may legitimately recur across iterations (the same
+      // activation written again). The old assert(false) aborted debug runs
+      // and silently kept the stale first-write window/size in release,
+      // distorting the lifetime/peak reports. Keep the single-slot model
+      // but refresh it with the latest write: fail-visible instead of
+      // silent, and no whole-simulation abort in debug.
+      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+          ->warn("tracker tensor re-write refreshes its window: node.id={} "
+                 "tensor.name={} old=[{}, {}] new=[{}, {}]",
+                 node->id(), tensorName,
+                 this->memWrites.at(tensorName).start,
+                 this->memWrites.at(tensorName).end, start, end);
+      this->tensorSize[tensorName] = tensorSize;
+      this->memWrites[tensorName] = writeActivity;
     }
   }
 }

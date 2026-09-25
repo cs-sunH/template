@@ -168,15 +168,6 @@ bool NodeStore::mark_terminal_observed(uint64_t node_id) {
     return true;
 }
 
-std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
-    const auto it = nodes_.find(node_id);
-    if (it == nodes_.end()) {
-        return std::nullopt;
-    }
-    return NodeStoreMeta{it->second.node.request_id, it->second.node.stage,
-                         it->second.node.generation};
-}
-
 size_t NodeStore::pending_count() const {
     return std::count_if(nodes_.begin(), nodes_.end(),
                          [](const auto& entry) {

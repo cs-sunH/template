@@ -1188,15 +1188,15 @@ DecisionEvent drain_event(const std::string& req) {
 // Drive one committed node to terminal exactly like the online path would:
 // the NodeStore dependency release (Workload::call owns it in the real
 // system) plus the completion fact into the WatchRegistry
-// (online_completion_hook's job) with the store's OWN meta for the node.
+// (online_completion_hook's job) with the store's OWN record for the node.
 void drive_terminal(Fixture& f, int rank, uint64_t store_id,
                     NodeTerminalStatus status) {
     f.sources[rank]->store().finish_node(store_id);
-    const auto meta = f.sources[rank]->store().meta_for(store_id);
-    expect(meta.has_value(), "train: meta_for the driven node");
-    if (meta.has_value()) {
+    const auto rec = f.sources[rank]->store().node(store_id);
+    expect(rec.has_value(), "train: node record for the driven node");
+    if (rec.has_value()) {
         f.registry.on_node_terminal(
-            CompletionKey{rank, store_id, meta->generation}, status);
+            CompletionKey{rank, store_id, rec->generation}, status);
     }
 }
 

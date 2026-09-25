@@ -2,9 +2,9 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
-#include <stdexcept>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -17,6 +17,7 @@
 #include <limits>
 
 #include "astra-sim/system/Common.hh"
+#include "astra-sim/system/Sys.hh"
 #include "astra-sim/common/Logging.hh"
 
 // Using the new feeder v3 APIs.
@@ -64,11 +65,19 @@ void write_indented_event(std::ostream& output,
   }
 }
 
-[[noreturn]] void throw_trace_spool_error(const char* const operation) {
+// Same fail-closed channel as the rest of this file: Sys::sys_panic, which
+// exits instead of throwing (recordEnd and the trace builders run inside
+// Sys::call_events, whose catch handler logs std::exception and continues --
+// a throw here would degrade into a silent hang).
+[[noreturn]] void panic_trace_spool_error(const char* const operation) {
   const int error_number = errno;
-  throw std::runtime_error(
+  Sys::sys_panic(
       std::string("LocalMemUsageTracker trace spool failed while ") + operation +
       ": " + (error_number == 0 ? "unknown error" : std::strerror(error_number)));
+  // Unreachable: sys_panic always exits. Sys::sys_panic is not declared
+  // [[noreturn]], so anchor the end of this [[noreturn]] helper for the
+  // compiler.
+  std::abort();
 }
 
 }  // namespace
@@ -77,7 +86,7 @@ uint64_t LocalMemUsageTracker::parseIOInfos(
   const google::protobuf::RepeatedPtrField<std::string>& values,
   std::vector<std::tuple<TensorId, uint64_t>>& IOinfos) {
   if (values.size() % 2 != 0) {
-    throw std::runtime_error("IO infos list size is not even.");
+    Sys::sys_panic("IO infos list size is not even.");
   }
   uint64_t parsedCnt = 0;
   for (int i = 0; i < values.size(); i += 2) {
@@ -99,7 +108,7 @@ void LocalMemUsageTracker::recordReads(
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("inputs")) {
-    throw std::runtime_error("Attribute 'inputs' not found in node " +
+    Sys::sys_panic("Attribute 'inputs' not found in node " +
       std::to_string(nodeId) +
       " (LocalMemUsageTracker::recordReads)");
   }
@@ -158,7 +167,7 @@ void LocalMemUsageTracker::recordWrites(
   uint64_t nodeId = node->id();
 
   if (!node->has_attr("outputs")) {
-    throw std::runtime_error("Attribute 'outputs' not found in node " +
+    Sys::sys_panic("Attribute 'outputs' not found in node " +
       std::to_string(nodeId) + " (LocalMemUsageTracker::recordWrites)");
   }
 
@@ -196,9 +205,10 @@ void LocalMemUsageTracker::recordWrites(
     } else {
       // Each tensor should only be written once. The old bare
       // assert(false) compiled out under Release (NDEBUG), silently keeping
-      // the first write; fail closed with the same style as the attribute
-      // guards above so a duplicate write is loud in every build.
-      throw std::runtime_error(
+      // the first write; fail closed via Sys::sys_panic -- a throw would be
+      // swallowed by Sys::call_events -- so a duplicate write is loud in
+      // every build.
+      Sys::sys_panic(
           "Tensor '" + tensorName + "' is written more than once (node " +
           std::to_string(node->id()) +
           ", LocalMemUsageTracker::recordWrites)");
@@ -248,14 +258,14 @@ void LocalMemUsageTracker::append_trace_event(const json& event) {
     errno = 0;
     this->trace_spool_ = std::tmpfile();
     if (this->trace_spool_ == nullptr) {
-      throw_trace_spool_error("creating an anonymous spool");
+      panic_trace_spool_error("creating an anonymous spool");
     }
   }
 
   const std::string encoded_event = event.dump(2);
   if (this->trace_spool_event_count_ ==
       std::numeric_limits<uint64_t>::max()) {
-    throw std::runtime_error("LocalMemUsageTracker trace event count overflow");
+    Sys::sys_panic("LocalMemUsageTracker trace event count overflow");
   }
 
   const uint64_t encoded_size =
@@ -264,7 +274,7 @@ void LocalMemUsageTracker::append_trace_event(const json& event) {
                   this->trace_spool_) != sizeof(encoded_size) ||
       std::fwrite(encoded_event.data(), 1, encoded_event.size(),
                   this->trace_spool_) != encoded_event.size()) {
-    throw_trace_spool_error("writing an event");
+    panic_trace_spool_error("writing an event");
   }
   ++this->trace_spool_event_count_;
 }

@@ -63,7 +63,7 @@ enum class NodeKind : int {
     CommCollective = 7,
 };
 
-/// Compute-node attributes (issue_comp / issue_replay / issue_remote_mem).
+/// Compute-node attributes (issue_comp / issue_replay).
 struct ComputeAttrs {
     uint64_t num_ops = 0;
     uint64_t tensor_size = 0;

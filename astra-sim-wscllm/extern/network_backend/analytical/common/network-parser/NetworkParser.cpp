@@ -160,6 +160,19 @@ void NetworkParser::check_validity() const noexcept {
                   << std::endl;
         std::exit(-1);
     }
+
+    // topology list must be non-empty. An empty "topology" key yields
+    // dims_count == 0, which would silently pass every length check below
+    // (0 == 0) and only surface far later -- as an assert in
+    // get_dims_count()/get_npus_counts_per_dim() under a Debug build, or as
+    // an unrelated route failure in the first fluid emission -- instead of
+    // pointing at the missing key.
+    if (dims_count < 1) {
+        std::cerr << "[Error] (network/analytical) " << "topology list is empty; "
+                  << "the network config must define a non-empty topology list" << std::endl;
+        std::exit(-1);
+    }
+
     // dims_count should match
     if (dims_count != npus_count_per_dim.size()) {
         std::cerr << "[Error] (network/analytical) " << "length of npus_count (" << npus_count_per_dim.size()

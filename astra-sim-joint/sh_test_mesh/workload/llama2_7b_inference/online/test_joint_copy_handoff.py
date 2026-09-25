@@ -390,7 +390,7 @@ SESSION_G = "session_copy_g"
 REQUEST_G = "session_copy_g_request_0"
 
 
-def _graph_config():
+def _graph_config(layers: int = 16):
     return SimpleNamespace(
         npus_count=4,
         remote_operand_loads=False,
@@ -399,7 +399,7 @@ def _graph_config():
             SimpleNamespace(ranks=HOME_RANKS, pg_name="tp_prefill"),
             SimpleNamespace(ranks=EXEC_RANKS, pg_name="tp_decode"),
         ],
-        layers=16,
+        layers=layers,
         hidden_size=64,
         ffn_size=128,
         vocab_size=256,
@@ -415,7 +415,8 @@ def _graph_config():
     )
 
 
-def _handoff_transfer(chunk_index, layer_start, layer_end, *, bytes_):
+def _handoff_transfer(chunk_index, layer_start, layer_end, *, bytes_,
+                      model_layers: int = 16):
     return KVTransfer(
         kind="noc_migrate",
         phase="history",
@@ -432,7 +433,7 @@ def _handoff_transfer(chunk_index, layer_start, layer_end, *, bytes_):
                 bytes=bytes_, noc_path=(source, source + 2),
                 layer_start=layer_start, layer_end=layer_end)
             for source in HOME_RANKS),
-        model_layers=16,
+        model_layers=model_layers,
         layer_start=layer_start,
         layer_end=layer_end,
         resident_prefix_layers_before=layer_start,
@@ -466,6 +467,17 @@ def _copy_admission_plan():
     }
 
 
+def _copy_admission_plan_24():
+    """24 层 3 块变体（T2：handoff 块 0/1/2——两个尾块）。"""
+    plan = dict(_copy_admission_plan())
+    plan["history_transfers"] = [
+        _handoff_transfer(0, 0, 8, bytes_=400, model_layers=24),
+        _handoff_transfer(1, 8, 16, bytes_=400, model_layers=24),
+        _handoff_transfer(2, 16, 24, bytes_=400, model_layers=24),
+    ]
+    return plan
+
+
 def _copy_train_plan(train_id, spans, *, exits=False):
     plan = {
         "train_id": train_id,
@@ -484,6 +496,13 @@ def _copy_train_plan(train_id, spans, *, exits=False):
     }
     if exits:
         plan["exit_members"] = [_copy_admission_plan()]
+    return plan
+
+
+def _copy_train_plan_24(train_id, spans):
+    plan = dict(_copy_train_plan(train_id, spans))
+    plan["prefill_start_member"] = _copy_admission_plan_24()
+    plan["first_chunk_member"] = _copy_admission_plan_24()
     return plan
 
 
@@ -616,6 +635,191 @@ class CopyHandoffGraphStructureTests(unittest.TestCase):
         self.builder.next_plan[REQUEST_G] = None
         with self.assertRaisesRegex(RuntimeError, "unconsumed copy"):
             self.builder.emit_completion_batch(_copy_admission_plan())
+
+
+class CopyHandoffParallelTailTests(unittest.TestCase):
+    """T2（P1 锚，PARTIAL 跨实例 copy 流水化 2026-09-25）：尾块逐笔并行
+    支链（layers=24 → handoff 块 0/1/2，两个尾块）：
+
+      (a) 块间无边：同 home rank 的 handoff1/handoff2 send 父集合相等且
+          = 头块发射后的主链 frontier（exec 侧 recv 同理）——首块之后的
+          D2D 事务多笔同时在飞的图侧前提；
+      (b) 块内新形态边：ack_send_c 父 = {recv_c}、ack_recv_c 父 =
+          {send_c}；跨 rank send/recv 无图边（因果由 tag 配对承载）；
+      (c) 三账本对块 1/2 登记完整且落 EXEC_RANKS/HOME_RANKS；
+      (d) readiness barrier 直连父与祖先闭包都不含任何尾块（首块仍是
+          唯一启动栅栏）；
+      (e) 列车体逐块消费全部尾块门（账本弹空）。
+    """
+
+    def setUp(self):
+        self.builder = GraphBatchBuilder(_graph_config(layers=24))
+        self.builder.begin_batch()
+
+    def _nodes(self):
+        return self.builder.batch["nodes"]
+
+    def _parents_by_rank(self):
+        parents = {}
+        for edge in self.builder.batch["parent_edges"]:
+            parents.setdefault((edge["rank"], edge["to"]), []).append(
+                edge["from"])
+        return parents
+
+    def _find_node(self, rank, name_fragment):
+        matches = [
+            node for node in self._nodes()
+            if node["rank"] == rank and name_fragment in node["name"]]
+        self.assertEqual(
+            len(matches), 1,
+            f"expected exactly one node on rank {rank} matching "
+            f"{name_fragment!r}, got {len(matches)}")
+        return matches[0]
+
+    def _emit_admission(self):
+        self.builder.emit_iteration_train(
+            _copy_train_plan_24("batch_train_i1_1", [(1, 101)]))
+        self.builder.emit_admission_batch(_copy_admission_plan_24())
+
+    def _head_frontier(self, rank):
+        # fork frontier = 头块发射后该 rank 主链的末节点（同
+        # test_fork_order_tail_after_head 口径）。
+        return max(
+            node["id"] for node in self._nodes()
+            if "history_transfer" in node["name"] and node["rank"] == rank)
+
+    def test_tail_chunks_fork_frontier_with_no_inter_chunk_edges(self):
+        self._emit_admission()
+        parents = self._parents_by_rank()
+        for rank in HOME_RANKS:
+            frontier = self._head_frontier(rank)
+            send_parents = {
+                chunk: set(parents.get(
+                    (rank,
+                     self._find_node(rank, f"_handoff{chunk}_send")["id"]),
+                    ()))
+                for chunk in (1, 2)}
+            self.assertEqual(
+                send_parents[1], {frontier},
+                "tail chunk send must fork from the post-head frontier")
+            self.assertEqual(
+                send_parents[1], send_parents[2],
+                "tail chunks must not chain to each other on the home "
+                "rank (parallel side branches)")
+        for rank in EXEC_RANKS:
+            frontier = self._head_frontier(rank)
+            recv_parents = {
+                chunk: set(parents.get(
+                    (rank,
+                     self._find_node(rank, f"_handoff{chunk}_recv")["id"]),
+                    ()))
+                for chunk in (1, 2)}
+            self.assertEqual(
+                recv_parents[1], {frontier},
+                "tail chunk recv must fork from the post-head frontier")
+            self.assertEqual(
+                recv_parents[1], recv_parents[2],
+                "tail chunks must not chain to each other on the exec "
+                "rank (parallel side branches)")
+
+    def test_chunk_internal_ack_edges_new_shape(self):
+        self._emit_admission()
+        parents = self._parents_by_rank()
+        for chunk in (1, 2):
+            for source in HOME_RANKS:
+                target = source + 2
+                send_id = self._find_node(
+                    source, f"_handoff{chunk}_send")["id"]
+                recv_id = self._find_node(
+                    target, f"_handoff{chunk}_recv")["id"]
+                ack_to = self._find_node(
+                    target, f"_handoff{chunk}_ack_to_rank{source}")
+                ack_from = self._find_node(
+                    source, f"_handoff{chunk}_ack_from_rank{target}")
+                self.assertEqual(
+                    set(parents.get((target, ack_to["id"]), ())), {recv_id},
+                    "ack_send must hang on its own chunk's recv (new "
+                    "block-internal shape), not on a tail ack chain")
+                self.assertEqual(
+                    set(parents.get((source, ack_from["id"]), ())), {send_id},
+                    "ack_recv must hang on its own chunk's send (new "
+                    "block-internal shape), not on a tail ack chain")
+
+    def test_ledgers_register_every_tail_chunk_on_exec_ranks(self):
+        self._emit_admission()
+        arms = self.builder._copy_handoff_arms.get(REQUEST_G)
+        layers = self.builder._copy_handoff_layers.get(REQUEST_G)
+        anchors = self.builder._copy_handoff_release_anchors.get(REQUEST_G)
+        self.assertEqual(sorted(arms), [1, 2])
+        self.assertEqual(sorted(layers), [1, 2])
+        self.assertEqual(sorted(anchors), [1, 2])
+        self.assertEqual(layers[1], (8, 16))
+        self.assertEqual(layers[2], (16, 24))
+        for chunk in (1, 2):
+            self.assertEqual(sorted(arms[chunk]), list(EXEC_RANKS),
+                             "recv gates must land on the exec instance")
+            self.assertEqual(sorted(anchors[chunk]), list(HOME_RANKS),
+                             "release anchors must land on the home ranks")
+
+    def test_readiness_barrier_ancestors_exclude_all_tail_chunks(self):
+        self._emit_admission()
+        parents = self._parents_by_rank()
+        barrier_nodes = {
+            node["rank"]: node["id"] for node in self._nodes()
+            if node["name"].endswith("_prefill_kv_ready_barrier")}
+        self.assertEqual(sorted(barrier_nodes), list(EXEC_RANKS))
+        # 节点 id 是 per-rank 空间——尾块 id 集合按 rank 收集。
+        tail_ids_by_rank = {}
+        for node in self._nodes():
+            if "_handoff1_" in node["name"] or "_handoff2_" in node["name"]:
+                tail_ids_by_rank.setdefault(node["rank"], set()).add(
+                    node["id"])
+        for rank, barrier in barrier_nodes.items():
+            tail_ids = tail_ids_by_rank.get(rank, set())
+            # 直连父不含尾块。
+            self.assertFalse(
+                set(parents.get((rank, barrier), ())) & tail_ids,
+                "readiness barrier waits for a copy tail chunk "
+                "(whole-history serialization)")
+            # 祖先闭包同样不含尾块（首块是唯一启动栅栏的完整口径）。
+            seen = {barrier}
+            frontier = [barrier]
+            while frontier:
+                current = frontier.pop()
+                for parent in parents.get((rank, current), ()):
+                    if parent not in seen:
+                        seen.add(parent)
+                        frontier.append(parent)
+            self.assertFalse(
+                seen & tail_ids,
+                "readiness barrier ancestor closure reaches a copy tail "
+                "chunk")
+
+    def test_train_body_gates_on_every_tail_chunk(self):
+        self._emit_admission()
+        recv_gates = {
+            chunk: dict(self.builder._copy_handoff_arms[REQUEST_G][chunk])
+            for chunk in (1, 2)}
+        self.builder.emit_iteration_train(
+            _copy_train_plan_24(
+                "batch_train_i1_2", [(1, 201), (1, 202), (1, 203)]))
+        body_nodes = {
+            node["id"] for node in self._nodes()
+            if node["request_id"] == "batch_train_i1_2"}
+        parents = self._parents_by_rank()
+        for chunk in (1, 2):
+            for rank, gate in recv_gates[chunk].items():
+                armed = {
+                    target for (node_rank, target) in parents
+                    if node_rank == rank
+                    and gate in parents[(node_rank, target)]}
+                self.assertTrue(
+                    armed & body_nodes,
+                    f"chunk {chunk} recv gate on rank {rank} did not arm a "
+                    "train-body layer segment")
+        # 全部尾块消费后账本弹空（joiner 恰一次）。
+        self.assertNotIn(REQUEST_G, self.builder._copy_handoff_arms)
+        self.assertNotIn(REQUEST_G, self.builder._copy_handoff_layers)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -119,7 +119,6 @@ export PYTHONUNBUFFERED=1
   --workload-configuration="${ET_PREFIX}" \
   --comm-group-configuration="${RC}/comm_group.json" \
   --system-configuration="${RC}/system.json" \
-  --remote-memory-configuration="${RC}/remote_memory.json" \
   --network-configuration="${RC}/network.yml" \
   --logging-folder=off \
   --metrics-configuration="${ET_DIR}/metrics_manifest.json" \

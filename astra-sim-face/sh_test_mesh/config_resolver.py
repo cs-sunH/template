@@ -20,8 +20,6 @@ _MANAGED_SYSTEM_FIELDS = frozenset(
         "local-mem-latency",
         "local-mem-capacity-bytes",
         "local-mem-capacity-note",
-        "remote-mem-bw",
-        "remote-mem-latency",
     }
 )
 _SUPPORTED_TOPOLOGIES = frozenset(
@@ -35,7 +33,6 @@ class ResolvedHardware:
     capacity_profile: str
     slug: str
     label: str
-    paper_case: str
     mesh_rows: int
     mesh_cols: int
     topology_by_network_dimension: tuple[str, ...]
@@ -45,17 +42,12 @@ class ResolvedHardware:
     d2d_bandwidth_gbps: float
     d2d_latency_ns: int
     remote_memory_type: str
-    remote_memory_bandwidth_gbps: float
     peak_perf_tflops: float
     metadata: dict[str, object]
 
     @property
     def npus_count(self) -> int:
         return self.mesh_rows * self.mesh_cols
-
-    @property
-    def mesh_label(self) -> str:
-        return f"{self.mesh_rows}x{self.mesh_cols}"
 
     @property
     def remote_memory_runtime_label(self) -> str:
@@ -164,7 +156,9 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         raise ValueError("Hardware configuration.schema-version must be 1")
     slug = _require_string(data, "slug", "Hardware configuration")
     label = _require_string(data, "label", "Hardware configuration")
-    paper_case = _require_string(data, "paper-case", "Hardware configuration")
+    # "paper-case" stays a required schema key even though its value has no
+    # consumer in this repository.
+    _require_string(data, "paper-case", "Hardware configuration")
 
     mesh = _require_object(data, "mesh", "Hardware configuration")
     _require_exact_keys(mesh, {"rows", "columns", "topology-by-network-dimension"}, "Hardware configuration.mesh")
@@ -232,11 +226,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         {"memory-type", "bandwidth-gbps"},
         "Hardware configuration.remote-memory",
     )
-    remote_memory_bandwidth = _require_number(
-        remote_memory["bandwidth-gbps"],
-        "Hardware configuration.remote-memory.bandwidth-gbps",
-        positive=True,
-    )
 
     compute = _require_object(data, "compute", "Hardware configuration")
     _require_exact_keys(compute, {"peak-perf-tflops"}, "Hardware configuration.compute")
@@ -253,7 +242,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         capacity_profile=capacity_profile,
         slug=slug,
         label=f"{label} / {profile_label}",
-        paper_case=paper_case,
         mesh_rows=rows,
         mesh_cols=columns,
         topology_by_network_dimension=tuple(topology),
@@ -263,7 +251,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         d2d_bandwidth_gbps=d2d_bandwidth,
         d2d_latency_ns=d2d_latency,
         remote_memory_type=remote_memory_type,
-        remote_memory_bandwidth_gbps=remote_memory_bandwidth,
         peak_perf_tflops=peak_perf,
         metadata=metadata,
     )
@@ -272,7 +259,11 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
 def _write_text_atomically(path: Path, contents: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as temporary:
-        temporary.write(contents)
+        try:
+            temporary.write(contents)
+        except BaseException:
+            Path(temporary.name).unlink(missing_ok=True)
+            raise
         temporary_name = temporary.name
     try:
         os.replace(temporary_name, path)
@@ -324,6 +315,29 @@ def _prepare_comm_groups(
         }
         if seen_ranks != expected:
             raise ValueError(f"Communicator group {pg_id} ranks must form a contiguous row-major rectangle")
+        # The C++ GeneralComplexTopology consumes the ranks list as a
+        # dim0-fastest row-major ring; validating only the set above would let
+        # an out-of-order list silently build a transposed ring and misalign
+        # the per-rank custom ET files.  Compare position by position and fail
+        # closed on the first divergence (no silent reordering).
+        expected_order = [
+            row * hardware.mesh_cols + column
+            for row in range(min(rows), max(rows) + 1)
+            for column in range(min(columns), max(columns) + 1)
+        ]
+        if ranks != expected_order:
+            mismatched = ", ".join(
+                f"position {index}: got {actual}, expected {wanted}"
+                for index, (actual, wanted) in enumerate(zip(ranks, expected_order))
+                if actual != wanted
+            )
+            raise ValueError(
+                f"Communicator group {pg_id} ranks must be listed in "
+                f"dim0-fastest row-major order (the C++ "
+                f"GeneralComplexTopology consumes them in that order); "
+                f"expected head {expected_order[:4]}, got {ranks[:4]} "
+                f"({mismatched})"
+            )
         groups[str(pg_id)] = {
             "ranks": ranks,
             "dimensions": [len(columns), len(rows)],
@@ -362,7 +376,6 @@ def materialize_runtime_configs(
     system = dict(system_template)
     system["local-mem-bw"] = hardware.local_hbm_bandwidth_gbps
     system["local-mem-latency"] = hardware.local_hbm_latency_ns
-    system["local-mem-capacity-bytes"] = hardware.local_hbm_capacity_bytes
     system["peak-perf"] = hardware.peak_perf_tflops
 
     destination = Path(output_dir)

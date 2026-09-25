@@ -34,15 +34,14 @@ void StreamBaseline::init() {
         queuing_delay.push_back(last_phase_change - creation_time);
     }
     queuing_delay.push_back(Sys::boostedTick() - last_phase_change);
-    total_packets_sent = 1;
 }
 
 void StreamBaseline::call(EventType event, CallData* data) {
-    SharedBusStat* sharedBusStat = (SharedBusStat*)data;
-    update_bus_stats(BusType::Both, sharedBusStat);
     my_current_phase.algorithm->run(EventType::General, data);
     if (data != nullptr) {
-        delete sharedBusStat;
+        // CallData has no virtual destructor: delete through the concrete
+        // payload type this path always receives (MemBus/LogGP SharedBusStat).
+        delete (SharedBusStat*)data;
     }
 }
 

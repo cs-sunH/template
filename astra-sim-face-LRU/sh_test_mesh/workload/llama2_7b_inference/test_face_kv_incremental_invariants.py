@@ -1,9 +1,10 @@
 """Focused parity checks for incremental SessionKVCacheManager invariants.
 
-B2 (2026-09-06): 内部检查器扩三态(策略 §8)——模型换 2 层以覆盖半层
-逐出/恢复路径;parity 序列补 _evict_suffix/_evict_session 与 PARTIAL/
-REMOTE 恢复分支,对齐 sh_2.0 test_sh20_kv_incremental_invariants 的
-覆盖形状(face 事件流/失败语义保留)。
+Session-level Tiered-LRU (2026-09-25 重写):逐出恒为完整 session 整体
+外迁(_evict_session 是唯一逐出路径,半层 _evict_suffix 与 PARTIAL 手工
+翻转 fixtures 已随两阶段流程删除);跨实例恢复断言 = REMOTE_RESTORE 全量
+回迁;新增规格6 manager 级不可达证明——手工把状态置为 PARTIAL 或非两值
+驻留层数 -> _check_invariants fail-closed raise。
 """
 
 from __future__ import annotations
@@ -37,7 +38,6 @@ def _manager(strict_invariants: bool) -> SessionKVCacheManager:
             FaceInstanceSpec("ins1", "2", (2, 3)),
         ),
     )
-    # B2: 2 层模型 -> partial_resident_prefix_layers = 1,半层逐出可触发。
     model = FaceModel(2, 4, 4, 2, 4, 1, "gelu")
     return SessionKVCacheManager(
         topology,
@@ -105,47 +105,8 @@ class IncrementalInvariantTests(unittest.TestCase):
         invoke("grow_decode", "session", 5, 3, "request")
         invoke("mark_complete", "session", 4, "request")
 
-        # B2:阶段1 半层逐出 LOCAL -> PARTIAL(增量 vs 全量审计逐字段一致)。
-        with mock.patch.object(
-            fast,
-            "_check_invariants",
-            side_effect=AssertionError("normal mutation used the full verifier"),
-        ):
-            fast_suffix = fast._evict_suffix(
-                fast._sessions["session"],
-                now_ns=4,
-                phase="test",
-                reason="parity",
-                trigger_request_id="request",
-            )
-        self.assertEqual(
-            fast_suffix,
-            strict._evict_suffix(
-                strict._sessions["session"],
-                now_ns=4,
-                phase="test",
-                reason="parity",
-                trigger_request_id="request",
-            ),
-        )
-        verify()
-
-        # PARTIAL 跨实例恢复 = 两段链(前缀 NoC 迁移 + 后缀远端回迁)。
-        # 会话经 move_prefill_to_decode 驻留实例 1,目标换实例 0。
-        partial = invoke(
-            "prepare_history",
-            "session",
-            0,
-            5,
-            5,
-            "next",
-            required_context_tokens=5,
-        )
-        self.assertEqual(partial.action, "PARTIAL_REMOTE_MIGRATE")
-        self.assertEqual(len(partial.transfers), 2)
-        invoke("mark_complete", "session", 5, "next")
-
-        # B2:阶段2 整体外迁(PARTIAL -> REMOTE)。
+        # 唯一逐出路径:完整 session 整体外迁 LOCAL -> REMOTE(增量 vs
+        # 全量审计逐字段一致;每 victim 恰一笔全量 remote_store)。
         with mock.patch.object(
             fast,
             "_check_invariants",
@@ -153,33 +114,44 @@ class IncrementalInvariantTests(unittest.TestCase):
         ):
             fast_evict = fast._evict_session(
                 fast._sessions["session"],
-                now_ns=5,
+                now_ns=4,
                 phase="test",
                 reason="parity",
-                trigger_request_id="next",
+                trigger_request_id="request",
             )
         self.assertEqual(
             fast_evict,
             strict._evict_session(
                 strict._sessions["session"],
-                now_ns=5,
+                now_ns=4,
                 phase="test",
                 reason="parity",
-                trigger_request_id="next",
+                trigger_request_id="request",
             ),
+        )
+        self.assertEqual(fast_evict.transfer.kind, "remote_store")
+        self.assertEqual(fast_evict.transfer.reason, "parity_full")
+        self.assertEqual(
+            (fast_evict.transfer.layer_start, fast_evict.transfer.layer_end),
+            (0, fast.model.layers),
         )
         verify()
 
-        # REMOTE 全量回迁 + 终态核销。
+        # 唯一恢复路径:REMOTE 全量回迁(单笔 remote_load [0, L))+ 终局核销。
         restored = invoke(
             "prepare_history",
             "session",
             0,
             5,
-            6,
+            5,
             "final",
         )
         self.assertEqual(restored.action, "REMOTE_RESTORE")
+        self.assertEqual(len(restored.transfers), 1)
+        transfer = restored.transfers[0]
+        self.assertEqual(transfer.kind, "remote_load")
+        self.assertEqual(
+            (transfer.layer_start, transfer.layer_end), (0, fast.model.layers))
         invoke("mark_complete", "session", 6, "final")
         invoke("retire_terminal_session", "session", 6, "final")
         fast.assert_final_state()
@@ -204,8 +176,8 @@ class IncrementalInvariantTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "session/rank KV accounting mismatch"):
                 manager._check_invariants()
 
-    def test_three_state_invariants_reject_invalid_locations(self) -> None:
-        """B2:三态白名单/层域断言/REMOTE 无实例无驻留层(增量检查器)。"""
+    def test_two_state_invariants_reject_invalid_locations(self) -> None:
+        """两态白名单/全量层域断言/REMOTE 无实例无驻留层(增量检查器)。"""
 
         for strict_invariants in (False, True):
             manager = _manager(strict_invariants)
@@ -248,21 +220,51 @@ class IncrementalInvariantTests(unittest.TestCase):
                 manager._check_invariants_after_mutation(
                     session_ids=("session",))
 
-            # PARTIAL 层域非法(prefix == L 不是 PARTIAL) -> 拒绝。
-            state.location = PARTIAL_HBM_REMOTE
-            state.instance_index = 0
-            state.resident_prefix_layers = manager.model.layers
-            with self.assertRaisesRegex(RuntimeError, "invalid prefix length"):
-                manager._check_invariants_after_mutation(
-                    session_ids=("session",))
-
-            # 恢复与 rank 账本一致的 LOCAL 终态后收尾(PARTIAL 真实形态
-            # 需伴随半层字节离账,由 _evict_suffix 路径覆盖,见首测)。
+            # 恢复与 rank 账本一致的 LOCAL 终态后收尾(真实 REMOTE 形态
+            # 由 _evict_session 路径覆盖,见首测)。
             state.location = LOCAL_HBM
             state.resident_prefix_layers = manager.model.layers
             manager._check_invariants_after_mutation(session_ids=("session",))
             manager.retire_terminal_session("session", 4, "request")
             manager.assert_final_state()
+
+    def test_partial_state_is_unreachable(self) -> None:
+        """规格6:manager 级不可达证明——手工把 state 置为 legacy 的
+        PARTIAL_HBM_REMOTE 或非两值驻留层数,全量审计 fail-closed raise
+        (运行态白名单已无 PARTIAL:新代码零产生点)。"""
+
+        manager = _manager(False)
+        manager.prepare_history(
+            "session", 0, 0, 0, "request", required_context_tokens=4
+        )
+        manager.grow_prefill("session", 4, 1, "request")
+        manager.mark_complete("session", 4, "request")
+        state = manager._sessions["session"]
+
+        # legacy PARTIAL 串(旧日志解析专用常量)不在两态白名单内。
+        state.location = PARTIAL_HBM_REMOTE
+        with self.assertRaisesRegex(RuntimeError, "unknown KV location"):
+            manager._check_invariants_after_mutation(
+                session_ids=("session",))
+        with self.assertRaisesRegex(RuntimeError, "unknown KV location"):
+            manager._check_invariants()
+        state.location = LOCAL_HBM
+
+        # 非两值驻留层数(半层形态)同样 fail-closed:LOCAL 必须持全层。
+        state.resident_prefix_layers = manager.model.layers - 1
+        with self.assertRaisesRegex(RuntimeError, "fully local"):
+            manager._check_invariants()
+        state.resident_prefix_layers = 0
+        with self.assertRaisesRegex(RuntimeError, "fully local"):
+            manager._check_invariants()
+        state.resident_prefix_layers = manager.model.layers
+
+        # REMOTE 会话携带驻留层/实例 -> 拒绝(两态语义的对偶半边)。
+        state.location = REMOTE_MEMORY
+        state.instance_index = 0
+        state.resident_prefix_layers = manager.model.layers
+        with self.assertRaisesRegex(RuntimeError, "remote KV session"):
+            manager._check_invariants()
 
 
 if __name__ == "__main__":

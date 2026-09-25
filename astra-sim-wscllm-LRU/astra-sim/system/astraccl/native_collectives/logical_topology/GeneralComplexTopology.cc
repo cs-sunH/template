@@ -92,23 +92,47 @@ GeneralComplexTopology::GeneralComplexTopology(
     std::vector<CollectiveImpl*> collective_impl) {
     // rank_map is a compact row-major embedding: dimension 0 changes fastest.
     // Build the X/Y slice containing this physical rank for each dimension.
-    assert(!rank_map.empty());
-    assert(collective_impl.size() == dimension_size.size());
+    if (rank_map.empty()) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires a non-empty rank map");
+    }
+    if (collective_impl.size() != dimension_size.size()) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires one collective implementation "
+            "per topology dimension when constructing from a rank map");
+    }
 
     int expected_ranks = 1;
     for (int size : dimension_size) {
-        assert(size > 0);
+        if (size <= 0) {
+            throw std::runtime_error(
+                "GeneralComplexTopology requires every topology dimension "
+                "size to be positive");
+        }
         expected_ranks *= size;
     }
-    assert(static_cast<int>(rank_map.size()) == expected_ranks);
+    if (static_cast<int>(rank_map.size()) != expected_ranks) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires the rank map size to equal the "
+            "product of the topology dimension sizes");
+    }
 
     auto rank_position = std::find(rank_map.begin(), rank_map.end(), id);
-    assert(rank_position != rank_map.end());
+    if (rank_position == rank_map.end()) {
+        throw std::runtime_error(
+            "GeneralComplexTopology requires the local rank to be present in "
+            "the rank map");
+    }
     int compact_id = std::distance(rank_map.begin(), rank_position);
     int offset = 1;
 
     for (uint64_t dim = 0; dim < dimension_size.size(); dim++) {
-        assert(collective_impl[dim]->type == CollectiveImplType::Ring);
+        if (collective_impl[dim]->type != CollectiveImplType::Ring) {
+            throw std::runtime_error(
+                "GeneralComplexTopology requires the Ring collective "
+                "implementation for every topology dimension when "
+                "constructing from a rank map");
+        }
 
         int coordinate = (compact_id / offset) % dimension_size[dim];
         int slice_base = compact_id - coordinate * offset;

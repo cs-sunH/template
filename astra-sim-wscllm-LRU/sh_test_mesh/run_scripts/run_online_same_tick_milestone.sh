@@ -20,7 +20,7 @@
 #   (c) milestone 在下一 delivery epoch 交付,decode 图随后正常提交:
 #       seq=2 的 delivery reasons 恰为 ["DECODE_COMPLETION",
 #       "REQUEST_COMPLETE"],cpp 侧 completed=1,双进程 exit 0;
-#   (d) 无事件丢失(mailbox 结束审计 no_decision_python_callback_count==0)、
+#   (d) 无事件丢失(cpp 服务计数审计 + delivery 恰好 3 次)、
 #       无死锁(轮询有界),request 最终完成。
 #
 # Usage: bash run_online_same_tick_milestone.sh [run_root]
@@ -41,7 +41,6 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
-FIXTURE_SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/same_tick_milestone_fixture_service.py
 
 # 指定世界 tick(纳秒,事件时钟从 0 起):注入在 wall ~1s,到达在事件 3.0s。
 T_NS=3000000000
@@ -206,15 +205,12 @@ if grep -q 'reasons=\[.*ARRIVAL.*PREFILL_DRAIN' "${log}"; then
   exit 1
 fi
 
-# (d) cpp 侧审计:服务计数 accepted=1 completed=1 active=0;
-#     no_decision_python_callback_count==0(无事件丢失)。
+# (d) cpp 侧审计:服务计数 accepted=1 completed=1 active=0,pending_alarm=0
+#     (no_decision 结束审计行已删,无事件丢失由该审计+delivery 恰 3 次门
+#     共同承担)。
 if ! grep -q '\[online\] service counters: accepted=1 completed=1 active=0 pending_alarm=0' "${run_dir}/cpp.log"; then
   echo "[fixture] FAIL (d): 服务计数不符(期望 accepted=1 completed=1)" >&2
   grep "\[online\] service counters" "${run_dir}/cpp.log" >&2 || true
-  exit 1
-fi
-if ! grep -q 'no_decision_python_callback_count=0' "${run_dir}/cpp.log"; then
-  echo "[fixture] FAIL (d): no_decision_python_callback_count != 0(事件丢失)" >&2
   exit 1
 fi
 
@@ -222,4 +218,4 @@ echo "[fixture] ALL PASS:"
 echo "[fixture]   (a) PREFILL_DRAIN 不在 ARRIVAL 的同一 Python 调用内(单 tick 单次 delivery)"
 echo "[fixture]   (b) 显式 T+1 下一决策边界唤醒:seq=1 tick=${T_PLUS1} deferred_from_tick=${T_NS}"
 echo "[fixture]   (c) milestone 在下一 epoch 交付,decode 提交,completed=1,双进程 exit 0"
-echo "[fixture]   (d) 无事件丢失(no_decision_python_callback_count=0)、无死锁"
+echo "[fixture]   (d) 无事件丢失(服务计数审计+delivery 恰 3 次)、无死锁"

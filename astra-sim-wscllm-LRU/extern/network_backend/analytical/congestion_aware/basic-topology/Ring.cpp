@@ -16,10 +16,17 @@ Ring::Ring(const int npus_count, const Bandwidth bandwidth, const Latency latenc
     assert(latency >= 0);
 
     // connect npus in a ring
-    for (auto i = 0; i < npus_count - 1; i++) {
-        connect(i, i + 1, bandwidth, latency, bidirectional);
+    // a ring of 2 npus degenerates to a single pair of links (Mesh-equivalent),
+    // and a single npu needs no link, following the same degeneration rule as
+    // MultiDimTopology::connect_ring_dimension
+    if (npus_count == 2) {
+        connect(0, 1, bandwidth, latency, bidirectional);
+    } else if (npus_count > 2) {
+        for (auto i = 0; i < npus_count - 1; i++) {
+            connect(i, i + 1, bandwidth, latency, bidirectional);
+        }
+        connect(npus_count - 1, 0, bandwidth, latency, bidirectional);
     }
-    connect(npus_count - 1, 0, bandwidth, latency, bidirectional);
 }
 
 Route Ring::route(DeviceId src, DeviceId dest) const noexcept {

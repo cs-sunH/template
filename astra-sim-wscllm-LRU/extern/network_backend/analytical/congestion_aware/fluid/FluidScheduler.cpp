@@ -643,10 +643,6 @@ void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcep
     }
 }
 
-bool FluidScheduler::link_observer_enabled() const noexcept {
-    return link_observer_.enabled;
-}
-
 uint64_t FluidScheduler::link_observer_bucket_ns() const noexcept {
     return link_observer_.bucket_ns;
 }

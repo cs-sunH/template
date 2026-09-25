@@ -21,7 +21,6 @@ class UsageTracker {
     UsageTracker(int levels, bool retain_history = true);
     void increase_usage();
     void decrease_usage();
-    void set_usage(int level);
 
     int levels;
     int current_level;

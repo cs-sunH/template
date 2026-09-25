@@ -41,8 +41,13 @@ finite float: it divides ONLY the turn-0 session_arrival_time_ns column
 -- the human/tool exogenous waits -- is never scaled, and the window gate
 plus all statistics stay on unscaled source times, so scale=1.0
 reproduces the frozen 8-column queue byte-for-byte and a scaled run
-selects exactly the same sessions/requests.  New scale/type provenance
-goes only into the canonical sidecar and stdout, never into the queue.)
+selects exactly the same sessions/requests.  Timing gate: the simulator
+request-queue loader (generate_trace.load_request_queue) fail-closes on
+any timing not divisible by 1000 ns; this script therefore fail-closes
+itself when a scaled t0 = int(round(t0/arrival_scale)) lands off a 1000 ns
+boundary -- pick a scale that keeps the quotients on 1000 ns steps.  New
+scale/type provenance goes only into the canonical sidecar and stdout,
+never into the queue.)
 """
 
 import csv
@@ -277,6 +282,21 @@ def main() -> None:
                 # arrival_scale applies ONLY here (t0 / arrival_scale);
                 # window gating above stays on the unscaled source time.
                 session_arrival = int(round(prev_arrival / arrival_scale))
+                if session_arrival % 1000 != 0:
+                    # fail-closed: generate_trace.load_request_queue rejects
+                    # any timing not divisible by 1000 ns, so a scaled t0
+                    # off the 1000 ns grid must abort HERE (authoritative
+                    # materializer) instead of downstream.
+                    print(
+                        f"arrival_scale {arrival_scale} produced turn-0 "
+                        f"arrival {session_arrival} ns not divisible by "
+                        "1000 ns; the request-queue loader fail-closes on "
+                        "such timings -- pick a scale keeping "
+                        "t0/arrival_scale on 1000 ns steps; queue NOT "
+                        "materialized",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
                 interval = ""
             else:
                 session_arrival = ""

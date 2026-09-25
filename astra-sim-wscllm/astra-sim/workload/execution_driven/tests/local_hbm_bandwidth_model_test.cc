@@ -46,7 +46,6 @@ Exit code 0 on ALL PASS.
 ****************************************************************************/
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
-#include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
@@ -181,14 +180,6 @@ class FakeNetworkApi : public AstraNetworkAPI {
     uint64_t now_ns_ = 0;
 };
 
-// Fake remote memory: never used (this repo has no MEM nodes in play).
-class FakeRemoteMemory : public AstraRemoteMemoryAPI {
-  public:
-    void set_sys(int /*id*/, Sys* /*sys*/) override {}
-    void issue(uint64_t /*tensor_size*/,
-               WorkloadLayerHandlerData* /*wlhd*/) override {}
-};
-
 // ---------------------------------------------------------------------------
 // Terminal-record ledger (CompletionObserver hook)
 // ---------------------------------------------------------------------------
@@ -237,7 +228,6 @@ std::string write_system_json(const std::string& name,
 
 struct Fixture {
     FakeNetworkApi net{0};
-    FakeRemoteMemory mem;
     std::shared_ptr<NodeStoreGraphSource> source =
         std::make_shared<NodeStoreGraphSource>();
     Sys* sys = nullptr;
@@ -250,7 +240,7 @@ struct Fixture {
         // keeping every scenario's Sys alive avoids teardown-order hazards
         // while each scenario's own FakeNetworkApi owns its event queue.
         this->sys = new Sys(
-            0, "workload-unused", "empty", system_json_path, &this->mem,
+            0, "workload-unused", "empty", system_json_path,
             &this->net, std::vector<int>{1}, std::vector<int>{1},
             1.0 /*injection*/, 1.0 /*comm scale*/,
             false /*rendezvous*/, ExecutionDriven::ExecutionMode::Online,

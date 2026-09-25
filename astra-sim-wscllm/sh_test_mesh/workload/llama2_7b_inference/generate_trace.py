@@ -7,7 +7,6 @@ not serialize business Chakra ET files.
 """
 
 import csv
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,8 +31,6 @@ from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E
     COMM_RECV_NODE,
     COMM_SEND_NODE,
     COMP_NODE,
-    MEM_LOAD_NODE,
-    MEM_STORE_NODE,
     AttributeProto as ChakraAttr,
     BoolList,
     Node as ChakraNode,
@@ -63,17 +60,6 @@ class RequestSpec:
     decode_length: int
     session_arrival_time_ns: Optional[int]
     inter_request_interval_ns: Optional[int]
-
-
-@dataclass(frozen=True)
-class RemoteMemoryConfig:
-    path: Path
-    edge_npus: tuple[int, ...]
-    mesh_rows: int
-    mesh_cols: int
-    remote_mem_latency_ns: int
-    remote_mem_bw_gbps: float
-    logical_pool: str
 
 
 def parse_int(value: str, key: str) -> int:
@@ -140,116 +126,6 @@ def parse_rank_spec(rank_spec: str) -> tuple[int, ...]:
 
 def clean_csv_row(row: dict[str, Optional[str]]) -> dict[str, str]:
     return {(key or "").strip(): (value or "").strip() for key, value in row.items()}
-
-
-def load_remote_memory_config(
-    path: Path,
-    npus_count: int,
-    mesh_shape: Optional[tuple[int, int]] = None,
-) -> RemoteMemoryConfig:
-    if not path.exists():
-        raise FileNotFoundError(f"remote-memory config not found: {path}")
-    with path.open(encoding="utf-8") as config_file:
-        raw = json.load(config_file)
-
-    memory_type = raw.get("memory-type")
-    if memory_type != "PER_NPU_MEMORY_EXPANSION":
-        raise ValueError(
-            "remote-memory config must use PER_NPU_MEMORY_EXPANSION, got "
-            f"{memory_type!r}"
-        )
-
-    raw_edge_npus = raw.get("npu-ids")
-    if not isinstance(raw_edge_npus, list) or not raw_edge_npus:
-        raise ValueError("remote-memory config npu-ids must be a non-empty list")
-    if any(isinstance(rank, bool) or not isinstance(rank, int) for rank in raw_edge_npus):
-        raise ValueError("remote-memory config npu-ids must contain integer ranks")
-    edge_npus = tuple(raw_edge_npus)
-    if len(set(edge_npus)) != len(edge_npus):
-        raise ValueError("remote-memory config npu-ids must not contain duplicates")
-    invalid_ranks = [rank for rank in edge_npus if rank < 0 or rank >= npus_count]
-    if invalid_ranks:
-        raise ValueError(
-            f"remote-memory config contains ranks outside 0-{npus_count - 1}: "
-            f"{invalid_ranks}"
-        )
-
-    configured_mesh_shape = raw.get("mesh-shape")
-    if mesh_shape is None:
-        if (
-            not isinstance(configured_mesh_shape, list)
-            or len(configured_mesh_shape) != 2
-            or any(
-                isinstance(value, bool) or not isinstance(value, int)
-                for value in configured_mesh_shape
-            )
-            or any(value <= 0 for value in configured_mesh_shape)
-        ):
-            raise ValueError(
-                "remote-memory config requires mesh_shape from the authoritative "
-                "hardware config"
-            )
-        mesh_rows, mesh_cols = configured_mesh_shape
-    else:
-        mesh_rows, mesh_cols = mesh_shape
-        if (
-            any(
-                isinstance(value, bool) or not isinstance(value, int)
-                for value in (mesh_rows, mesh_cols)
-            )
-            or mesh_rows <= 0
-            or mesh_cols <= 0
-        ):
-            raise ValueError("mesh_shape must contain positive integer rows and columns")
-        if configured_mesh_shape is not None:
-            if (
-                not isinstance(configured_mesh_shape, list)
-                or len(configured_mesh_shape) != 2
-                or any(
-                    isinstance(value, bool) or not isinstance(value, int)
-                    for value in configured_mesh_shape
-                )
-                or any(value <= 0 for value in configured_mesh_shape)
-            ):
-                raise ValueError(
-                    "remote-memory mesh-shape must contain positive integer rows "
-                    "and columns"
-                )
-            if tuple(configured_mesh_shape) != mesh_shape:
-                raise ValueError(
-                    "remote-memory mesh-shape does not match the authoritative "
-                    "hardware mesh"
-                )
-    if mesh_rows * mesh_cols != npus_count:
-        raise ValueError(
-            f"mesh-shape {[mesh_rows, mesh_cols]} does not contain "
-            f"npus_count={npus_count} ranks"
-        )
-
-    remote_mem_latency_ns = raw.get("remote-mem-latency", 0)
-    remote_mem_bw_gbps = raw.get("remote-mem-bw", 0)
-    if (
-        isinstance(remote_mem_latency_ns, bool)
-        or not isinstance(remote_mem_latency_ns, int)
-        or remote_mem_latency_ns < 0
-    ):
-        raise ValueError("remote-mem-latency must be a non-negative integer")
-    if (
-        isinstance(remote_mem_bw_gbps, bool)
-        or not isinstance(remote_mem_bw_gbps, (int, float))
-        or remote_mem_bw_gbps <= 0
-    ):
-        raise ValueError("remote-mem-bw must be positive")
-
-    return RemoteMemoryConfig(
-        path=path,
-        edge_npus=edge_npus,
-        mesh_rows=mesh_rows,
-        mesh_cols=mesh_cols,
-        remote_mem_latency_ns=remote_mem_latency_ns,
-        remote_mem_bw_gbps=float(remote_mem_bw_gbps),
-        logical_pool=str(raw.get("logical-pool", "unified-kv-cache-pool")),
-    )
 
 
 def parse_request_length(row: dict[str, str], key: str, aliases: tuple[str, ...]) -> int:
@@ -449,16 +325,6 @@ class TraceBuilder:
         node.duration_micros = duration_ns // 1000
         self._commit_node(node)
         return node.id
-
-    def mem_store(self, name: str, tensor_size: int) -> None:
-        node = self._new_node(name, MEM_STORE_NODE)
-        node.attr.append(self._uint64_attr("tensor_size", tensor_size))
-        self._commit_node(node)
-
-    def mem_load(self, name: str, tensor_size: int) -> None:
-        node = self._new_node(name, MEM_LOAD_NODE)
-        node.attr.append(self._uint64_attr("tensor_size", tensor_size))
-        self._commit_node(node)
 
     def comp(
         self,

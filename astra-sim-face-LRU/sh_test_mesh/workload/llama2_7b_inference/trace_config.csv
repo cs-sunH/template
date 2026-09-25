@@ -9,7 +9,7 @@ config,model_name,llama2_7b,,,,Meta LLaMA 2 7B inference model
 config,mlp_variant,swiglu,,,,LLaMA gated SwiGLU MLP with RMSNorm
 config,output_prefix,llama2_7b_inference,,,,Trace file prefix
 config,output_dir,,,,,Leave empty for derived sh_test generated path
-config,request_queue_csv,llama2_7b_inference/request_queue_placeholder.csv,,,,request-neutral: 由调用方物化输入后指定;正式入口缺失输入 fail-closed(物化规则见 traces/derive_20_first_30_seconds.py 模块 docstring)
+config,request_queue_csv,/home/sunhao/wsc-simulator/template/astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference/traces/smoke2s_request_queue_recompute.csv,,,,request-neutral: 由调用方物化输入后指定;正式入口缺失输入 fail-closed(物化规则见 traces/derive_20_first_30_seconds.py 模块 docstring)
 config,request_queue_session_limit,0,,,,Use every session in the normalized three-minute queue
 config,trace_granularity,request_aggregated,,,,Preserve request-level work totals while compressing repeated layer/chunk/token invocations
 config,prefill_chunk_size,512,,,,Fixed Prefill and history-recompute chunk size in tokens

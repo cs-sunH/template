@@ -283,8 +283,10 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual((min(decode_lengths), max(decode_lengths)), (4, 12))
 
     def test_kv_cache_policy_accepts_session_lru_tiered(self) -> None:
-        """B2 (2026-09-06): kv_cache_policy 值域加新值 session_lru_tiered
-        (契约 §8,loader fail-closed 同步);旧值保留;未知值仍拒绝。"""
+        """B2 (2026-09-06): kv_cache_policy 值域 fail-closed 同步(契约 §8);
+        2026-09-25 session 级 Tiered-LRU 命名卫生起值域单值化——唯一合法值
+        session_lru_tiered,旧值别名 session_lru_recompute 与未知值一律
+        fail-closed 拒绝(与 wscllm-LRU 仓同构,无别名保留旧机制表面)。"""
 
         def edit_policy(value: str):
             def edit(line: str):
@@ -296,15 +298,15 @@ class FaceSchedulerTests(unittest.TestCase):
         config = _load_edited_config(
             "policy_tiered", edit_policy("session_lru_tiered"))
         self.assertEqual(config.kv_cache_policy, "session_lru_tiered")
-        # 旧值保留在值域(兼容旧 trace_config 读取;trace_config 实际换值归 B3)。
-        legacy = _load_edited_config(
-            "policy_legacy", edit_policy("session_lru_recompute"))
-        self.assertEqual(legacy.kv_cache_policy, "session_lru_recompute")
+        # 旧值别名已清除(fail-closed,防旧机制表面残留)。
+        with self.assertRaisesRegex(ValueError, "kv_cache_policy"):
+            _load_edited_config(
+                "policy_legacy", edit_policy("session_lru_recompute"))
         with self.assertRaisesRegex(ValueError, "kv_cache_policy"):
             _load_edited_config(
                 "policy_bad", edit_policy("session_lru_fifo"))
 
-    def test_exact_tp_shards_and_session_lru_recompute(self) -> None:
+    def test_exact_tp_shards_and_passive_session_lru(self) -> None:
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         self.assertEqual(attention_heads_by_tp_rank(5, 3), (2, 2, 1))
         self.assertEqual(
@@ -672,9 +674,9 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(allocation2.pieces[0].instance_index, 2)
 
     def test_manager_evicts_multiple_lru_victims_but_not_active_kv(self) -> None:
-        # B2(2026-09-06):三态化后 1 层模型无半层后缀(partial_resident_
-        # prefix_layers == layers),两段式退化为纯阶段2 整体外迁——逐出
-        # 语义从"零成本删除"变为"整体 remote_store -> REMOTE"。
+        # Session 级 Tiered-LRU(2026-09-25):逐出恒为完整 session 整体
+        # remote_store -> REMOTE(半层两阶段已删除;victim 池 = 唯一的
+        # _completed_local_candidates,LRU 序)。
         model = FaceModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = FaceHardware(1, 2, 200, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
@@ -700,24 +702,23 @@ class FaceSchedulerTests(unittest.TestCase):
             manager.mark_complete(session_id, completion_ns, f"{session_id}0")
 
         candidate_calls = 0
-        original_candidate_sessions = manager._completed_resident_candidates
+        original_candidate_sessions = manager._completed_local_candidates
 
         def snapshot_candidates(*args, **kwargs):
             nonlocal candidate_calls
             candidate_calls += 1
             return original_candidate_sessions(*args, **kwargs)
 
-        manager._completed_resident_candidates = snapshot_candidates
+        manager._completed_local_candidates = snapshot_candidates
         try:
             c_decision = manager.prepare_history(
                 "c", 0, 0, 30, "c0", required_context_tokens=30
             )
         finally:
-            manager._completed_resident_candidates = original_candidate_sessions
+            manager._completed_local_candidates = original_candidate_sessions
 
-        # The admission needs two full evictions, but one stage-local LRU
-        # snapshot (stage 2 candidate list is built once; 1-layer models have
-        # no stage-1 suffix candidates at all).
+        # The admission needs two whole-session evictions, but one LRU
+        # snapshot (the sole candidate list is built once).
         self.assertEqual(candidate_calls, 1)
         self.assertEqual(
             tuple(record.victim_session_id for record in c_decision.evictions),
@@ -735,9 +736,9 @@ class FaceSchedulerTests(unittest.TestCase):
                 ("no_history", "b", "history", "window_first_request", "b0"),
                 ("retain_complete", "b", "completion", "request_completed_keep_kv", "b0"),
                 ("evict_full", "a", "history",
-                 "evict_history_and_prefill_admission_full_fallback:layers0-1", "c0"),
+                 "evict_history_and_prefill_admission_full:layers0-1", "c0"),
                 ("evict_full", "b", "history",
-                 "evict_history_and_prefill_admission_full_fallback:layers0-1", "c0"),
+                 "evict_history_and_prefill_admission_full:layers0-1", "c0"),
                 ("no_history", "c", "history", "window_first_request", "c0"),
             ],
         )
@@ -939,9 +940,10 @@ class KvEvictionModeConfigTests(unittest.TestCase):
 
 
 class PassiveEvictionModeTests(unittest.TestCase):
-    """R7 (2026-09-05): 被动逐出语义回归——完成边界零逐出、准入按需逐到
-    刚好够、深缺口两出口台账(主动水位逐出已物理清除)。B2(2026-09-06)
-    三态化:1 层模型无半层后缀,逐出形态 = 阶段2 整体 remote_store。
+    """R7 (2026-09-05): 被动逐出语义回归——完成边界零逐出、准入按需逐出、
+    深缺口两出口台账(主动水位逐出已物理清除)。Session 级 Tiered-LRU
+    (2026-09-25):逐出恒为完整 session 整体 remote_store,允许过量释放
+    (D4-I3 恰好够守卫已删除),逐 victim 后重查水位、够即停。
 
     算术口径(FaceModel(1,4,4,2,4,1,"gelu") + tp2 + 容量 200):每 rank
     模型权重 72 字节 -> 空 rank 每 token KV 4 字节、初始余 128 字节/rank。
@@ -982,7 +984,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
         self.assertFalse(
             [
                 event for event in manager.events
-                if event.event_type in ("evict_suffix", "evict_full")
+                if event.event_type == "evict_full"
             ]
         )
         for session_id, completion_ns in (("a", 10), ("b", 20)):
@@ -1002,12 +1004,14 @@ class PassiveEvictionModeTests(unittest.TestCase):
         manager.retire_terminal_session("b", 20, "b0")
         manager.assert_final_state()
 
-    def test_passive_admission_evicts_exactly_enough(self) -> None:
+    def test_passive_admission_stops_at_first_covering_victim_allow_over_release(self) -> None:
         manager = self._manager()  # a/b 各 10 token;a+b 完成后余 48B/rank
         self.assertEqual(self._admit_and_complete(manager, "a", "a0", 10), ())
         self.assertEqual(self._admit_and_complete(manager, "b", "b0", 20), ())
 
-        # c 需 80B/rank(20 token):仅整体外迁最老 a(+40 -> 88)即够,b 不动。
+        # c 需 80B/rank(20 token),缺口 32B/rank < a 的全量 40B/rank:
+        # 仅整体外迁最老 a(+40 -> 88)即覆盖缺口,b 不动;整 session 释放
+        # 产生的 8B/rank 过量释放被允许、不 raise(D4-I3 已删)。
         decision = manager.prepare_history(
             "c", 0, 0, 30, "c0", required_context_tokens=20
         )
@@ -1017,7 +1021,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
             ("a",),
         )
         # 逐出来自按需 fit 路径(reason 钉死来源);KVTransfer 载体为
-        # remote_store、层域 0..L(1 层模型无半层段)。
+        # remote_store、层域全量 0..L。
         self.assertEqual(
             decision.evictions[0].reason, "history_and_prefill_admission"
         )
@@ -1026,7 +1030,8 @@ class PassiveEvictionModeTests(unittest.TestCase):
         self.assertEqual(decision.evictions[0].transfer.layer_end, 1)
         self.assertEqual(manager.session_snapshot("b").location, "local_hbm")
         self.assertTrue(manager.grow_prefill("c", 20, 30, "c0").admitted)
-        # 逐到刚好够即停:不追加额外逐出(b 保留,余 8B/rank)。
+        # 首个覆盖缺口的 victim 处即停:不追加额外逐出(b 保留,
+        # 余 8B/rank = 88 - 80;过量释放 8B/rank 合法)。
         self.assertEqual(
             tuple(s.remaining_bytes for s in manager.hbm_snapshots(0)),
             (8, 8),
@@ -1084,7 +1089,7 @@ class PassiveEvictionModeTests(unittest.TestCase):
         self.assertEqual(
             deep_gaps[0].reason, "exhausted_completed_candidates"
         )
-        # 两阶段耗尽:a/b 整体外迁至 REMOTE(结构不可解,优雅推迟)。
+        # 耗尽出口:a/b 整体外迁至 REMOTE(结构不可解,优雅推迟)。
         self.assertEqual(manager.session_snapshot("a").location, "remote_memory")
         self.assertEqual(manager.session_snapshot("b").location, "remote_memory")
         self.assertEqual(manager.session_snapshot("z").location, "local_hbm")

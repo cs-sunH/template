@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""test_joint_credit_pricing.py -- remote-read 决策计价流水式的手算
-锚点单测（§4.3.1，路线 B credit 交错流，P0）。
+"""test_joint_credit_pricing.py -- remote-read 决策计价分阶段关键路径的
+手算锚点单测（规格书 §5，2026-09-25；前身 §4.3.1 credit 交错流锚）。
 
-计价合同（唯一执行口径，2026-09-17 用户裁定：v1 串行加法口径删除，
-不作为开关可选项保留）：
+计价合同（分阶段关键路径，旧"后缀恢复全量串在 prefill 计算之前"的
+max(history_prep, eviction) + first_credit + max(stream, compute) 合成
+废除、无开关可选项）：
 
-* effective = first_credit_ns + max(remaining_stream_ns, compute_ns)
-  ——joint_config 同源公式，与 Workload.cc:558-566 闭式
-  first_tile + max(remaining, compute) 同构；K 与执行侧切片同源
-  （remote_credit_block_size 单一裁决点）；
-* 不变量：K >= read_passes（单 credit）时 first_credit_ns ==
-  remote_read_ns、remaining_stream_ns == 0 ⇒ 合成退化为
-  remote_read_ns + compute_ns（旧加法形态的数值——单块切片等价锚）。
+* prefill_stage = prefix_first_credit
+                  + max(prefix_remaining_stream, suffix_restore,
+                        prefill_compute)
+  decode_stage  = decode_first_credit
+                  + max(decode_remaining_stream, decode_compute)
+  cost = target_wait + eviction_wait + prefill_stage + decode_stage
+         + merge
+  ——prefill 前缀读流与后缀池恢复同准入 frontier 并行分叉、prefill 计
+  算按层段随数据到达推进（无全局 barrier）；decode 只对 home 前缀新
+  发 credit 读。阶段量经 notes 四键披露（remote_read_prefill_ns /
+  remote_read_decode_ns / suffix_restore_ns /
+  prefill_pipeline_overlap_ns）；K 与执行侧切片同源
+  （remote_credit_block_size 单一裁决点，两腿共用同一 K）；
+* 旧 breakdown 字段保持日志兼容口径：remote_read_ns 恒为合并流
+  （read_passes 全程、时延单计）全流总时延，remote_read_first_credit_ns
+  / remote_read_stream_ns 仍为该合并流的全局 credit 拆分——不再进关
+  键路径；不变量：K >= read_passes（单 credit）时 first_credit_ns ==
+  remote_read_ns、remaining_stream_ns == 0。
 
 运行：cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 joint/test_joint_credit_pricing.py
@@ -130,28 +142,52 @@ ANCHOR_MERGE_NS = 16
 ANCHOR_K = 2
 ANCHOR_FIRST_CREDIT_NS = 410
 ANCHOR_STREAM_NS = 1800
-# 单块退化值（K = read_passes = 11）：first == 全流时延 2210、
-# stream == 0 ⇒ effective = 2210 + 70 = 2280（旧加法形态数值）
-# ⇒ cost = 1200 + 0 + 2280 + 16 = 3496。
-ANCHOR_SINGLE_CREDIT_COST = 3496
+# 分阶段关键路径（LOCAL 基 suffix_restore = 0）：prefill 腿 = 1 遍
+# （1000 B/rank）→ leg = 10 + 1000/5 = 210、first = 210（K=2 ≥ 1 遍
+# 全覆盖）、remaining = 0；decode 腿 = 10 遍（10000 B/rank）→ leg =
+# 10 + 10000/5 = 2010、first = 10 + 2000/5 = 410、remaining = 8000/5
+# = 1600。计算分量 prefill = 50×1.0 = 50、decode = 10×2.0 = 20。
+# prefill_stage = 210 + max(0, 0, 50) = 260；decode_stage = 410 +
+# max(1600, 20) = 2010 ⇒ cost = 1200 + 0 + 260 + 2010 + 16 = 3486。
+ANCHOR_PREFILL_LEG_NS = 210
+ANCHOR_DECODE_LEG_NS = 2010
+# 逐腿 credit 拆分（同一 K = 2）：prefill 腿 1 遍全进首块 → first 210、
+# remaining 0；decode 腿首块 2 遍 → first 410、其余 8 遍纯流送 1600。
+ANCHOR_PREFILL_FIRST_NS = 210
+ANCHOR_PREFILL_REMAINING_NS = 0
+ANCHOR_DECODE_FIRST_NS = 410
+ANCHOR_DECODE_REMAINING_NS = 1600
+ANCHOR_PREFILL_COMPUTE_NS = 50
+ANCHOR_DECODE_COMPUTE_NS = 20
+ANCHOR_STAGED_COST = 3486
+# 单块退化值（K = read_passes = 11）：全局拆分 first == 全流时延
+# 2210、stream == 0；分阶段逐腿同退化——prefill_first = 210、
+# decode_first = 10 + 10000/5 = 2010、两腿 remaining = 0 ⇒
+# prefill_stage = 210 + 50 = 260、decode_stage = 2010 + 20 = 2030
+# ⇒ cost = 1200 + 260 + 2030 + 16 = 3506。
+ANCHOR_SINGLE_CREDIT_COST = 3506
 
 
 # ======================================================= 流水式手算锚 ==
 
 class PipelinePricingAnchorTest(unittest.TestCase):
-    """唯一形态手算锚：auto K（流送段主导）与 compute-bound 两分支。"""
+    """分阶段关键路径手算锚：auto K（流送段主导）与 compute-bound 两
+    分支。"""
 
     def test_auto_k_stream_bound_cost_by_hand(self):
         candidate = _remote(_model(_anchor_loads()))
         self.assertTrue(candidate.applicable)
-        # 全链手算（C4 重推导）：1200 + 0 + (410 + max(1800, 70)) + 16
-        # = 3426。流送段主导（1800 > 70）⇒ 计算段完全被其余读流隐藏。
-        # effective 只剩首 credit + 其余流送 = 410 + 1800 = 2210（与
-        # 全流 wall 2210 同值——时延只计一次、其余流送段无时延；旧
-        # 加法形态为 compute 70 + 全流 2210 = 2280）。
-        self.assertEqual(candidate.cost_ns, 3426)
+        # 全链手算（分阶段）：1200 + 0 + (210 + max(0, 0, 50)) + (410 +
+        # max(1600, 20)) + 16 = 3486。LOCAL 基无后缀恢复项（suffix_
+        # restore = 0）；decode 腿流送段主导（1600 > 20）⇒ decode 计算
+        # 段被其余读流隐藏；prefill 腿 K=2 ≥ 1 遍全覆盖 ⇒ remaining = 0、
+        # prefill 计算 50 暴露在首 credit 之后（旧合并流口径下 compute
+        # 70 全被 stream 1800 吸收——分阶段后 prefill/decode 计算各归
+        # 所属阶段）。
+        self.assertEqual(candidate.cost_ns, ANCHOR_STAGED_COST)
         breakdown = candidate.breakdown
-        # 拆分披露 = 手算值；remote_read_ns 仍为全流总时延口径。
+        # 全局拆分披露 = 手算值（日志兼容口径）；remote_read_ns 仍为合
+        # 并流全流总时延。
         self.assertEqual(
             breakdown.remote_read_first_credit_ns, ANCHOR_FIRST_CREDIT_NS)
         self.assertEqual(breakdown.remote_read_stream_ns, ANCHOR_STREAM_NS)
@@ -161,27 +197,42 @@ class PipelinePricingAnchorTest(unittest.TestCase):
         self.assertEqual(breakdown.target_wait_ns, ANCHOR_TARGET_WAIT)
         self.assertIn("remote_read_passes=11", breakdown.notes)
         self.assertIn(f"remote_credit_k={ANCHOR_K}", breakdown.notes)
-        # 合成式逐位：effective = first + max(stream, compute)。
+        # 阶段量 notes 披露（规格书 §5 四键）与手算值逐位一致。
+        self.assertIn(
+            f"remote_read_prefill_ns={ANCHOR_PREFILL_LEG_NS}",
+            breakdown.notes)
+        self.assertIn(
+            f"remote_read_decode_ns={ANCHOR_DECODE_LEG_NS}",
+            breakdown.notes)
+        self.assertIn("suffix_restore_ns=0", breakdown.notes)
+        self.assertIn("prefill_pipeline_overlap_ns=0", breakdown.notes)
+        # 合成式逐位：cost = target + eviction + prefill_stage +
+        # decode_stage + merge（LOCAL 基 eviction = 0、suffix_restore =
+        # 0）；prefill_stage = first + max(remaining, suffix, compute)、
+        # decode_stage = first + max(remaining, compute)。
+        prefill_stage = ANCHOR_PREFILL_FIRST_NS + max(
+            ANCHOR_PREFILL_REMAINING_NS, 0, ANCHOR_PREFILL_COMPUTE_NS)
+        decode_stage = ANCHOR_DECODE_FIRST_NS + max(
+            ANCHOR_DECODE_REMAINING_NS, ANCHOR_DECODE_COMPUTE_NS)
         self.assertEqual(
             candidate.cost_ns - breakdown.target_wait_ns
-            - max(breakdown.history_prep_ns, breakdown.eviction_wait_ns)
-            - breakdown.merge_ns,
-            ANCHOR_FIRST_CREDIT_NS
-            + max(ANCHOR_STREAM_NS, ANCHOR_COMPUTE_NS))
-        # 流水重叠恒 ≤ 旧加法形态数值（3356）。
+            - breakdown.eviction_wait_ns - breakdown.merge_ns,
+            prefill_stage + decode_stage)
+        # 分阶段流水恒 ≤ 单块退化数值（3506）。
         self.assertLess(candidate.cost_ns, ANCHOR_SINGLE_CREDIT_COST)
 
     def test_compute_bound_takes_max_compute(self):
-        # 流送段短于计算段时 max 取 compute：decode 速率放大（2 → 50
-        # ns/token）+ 小历史（200 B）。手算（C4 重推导）：远读基数
-        # = (100,100)/rank × read_passes 11 → 逐 shard 1100 B，noc 腿
-        # = 1100/5 = 220（并集除数 2）、端点腿各 11 → remote_read =
-        # 10 + 220 = 230；compute = 50 + 500 = 550；K = 2 → credit1
-        # 逐 shard 200 B → first = 10 + 40 = 50、其余流送 900 B →
-        # stream = 900/5 = 180；effective = 50 + max(180, 550) = 600
-        # （旧加法形态为 550 + 230 = 780，被 max 吸收的流送段即重叠
-        # 收益）；merge：forward = 10 + 30/5 = 16、reverse = 10 +
-        # 100/5 = 30 → merge_ns = 16 → cost = 0 + 0 + 600 + 16。
+        # prefill/decode 计算分量各自在所属阶段取 max：decode 速率放大
+        # （2 → 50 ns/token）+ 小历史（200 B）。手算（C4 重推导）：远读
+        # 基数 = (100,100)/rank × read_passes 11 → 逐 shard 1100 B，noc
+        # 腿 = 1100/5 = 220（并集除数 2）、端点腿各 11 → remote_read =
+        # 10 + 220 = 230；compute = 50 + 500 = 550（prefill 50、decode
+        # 500）；K = 2 → prefill 腿 1 遍全覆盖：leg = first = 10 +
+        # 100/5 = 30、remaining = 0 → prefill_stage = 30 + 50 = 80；
+        # decode 腿 first = 10 + 200/5 = 50、remaining = 800/5 = 160 →
+        # decode_stage = 50 + max(160, 500) = 550；merge：forward =
+        # 10 + 30/5 = 16、reverse = 10 + 100/5 = 30 → merge_ns = 16 ⇒
+        # cost = 0 + 0 + 80 + 550 + 16 = 646。
         model = _model(
             {0: _load(0, 0), 1: _load(1, 0)}, decode_ns_per_token=50.0)
         candidate = _remote(model, session=_session(history_bytes=(100, 100)))
@@ -189,12 +240,15 @@ class PipelinePricingAnchorTest(unittest.TestCase):
         self.assertEqual(breakdown.compute_ns, 550)
         self.assertEqual(breakdown.remote_read_first_credit_ns, 50)
         self.assertEqual(breakdown.remote_read_stream_ns, 180)
+        self.assertIn("remote_read_prefill_ns=30", breakdown.notes)
+        self.assertIn("remote_read_decode_ns=210", breakdown.notes)
+        # 合成式逐位：prefill_stage = 30 + max(0, 0, 50)、decode_stage
+        # = 50 + max(160, 500)。
         self.assertEqual(
             candidate.cost_ns - breakdown.target_wait_ns
-            - max(breakdown.history_prep_ns, breakdown.eviction_wait_ns)
-            - breakdown.merge_ns,
-            50 + max(180, 550))
-        self.assertEqual(candidate.cost_ns, 616)
+            - breakdown.eviction_wait_ns - breakdown.merge_ns,
+            30 + max(0, 0, 50) + 50 + max(160, 500))
+        self.assertEqual(candidate.cost_ns, 646)
 
     def test_default_k_equals_explicit_auto(self):
         # 缺省 remote_credit_iters 与显式 "auto" 同夹具逐位相等。
@@ -207,19 +261,36 @@ class PipelinePricingAnchorTest(unittest.TestCase):
 # ================================================== 单块退化等价锚 ==
 
 class SingleCreditDegenerateTest(unittest.TestCase):
-    """K >= read_passes（单 credit）⇒ 合成退化为旧加法形态数值。"""
+    """K >= read_passes（单 credit）⇒ 合并流全局拆分退化为 first ==
+    remote_read_ns、stream == 0；分阶段逐腿同退化（首块 = 整腿、
+    remaining = 0）。"""
 
-    def test_explicit_k_equals_steps_degenerates_to_additive(self):
+    def test_explicit_k_equals_steps_degenerates(self):
         candidate = _remote(_model(
             _anchor_loads(), remote_credit_iters="11"))  # K = read_passes
         self.assertTrue(candidate.applicable)
         self.assertEqual(candidate.cost_ns, ANCHOR_SINGLE_CREDIT_COST)
         breakdown = candidate.breakdown
-        # 不变量落地：first_credit == 全流时延、stream == 0。
+        # 合并流不变量落地：first_credit == 全流时延、stream == 0。
         self.assertEqual(
             breakdown.remote_read_first_credit_ns, ANCHOR_REMOTE_READ_NS)
         self.assertEqual(breakdown.remote_read_stream_ns, 0)
         self.assertIn("remote_credit_k=11", breakdown.notes)
+        # 分阶段逐腿退化：prefill 腿（1 遍）全进首块 = 整腿 210、
+        # decode 腿（10 遍）全进首块 = 整腿 2010、两腿 remaining = 0
+        # ⇒ prefill_stage = 210 + 50 = 260、decode_stage = 2010 + 20
+        # = 2030（decode 计算不再被流送吸收——单块下无其余流送段）。
+        self.assertIn(
+            f"remote_read_prefill_ns={ANCHOR_PREFILL_LEG_NS}",
+            breakdown.notes)
+        self.assertIn(
+            f"remote_read_decode_ns={ANCHOR_DECODE_LEG_NS}",
+            breakdown.notes)
+        self.assertEqual(
+            candidate.cost_ns - breakdown.target_wait_ns
+            - breakdown.eviction_wait_ns - breakdown.merge_ns,
+            (ANCHOR_PREFILL_FIRST_NS + ANCHOR_PREFILL_COMPUTE_NS)
+            + (ANCHOR_DECODE_LEG_NS + ANCHOR_DECODE_COMPUTE_NS))
 
     def test_explicit_k_clamped_to_steps(self):
         # 显式 K = 100 > 步数 11 → 钳到 11（单块退化锚的另一面）；

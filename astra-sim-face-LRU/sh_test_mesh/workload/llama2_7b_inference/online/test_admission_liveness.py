@@ -580,10 +580,11 @@ class DecodeEvictionSerializationTest(unittest.TestCase):
 
 
 class TieredRestoreAdmissionTest(unittest.TestCase):
-    """B2(2026-09-06):三态恢复路径经真实 _try_admit_prefill 接线——
-    PARTIAL 同实例 -> REMOTE_SUFFIX_RESTORE(后缀回迁);REMOTE ->
-    REMOTE_RESTORE(全量回迁);remaining_chunks 口径不再含 recompute 段
-    (ceil(R/p_chunk) 项删除)。KV 状态经真实准入/完成/逐出调用建立。"""
+    """Session 级 Tiered-LRU(2026-09-25 重写):唯一恢复路径经真实
+    _try_admit_prefill 接线——REMOTE -> REMOTE_RESTORE(单笔全量回迁
+    [0, L));铺垫改用重写后 _evict_session(reason='probe') 整体外迁;
+    remaining_chunks 口径不再含 recompute 段(ceil(R/p_chunk) 项删除)。
+    KV 状态经真实准入/完成/逐出调用建立。"""
 
     def _admit_turn(self, scheduler, request_id, session_id, turn,
                     history_tokens, prefill_length, target_instance, now_ns):
@@ -597,29 +598,37 @@ class TieredRestoreAdmissionTest(unittest.TestCase):
         self.assertTrue(scheduler._try_admit_prefill(runtime, now_ns))
         return runtime
 
-    def test_partial_same_instance_and_remote_restore_paths(self):
+    def test_remote_restore_path(self):
         scheduler = _make_scheduler()
         manager = scheduler.kv_manager
         _kv_admit_prefill(manager, "sy", 0, 100, 100, "ry")
         manager.mark_complete("sy", 100, "ry")
-        # 阶段1 半层逐出 -> PARTIAL(模拟冷会话被动逐出后的下一 turn)。
-        manager._evict_suffix(
+        # 唯一逐出路径:完整 session 整体外迁 -> REMOTE(模拟冷会话被动
+        # 逐出后的下一 turn)。
+        manager._evict_session(
             manager._sessions["sy"], now_ns=110, phase="admission",
             reason="probe", trigger_request_id="probe")
         snapshot = manager.session_snapshot("sy")
-        self.assertEqual(snapshot.location, "partial_hbm_remote")
-        self.assertEqual(snapshot.resident_prefix_layers, MODEL.layers // 2)
+        self.assertEqual(snapshot.location, "remote_memory")
+        self.assertIsNone(snapshot.instance_index)
+        self.assertEqual(snapshot.resident_prefix_layers, 0)
+        self.assertEqual(snapshot.local_bytes, 0)
+        self.assertGreater(snapshot.remote_bytes, 0)
 
         runtime = self._admit_turn(
             scheduler, "ry1", "sy", 1,
             history_tokens=100, prefill_length=20,
             target_instance=0, now_ns=120)
-        # PARTIAL 同实例:只回迁后缀层段;KVTransfer = remote_load 一段,
-        # 与决策同条承载(不拆两条 prefill 记录)。
-        self.assertEqual(runtime.history_action, "REMOTE_SUFFIX_RESTORE")
+        # REMOTE 全量回迁:KVTransfer = 单笔 remote_load [0, L),
+        # reason = history_remote_restore(与决策同条承载)。
+        self.assertEqual(runtime.history_action, "REMOTE_RESTORE")
         self.assertEqual(
             [(t.kind, t.reason) for t in runtime.history_transfers],
-            [("remote_load", "history_remote_suffix_restore")])
+            [("remote_load", "history_remote_restore")])
+        transfer = runtime.history_transfers[0]
+        self.assertEqual(
+            (transfer.layer_start, transfer.layer_end),
+            (0, MODEL.layers))
         self.assertEqual(
             runtime.history_recompute_tokens, 0)
         # remaining_chunks = ceil(20/128) = 1(recompute 项已删除)。
@@ -627,27 +636,13 @@ class TieredRestoreAdmissionTest(unittest.TestCase):
         restored = manager.session_snapshot("sy")
         self.assertEqual(restored.location, "local_hbm")
         self.assertEqual(restored.resident_prefix_layers, MODEL.layers)
+        # 恢复后完整本地驻留:全量字节在本地、远端零残留(_admit_turn 返回
+        # 时点已含 grow_prefill 至 prefill_context=120 token)。
+        self.assertEqual(
+            restored.local_bytes, _shard_per_rank(120) * TP)
+        self.assertEqual(restored.local_bytes, restored.total_bytes)
+        self.assertEqual(restored.remote_bytes, 0)
         self.assertTrue(restored.active)
-
-        # 阶段2 整体外迁 -> REMOTE;下一 turn 全量回迁。
-        manager.mark_complete("sy", 130, "ry1")
-        manager._evict_session(
-            manager._sessions["sy"], now_ns=140, phase="admission",
-            reason="probe2", trigger_request_id="probe2")
-        self.assertEqual(
-            manager.session_snapshot("sy").location, "remote_memory")
-
-        runtime3 = self._admit_turn(
-            scheduler, "ry2", "sy", 2,
-            history_tokens=120, prefill_length=10,
-            target_instance=0, now_ns=150)
-        self.assertEqual(runtime3.history_action, "REMOTE_RESTORE")
-        self.assertEqual(
-            [(t.kind, t.reason) for t in runtime3.history_transfers],
-            [("remote_load", "history_remote_restore")])
-        final = manager.session_snapshot("sy")
-        self.assertEqual(final.location, "local_hbm")
-        self.assertTrue(final.active)
 
 
 if __name__ == "__main__":

@@ -509,7 +509,8 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
             }
             break;
         default:
-            break;  // Invalid / Metadata / MemLoad / MemStore: no attrs read
+            break;  // Invalid / Metadata: no attrs read (MemLoad/MemStore
+                    // have their own case branch above)
     }
     return nv;
 }

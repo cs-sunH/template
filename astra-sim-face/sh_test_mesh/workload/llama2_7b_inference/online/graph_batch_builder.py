@@ -3,8 +3,9 @@
 
 阶段 1 最关键的对齐点:复用共享发射原语的节点结构。per-request 发射
 (generate_face_trace.py 模块级函数)由
-助手函数组成(_emit_control_trigger / _paired_transfer / _emit_prefill_stage /
-transformer_pass_aggregated)——本模块直接 import 它们,用 OnlineTraceBuilder
+助手函数 _emit_control_trigger / _paired_transfer(自 generate_face_trace
+import)与 generate_trace 的 transformer_pass_aggregated 组成——本模块
+直接 import 它们,用 OnlineTraceBuilder
 (与 TraceBuilder 同构的在线侧 builder)驱动,保证:
 
   - 节点属性、插入顺序、rank ownership 和跨 request 链结构稳定(节点级审计口径);

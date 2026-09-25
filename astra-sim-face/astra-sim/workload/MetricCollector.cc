@@ -504,7 +504,13 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
     for (auto it = events_by_rank.begin(); it != events_by_rank.end(); ++it) {
         int rank;
         try {
-            rank = std::stoi(it.key());
+            size_t pos = 0;
+            rank = std::stoi(it.key(), &pos);
+            if (pos != it.key().size()) {
+                fatal_metrics_error(
+                    "non-integer rank key in node_events_by_rank: " +
+                    it.key());
+            }
         } catch (const std::exception&) {
             fatal_metrics_error("non-integer rank key in node_events_by_rank: "
                                 + it.key());
@@ -2054,11 +2060,20 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         if (peak_it != peaks_by_rank.end() &&
             peak_it->second->contains("ledger")) {
             const json& ledger = (*peak_it->second)["ledger"];
-            capacity = ledger.value("capacity_bytes", int64_t(0));
-            planner_physical =
-                ledger.value("physical_used_bytes", int64_t(0));
-            planner_committed =
-                ledger.value("committed_used_bytes", int64_t(0));
+            try {
+                capacity = ledger.value("capacity_bytes", int64_t(0));
+                planner_physical =
+                    ledger.value("physical_used_bytes", int64_t(0));
+                planner_committed =
+                    ledger.value("committed_used_bytes", int64_t(0));
+            } catch (const std::exception& e) {
+                fatal_metrics_error(
+                    "rank " + std::to_string(rank) +
+                    ": malformed planner peaks ledger key "
+                    "(capacity_bytes/physical_used_bytes/"
+                    "committed_used_bytes): " +
+                    e.what());
+            }
         }
 
         __int128 weight = 0;
@@ -2289,8 +2304,15 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         const auto peak_it = peaks_by_rank.find(rank);
         if (peak_it != peaks_by_rank.end() &&
             peak_it->second->contains("ledger")) {
-            series.capacity_bytes = (*peak_it->second)["ledger"].value(
-                "capacity_bytes", int64_t(0));
+            try {
+                series.capacity_bytes = (*peak_it->second)["ledger"].value(
+                    "capacity_bytes", int64_t(0));
+            } catch (const std::exception& e) {
+                fatal_metrics_error(
+                    "rank " + std::to_string(rank) +
+                    ": malformed planner peaks ledger key (capacity_bytes): " +
+                    e.what());
+            }
             series.capacity_known = true;
         }
         watermark_series_by_rank.emplace(rank, std::move(series));

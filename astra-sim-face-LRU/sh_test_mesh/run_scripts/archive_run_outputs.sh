@@ -23,6 +23,9 @@
 #   results/profile.jsonl(存在时) results/train_ledger.jsonl
 #   results/ledger.jsonl results/sensing_query_log.jsonl(仅 sensing 跑产生,
 #   对账/差异报告输入;strategy 跑无此二件,保留集不受影响)
+#   results/remote_memory_transactions.jsonl(2026-09-24 SerDes 并发化改造,
+#   方案 §5.1:C++ 后端逐事务明细,仅 --sensing-enabled 跑产生;文件惰性建,
+#   关感知跑零残留,保留集不受影响)
 #   campaign_provenance.json(存在时)
 #   SLO 自动提取产物(P3,2026-08-28,由 run_slo_postprocess.sh 写在 run_dir
 #   根,本脚本不触碰 run_dir 根级文件,此处显式登记为常驻):slo_*.csv、
@@ -93,6 +96,7 @@ if [ -d "${RUN_DIR}/results" ]; then
     ! -name 'train_ledger.jsonl' \
     ! -name 'ledger.jsonl' \
     ! -name 'sensing_query_log.jsonl' \
+    ! -name 'remote_memory_transactions.jsonl' \
     ! -name 'campaign_provenance.json' \
     -printf '%f\n' > "${EXTRA_LIST}"
   if [ -s "${EXTRA_LIST}" ]; then

@@ -30,7 +30,6 @@ class DataSet : public Callable, public StreamStat {
         std::shared_ptr<CommunicatorGroup> communicator_group);
     void notify_stream_finished(StreamStat* data);
     void call(EventType event, CallData* data);
-    bool is_finished();
 
     static int id_auto_increment;
     int my_id;

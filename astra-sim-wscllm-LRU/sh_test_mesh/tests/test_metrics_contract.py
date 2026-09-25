@@ -555,24 +555,7 @@ class MetricsConfigTests(unittest.TestCase):
     def test_metrics_config_json_parses_and_pins_protocol_values(self) -> None:
         config = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
         self.assertEqual(config["schema_version"], ms.SCHEMA_VERSION)
-        self.assertEqual(
-            config["memory"],
-            {
-                "chiplets_per_npu": 4,
-                "projection": "equal_striping",
-                "wasted_definition": "capacity_minus_weight_minus_resident_kv",
-            },
-        )
-        self.assertEqual(
-            config["microbenchmark"],
-            {
-                "tp_degrees": [1, 2, 4, 6, 8],
-                "prefill_chunks": [128, 256, 512],
-                "decode_batches": [1, 2, 4, 8, 16, 32],
-                "kv_lengths": [128, 256, 512, 1024, 2048, 4096],
-                "repeats": 1,
-            },
-        )
+        self.assertEqual(config["memory"], {"chiplets_per_npu": 4})
 
 
 class FirstTokenAndRequestMetricsContractTests(unittest.TestCase):

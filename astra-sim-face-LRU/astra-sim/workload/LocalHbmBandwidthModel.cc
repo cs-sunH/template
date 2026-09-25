@@ -12,10 +12,13 @@ LICENSE file in the root directory of this source tree.
 #include <utility>
 #include <vector>
 
+#include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
+
+#include <cstdlib>
 
 using namespace AstraSim;
 
@@ -57,7 +60,13 @@ bool LocalHbmBandwidthModel::complete(const Job& job) {
 
 void LocalHbmBandwidthModel::advance_to(Tick now) {
     if (now < last_update_tick) {
-        throw std::runtime_error("local HBM model time moved backwards");
+        // Invariant breach on a path whose callers run under
+        // Sys::call_events (which swallows std::exception): fail closed
+        // with exit, never throw (see issue_job).
+        LoggerFactory::get_logger("workload")
+            ->critical("local HBM model time moved backwards (sys.id={})",
+                       sys->id);
+        std::exit(EXIT_FAILURE);
     }
     const double elapsed_ns = static_cast<double>(now - last_update_tick);
     if (elapsed_ns <= 0) {
@@ -133,8 +142,11 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                 }
             }
             if (!clamped_residue) {
-                throw std::runtime_error(
-                    "local HBM model made no progress at a transition");
+                LoggerFactory::get_logger("workload")
+                    ->critical("local HBM model made no progress at a "
+                               "transition (sys.id={})",
+                               sys->id);
+                std::exit(EXIT_FAILURE);
             }
             continue;
         }
@@ -220,7 +232,11 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     }
 
     if (!std::isfinite(next_ns)) {
-        throw std::runtime_error("local HBM model has no schedulable transition");
+        LoggerFactory::get_logger("workload")
+            ->critical("local HBM model has no schedulable transition "
+                       "(sys.id={})",
+                       sys->id);
+        std::exit(EXIT_FAILURE);
     }
     Tick delay = static_cast<Tick>(std::ceil(next_ns));
     delay = std::max<Tick>(1, delay);
@@ -241,9 +257,16 @@ void LocalHbmBandwidthModel::issue_job(
     if (tensor_size == 0) {
         // Zero-byte endpoints never create an HBM job (the Workload layer
         // already guards this); reaching here is a wiring bug, not a data
-        // property: fail closed instead of silently stalling the node.
-        throw std::runtime_error(
-            "local HBM model refused a zero-byte job");
+        // property. Fail closed with exit instead of throw: the issuing
+        // node is already occupied, and static-path callers run under
+        // Sys::call_events, which swallows std::exception -- a throw here
+        // would leave the node occupied forever (static_all_done never
+        // fires).
+        LoggerFactory::get_logger("workload")
+            ->critical("local HBM model refused a zero-byte job "
+                       "(sys.id={}, kind={}, bytes=0)",
+                       sys->id, static_cast<int>(kind));
+        std::exit(EXIT_FAILURE);
     }
     const bool joins_active_jobs = !jobs.empty();
     jobs.push_back(Job{
@@ -337,13 +360,9 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
     }
 
     for (const Job& job : completed) {
-        const uint64_t elapsed = now - job.start_tick;
         if (job.kind == JobKind::COMPUTE) {
-            workload->hw_resource->tics_gpu_ops += elapsed;
-        } else {
-            // RESTORE / COMM_* / POOL_* jobs are HBM transfers; their
-            // elapsed time accumulates on the hbm_dma counter.
-            workload->hw_resource->tics_hbm_dma_ops += elapsed;
+            workload->hw_resource->tics_gpu_ops +=
+                now - job.start_tick;
         }
         job.wlhd->workload->call(EventType::General, job.wlhd);
     }

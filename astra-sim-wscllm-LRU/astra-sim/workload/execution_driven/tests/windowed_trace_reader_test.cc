@@ -241,8 +241,6 @@ void test_row_semantics() {
     expect(reader.rows_read() == 11, "rows_read == 11");
     expect(ingress.pending_command_count() == 10,
            "exactly the 10 turn-0 rows are submitted; turn>0 never is");
-    expect(ingress.pending_queue_index_count() == 1,
-           "only the one turn>0 row retains a future lookup");
     std::printf("[fixture] part B PASS: turn-0 Submit / turn>0 future-alarm "
                 "semantics (window 0 == 128)\n");
 }
@@ -518,8 +516,6 @@ void test_queue_index_lifetime_and_fail_closed() {
     expect(reader.rows_read() == 4, "all four rows indexed in one pump");
     expect(ingress.pending_command_count() == 2,
            "both turn-0 rows submitted");
-    expect(ingress.pending_queue_index_count() == 2,
-           "both turn>0 rows pre-registered by the index pass");
     expect(reader.provenance().turn0_count == 2, "provenance turn0_count");
 
     RequestEnvelope future0;
@@ -528,16 +524,12 @@ void test_queue_index_lifetime_and_fail_closed() {
     future0.request_id = "session_0_request_1";
     future0.arrival_world_ns = 100;
     ingress.schedule_future_arrival(future0);
-    expect(ingress.pending_queue_index_count() == 1,
-           "queue-index: first lookup erased at future schedule");
     RequestEnvelope future1;
     future1.session_id = "session_1";
     future1.turn_index = 1;
     future1.request_id = "session_1_request_1";
     future1.arrival_world_ns = 200;
     ingress.schedule_future_arrival(future1);
-    expect(ingress.pending_queue_index_count() == 0,
-           "queue-index: second lookup erased at future schedule");
     while (!eq.finished()) {
         eq.proceed();
     }
@@ -703,8 +695,6 @@ void test_first_block_over_window() {
     expect(!reader.pump(), "one pump drains the whole 151-row file");
     expect(reader.rows_read() == 151, "all rows indexed");
     expect(reader.data_rows() == 151, "data_rows == 151");
-    expect(ingress.pending_queue_index_count() == 149,
-           "every turn>0 row of the long block pre-registered");
     expect(ingress.pending_command_count() == 2,
            "both turn-0 rows submitted (file position irrelevant)");
     expect(reader.provenance().turn0_adjacent_inversions == 1,

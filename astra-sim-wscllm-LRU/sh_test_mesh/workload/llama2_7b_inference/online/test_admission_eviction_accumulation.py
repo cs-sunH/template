@@ -46,12 +46,13 @@ from wsc_llm_scheduler import (  # noqa: E402  (只读 import)
 
 
 def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
-    # B2 三态:逐出对象 = remote_store KVTransfer(source_instance_index 即
-    # 受害实例,纪元唤醒与序列化消费同一字段;time_ns 不进对象)。
+    # 整体逐出:逐出对象 = remote_store KVTransfer(source_instance_index 即
+    # 受害实例,纪元唤醒与序列化消费同一字段;time_ns 不进对象;层域
+    # [0, L) 全层、本地驻留清零)。
     return KVTransfer(
         kind="remote_store",
         phase="history",
-        reason="watermark_admission_full_fallback",
+        reason="watermark_admission_session",
         session_id=f"victim_session_{victim_instance_index}",
         trigger_request_id=trigger_request_id,
         source_instance_index=victim_instance_index,

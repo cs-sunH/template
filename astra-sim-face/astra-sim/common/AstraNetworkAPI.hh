@@ -12,7 +12,7 @@ namespace AstraSim {
 
 class AstraNetworkAPI {
   public:
-    enum class BackendType { NotSpecified = 0, Garnet, NS3, Analytical };
+    enum class BackendType { NotSpecified = 0, Garnet };
 
     /**
      * Opaque identity for one opt-in cancellable backend alarm.

@@ -132,7 +132,9 @@ class ServiceCoordinator {
     void signal_work();
 
     /// Bounded ordered prefix of state transitions (fixture assertion data).
-    [[nodiscard]] const std::vector<ServiceState>& transition_log() const;
+    /// Returns a copy taken under the internal mutex (the log is hot data:
+    /// set_state appends from the sim thread).
+    [[nodiscard]] std::vector<ServiceState> transition_log() const;
     /// Number of transitions omitted after the bounded prefix filled.
     [[nodiscard]] uint64_t transition_log_dropped() const;
     /// Step 1-10: install the transition observer (IDLE/ACTIVE/DRAINING/

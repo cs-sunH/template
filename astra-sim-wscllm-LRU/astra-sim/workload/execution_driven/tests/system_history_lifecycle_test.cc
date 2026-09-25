@@ -137,7 +137,6 @@ ReadyStream make_ready_stream(AstraSim::Sys& sys, int stream_id) {
     AstraSim::CollectivePhase phase;
     phase.queue_id = 0;
     phase.algorithm = nullptr;
-    phase.initial_data_size = 0;
     phase.final_data_size = 0;
     phase.enabled = false;
     phase.comm_type = AstraSim::ComType::None;

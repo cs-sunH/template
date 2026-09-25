@@ -35,6 +35,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import (  # noqa: E402
@@ -115,11 +119,17 @@ class BoundedSorterTests(unittest.TestCase):
         sorter = BoundedSorter(chunk_size=2)
         for value in range(50):
             sorter.add(value)
+        # spill 文件经 mkstemp 落在共享 /tmp 命名空间——清理断言只针对本
+        # sorter 自己创建的文件（全局 glob 会被并发 pytest 进程的在飞
+        # spill 文件误伤，2026-09-25 门禁竞态修复；清理语义不变）。
+        spill_paths = list(sorter._spills)
+        self.assertTrue(
+            spill_paths, "chunk_size=2 的 50 元素输入必须实际走 spill 路径")
         consumed = list(sorter.sorted_iter())
         self.assertEqual(consumed, list(range(50)))
-        leftovers = list(Path(tempfile.gettempdir()).glob(
-            "slo_bounded_sort_*"))
-        self.assertEqual(leftovers, [])
+        for path in spill_paths:
+            self.assertFalse(path.exists(), f"spill 文件残留: {path}")
+        self.assertEqual(sorter._spills, [])
 
 
 class PercentileManyTests(unittest.TestCase):
@@ -438,17 +448,21 @@ class DriverParityTests(unittest.TestCase):
 
     def _compare(self, tag: str, mutate=None, expect_rc: int = 0):
         run_dir = build_sh10_run_dir()
+        # 快照目录用 per-run mkdtemp（原为固定 /tmp 名 run_dir.parent/
+        # f"{tag}_*_out"= 共享 /tmp 下 collide——工作流门禁并行跑两仓同文
+        # 套件时，一方 _snapshot 的"先清空后写"会撕掉对方正在对比的字节，
+        # 2026-09-25 门禁竞态修复；对比语义不变）。
+        old_out = Path(tempfile.mkdtemp(prefix=f"slo_parity_{tag}_old_"))
+        new_out = Path(tempfile.mkdtemp(prefix=f"slo_parity_{tag}_new_"))
         try:
             if mutate is not None:
                 mutate(run_dir)
             rc_old = run_old_chain_replica(run_dir)
             self.assertEqual(rc_old, expect_rc)
-            old_out = run_dir.parent / f"{tag}_old_out"
             _snapshot(run_dir, old_out)
             _clear_slo_products(run_dir)
             rc_new = run_new_chain(run_dir)
             self.assertEqual(rc_new, expect_rc)
-            new_out = run_dir.parent / f"{tag}_new_out"
             _snapshot(run_dir, new_out)
             diffs = []
             for name in sorted(set(os.listdir(old_out))

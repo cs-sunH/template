@@ -220,14 +220,14 @@ void Workload::mark_online_terminal_or_fail(uint64_t node_id) {
     }
 }
 
-void Workload::record_network_bandwidth(uint64_t node_id,
-                                        Tick execution_time) {
-    // No-op: OnlineStatisticsState::network_bandwidth was removed (dead
-    // field; the achieved-bandwidth value had no reader).  The legacy
-    // per-node OperatorStatistics::network_bandwidth field was also
-    // write-only in this repository (its only reader was a commented-out
-    // report block), so no mode has anything to do here.
-}
+// record_network_bandwidth was removed: the whole comm_size ->
+// achieved-bandwidth chain had no production consumer (the former
+// OperatorStatistics::network_bandwidth field was write-only, its only
+// reader a long-commented-out report block; the field itself is gone).
+// OperatorStatistics::comm_size was write-only for this chain and is
+// deleted with it; the compact-mode OnlineStatisticsState::comm_size
+// retention stays (live NodeStore record fact, pinned by
+// statistics_online_compaction_test).
 
 void Workload::initialize_comm_groups(string comm_group_filename) {
     // communicator group input file is not given
@@ -236,14 +236,51 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
         return;
     }
 
+    // Fail closed with a diagnostic instead of an escaping exception: this
+    // runs in the Workload constructor ("new Workload" inside Sys, no
+    // try/catch up the chain), so a missing/unreadable file, a malformed
+    // document, or a non-numeric group key would otherwise surface as a
+    // bare std::terminate at startup.
     ifstream inFile;
     json j;
     inFile.open(comm_group_filename);
-    inFile >> j;
+    if (!inFile.is_open()) {
+        workload_logger_->critical(
+            "communicator group file: {} does not exist or is not readable",
+            comm_group_filename);
+        exit(EXIT_FAILURE);
+    }
+    try {
+        inFile >> j;
+    } catch (const std::exception& e) {
+        workload_logger_->critical(
+            "failed to parse communicator group file {}: {}",
+            comm_group_filename, e.what());
+        exit(EXIT_FAILURE);
+    }
 
     for (json::iterator it = j.begin(); it != j.end(); ++it) {
         std::string comm_group_name = it.key();
-        int comm_group_id = std::stoi(comm_group_name);
+        // Group keys are decimal ids; reject non-numeric or
+        // trailing-garbage keys explicitly (std::stoi would throw, same
+        // rule as the ParsedGraphBatch watch-member rank keys).
+        int comm_group_id = 0;
+        try {
+            size_t parsed_chars = 0;
+            comm_group_id = std::stoi(comm_group_name, &parsed_chars);
+            if (parsed_chars != comm_group_name.size()) {
+                workload_logger_->critical(
+                    "communicator group file {}: unparsable group id key "
+                    "{}, trailing characters",
+                    comm_group_filename, comm_group_name);
+                exit(EXIT_FAILURE);
+            }
+        } catch (const std::exception&) {
+            workload_logger_->critical(
+                "communicator group file {}: unparsable group id key {}",
+                comm_group_filename, comm_group_name);
+            exit(EXIT_FAILURE);
+        }
 
         std::vector<int> involved_NPUs;
         std::vector<int> dimension_sizes;
@@ -258,9 +295,11 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
                                       .get<std::vector<int>>();
             }
         } else {
-            throw std::runtime_error(
+            workload_logger_->critical(
                 "Communicator group must be a rank array or an object with "
-                "ranks and dimensions");
+                "ranks and dimensions (file {} key {})",
+                comm_group_filename, comm_group_name);
+            exit(EXIT_FAILURE);
         }
 
         comm_groups[comm_group_id] = std::make_shared<CommunicatorGroup>(
@@ -432,9 +471,7 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
         // already converted them into nanoseconds
         runtime = node.compute.runtime_ns;
     }
-    if (node.is_cpu_op) {
-        hw_resource->tics_cpu_ops += runtime;
-    } else {
+    if (!node.is_cpu_op) {
         hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
@@ -508,18 +545,25 @@ void Workload::issue_local_hbm_kv_restore(
         static_cast<double>(tensor_size) / sys->local_mem_bw;
     const uint64_t runtime = std::max<uint64_t>(
         1, static_cast<uint64_t>(std::ceil(elapsed_seconds * 1e9)));
-    hw_resource->tics_hbm_dma_ops += runtime;
     sys->register_event(this, EventType::General, wlhd, runtime);
 }
 
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
+    // issue() dispatch chain: the node was already taken/occupied by the
+    // time we run, and static-path callers run under Sys::call_events,
+    // which swallows std::exception and leaves the node occupied forever
+    // (static_all_done never fires). Any invariant breach here must be
+    // fail-closed (critical + exit), not throw.
     if (!this->sys->roofline_enabled) {
-        throw std::runtime_error(
+        workload_logger_->critical(
             "Roofline model is not enabled for non-replay comp");
+        exit(EXIT_FAILURE);
     }
 
     if (node.is_cpu_op) {
-        throw std::runtime_error("Roofline is only available for GPU nodes");
+        workload_logger_->critical(
+            "Roofline is only available for GPU nodes");
+        exit(EXIT_FAILURE);
     }
 
     // Fail-closed configuration check: roofline is enabled, but its two
@@ -581,13 +625,15 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     if (node.compute.has_remote_weight_bytes) {
         if (local_hbm_bandwidth_model != nullptr) {
-            throw std::runtime_error(
+            workload_logger_->critical(
                 "HBM KV-restore sharing cannot be combined with remote "
                 "operand pipeline loads on the same COMP node");
+            exit(EXIT_FAILURE);
         }
         if (sys->remote_mem_bw <= 0) {
-            throw std::runtime_error(
+            workload_logger_->critical(
                 "Pipeline roofline requires remote-mem-bw in system config");
+            exit(EXIT_FAILURE);
         }
 
         double remote_weight_bytes =
@@ -626,9 +672,7 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         local_hbm_bandwidth_model->issue_compute(
             node_num_ops, node_tensor_size, wlhd);
     } else {
-        if (node.is_cpu_op) {
-            hw_resource->tics_cpu_ops += runtime;
-        } else {
+        if (!node.is_cpu_op) {
             hw_resource->tics_gpu_ops += runtime;
         }
         sys->register_event(this, EventType::General, wlhd, runtime);
@@ -685,8 +729,11 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
+    // Fail-closed, not throw: see the Sys::call_events swallowing note in
+    // issue_comp.
     if (node.is_cpu_op) {
-        throw std::runtime_error("Comm node should not be on CPU");
+        workload_logger_->critical("Comm node should not be on CPU");
+        exit(EXIT_FAILURE);
     }
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) comm
     // completion branch was deleted with the replay route; strategy mode
@@ -699,7 +746,8 @@ void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
     } else if (node_type == ChakraNodeType::COMM_RECV_NODE) {
         this->issue_recv_comm(node);
     } else {
-        throw std::runtime_error("Unknown comm node type");
+        workload_logger_->critical("Unknown comm node type");
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -714,14 +762,14 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // Keep comm_size on the live NodeStore record in compact service mode:
-    // terminal bandwidth accounting still consumes it, but no global
-    // Statistics per-node hash-table entry is needed.
+    // Keep comm_size on the live NodeStore record in compact service mode
+    // (terminal communication fact; pinned by
+    // statistics_online_compaction_test). No global Statistics map entry is
+    // written: OperatorStatistics::comm_size had no reader and was removed
+    // with the dead achieved-bandwidth chain.
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
     }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
@@ -774,23 +822,26 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
                             runtime);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else {
-        throw std::runtime_error("Unsupported collective comm type");
+        workload_logger_->critical("Unsupported collective comm type");
+        exit(EXIT_FAILURE);
     }
 }
 
 void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     const auto src = node.comm.src;  // adapter default: this rank
     if (src != this->sys->id) {
-        throw std::runtime_error("Send node should be issued by the sender");
+        workload_logger_->critical(
+            "Send node should be issued by the sender");
+        exit(EXIT_FAILURE);
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
+    // Compact service mode only: retain the size as a terminal
+    // communication fact on the live NodeStore record (no bandwidth
+    // consumer exists anymore; OperatorStatistics::comm_size is gone).
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -834,15 +885,17 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     const auto src = node.comm.src;
     const auto dst = node.comm.dst;  // adapter default: this rank
     if (dst != this->sys->id) {
-        throw std::runtime_error("Recv node should be issued by the receiver");
+        workload_logger_->critical(
+            "Recv node should be issued by the receiver");
+        exit(EXIT_FAILURE);
     }
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
+    // Compact service mode only: retain the size as a terminal
+    // communication fact on the live NodeStore record (no bandwidth
+    // consumer exists anymore; OperatorStatistics::comm_size is gone).
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -958,7 +1011,6 @@ void Workload::call(EventType event, CallData* data) {
         collective_comm_node_id_map.erase(node_id_it);
         collective_comm_wrapper_map.erase(wrapper_it);
 
-        hw_resource->tics_gpu_comms += int_data->execution_time;
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.
@@ -1012,9 +1064,6 @@ void Workload::call(EventType event, CallData* data) {
             }
         }
 
-        // Calculate network bandwidth
-        record_network_bandwidth(node_id, int_data->execution_time);
-
         if (this->sys->track_local_mem) {
             this->local_mem_usage_tracker->recordEnd(node, Sys::boostedTick());
         }
@@ -1063,10 +1112,8 @@ void Workload::call(EventType event, CallData* data) {
             // because this node has not been finish_node'd yet, so
             // static_all_done() is necessarily false here.
             auto join_it = hbm_endpoint_joins_.find(wlhd->node_id);
-            bool hbm_joined = false;
             EventType hbm_join_event = EventType::General;
             if (join_it != hbm_endpoint_joins_.end()) {
-                hbm_joined = true;
                 hbm_join_event = join_it->second.completion_event;
                 // Fail-closed double-fire guard (R8-7): the latch must open
                 // on exactly one arrival per side. Side attribution is by
@@ -1155,39 +1202,10 @@ void Workload::call(EventType event, CallData* data) {
                 }
             }
 
-            // Calculate network bandwidth for point-to-point communications
-            // (中-4①: joined nodes use the deterministic network event kept
-            // in the join entry -- the later-arriving HBM-side General
-            // callback must not skip the stat; face :890-893 semantics:
-            // bandwidth = bytes / (join completion - start), contention-aware)
-            const EventType effective_event =
-                hbm_joined ? hbm_join_event : event;
-            if (effective_event == EventType::PacketSent ||
-                effective_event == EventType::PacketReceived) {
-                if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-                    !stats->online_history_preserved()) {
-                    const auto& online_stat =
-                        online_statistics_state_or_fail(wlhd->node_id);
-                    if (!online_stat.completed ||
-                        online_stat.end_time ==
-                            ExecutionDriven::OnlineStatisticsState::kInvalidTick) {
-                        workload_logger_->critical(
-                            "p2p bandwidth requested before compact online "
-                            "completion for node {}",
-                            wlhd->node_id);
-                        std::exit(EXIT_FAILURE);
-                    }
-                    record_network_bandwidth(
-                        wlhd->node_id,
-                        online_stat.end_time - online_stat.start_time);
-                } else {
-                    const auto& op_stat =
-                        stats->get_operator_statistics(wlhd->node_id);
-                    record_network_bandwidth(
-                        wlhd->node_id,
-                        op_stat.end_time - op_stat.start_time);
-                }
-            }
+            // (The former p2p network-bandwidth accounting block was removed
+            // with record_network_bandwidth -- its only consumer was the
+            // no-op; the joined-node hbm_join_event plumbing above survives
+            // unchanged for the latch semantics.)
 
             if (this->sys->track_local_mem) {
                 this->local_mem_usage_tracker->recordEnd(node,
@@ -1225,6 +1243,12 @@ void Workload::call(EventType event, CallData* data) {
             (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
             (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
             (hw_resource->num_in_flight_hbm_dma_ops == 0) &&
+            // 远端 MEM 节点在途计数（SerDes 并发化改造方案 §4/阶段2）：
+            // remote MEM 节点只在 Workload::call 终结时释放（hbm-access-mode
+            // 节点更是要等端口+HBM 两腿 join 开闸），静态 sim-finish 必须等
+            // 该计数归零。这是节点占用数，不是端口流数，不参与任何带宽/
+            // 并发分母口径。
+            (hw_resource->num_in_flight_remote_mem_ops == 0) &&
             // Local-HBM contention: a still-active local-HBM job always
             // belongs to a node that has not completed, so the slot counters
             // above already cover it; the explicit has_active_jobs() check
@@ -1284,7 +1308,27 @@ std::shared_ptr<CommunicatorGroup> Workload::extract_comm_group(
         return nullptr;
     }
 
-    int comm_group_id = std::stoi(comm_group_name);
+    // Non-numeric pg_name must not throw: static-path callers run under
+    // Sys::call_events, which swallows std::exception -- a throw here would
+    // log a misleading "callable removed before call" and leave the issued
+    // node occupied forever. Fail closed instead.
+    int comm_group_id = 0;
+    try {
+        size_t parsed_chars = 0;
+        comm_group_id = std::stoi(comm_group_name, &parsed_chars);
+        if (parsed_chars != comm_group_name.size()) {
+            workload_logger_->critical(
+                "For rank {} ET node {}, unparsable communicator group "
+                "name {} (trailing characters)",
+                sys->id, node.global_id, comm_group_name);
+            exit(EXIT_FAILURE);
+        }
+    } catch (const std::exception&) {
+        workload_logger_->critical(
+            "For rank {} ET node {}, unparsable communicator group name {}",
+            sys->id, node.global_id, comm_group_name);
+        exit(EXIT_FAILURE);
+    }
     const auto comm_group_it = comm_groups.find(comm_group_id);
     if (comm_group_it == comm_groups.end() || !comm_group_it->second) {
         workload_logger_

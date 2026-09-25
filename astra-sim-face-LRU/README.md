@@ -8,12 +8,13 @@
 > 本仓是 ASTRA-sim 2.0 的晶圆级芯片（Wafer-Scale Chip, WSC）推理仿真改造仓，
 > 系 `astra-sim-face` 的 **KV 冷热管理改造仓（-LRU）**：在 FACE 请求→实例映射
 > **逐行保留**（`face_scheduler.py` 零改动）的前提下，把原仓的"两态 KV +
-> LRU 零代价删除 + 历史全量重算"整体替换为**三态 KV 冷热管理**——
-> LOCAL / PARTIAL（前 ⌈L/2⌉ 层片上 + 后 ⌊L/2⌋ 层远端）/ REMOTE 三态 +
-> **去类型化两段式 LRU 逐出**（先扫全部会话后半层、仍不足才整体外迁=唯一回退）+
-> 远端共享内存池逐出/回迁物理链路 + PARTIAL 同实例真流水恢复。逐出内核与
-> 发射链路承袭 `astra-sim-sh_2.0`（去类型化；恢复取代重算，RECOMPUTE 路径
-> 已从历史决策中删除）。六个同源仓
+> LRU 零代价删除 + 历史全量重算"整体替换为 **session 级 Tiered-LRU 冷热管理**——
+> LOCAL（全部层片上）/ REMOTE（全部层远端池）两态 +
+> **单阶段完整 session LRU 逐出**（逐出单位 = 完整 logical session：全部层、
+> 全部 TP shard、全部本地驻留字节一次性整体外迁，允许过量释放）+
+> 远端共享内存池逐出/回迁物理链路 + 全量恢复（恢复完成前不可消费）。
+> 历史决策中 RECOMPUTE 已删除；旧三态（PARTIAL 半层化）与两段式逐出
+> 已物理移除，仅在分析层保留旧日志解析兼容。六个同源仓
 > `astra-sim-face / astra-sim-wscllm / astra-sim-sh_2.0 / astra-sim-sh_3.0 /
 > astra-sim-face-LRU / astra-sim-wscllm-LRU`
 > 共享同一套硬件架构建模与同一套术语，仅在"请求→实例映射与 KV 管理策略"上分化（见文末对照表）。
@@ -68,10 +69,20 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
 - **"统一"的含义**：远端池是统一逻辑地址空间——从边缘芯粒 A 写入的数据可以从另一个
   边缘芯粒 B 读出、回到片上任意芯粒，写入端口与读出端口可以不同（该统一性为
   建模语义，全仓无对应配置/manifest 键），因此称为统一内存池。
-- **端口代价模型**：每个边缘端口为严格 FIFO 事务队列，单次访问
-  `耗时 = 端口时延 + 字节数 / 端口带宽`（取硬件配置 `remote-memory` 的值）；
-  端口之间完全并行，远端池总容量不设限（sh 系仓实现于各自仓的
-  `extern/remote_memory_backend/`）。
+- **端口代价模型（2026-09-24 并发化改造，方案《SerDes片外链路并发化改造执行方案》§1/§3）**：
+  每个边缘端口不再是严格 FIFO 单事务串行队列，改为**并发在途 + 流体均分**：
+  事务 issue 即进入 latency 阶段（固定 `remote-mem-latency`，可跨事务重叠、
+  不占带宽）；latency 到期后正字节事务进入同端口传输流集合，N 条在途流各得
+  `remote-mem-bw / N` 连续均分，任一流完成立即按新 N 重分（同一连续时刻完成
+  的流整批移出分母，新到流不与垂死流分带宽）；完成回调落在
+  `ceil(fluid_finish_ns)` 整数 Tick（物理服务完成时刻允许是 Tick 内连续子步，
+  回调 Tick 是唯一对外完成时间）；`bytes=0` 且 `latency=0` 的事务走独立一次性
+  定时作业精确延 1ns 异步完成。端口内无 FIFO 等待队列、无人为 outstanding
+  上限；端口之间完全并行，远端池总容量不设限（sh 系仓实现于各自仓的
+  `extern/remote_memory_backend/`，本仓流体实现在
+  `extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.{hh,cc}`，
+  配置取硬件 `remote-memory` 的值；`remote-mem-bw` 以 GB/s 声明、C++ 经 SI
+  恒等 1 GB/s ≡ 1 B/ns 数值消费）。
 - **本仓配置**：远端内存已启用（2026-09-06 改造，自 sh_2.0 同步
   `extern/remote_memory_backend/` 现版 + Sys/CLI 接线 + `config_resolver.py`
   PER_NPU 分支）：硬件配置 `sh_test_mesh/hardware/face_case5_config_c.json` 声明
@@ -106,10 +117,10 @@ prefill 与 decode 不分池。
 
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
-| **astra-sim-face-LRU（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射（与 astra-sim-face 逐行一致）：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | 三态（LOCAL/PARTIAL/REMOTE）；去类型化两段式 LRU 逐出（先逐后半层、仍不足才整体外迁=唯一回退）；恢复＝远端回迁（PARTIAL 后缀与前缀计算真流水，RECOMPUTE 已删除） | 启用（全部边缘芯粒挂端口） |
+| **astra-sim-face-LRU（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射（与 astra-sim-face 逐行一致）：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | 两态（LOCAL/REMOTE）；单阶段完整 session LRU 逐出（整体外迁、允许过量释放）；恢复＝全量远端回迁（RECOMPUTE 已删除） | 启用（全部边缘芯粒挂端口） |
 | astra-sim-face | 统一实例（P+D 同实例） | FACE 原始映射（同上） | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 不支持（机制已整体移除） |
 | astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
-| astra-sim-wscllm-LRU | PD 分离（同 wscllm） | wscllm 原始映射（静态 P/D 分区 + 最小排队 + 静态路由钉死，逐行保留） | 三态 + 去类型化两段式 LRU 逐出 + 远端回迁（与本仓同一内核族） | 启用 |
+| astra-sim-wscllm-LRU | PD 分离（同 wscllm） | wscllm 原始映射（静态 P/D 分区 + 最小排队 + 静态路由钉死，逐行保留） | 完整本地/完整远端二态；session 级单阶段完整 LRU 逐出（整体外迁、允许过量释放，无 PARTIAL 运行态）；恢复＝远端池全量回迁（与本仓同一内核族） | 启用 |
 | astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
@@ -168,8 +179,9 @@ hbm_dma 单槽闭式计时）。
    （节点级属性 `is_local_hbm_kv_restore: true`）——restore 落 HBM 的唯一数据计费；
    一 rank 同时至多一个在飞 restore（hbm_dma 单槽），带宽分享开关见上。
 4. **远端池直连端点（POOL_READ/POOL_WRITE）**：source 恰为边缘 rank 的直连
-   `mem_store(hbm_access_mode=1)` 触发 POOL_READ 作业 + 池端口 FIFO 双异步 join
-   （非直连链路的数据由 comm_send 承担、边缘侧过路 `hbm-charge:false` 零计费，
+   `mem_store(hbm_access_mode=1)` 触发 POOL_READ 作业 + 池端口事务双异步 join
+   （远端端口腿为 2026-09-24 起的并发流体计时，见 §D 端口代价模型；非直连
+   链路的数据由 comm_send 承担、边缘侧过路 `hbm-charge:false` 零计费，
    见 §1.1 计费地图）。
 
 仲裁规则：某 rank 同时有 N 个 HBM 用户 → 各得 full_rate/N **严格均分**；任一作业完成
@@ -195,71 +207,76 @@ local_hbm_restore_bytes_issued）、峰值并发作业数、均分重分配事�
   decode 以加权实例图邻域（距离阈值 D_limit = D2D 带宽 / 本地 HBM 带宽）内
   per-die Roofline 单位 NPU 增量时延最小者（精确平局轮转）选实例。映射不感知
   KV 位置（位置只决定恢复成本，不进入选择键）。
-- **KV 冷热管理（本仓改造核心，2026-09 改造）**：三态（LOCAL / PARTIAL / REMOTE）
-  + 去类型化两段式 LRU 逐出 + 远端共享池逐出/回迁 + 六分支恢复（详见 §1.1）；
-  session 驻留状态/字节数/驻留层段由运行时 KV 账本（`session_kv_manager.py`
-  三态内核）动态维护，无 sidecar。
+- **KV 冷热管理（本仓改造核心，2026-09 改造）**：两态（LOCAL / REMOTE）
+  + 单阶段完整 session LRU 逐出 + 远端共享池逐出/全量回迁 + 四分支恢复
+  （详见 §1.1）；session 驻留状态/字节数由运行时 KV 账本
+  （`session_kv_manager.py` 两态内核）动态维护，无 sidecar。
 - **执行驱动机制层**（`astra-sim/workload/execution_driven/`）：在线事件驱动
   （RequestIngress/DecisionMailbox/WatchRegistry/GraphBatchCommitter/长连接
   DecisionBridge 等），六仓接口一致。
 - **验证证据**：Tier B 等价、感知开/关决策逐字节一致、分层账本对账、
-  机制 fixtures、三态不变量审计（`SH_STRICT_KV_INVARIANTS=1` 全绿）。
+  机制 fixtures、两态不变量审计（`SH_STRICT_KV_INVARIANTS=1` 全绿）。
 
-### 1.1 会话 KV 三态冷热管理（`kv_cache_policy = session_lru_tiered`）
+### 1.1 会话 KV 两态冷热管理（`kv_cache_policy = session_lru_tiered`）
 
 本仓 `trace_config.csv` 的 `kv_cache_policy` 已切换为 `session_lru_tiered`
-（旧值 `session_lru_recompute` 仍可读、仅作旧 trace 兼容；行为上管理器唯一，
-无档位分支）。逐出内核与发射链路承袭 sh_2.0，按改造策略做**去类型化**裁剪。
+（2026-09-25 命名卫生起值域单值化：唯一合法值 `session_lru_tiered`，旧值别名
+`session_lru_recompute` 与未知值 fail-closed 拒绝；行为上管理器唯一，
+无档位分支）。逐出内核（session 级 Tiered-LRU）**去类型化**
+且**去部分化**：逐出/恢复的决策粒度恒为完整 logical session。
 
-**三态与层切分**（`sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py`）：
+**两态状态机**（`sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py`）：
 
 | 状态 | 含义 | 片上层数 |
 |---|---|---|
 | `LOCAL_HBM` | 全部 L 层驻留本实例 | L |
-| `PARTIAL_HBM_REMOTE` | 前 ⌈L/2⌉ 层片上 + 后 ⌊L/2⌋ 层远端池 | L − L//2 |
 | `REMOTE_MEMORY` | 全部层在远端池，无实例归属 | 0 |
 
-- 切分规则 `partial_resident_prefix_layers = L − L//2`（奇数层较大半驻留），
-  **不可配置**；层区间字节按层数正比折算，逐 NPU 按整头（whole-head）分片，
-  本地 + 远端逐字节守恒（`kv_cache_shard_bytes_for_layer_range` 守恒断言）。
+- 层区间字节按层数正比折算，逐 NPU 按整头（whole-head）分片；本地/远端
+  账本逐字节守恒（`kv_cache_shard_bytes_for_layer_range` 守恒断言）。
+  旧三态的 `PARTIAL_HBM_REMOTE`（半层驻留）已无运行时产生者：两态白名单
+  fail-closed 拒绝（不可达性由测试钉死），常量仅为旧日志解析保留。
 - 位置值域（决策日志 `history_location_before`）：`local_hbm` /
-  `partial_hbm_remote` / `remote_memory`。
+  `remote_memory`。
 
-**去类型化两段式 LRU 逐出**（触发点与 face 原仓完全一致的三处：prefill 准入
-`prepare_history`、decode 准入 `move_prefill_to_decode`、容量增长 `_grow`；
-**不新增触发位置，完成路径零逐出**）：
+**去类型化单阶段完整 session LRU 逐出**（触发点与 face 原仓完全一致的三处：
+prefill 准入 `prepare_history`、decode 准入 `move_prefill_to_decode`、容量增长
+`_grow`；**不新增触发位置，完成路径零逐出**）：
 
-1. 候选池 = 本实例上"已完成（`last_completion_ns` 非空）且非 active"的驻留会话，
-   **不按 human/tool 分类**（无 `next_request_type`、请求 CSV 维持 8 列）；
-   排序键 `(last_completion_ns, session_id)` 升序 = 纯 LRU；触发请求自身会话受保护。
-2. **阶段 1（逐后半层）**：按 LRU 序把 LOCAL 会话的后 ⌊L/2⌋ 层 remote_store
-   → PARTIAL；**每逐一笔立即逐 NPU 重查水位，够即停**。
-3. 阶段 1 全部候选半层化仍不足 → **阶段 2（整体外迁 = 唯一回退）**：按同一 LRU
-   序把驻留前缀 `[0, resident_prefix_layers)` 整体 remote_store → REMOTE、清
-   `instance_index`；逐笔重查。
-4. 两阶段耗尽仍不足：记 `deep_gap`（int 计数 + KVCacheEvent）后按 face 语义
+1. 候选池 = 本实例上"已完成（`last_completion_ns` 非空）且非 active"的完整
+   本地驻留会话，**不按 human/tool 分类**（无 `next_request_type`、请求 CSV
+   维持 8 列）；排序键 `(last_completion_ns, session_id)` 升序 = 纯 LRU；
+   触发请求自身会话受保护；active/in-flight 会话绝不入池。
+2. **单阶段逐个整体外迁**：按 LRU 序逐 victim 把其全部 L 层、全部 TP shard、
+   全部本地驻留字节一次性 remote_store 到远端池（layer domain `[0, L)`，
+   before=L / after=0），随后整体释放本地占用、置 REMOTE、清 `instance_index`；
+   **每逐一笔立即逐 NPU 重查水位，够即停**；整体逐出产生的**过量释放被明确
+   允许**（不为凑缺口只逐某会话的部分层）。
+3. 耗尽仍不足：记 `deep_gap`（int 计数 + KVCacheEvent）后按 face 语义
    `admission_blocked` 推迟 + **容量纪元门重试**（容量变化或纪元重开通道时重试；
    仅空实例装不下才 raise）——不搬 sh 的"耗尽即 raise"。
-- **无消融档位**（不设 `no_tiered_eviction` 类开关，逐出行为唯一：两段式，
-  整体外迁是唯一回退）；**无 R_kv 保留水位**（`kv_reserve_context_tokens`
+- **无消融档位**（不设 `no_tiered_eviction` 类开关，逐出行为唯一：完整
+  session 整体外迁）；**无 R_kv 保留水位**（`kv_reserve_context_tokens`
   维持 manifest-only）；**无历史截断**。
-- 守卫：D4-I1 受害者资格复核（逐出后重验受害者确已非 active/非保护）+
-  D4-I3 过度逐出守卫（撤销最后一笔必须使至少一个受影响 rank 回到不满足，
-  否则不逐）；`SH_STRICT_KV_INVARIANTS=1` 全量审计（三态白名单 / 层域断言 /
+- 守卫：D4-I1 受害者资格复核（逐出后重验受害者确已非 active/非保护）；
+  旧 D4-I3 过度逐出守卫已随两阶段流程删除（与过量释放语义冲突）；
+  `SH_STRICT_KV_INVARIANTS=1` 全量审计（两态白名单 / 全量层域断言 /
   REMOTE 无实例无驻留层 / 逐 rank expected_kv 重算 / 预占一致性）。
 - 终局会话 `retire_terminal_session`：层域减账 + 远端账面静默核销（不发传输、
   **不算逐出**）；构图器同点位清除该会话的 store 支链尾部登记。
 
-**远端共享池与物理链路**（远端池**无容量上限、无自身置换**；边缘端口严格 FIFO
-单事务 `耗时 = λ_rem + bytes/B_rem`；逐 source/target rank 取**最近边缘端口**
+**远端共享池与物理链路**（远端池**无容量上限、无自身置换**；边缘端口自
+2026-09-24 起为并发流体端口（§D 端口代价模型）：同端口多事务并发在途、
+带宽按在途流数均分，端口耗时不再是单事务 `λ_rem + bytes/B_rem` 串行公式；
+逐 source/target rank 取**最近边缘端口**
 ——曼哈顿跳数最小、平局取编号最小；NoC 段走既有 XY 维序确定性路由）：
 
 | 链路 | 发射序与 HBM 计费（每字节恰一次） |
 |---|---|
-| remote_store 链 A（source≠edge） | [可选 1B trigger] → source `comm_send(bytes)`＝源端 COMM_READ 唯一数据计费 → edge `comm_recv`（`hbm_charge=false` 过路零计费）→ edge `mem_store`（池写本地零计费，仅池端口 FIFO）→ 1B ack 双端；**源端收到 ack 后才物理释放** |
-| remote_store 链 B（source==edge 直连） | edge `mem_store(bytes, hbm_access_mode=1)`＝POOL_READ 唯一计费 + 池端口 FIFO 双异步 join |
-| remote_load（回迁） | [1B control/arm] → edge `mem_load`（仅池 FIFO）→ edge `comm_send`（`hbm_charge=false`）→ target `comm_recv`（`hbm_charge=false`，目标写由 restore 承担）→ target `local_hbm_kv_restore`（节点级 `is_local_hbm_kv_restore=true`）＝RESTORE 唯一数据计费 |
-| noc_migrate（LOCAL 跨实例 / PARTIAL 前缀迁移 / decode P→D 交接） | face 既有 1000 类 p2p 配对迁移，两端正常 COMM_READ/COMM_WRITE 计费 |
+| remote_store 链 A（source≠edge） | [可选 1B trigger] → source `comm_send(bytes)`＝源端 COMM_READ 唯一数据计费 → edge `comm_recv`（`hbm_charge=false` 过路零计费）→ edge `mem_store`（池写本地零计费，仅池端口流体计时）→ 1B ack 双端；**源端收到 ack 后才物理释放** |
+| remote_store 链 B（source==edge 直连） | edge `mem_store(bytes, hbm_access_mode=1)`＝POOL_READ 唯一计费 + 池端口事务双异步 join（端口腿为并发流体计时） |
+| remote_load（回迁） | [1B control/arm] → edge `mem_load`（仅池端口流体计时）→ edge `comm_send`（`hbm_charge=false`）→ target `comm_recv`（`hbm_charge=false`，目标写由 restore 承担）→ target `local_hbm_kv_restore`（节点级 `is_local_hbm_kv_restore=true`）＝RESTORE 唯一数据计费 |
+| noc_migrate（LOCAL 跨实例 / decode P→D 交接） | face 既有 1000 类 p2p 配对迁移，两端正常 COMM_READ/COMM_WRITE 计费 |
 
 KV 传输 tag 由 `TransferTagAllocator` 从 **10,000,000** 起单调分配（错开既有
 `queue_index*10000+{1000,1900,3000}` 段）；新节点命名避开 `first_token` /
@@ -286,11 +303,12 @@ helper 暂存清空、主链恢复后原样归还（图依赖与逐出链在主�
 
 **store→restore 前递依赖补偿**：支链化后"同会话逐出池写先于其下一轮池读"
 的链序传递性失效——构图器按会话登记在飞 store 支链尾部（`pending_store_tails`
-，粒度 = 边缘 `mem_store` 完成），回迁发射统一入口（REMOTE 全量 remote_load
-与 PARTIAL 后缀恢复分支）发射前查表补边：同缘直接挂同 rank data_dep、跨缘
-经 1B p2p 中继承载时序（桥拒绝跨 rank 直边）；两段式逐出的 suffix 与 full
-两笔 store 均被依赖（restore 读全区间须等齐），terminal 会话回收登记。
-懒处理：store 早已物理完成时补边即刻满足、零额外时延。
+，粒度 = 边缘 `mem_store` 完成；session 级 Tiered-LRU 下逐出恒单笔整体
+store，每会话至多一条登记），回迁发射统一入口（REMOTE 全量 remote_load）
+发射前查表补边：同缘直接挂同 rank data_dep、跨缘经 1B p2p 中继承载时序
+（桥拒绝跨 rank 直边）；恢复链在等齐在飞 store 后才落位，恢复完成前不可
+消费；terminal 会话回收登记。懒处理：store 早已物理完成时补边即刻满足、
+零额外时延。
 
 **瞬态双占用窗口口径**：容量权威在 Python 台账、**决策时刻**记账（本仓既有
 语义，逐出策略/准入/`capacity_violations` 口径均不变，C++ 无容量强制）；
@@ -299,7 +317,7 @@ helper 暂存清空、主链恢复后原样归还（图依赖与逐出链在主�
 计算与该窗口重叠），窗口上界 = 该 rank 在飞逐出字节数；论文引用不得把窗口
 期台账值当物理占用。
 
-**恢复六分支**（下一轮到达、映射照常选点后，`prepare_history` 按态分流；
+**恢复四分支**（下一轮到达、映射照常选点后，`prepare_history` 按态分流；
 **RECOMPUTE 已从历史路径删除**——恢复取代重算，`remaining_chunks` 不再有
 `ceil(history/p_chunk)` 项）：
 
@@ -308,21 +326,25 @@ helper 暂存清空、主链恢复后原样归还（图依赖与逐出链在主�
 | 无历史 | 建片上记录，随 prefill 增长（NO_HISTORY） |
 | LOCAL 同实例 | 零开销本地复用（LOCAL_HIT） |
 | LOCAL 跨实例 | 整份 KV NoC 迁移（NOC_MIGRATE，既有 1000 类路径原样保留） |
-| PARTIAL 同实例 | **只回迁后缀层段 + 与前缀计算真流水重叠**（REMOTE_SUFFIX_RESTORE）：首 chunk 拆前缀层段/后缀层段，后缀段以远端恢复的逐 NPU 完成门为依赖，恢复流量与前缀计算重叠 |
-| PARTIAL 跨实例 | 两段链（PARTIAL_REMOTE_MIGRATE）：前缀 NoC 迁移 + 目标实例容量逐出 + 后缀远端恢复；**两段必须序列化在同一条 prefill 决策记录的 `history_transfers` 列表内**（watermark 校验"同请求同 kind 两次即 fail"） |
-| REMOTE | 全量回迁到选定实例，逐 target rank 最近边缘端口（REMOTE_RESTORE） |
+| REMOTE | 全量回迁到选定实例，逐 target rank 最近边缘端口，单笔 remote_load `[0, L)`（REMOTE_RESTORE）；恢复链等齐在飞 store，恢复完成前历史 KV 不可消费 |
 
-**KV 指标观测（方案 A）**：`repo_variant` 维持 `"astra-sim-face"` 不变；
-`kv_hit_state` **五值域不扩**——REMOTE→`full`、PARTIAL→`partial`
-（`full_local` / `full_remote` 的区分由 `kv_hit_states.csv` 的 evidence 列承载，
-如 `history_location_before=remote_memory`）；命中率分子 `hit_n = full + partial`
-公式不变；`slo_tools/kv_cache_adapter.py` face 分支**双级解析**——新产物优先
-`history_location_before` 三态映射，字段缺失回退 legacy `history_action` 四值表
+**KV 指标观测（方案 A）**：`repo_variant` 自 2026-09-25 第二轮修复批起改为
+`"astra-sim-face-LRU"`（`plan_materializer.py` `REPO_VARIANT`；slo 域四张注册表
+`kv_cache_adapter.py`/`hbm_watermark.py`/`hopbytes.py`/`load_imbalance.py` 已登记
+同键、条目语义复制 face 分支——键名独立、解析语义不变）；
+`kv_hit_state` **五值域不扩**——新运行仅产出两值 `local_hbm`/`remote_memory`
+→ 恒 `full`（`full_local` / `full_remote` 的区分由 `kv_hit_states.csv` 的
+evidence 列承载，如 `history_location_before=remote_memory`），
+`partial_hbm_remote→partial` 映射仅供旧产物解析、新运行不产出；
+命中率分子 `hit_n = full + partial` 公式不变；
+`slo_tools/kv_cache_adapter.py` face 分支**双级解析**——新产物优先
+`history_location_before` 两态映射，字段缺失回退 legacy `history_action` 四值表
 （旧产物兼容）；逐出/恢复消费契约行（`history_transfers` 逐段对象 +
 `history_evictions`/`prefill_evictions`/`decode_evictions`/
 `completion_eviction_transfers`，legacy 镜像行不再消费防双计）；
 `hbm_watermark.py` 检测到 `history_transfers` 在场自动升级 S2 逐段对账重放
-（PARTIAL 两段式恢复不再混成标量）。`request_metrics.csv` 冻结列不动
+（新日志下 evict bytes == session bytes、restore ratio 恒 1.0，partial
+计数恒 0；旧产物 replay 路径原样保留）。`request_metrics.csv` 冻结列不动
 （kv_hit_state 列维持 postprocess 填 NA，真值在 kv_hit_states.csv）。
 
 ## 2. 快速开始
@@ -347,7 +369,7 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    产物放 sh_test_mesh/workload/llama2_7b_inference/traces/，
 #    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
 #    （裸仓交付态该指针为占位串；kv_cache_policy=session_lru_tiered 为本仓
-#    交付态值，无需改动——旧值 session_lru_recompute 保留仅为兼容读取）
+#    交付态值且为唯一合法值，无需改动）
 #    物化器 CLI：[source] [queue] [sidecar] [window_ns] [arrival_scale]；
 #    arrival_scale>0 仅缩放 turn-0 session_arrival_time_ns（t0/scale，即
 #    负载 ×scale），inter_request_interval_ns（human/tool 外生等待）不动，
@@ -403,7 +425,7 @@ bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（bui
 | 路线 | runner | 时钟 | 产物 |
 |---|---|---|---|
 | ③ strategy 关感知 | run_online_strategy.sh | 真实物理 | 决策日志/metrics（digests 默认关，见 §3.1.1；成功后自动瘦身归档） |
-| ④ strategy 开感知 | run_online_strategy_sensing.sh | 真实物理 | ③产物 + ledger.jsonl/感知日志（对账用） |
+| ④ strategy 开感知 | run_online_strategy_sensing.sh | 真实物理 | ③产物 + ledger.jsonl/感知日志 + remote_memory_transactions.jsonl（对账用；事务流仅 sensing 跑产生，零事务也落 per-port PortStats 汇总终行，两 runner 归档清单已含） |
 
 PASS 判据：completed == 物化请求数、no_decision=0、single_node=0、
 delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据）。
@@ -684,7 +706,8 @@ OnlineCli 在线家族解析）：
 `run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
 另有 C++ 聚焦单测（target 注册于 `astra-sim/network_frontend/analytical/CMakeLists.txt`，
 随 §2 ① 构建树编译，可执行文件落在 `build/astra_analytical/build_congestion_aware/bin/`，
-无参数直跑；2026-08-29 新增两项，多仓同构；2026-09 -LRU 改造再随迁两项）：
+无参数直跑；2026-08-29 新增两项，多仓同构；2026-09 -LRU 改造再随迁两项；
+2026-09-24 SerDes 片外链路并发化改造新增三项远端端口测试，见下）：
 `..._AlarmCancellationTest`（可取消 alarm
 链路：bucket 清空时 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、
 legacy 后端回退 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot
@@ -692,16 +715,37 @@ node bucket 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输�
 sizeof 编译期锁定）、`..._LocalHbmTest`（本仓自研 ET 静态版 HBM 模型测试，保留）、
 `..._LocalHbmModelTest`（6 作业模型权威数值测试，575 行，2026-09 改造自 sh_2.0 随迁：
 RESTORE/POOL_READ/POOL_WRITE 泳道与 N-way 均分序列的逐数值断言）等。
+
+SerDes 片外链路并发化新增远端端口测试（方案阶段 5.1/5.3/5.4，2026-09-24；
+源文件 `astra-sim/workload/execution_driven/tests/remote_port_{nway,online_gate,static_gate}_test.cc`）：
+- `..._RemotePortNwayTest` 与 `..._RemotePortOnlineGateTest`：无参数直跑
+  `build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest`、
+  `build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest`。
+  前者为端口模型精度夹具（PER_NPU/PER_NODE/MEMORY_POOL 三映射、方案阶段 5.2 数学锚
+  bw=6/lat=100 双 600B→双回调 Tick300、四流 1k/2k/3k/4k→90/120/140/150、双零 +1ns、
+  同 Tick 保留原事件、fail-closed 边界），自写全部配置进隔离 mkdtemp 目录；后者为
+  online NodeView 发射门控系统夹具（同 rank 双 MEM 不互堵、MEM 与 COMM_SEND 不共门、
+  后端 PortStats 断言并发在途）。
+- `..._RemotePortStaticGateTest`：静态 ETFeeder 发射门控系统夹具，需先生成 fixture：
+  `python3 astra-sim/workload/execution_driven/tests/make_remote_port_static_fixture_et.py --out-dir <临时目录>`
+  然后
+  `build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest --fixture-dir <同一临时目录>`。
+- 三测试亦可经回归入口一次执行：`bash sh_test_mesh/run_scripts/run_remote_port_tests.sh`
+  （默认对既有 build 树增量构建三目标后逐个运行；`--skip-build` 跳过构建直接运行；
+  该脚本头注登记各命令与当日落地验证退出码，ctest 不作为执行证据）。
 Python 侧 `online/test_propagating_tail.py`
 （`online_scheduler_base.py` 的在途尾部观测器 PropagatingTailTracker：对到达未完成
 请求、未 ack 交付、未确认 provisional KV 动作三类在途工作记 current/peak/按来源计数，
-超限 fail-closed 报错、绝不截断；8 用例，pytest 或直跑）；KV 三态改造配套专项：
-`test_face_tiered_eviction_sequence.py`（两段式逐出序：半层×N 逐笔重查停机 →
-不足才整体×M、D4-I3 撤销重开、触发会话保护、平局按 session_id、耗尽 admission_blocked
-不 raise）、`test_face_kv_incremental_invariants.py`（三态增量账本不变量）、
+超限 fail-closed 报错、绝不截断；8 用例，pytest 或直跑）；KV 冷热管理改造配套专项：
+`test_face_tiered_eviction_sequence.py`（session 级 Tiered-LRU 整体逐出序：严格
+LRU 逐 victim 恰一笔全量 remote_store、逐笔重查水位在首个覆盖缺口 victim 处停、
+过量释放不 raise、活跃/触发会话保护、平局按 session_id、耗尽 admission_blocked
+不 raise、传输边缘端口/全量层域/单 victim 单 record）、
+`test_face_kv_incremental_invariants.py`（两态增量账本不变量 + PARTIAL 不可达
+fail-closed 证明）、`online/test_whole_session_no_partial_outputs.py`（规格6
+输出门禁：新产物无 partial/suffix 词汇域、evict_full 恒全量域）、
 `online/test_graph_batch_builder.py` 的 `KVTransferBillingNailTest`（remote_store/
-remote_load/noc_migrate 逐节点 HBM 计费键钉子）与
-`test_partial_first_chunk_two_stage_pipelining`（PARTIAL 真流水首 chunk 层段拆分）。
+remote_load/noc_migrate 逐节点 HBM 计费键钉子）与远端恢复会话列车统一聚合体专项。
 
 ## 5. 目录导览（关键路径）
 
@@ -711,16 +755,19 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
-- `sh_test_mesh/tests/` + workload 根 + online/：pytest（-LRU 改造后基线：
-  tests/ 48 + workload 根 34（test_face_scheduler 25 / kv_incremental_invariants 3 /
-  tiered_eviction_sequence 6）+ online/ 74（另 7 subtests）= **156 passed**，
-  `SH_STRICT_KV_INVARIANTS=1` 下同绿；2026-08-22 拼 batch 改造新增
-  online/test_weight_passes.py(4) + online/test_train_machinery.py(9) +
-  online/test_graph_batch_builder.py(7)；2026-08-29 内存根治续作新增
-  online/test_propagating_tail.py(8)；2026-09 -LRU 改造新增/改写
-  test_face_tiered_eviction_sequence.py(6) + 计费钉子/流水专项等；
-  2026-09-13 逐出旁路支链改造新增 test_eviction_side_branch_structure.py(7)
-  + test_store_restore_ordering.py(5)）
+- `sh_test_mesh/tests/` + workload 根 + online/：pytest（session 级 Tiered-LRU
+  改造后基线（2026-09-25 实测）：tests/ 48 + workload 根 35（test_face_scheduler
+  25 / kv_incremental_invariants 4 / tiered_eviction_sequence 6）+ online/ 75
+  （另 7 subtests）= **158 passed**，`SH_STRICT_KV_INVARIANTS=1` 下同绿；
+  2026-08-22 拼 batch 改造新增 online/test_weight_passes.py(4) +
+  online/test_train_machinery.py(9) + online/test_graph_batch_builder.py(7)；
+  2026-08-29 内存根治续作新增 online/test_propagating_tail.py(8)；
+  2026-09 -LRU 改造新增/改写 test_face_tiered_eviction_sequence.py(6) +
+  计费钉子/恢复列车专项等；2026-09-13 逐出旁路支链改造新增
+  test_eviction_side_branch_structure.py(7) + test_store_restore_ordering.py(5)；
+  2026-09-25 session 级 Tiered-LRU 改造重写 tiered_eviction_sequence(6) /
+  kv_incremental_invariants(4) / store_restore_ordering(5) / admission_liveness
+  的恢复专项等，新增 online/test_whole_session_no_partial_outputs.py(1) 输出门禁）
 - `sh_test_mesh/slo_tools/tests/`：120 例（B4 后 34→38 watermark / 总 114→120）；
   其中 3 例（driver_parity ×2 + load_imbalance 手算例）为**改前基线既有失败**
   ——原 face 仓与 sh_2.0 仓同样失败（环境性/共享基线问题），与 -LRU 改造无关
@@ -731,8 +778,8 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与
   授权过更大窗口；以当下指示为准）。
 - 缺失输入一律 fail-closed（generate 桩/materializer/runner/GEN_MATCH 均实测 exit=1）。
 - FACE 映射文件 `face_scheduler.py`（Prefill/Decode 选点）为保留对象，**勿改**
-  （-LRU 改造全程零改动，diff 可证）；`session_kv_manager.py` 为三态 KV 内核
-  （本仓改造核心交付物）——修改它必须连带跑三态不变量测试
+  （-LRU 改造全程零改动，diff 可证）；`session_kv_manager.py` 为两态 KV 内核
+  （session 级 Tiered-LRU，本仓改造核心交付物）——修改它必须连带跑不变量测试
   （test_face_kv_incremental_invariants / test_face_tiered_eviction_sequence）
   且 `SH_STRICT_KV_INVARIANTS=1` 全绿。
 - 改动机制层后请跑 §4 fixtures + §2 ⑤ 对账再交付。
@@ -813,10 +860,9 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   turn-0 源前缀折入该行 prefill_length（队列口径不变，
   `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的
   history_tokens_before 推导值（`plan_materializer.py:61-88`）；会话 KV 的
-  规模/位置/驻留层段由运行时三态账本（`SessionKVCacheManager`）动态维护
+  规模/位置由运行时两态账本（`SessionKVCacheManager`）动态维护
   （`face_online_scheduler.py`；`session_kv_manager.py`）：LOCAL 驻留命中直接
-  复用、跨实例整份 NoC 迁移、PARTIAL 两段式恢复（同实例后缀回迁真流水 /
-  跨实例前缀迁移+后缀回迁）、REMOTE 全量回迁——**RECOMPUTE 已从历史路径
+  复用、跨实例整份 NoC 迁移、REMOTE 全量回迁——**RECOMPUTE 已从历史路径
   删除**（被逐出的会话落在远端冷层而非重算，见 §1.1）。
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
   范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持

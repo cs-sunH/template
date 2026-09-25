@@ -40,16 +40,3 @@ void UsageTracker::decrease_usage() {
         }
     }
 }
-
-void UsageTracker::set_usage(int level) {
-    if (current_level != level) {
-        if (retain_history_) {
-            Usage u(current_level, last_tick, Sys::boostedTick());
-            usage.push_back(u);
-        }
-        current_level = level;
-        if (retain_history_) {
-            last_tick = Sys::boostedTick();
-        }
-    }
-}

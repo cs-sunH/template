@@ -304,7 +304,6 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         super().__init__(
             manifest=manifest,
             config=config,
-            replay=None,  # strategy 无决策日志回放源
             digest_sink=digest_sink,
             mode=mode,
             sensing=sensing,
@@ -322,7 +321,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 "strategy scheduler supports kv_cache_policy "
                 "'session_lru_recompute' only, got {!r}".format(
                     config.kv_cache_policy))
-        self.graph = graph  # GraphBatchBuilder(与 replay 路径共用)
+        self.graph = graph  # GraphBatchBuilder(由 online_service 注入)
 
         # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(alpha 默认 1.0,与离线同参)。
         # offline: wsc_llm_scheduler.py
@@ -430,10 +429,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # (prefill_chunks>0;§3.6 P 侧逐 chunk 不拼,退化列车);两类字段
         # 互斥(无混合列车)。
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):提供
-        # train_ledger_sink 时行即写即弃,不驻留本列表;缺省 None = 兼容
-        # 旧路径(行仍缓冲)。
+        # train_ledger_sink 时行即写即弃;缺省 None = 不落盘(不缓冲)。
         self.train_ledger_sink = train_ledger_sink
-        self.train_ledger_rows = []
         # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
         # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代;0 = 不设限。
         # 交付默认 = 8(sh_1.0 母本 2026-08-22 §7.4 A2 对拍裁决:无上限
@@ -441,6 +438,15 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 位移 ≤5% 的最大值";原则 1 优先于节点数)。
         self._train_max_iter = int(
             os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        # low 修复(2026-09-24):负值此前无构造期校验,进入 _plan_train 后
+        # `iterations > 负数` 恒真、iterations 被截为负值,要到发射期才以
+        # 难懂错误暴露——改 fail-fast。非整数字面值在 int() 已抛
+        # ValueError;0 = 不设限(值域见上注释)。
+        if self._train_max_iter < 0:
+            raise ValueError(
+                "SH_TRAIN_MAX_ITER must be a non-negative integer "
+                "(0 = unlimited), got {!r}".format(
+                    os.environ.get("SH_TRAIN_MAX_ITER")))
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
@@ -920,11 +926,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         }
         if first_step:
             ledger_row["first_step"] = True
-        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省缓冲。
+        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省 None = 不落盘。
         if self.train_ledger_sink is not None:
             self.train_ledger_sink(ledger_row)
-        else:
-            self.train_ledger_rows.append(ledger_row)
 
     def _emit_train_first_step(self, state, plan, train_plan,
                                tick: int) -> None:
@@ -1581,18 +1585,16 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             "prefill_chunks": prefill_chunks + recompute_chunks,
             "pass_spans": prefill_chunks + recompute_chunks,
         }
-        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省缓冲
-        #(P 侧退化列车行,字段与改前一致)。
+        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省 None =
+        # 不落盘(P 侧退化列车行,字段与改前一致)。
         if self.train_ledger_sink is not None:
             self.train_ledger_sink(ledger_row)
-        else:
-            self.train_ledger_rows.append(ledger_row)
 
     # ------------------------------------------------------------- 助手 --
 
     def _plan_dict(self, runtime) -> dict:
         """graph_batch_builder 消费的 plan 字段(request 事实 + 在线决策)。
-        与 replay 路径同构;history_action 等 KV 决策字段在准入时已落账本。
+        history_action 等 KV 决策字段在准入时已落账本。
         """
         return {
             "request_id": runtime.request_id,

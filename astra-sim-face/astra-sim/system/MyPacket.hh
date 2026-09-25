@@ -20,12 +20,10 @@ class MyPacket : public Callable {
              int preferred_dest);
     void call(EventType event, CallData* data);
 
-    int stream_id;
     int preferred_vnet;
     int preferred_dest;
     int preferred_src;
     uint64_t msg_size;
-    Tick ready_time;
 };
 
 }  // namespace AstraSim

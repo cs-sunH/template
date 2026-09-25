@@ -63,8 +63,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
     (expected: 1177 for the 20.csv first-30-seconds input).
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
-    drained.  Assertions completed == CSV data rows and
-    no_decision_python_callback_count == 0 (acceptance: 1177/1177 replay).
+    drained.  Assertions completed == CSV data rows (acceptance: 1177/1177
+    replay).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -118,6 +118,7 @@ Step 1-10 (runners + IDLE fixture):
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -1091,8 +1092,35 @@ int main(int argc, char* argv[]) {
     // Create ASTRA-sim related resources
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
+    // 方案 §3.4: deliberately NON-const -- the run end must destroy/reset the
+    // remote API BEFORE the Sys objects are deleted, so the backend's
+    // shutdown() (transition-event cancel through the host Sys) always finds
+    // its host Sys alive. The former `const auto` could only be destroyed at
+    // scope exit -- after the `delete systems` loop.
+    auto memory_api =
         std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
+    // 阶段 3（§5.1）：既有 --sensing-enabled 路径接上逐事务明细流式写出
+    // ——bridge_dir/remote_memory_transactions.jsonl（惰性建文件：无首行
+    // 不建文件；sensing 关闭零逐事务残留）。不新增配置键/开关。行键
+    // run_id 沿用 metrics manifest 的非空 run_id（manifest 已在
+    // MetricCollector::initialize 载入）；缺失时以完整规范化 RUN_DIR
+    // （bridge_dir 的规范化父目录）作关联键——不从可复用目录 basename
+    // 猜测唯一性；合成夹具的固定 id 由调用方在 manifest 给定。
+    if (online_cli.sensing_enabled) {
+        std::string transaction_run_id =
+            MetricCollector::instance().metric_run_id();
+        if (transaction_run_id.empty()) {
+            std::error_code fs_ec;
+            const std::filesystem::path normalized_bridge_dir =
+                std::filesystem::absolute(online_cli.bridge_dir, fs_ec)
+                    .lexically_normal();
+            transaction_run_id =
+                fs_ec ? online_cli.bridge_dir
+                      : normalized_bridge_dir.parent_path().string();
+        }
+        memory_api->enable_transaction_log(
+            online_cli.bridge_dir, transaction_run_id);
+    }
     auto systems = std::vector<Sys*>();
 
     auto queues_per_dim = std::vector<int>();
@@ -1741,20 +1769,13 @@ int main(int argc, char* argv[]) {
         MetricCollector::instance().flush_emit_buffer();
     }
 
-    // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
-    // completed_request_count == CSV data rows (1177 for the 20.csv
-    // first-30-seconds input; the offline replay equivalent of
-    // replay_poll_query_count == 0 is the never-incremented
-    // no_decision_python_callback_count -- no delivery epoch was ever
-    // dropped). tick_end_without_decision_count is a normal
-    // allowed-nonzero counter, reported separately.
+    // Step-1-6/1-8 gate counters. tick_end_without_decision_count is a
+    // normal allowed-nonzero counter.
     std::cout << "[online] gate counters: event_count=" << mailbox.event_count()
               << " delivery_count=" << mailbox.delivery_count()
               << " coalescing_ratio=" << mailbox.coalescing_ratio()
               << " tick_end_without_decision_count="
-              << mailbox.tick_end_without_decision_count()
-              << " no_decision_python_callback_count="
-              << mailbox.no_decision_python_callback_count() << std::endl;
+              << mailbox.tick_end_without_decision_count() << std::endl;
     std::cout << "[online] service counters: accepted="
               << svc.accepted_request_count()
               << " completed=" << svc.completed_request_count()
@@ -1954,13 +1975,6 @@ int main(int argc, char* argv[]) {
             gate_ok = false;
         }
     }
-    if (mailbox.no_decision_python_callback_count() != 0) {
-        std::cerr << "[Error] (execution_driven/online) "
-                     "no_decision_python_callback_count="
-                  << mailbox.no_decision_python_callback_count()
-                  << " != 0" << std::endl;
-        gate_ok = false;
-    }
     if (mailbox.delivery_count() == 0 && expected_requests > 0) {
         std::cerr << "[Error] (execution_driven/online) delivery_count == 0: "
                      "the decision bridge never served an epoch"
@@ -2034,6 +2048,50 @@ int main(int argc, char* argv[]) {
         AstraSim::LoggerFactory::shutdown();
         return EXIT_FAILURE;
     }
+
+    // 方案 §3.4 lifecycle close-out, ordered BEFORE the Sys deletions below:
+    //  1. Normal end fails closed on an undrained backend (undelivered port
+    //     jobs / dual-zero timers / pending transition event -- backend-owned
+    //     state only, sensing-independent) or on a rank whose local-HBM model
+    //     still has active jobs. An unfinished HBM endpoint join keeps
+    //     exactly one leg alive -- the remote-port leg trips is_drained(),
+    //     the local-HBM leg trips has_active_jobs() -- so a normal end with
+    //     either half done REPORTS and exits nonzero instead of silently
+    //     cleaning up.
+    //  2. Then destroy the remote API while its host Sys is still alive
+    //     (shutdown() cancels the pending transition event through the host
+    //     Sys). After reset() the dangled sys->remote_mem raw pointers are
+    //     never dereferenced again: ~Sys/~Workload/HardwareResource do not
+    //     touch them.
+    //  3. Only afterwards delete the Sys objects.
+    // The gate-fail early return above skips all of this on purpose: the
+    // backend is then destroyed at scope exit while the (leaked) Sys objects
+    // keep their memory valid, releasing only backend-owned state -- no
+    // normal completion is ever claimed for a failed run.
+    if (!memory_api->is_drained()) {
+        std::cerr << "[Error] (execution_driven/online) remote-memory "
+                     "backend is not drained at normal end (undelivered "
+                     "port transaction or pending transition event); "
+                     "refusing to shut down silently"
+                  << std::endl;
+        AstraSim::LoggerFactory::shutdown();
+        return EXIT_FAILURE;
+    }
+    for (const auto& sys_ptr : systems) {
+        if (sys_ptr->workload != nullptr &&
+            sys_ptr->workload->local_hbm_bandwidth_model != nullptr &&
+            sys_ptr->workload->local_hbm_bandwidth_model->has_active_jobs()) {
+            std::cerr << "[Error] (execution_driven/online) sys "
+                      << sys_ptr->id
+                      << " still has active local-HBM jobs at normal end "
+                         "(unfinished HBM endpoint join or other local-HBM "
+                         "user); refusing to shut down silently"
+                      << std::endl;
+            AstraSim::LoggerFactory::shutdown();
+            return EXIT_FAILURE;
+        }
+    }
+    memory_api.reset();
 
     for (auto it : systems) {
         delete it;

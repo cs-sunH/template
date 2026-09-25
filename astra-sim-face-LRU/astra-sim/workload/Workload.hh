@@ -73,6 +73,14 @@ class Workload : public Callable {
     // stats
     void report();
 
+    // 方案 §3.4/阶段2（并发化改造）normal-end 审计：存在未开的 HBM
+    // endpoint join（端口/网络腿与本地 HBM 腿未全部完成）时，online main
+    // 必须报错而非静默清理。只读；join cookie 始终归 Workload 所有，与
+    // remote backend 的 wlhd 是两个东西。
+    [[nodiscard]] bool has_unfinished_hbm_endpoint_joins() const {
+        return !hbm_endpoint_joins_.empty();
+    }
+
     Chakra::ETFeeder* et_feeder;
     std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;
@@ -117,7 +125,6 @@ class Workload : public Callable {
     void complete_online_statistics(const ExecutionDriven::NodeView& node,
                                     Tick end_time);
     void mark_online_terminal_or_fail(uint64_t node_id);
-    void record_network_bandwidth(uint64_t node_id, Tick execution_time);
 
     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
     // completion is the JOIN of two independent async completions -- the
@@ -131,14 +138,20 @@ class Workload : public Callable {
     struct HbmEndpointJoinState {
         unsigned int pending_completions = 2;
         // 网络侧完成事件（face hbm_comm_join_.completion_event 同款）：
-        // 闩锁开闸后的终态带宽门用此存储事件，后到者（HBM 侧 General）
-        // 不再使 p2p 带宽统计静默缺失（中-4①，2026-08-20）。
+        // 记录 comm endpoint 的网络腿事件类型，供 call() 的双发侧归属
+        // 判定使用（completion_event != General 的节点上，General 到达即
+        // 为本地 HBM 腿）。其原有的"终态 p2p 带宽统计"消费链已随
+        // record_network_bandwidth 删除（整条链无生产读者）。
         EventType completion_event = EventType::General;
-        // Fail-closed double-fire flags (R8-7): each side must arrive
-        // exactly once; a same-side second arrival is a model-layer
-        // mechanism violation and exits instead of opening the latch early
-        // (2 -> 1 -> 0 while the other side is still pending). Side
-        // attribution happens in Workload::call (by event type).
+        // Fail-closed double-fire flags (R8-7): comm send/recv endpoints
+        // (and pool MEM nodes) each get one guarded arrival per side -- a
+        // duplicate packet-side or packet-joined HBM-side arrival exits
+        // instead of opening the latch early. CAVEAT: a pool MEM node's two
+        // legs BOTH deliver General and are indistinguishable by event type,
+        // so for them only the latch count is guarded -- a same-side second
+        // General arrival decrements the count and may open the latch before
+        // both legs are done, with no exit (Workload::call side-attribution
+        // carve-out).
         bool network_done = false;
         bool hbm_done = false;
     };

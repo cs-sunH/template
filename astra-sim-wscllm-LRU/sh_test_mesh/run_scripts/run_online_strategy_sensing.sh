@@ -138,7 +138,10 @@ python3 -u online/online_service.py \
   --plan-dir "${ET_DIR}" \
   > "${RUN_DIR}/python.log" 2>&1 || PY_EXIT=$?
 
-wait "${CPP_PID}"; CPP_EXIT=$?
+# 成功路径 wait 不触发 ||，须先置 0（与上方 PY_EXIT 同款），
+# 否则 set -u 下引用未绑定 CPP_EXIT 直接终止脚本。
+CPP_EXIT=0
+wait "${CPP_PID}" || CPP_EXIT=$?
 echo "[run_online_strategy_sensing] cpp_exit=${CPP_EXIT} python_exit=${PY_EXIT}"
 if [[ ${CPP_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/cpp.log" >&2
@@ -176,7 +179,11 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger kv_delta_journal; do
+# remote_memory_transactions 为 C++ 桥侧逐事务明细(SerDes 并发化改造
+# 2026-09-24):--sensing-enabled 开启时 C++ 流式写 bridge_dir,成功后随
+# 本循环移入 results/(常驻,archive 白名单同步登记);缺文件不是错误。
+# 与 run_online_strategy.sh 成对同改(W2 教训:成对脚本曾单边演进)。
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger kv_delta_journal remote_memory_transactions; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))

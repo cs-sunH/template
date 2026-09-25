@@ -15,10 +15,12 @@ position -- always by the arrival calendar built by the streaming index pass
 #include "astra-sim/workload/execution_driven/WindowedTraceReader.hh"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <vector>
 
@@ -54,6 +56,41 @@ inline uint64_t fnv1a64_byte(uint64_t h, unsigned char b) {
     std::cerr << "[Error] (execution_driven/windowed_reader) " << what
               << std::endl;
     std::exit(EXIT_FAILURE);
+}
+
+// Whole-token strict decimal parse of one CSV numeric column. A malformed
+// token (empty, sign, whitespace, any non-digit character, or a value beyond
+// the column's range) is a structural input violation and must fail through
+// the same reader_fatal diagnostic channel as the other row violations: a
+// bare std::stoi/std::stoull throws std::invalid_argument/std::out_of_range
+// past this file's only try/catch (the provenance sidecar parse) and
+// terminates the process without the row context. The digits-only grammar is
+// exactly what the materializer (derive_20_first_30_seconds.py) emits; it
+// also closes std::stoull's silent wrap-around of a leading '-'.
+uint64_t parse_csv_u64(const char* field, const std::string& token,
+                       const std::string& row_context) {
+    if (token.empty() ||
+        token.find_first_not_of("0123456789") != std::string::npos) {
+        reader_fatal(std::string("malformed ") + field + " token: \"" + token +
+                     "\" " + row_context);
+    }
+    errno = 0;
+    const uint64_t value = std::strtoull(token.c_str(), nullptr, 10);
+    if (errno == ERANGE) {
+        reader_fatal(std::string("out-of-range ") + field + " token: \"" +
+                     token + "\" " + row_context);
+    }
+    return value;
+}
+
+int parse_csv_int(const char* field, const std::string& token,
+                  const std::string& row_context) {
+    const uint64_t value = parse_csv_u64(field, token, row_context);
+    if (value > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        reader_fatal(std::string("out-of-range ") + field + " token: \"" +
+                     token + "\" " + row_context);
+    }
+    return static_cast<int>(value);
 }
 
 // Nearest-rank percentile (workspace convention: the ceil(rank*N)-th
@@ -194,21 +231,29 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     std::getline(row, arrival_s, ',');
     std::getline(row, interval_s, ',');
     ++data_rows_;
-
-    RequestEnvelope env;
-    env.session_id = session_id;
-    env.turn_index = std::stoi(turn_index_s);
-    env.request_id = request_id;
-    env.prefill_length = std::stoull(prefill_s);
-    env.decode_length = std::stoull(decode_s);
-    env.inter_request_interval_ns =
-        interval_s.empty() ? 0 : std::stoull(interval_s);
     // Frozen queue index (CSV data-row order, 0-based). Turn-0 carries it
     // directly in the Submit envelope. Turn>0 rows are ALL pre-registered
     // here during the index pass (O(rows), same order as the metrics side;
     // P0 fix note: this is a full pre-registration, no longer bounded by a
     // row window); schedule_future_arrival consumes the entries one-shot.
     const int64_t queue_index = static_cast<int64_t>(data_rows_) - 1;
+
+    RequestEnvelope env;
+    env.session_id = session_id;
+    // Row context for the guarded numeric parses below (reader_fatal
+    // messages carry the same fields as the structural violations).
+    const std::string row_ctx = "session_id=" + session_id +
+                                " request_id=" + request_id +
+                                " data_row=" + std::to_string(queue_index) +
+                                " (csv=" + csv_path_ + ")";
+    env.turn_index = parse_csv_int("turn_index", turn_index_s, row_ctx);
+    env.request_id = request_id;
+    env.prefill_length = parse_csv_u64("prefill_length", prefill_s, row_ctx);
+    env.decode_length = parse_csv_u64("decode_length", decode_s, row_ctx);
+    env.inter_request_interval_ns =
+        interval_s.empty()
+            ? 0
+            : parse_csv_u64("inter_request_interval_ns", interval_s, row_ctx);
     env.queue_index = queue_index;
 
     const bool is_turn0 = !arrival_s.empty();
@@ -282,7 +327,8 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
         } else {
             MetricCollector::instance().online_register_request(
                 queue_index, request_id, session_id, env.turn_index,
-                /*absolute_arrival=*/true, std::stoull(arrival_s),
+                /*absolute_arrival=*/true,
+                parse_csv_u64("session_arrival_time_ns", arrival_s, row_ctx),
                 /*arrival_parent_queue_index=*/-1, 0);
         }
         last_queue_index_by_session_[session_id] = queue_index;
@@ -301,7 +347,8 @@ void WindowedTraceReader::process_indexed_row(const std::string& line) {
     // counted separately for the run-end accepted-accounting invariant
     // (accepted + dropped == turn-0 rows; backport fix 2026-08-16).
     ++turn0_rows_;
-    const uint64_t arrival_ns = std::stoull(arrival_s);
+    const uint64_t arrival_ns =
+        parse_csv_u64("session_arrival_time_ns", arrival_s, row_ctx);
     env.arrival_world_ns = arrival_ns;
 
     if (!have_prev_turn0_) {

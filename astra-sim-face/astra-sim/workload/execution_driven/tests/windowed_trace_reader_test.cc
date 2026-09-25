@@ -57,7 +57,7 @@ simulation, no baseline artifacts touched:
           normal path gate passes.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_WindowedReaderTest.
-Run (from template/astra-sim-wscllm):
+Run (from template/astra-sim-face):
   build/astra_analytical/build_congestion_aware/bin/\
     AstraSim_Analytical_Congestion_Aware_WindowedReaderTest
 *******************************************************************************/
@@ -1062,7 +1062,10 @@ void test_gate_trips_on_delayed_submission() {
         ServiceCoordinator svc2;
         RequestIngress ingress2;
         ingress2.bind(&eq2, &mailbox2, &svc2);
-        WindowedTraceReader reader2(csv, ingress2, 128);
+        // No third argument: default max_arrival_ns=0 (UNBOUNDED), so the
+        // arrivals 1000/2000 submit normally and the gate assertions below
+        // run against real (nonzero) submissions.
+        WindowedTraceReader reader2(csv, ingress2);
         reader2.pump();
         ingress2.drain_commands();
         while (!eq2.finished()) {

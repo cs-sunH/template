@@ -11,6 +11,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+#include "astra-sim/workload/FailClosed.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
@@ -462,6 +463,22 @@ void Workload::issue_local_hbm_kv_restore(
         return;
     }
 
+    // Fallback DMA path divides by the configured local-mem-bw below. That
+    // key parses contains-only with a 0 default, and local_mem_bw <= 0 only
+    // auto-disables contention in the Sys config parse -- nothing validates
+    // this division. A non-positive bus would produce inf here and an UB
+    // uint64 conversion (a garbage, effectively hung node); fail closed
+    // instead of silently mis-timing the node.
+    if (sys->local_mem_bw <= 0) {
+        fail_closed(
+            "local HBM KV-restore fallback requires a positive local-mem-bw "
+            "(configure local-mem-bw or enable hbm-bandwidth-contention / "
+            "hbm-kv-restore-bandwidth-sharing): sys.id=" +
+            std::to_string(sys->id) +
+            " node_id=" + std::to_string(node.global_id) +
+            " tensor_size=" + std::to_string(tensor_size));
+    }
+
     const double elapsed_seconds =
         (static_cast<double>(sys->local_mem_latency) / 1e9) +
         static_cast<double>(tensor_size) / sys->local_mem_bw;
@@ -471,13 +488,16 @@ void Workload::issue_local_hbm_kv_restore(
 }
 
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
+    // Contract guards: unreachable through the sole production caller
+    // (Workload::issue routes !roofline_enabled / is_cpu_op to issue_replay)
+    // and kept fail-closed rather than throwing -- Sys::call_events swallows
+    // std::exception, which would strand the occupied node (FailClosed.hh).
     if (!this->sys->roofline_enabled) {
-        throw std::runtime_error(
-            "Roofline model is not enabled for non-replay comp");
+        fail_closed("Roofline model is not enabled for non-replay comp");
     }
 
     if (node.is_cpu_op) {
-        throw std::runtime_error("Roofline is only available for GPU nodes");
+        fail_closed("Roofline is only available for GPU nodes");
     }
 
     WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
@@ -512,10 +532,12 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     // well. Division by that perf would yield 0/0 = NaN or x/0 = inf, which
     // then spreads three ways: the static_cast<uint64_t> below is UB, the
     // static path pollutes per-node statistics, and the online compact path
-    // aborts at its isfinite gate. Reject the node instead.
+    // aborts at its isfinite gate. Fail closed (not throw): the node is
+    // already taken/occupied/record-started at this point, and a throw from
+    // this issue path would be swallowed by Sys::call_events and strand it
+    // (FailClosed.hh).
     if (node_num_ops == 0 || !std::isfinite(perf) || perf <= 0.0) {
-        delete wlhd;
-        throw std::runtime_error(
+        fail_closed(
             "Roofline comp node has degenerate performance: num_ops=" +
             std::to_string(node_num_ops) +
             " tensor_size=" + std::to_string(node_tensor_size) +
@@ -536,12 +558,12 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
     if (node.compute.has_remote_weight_bytes) {
         if (local_hbm_bandwidth_model != nullptr) {
-            throw std::runtime_error(
+            fail_closed(
                 "HBM KV-restore sharing cannot be combined with remote "
                 "operand pipeline loads on the same COMP node");
         }
         if (sys->remote_mem_bw <= 0) {
-            throw std::runtime_error(
+            fail_closed(
                 "Pipeline roofline requires remote-mem-bw in system config");
         }
 
@@ -632,7 +654,7 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
 
 void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
     if (node.is_cpu_op) {
-        throw std::runtime_error("Comm node should not be on CPU");
+        fail_closed("Comm node should not be on CPU");
     }
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) comm
     // completion branch was deleted with the replay route; strategy mode
@@ -645,7 +667,7 @@ void Workload::issue_comm(const ExecutionDriven::NodeView& node) {
     } else if (node_type == ChakraNodeType::COMM_RECV_NODE) {
         this->issue_recv_comm(node);
     } else {
-        throw std::runtime_error("Unknown comm node type");
+        fail_closed("Unknown comm node type");
     }
 }
 
@@ -711,14 +733,14 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
                             runtime);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else {
-        throw std::runtime_error("Unsupported collective comm type");
+        fail_closed("Unsupported collective comm type");
     }
 }
 
 void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     const auto src = node.comm.src;  // adapter default: this rank
     if (src != this->sys->id) {
-        throw std::runtime_error("Send node should be issued by the sender");
+        fail_closed("Send node should be issued by the sender");
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
@@ -755,7 +777,7 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     const auto src = node.comm.src;
     const auto dst = node.comm.dst;  // adapter default: this rank
     if (dst != this->sys->id) {
-        throw std::runtime_error("Recv node should be issued by the receiver");
+        fail_closed("Recv node should be issued by the receiver");
     }
     const auto size = node.comm.bytes;
     const auto tag = node.comm.tag;
@@ -1140,6 +1162,11 @@ void Workload::call(EventType event, CallData* data) {
             (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
             (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
             (hw_resource->num_in_flight_hbm_dma_ops == 0) &&
+            // 方案 §4: the static/ETFeeder sim-finish gate also counts the
+            // remote-MEM class (counted, unlimited HardwareResource slot --
+            // the former comm-single-slot fall-through is gone, so the gate
+            // must follow the slot the nodes actually occupy).
+            (hw_resource->num_in_flight_remote_mem_ops == 0) &&
             // Local-HBM contention: a still-active local-HBM job always
             // belongs to a node that has not completed, so the slot counters
             // above already cover it; the explicit has_active_jobs() check

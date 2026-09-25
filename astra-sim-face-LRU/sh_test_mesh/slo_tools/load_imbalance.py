@@ -50,6 +50,8 @@ EXPLICIT_ADMISSION_FIELDS: dict[str, tuple[str, ...]] = {
     "astra-sim-sh_1.0": ("admission_time_ns",),
     "astra-sim-sh_3.0": ("admission_time_ns",),
     "astra-sim-face": (),
+    # face-LRU（本仓）：同 face，仅有 tick（无显式 admission_time_ns）。
+    "astra-sim-face-LRU": (),
     "astra-sim-wscllm": (),
     "astra-sim-sh_2.0": (),
 }

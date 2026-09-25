@@ -307,7 +307,9 @@ else
   echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
 fi
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
-#  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
+#  - results/    : 最终结果(审计 jsonl,Python 决策侧写出;sensing 跑另有
+#    C++ 后端惰性写出的远端事务明细 remote_memory_transactions.jsonl,
+#    随下方循环一并搬入)。保留规则:每
 #    run 一份,run 目录即版本,不轮转;run 脚本开头 rm -rf 保证有界。
 #  - 临时产物    : response/ack 消费即删;request 散装文件按 256 条批量
 #    并入 request_journal.jsonl 后删除,成功结束仅保留单一顺序审计流与 fifo。
@@ -315,7 +317,7 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger remote_memory_transactions; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))

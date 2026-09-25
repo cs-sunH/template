@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """test_store_restore_ordering.py -- B4(2026-09-13)store→restore 前递依赖
-排序钉子测试(主方案《逐出与request执行的并行修改方案》§3.3/§4.6)。
+排序钉子测试(主方案《逐出与request执行的并行修改方案》§3.3/§4.6;
+session 级 Tiered-LRU 2026-09-25 重写:store fixtures 改全量域——逐出恒为
+单笔整体 store,layer [0, L)、reason evict_..._full:layers0-L)。
 
 逐出支链悬空后,"同会话逐出池写先于其下一轮池读"的链序传递性失效——
-回迁发射统一入口(全量 remote_load / PARTIAL 后缀恢复分支)查
-pending_store_tails 补边。合成"逐出后立刻再到达"序列钉住:
+回迁发射统一入口(全量 remote_load)查 pending_store_tails 补边。合成
+"逐出后立刻再到达"序列钉住:
 
   (a) 同缘:restore 边缘 mem_load(或其前 1B request 节点,经串行链)
       的祖先闭包包含 store 的边缘 mem_store 节点(直接 data_dep);
   (b) 跨缘:1B p2p 中继对(store_relay send 的直接 parent = mem_store;
       restore 边缘 relay arrival recv 在 mem_load 祖先闭包内);
-  (c) PARTIAL 后缀恢复分支同款补边(分支内发射,主链不受污染);
-  (d) 两段式逐出的 suffix store 与 full store 两笔均被依赖(restore 读
-      全区间须等齐);
+  (c) 恢复发射主链不受逐出支链污染(readiness 屏障无逐出祖先);
+      _partial_first_chunk 账本不存在(PARTIAL 流水已删);
+  (d) 两个独立会话各自的单笔 store 分别在其回迁闭包内(跨批
+      store→restore 前递 = 规格恢复语义 3:恢复完成前不能消费);
   (e) 登记表生命周期:回迁消费即清除;中继 tag 走 TransferTagAllocator
       (≥10^7),命名避开 first_token/batch_train_ 锚点。
 
@@ -33,6 +36,7 @@ for _p in (_ONLINE_DIR, _WORKLOAD_DIR):
 from online.graph_batch_builder import GraphBatchBuilder  # noqa: E402
 
 SESSION = "session_order_0"
+SESSION_OTHER = "session_order_9"
 REQUEST_A = f"{SESSION}_request_0"
 REQUEST_B = f"{SESSION}_request_1"
 
@@ -68,54 +72,43 @@ def _make_config():
     )
 
 
-def _store_transfer(layer_start, layer_end, *, shards, trigger=REQUEST_A):
+def _store_transfer(session_id=SESSION, trigger=REQUEST_A, *, shards=None):
     from session_kv_manager import KVTransfer
+    shards = tuple(shards) if shards is not None else _store_shards()
     return KVTransfer(
         kind="remote_store", phase="history",
-        reason=f"evict_admission:layers{layer_start}-{layer_end}",
-        session_id=SESSION, trigger_request_id=trigger,
+        reason=f"evict_admission_full:layers0-4",
+        session_id=session_id, trigger_request_id=trigger,
         source_instance_index=0, target_instance_index=None,
         total_bytes=sum(shard.bytes for shard in shards),
-        shards=tuple(shards), model_layers=4,
-        layer_start=layer_start, layer_end=layer_end,
-        resident_prefix_layers_before=4 if layer_start == 2 else 2,
-        resident_prefix_layers_after=(
-            2 if layer_start == 2 else 0),
+        shards=shards, model_layers=4,
+        layer_start=0, layer_end=4,
+        resident_prefix_layers_before=4,
+        resident_prefix_layers_after=0,
     )
 
 
-def _suffix_store_shards():
+def _store_shards(session_id=SESSION):
     from session_kv_manager import KVTransferShard
     return (
         KVTransferShard(source_rank=0, target_rank=0, edge_rank=0,
-                        bytes=256, noc_path=(0,), layer_start=2, layer_end=4),
+                        bytes=512, noc_path=(0,), layer_start=0, layer_end=4),
         KVTransferShard(source_rank=4, target_rank=1, edge_rank=1,
-                        bytes=256, noc_path=(4, 1), layer_start=2, layer_end=4),
+                        bytes=512, noc_path=(4, 1), layer_start=0, layer_end=4),
     )
 
 
-def _full_store_shards():
-    from session_kv_manager import KVTransferShard
-    return (
-        KVTransferShard(source_rank=0, target_rank=0, edge_rank=0,
-                        bytes=256, noc_path=(0,), layer_start=0, layer_end=2),
-        KVTransferShard(source_rank=4, target_rank=1, edge_rank=1,
-                        bytes=256, noc_path=(4, 1), layer_start=0, layer_end=2),
-    )
-
-
-def _load_transfer(layer_start, layer_end, *, shards):
+def _load_transfer(shards, session_id=SESSION, trigger=REQUEST_B):
     from session_kv_manager import KVTransfer
     return KVTransfer(
         kind="remote_load", phase="history",
         reason="history_remote_restore",
-        session_id=SESSION, trigger_request_id=REQUEST_B,
+        session_id=session_id, trigger_request_id=trigger,
         source_instance_index=None, target_instance_index=0,
         total_bytes=sum(shard.bytes for shard in shards),
         shards=tuple(shards), model_layers=4,
-        layer_start=layer_start, layer_end=layer_end,
-        resident_prefix_layers_before=(
-            4 if layer_start == 0 else 2),
+        layer_start=0, layer_end=4,
+        resident_prefix_layers_before=0,
         resident_prefix_layers_after=4,
     )
 
@@ -125,19 +118,9 @@ def _load_shards(edge_by_target):
     return tuple(
         KVTransferShard(
             source_rank=edge, target_rank=target, edge_rank=edge,
-            bytes=256, noc_path=(edge, target),
+            bytes=512, noc_path=(edge, target),
             layer_start=0, layer_end=4)
         for target, edge in edge_by_target.items())
-
-
-def _suffix_load_shards():
-    from session_kv_manager import KVTransferShard
-    return (
-        KVTransferShard(source_rank=0, target_rank=0, edge_rank=0,
-                        bytes=256, noc_path=(0,), layer_start=2, layer_end=4),
-        KVTransferShard(source_rank=1, target_rank=4, edge_rank=1,
-                        bytes=256, noc_path=(1, 4), layer_start=2, layer_end=4),
-    )
 
 
 def _restore_plan(location, action, transfers, *, history_instance=None,
@@ -235,12 +218,11 @@ class StoreRestoreOrderingTest(unittest.TestCase):
         """(a):同缘直挂——restore mem_load 祖先闭包含 store 的 mem_store。"""
         harness = _Harness()
         builder = harness.builder
-        store_ids = harness.emit_evictions(
-            _store_transfer(2, 4, shards=_suffix_store_shards()))
+        store_ids = harness.emit_evictions(_store_transfer())
         self.assertEqual(store_ids, {0: store_ids[0], 1: store_ids[1]})
         plan = _restore_plan(
             "remote_memory", "REMOTE_RESTORE",
-            (_load_transfer(0, 4, shards=_load_shards({0: 0, 4: 1})),))
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
         builder.emit_admission_batch(plan)
         # (a) 每个 restore 边缘 rank 的 mem_load 都等到同缘 mem_store。
         for rank, edge in ((0, 0), (4, 1)):
@@ -262,18 +244,17 @@ class StoreRestoreOrderingTest(unittest.TestCase):
         builder = harness.builder
         direct_shard = KVTransferShard(
             source_rank=0, target_rank=0, edge_rank=0,
-            bytes=256, noc_path=(0,), layer_start=2, layer_end=4)
+            bytes=512, noc_path=(0,), layer_start=0, layer_end=4)
         store_ids = harness.emit_evictions(
-            _store_transfer(2, 4, shards=(direct_shard,)))
+            _store_transfer(shards=(direct_shard,)))
         self.assertEqual(sorted(store_ids), [0])
         # 回迁换缘:target 4 的最近边缘 = 1 ≠ store 边缘 0。
-        from session_kv_manager import KVTransferShard
         cross_shard = KVTransferShard(
             source_rank=1, target_rank=4, edge_rank=1,
-            bytes=256, noc_path=(1, 4), layer_start=0, layer_end=4)
+            bytes=512, noc_path=(1, 4), layer_start=0, layer_end=4)
         plan = _restore_plan(
             "remote_memory", "REMOTE_RESTORE",
-            (_load_transfer(0, 4, shards=(cross_shard,)),))
+            (_load_transfer((cross_shard,)),))
         builder.emit_admission_batch(plan)
         relay_send = next(
             node for node in _rank_nodes(builder, 0)
@@ -299,64 +280,68 @@ class StoreRestoreOrderingTest(unittest.TestCase):
             self.assertNotIn("first_token", node["name"])
             self.assertNotIn("batch_train_", node["name"])
 
-    def test_partial_suffix_restore_patches_inside_branch(self):
-        """(c):PARTIAL 后缀恢复分支内补边——mem_load 等齐同缘 mem_store,
-        且主链(resident 前缀屏障)不含逐出支链污染。"""
+    def test_full_restore_patches_inside_branch_and_clean_main_chain(self):
+        """(c):全量恢复发射——mem_load 等齐同缘 mem_store;主链(readiness
+        屏障)不含逐出支链污染;_partial_first_chunk 账本不存在(PARTIAL
+        流水已随两阶段流程删除)。"""
         harness = _Harness()
         builder = harness.builder
-        store_ids = harness.emit_evictions(
-            _store_transfer(2, 4, shards=_suffix_store_shards()))
+        store_ids = harness.emit_evictions(_store_transfer())
         plan = _restore_plan(
-            "partial_hbm_remote", "REMOTE_SUFFIX_RESTORE",
-            (_load_transfer(2, 4, shards=_suffix_load_shards()),),
-            history_instance=0, resident_prefix=2)
+            "remote_memory", "REMOTE_RESTORE",
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
         builder.emit_admission_batch(plan)
         for shard_index, edge in ((0, 0), (1, 1)):
             mem_load = _mem_load_node(builder, edge, shard_index=shard_index)
             closure = _ancestors(builder, edge, mem_load["id"])
             self.assertIn(store_ids[edge], closure)
-        # 流水登记仍在(首 chunk 列车消费)。
-        self.assertIn(REQUEST_B, builder._partial_first_chunk)
-        # 主链 resident 前缀屏障不以逐出支链为祖先。
+        # PARTIAL 流水账本已删(不可达;属性不存在)。
+        self.assertFalse(hasattr(builder, "_partial_first_chunk"))
+        # store→restore 前递经恢复链进入主链闭包:readiness 屏障(其后才是
+        # prefill 主体)必须等齐在飞 store 的边缘 mem_store——"恢复完成前
+        # 不能消费"在主链上可传递验证。
         barrier = next(
             node for node in _rank_nodes(builder, 0)
-            if node["name"].endswith(
-                "_prefill_resident_prefix_ready_barrier"))
-        eviction_ids = {
-            node["id"] for node in _rank_nodes(builder, 0)
-            if "_blocked_admission_evictions_" in node["name"]}
-        self.assertTrue(eviction_ids)
-        self.assertEqual(
-            _ancestors(builder, 0, barrier["id"]) & eviction_ids, set())
+            if node["name"].endswith("_history_tp_ready_barrier"))
+        barrier_closure = _ancestors(builder, 0, barrier["id"])
+        self.assertIn(store_ids[0], barrier_closure)
         self.assertNotIn(SESSION, builder.pending_store_tails)
 
-    def test_two_stage_stores_both_required(self):
-        """(d):两段式两笔 store(suffix + full)均在 restore 依赖闭包内。"""
+    def test_two_independent_sessions_each_store_in_own_restore_closure(self):
+        """(d):两个独立会话各自的单笔整体 store 分别在其回迁闭包内
+        (跨批 store→restore 前递语义保留;恢复完成前不能消费)。"""
         harness = _Harness()
         builder = harness.builder
-        harness.emit_evictions(
-            _store_transfer(2, 4, shards=_suffix_store_shards()))
-        full_ids = harness.emit_evictions(
-            _store_transfer(0, 2, shards=_full_store_shards()))
-        suffix_ids = dict(full_ids)
-        tails = builder.pending_store_tails[SESSION]
-        suffix_ids = {
-            edge: node_id for edge, node_id, _ in tails[:2]}
-        full_ids = {
-            edge: node_id for edge, node_id, _ in tails[2:]}
-        self.assertNotEqual(suffix_ids[0], full_ids[0])
+        session_store_ids = harness.emit_evictions(
+            _store_transfer(session_id=SESSION))
+        # 第二个会话各一笔整体 store(每会话至多一条登记)。
+        other_store = _store_transfer(
+            session_id=SESSION_OTHER, shards=_store_shards())
+        plan_evict = {
+            "request_id": REQUEST_A,
+            "session_id": SESSION,
+            "turn_index": 0,
+            "queue_index": 0,
+        }
+        builder.emit_eviction_actions(plan_evict, (other_store,))
+        self.assertEqual(
+            sorted(builder.pending_store_tails),
+            sorted([SESSION, SESSION_OTHER]))
         plan = _restore_plan(
             "remote_memory", "REMOTE_RESTORE",
-            (_load_transfer(0, 4, shards=_load_shards({0: 0, 4: 1})),))
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
         builder.emit_admission_batch(plan)
         for rank, edge in ((0, 0), (4, 1)):
             mem_load = _mem_load_node(
                 builder, edge, shard_index=0 if edge == 0 else 1)
             closure = _ancestors(builder, edge, mem_load["id"])
-            # (d) 两笔 store 的同缘 mem_store 都被依赖。
-            self.assertIn(suffix_ids[edge], closure)
-            self.assertIn(full_ids[edge], closure)
+            # (d) 本会话 store 的同缘 mem_store 在闭包内。
+            self.assertIn(session_store_ids[edge], closure)
         self.assertNotIn(SESSION, builder.pending_store_tails)
+        # 他会话登记仍在(只等它自己的回迁)。
+        self.assertIn(SESSION_OTHER, builder.pending_store_tails)
+        builder.retire_completion_gate(SESSION_OTHER)
+        self.assertNotIn(SESSION_OTHER, builder.pending_store_tails)
 
     def test_restore_without_tails_is_noop(self):
         """无登记时回迁零增补(懒处理:无 store 支链即无额外节点)。"""
@@ -365,7 +350,7 @@ class StoreRestoreOrderingTest(unittest.TestCase):
         before_nodes = len(builder.batch["nodes"])
         plan = _restore_plan(
             "remote_memory", "REMOTE_RESTORE",
-            (_load_transfer(0, 4, shards=_load_shards({0: 0, 4: 1})),))
+            (_load_transfer(_load_shards({0: 0, 4: 1})),))
         builder.emit_admission_batch(plan)
         relay_nodes = [
             node for node in builder.batch["nodes"]

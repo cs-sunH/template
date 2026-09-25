@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -40,8 +39,6 @@ from generate_trace import (  # noqa: E402
     parse_rank_spec,
     sanitize_node_prefix,
     shard_extent,
-    transformer_pass,
-    transformer_pass_aggregated,
 )
 from config_resolver import (  # noqa: E402
     ResolvedHardware,
@@ -61,14 +58,16 @@ REQUIRED_CONFIG_KEYS = (
     "bytes_per_elem",
     "model_name",
     "mlp_variant",
-    "output_prefix",
-    "output_dir",
     "request_queue_csv",
     "hardware_config",
     "local_hbm_capacity_profile",
     "system_template",
     "remote_operand_loads",
 )
+# 2026-09-25 死配置清理：output_prefix/output_dir 曾服务已删除的离线静态
+# ET 生成路径，现无任何消费者。键仍被接受但值不装载（多余键忽略），以
+# 兼容既有 trace_config.csv。
+IGNORED_CONFIG_KEYS = ("output_prefix", "output_dir")
 OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
@@ -77,7 +76,11 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
-SUPPORTED_CONFIG_KEYS = set(REQUIRED_CONFIG_KEYS) | set(OPTIONAL_CONFIG_DEFAULTS)
+SUPPORTED_CONFIG_KEYS = (
+    set(REQUIRED_CONFIG_KEYS)
+    | set(OPTIONAL_CONFIG_DEFAULTS)
+    | set(IGNORED_CONFIG_KEYS)
+)
 INT_CONFIG_KEYS = {
     "layers",
     "hidden_size",
@@ -87,7 +90,6 @@ INT_CONFIG_KEYS = {
     "bytes_per_elem",
 }
 PATH_CONFIG_KEYS = {
-    "output_dir",
     "request_queue_csv",
     "hardware_config",
     "system_template",
@@ -110,14 +112,11 @@ class FaceTraceConfig:
     bytes_per_elem: int
     model_name: str
     mlp_variant: str
-    output_prefix: str
-    output_dir: Optional[Path]
     request_queue_csv: Path
     request_queue: tuple[RequestSpec, ...]
     hardware_config: Path
     hardware_capacity_profile: str
     hardware: FaceHardware
-    hardware_metadata: dict[str, object]
     system_template: Path
     system_config: Path
     network_config: Path
@@ -133,7 +132,6 @@ class FaceTraceConfig:
     kv_cache_policy: str
     kv_reserve_context_tokens: int
     record_planning_iterations: bool
-    configuration_digest: str
 
     @property
     def model(self) -> FaceModel:
@@ -193,22 +191,12 @@ def _parse_config_value(key: str, value: str) -> object:
             raise ValueError("config key mlp_variant must be gelu or swiglu")
         return value
     if key in PATH_CONFIG_KEYS:
-        if key == "output_dir" and not value:
-            return None
         if not value:
             raise ValueError(f"config key {key} must not be empty")
         return Path(value)
     if not value:
         raise ValueError(f"config key {key} must not be empty")
     return value
-
-
-def _configuration_digest(paths: Sequence[Path]) -> str:
-    digest = hashlib.sha1()
-    for path in paths:
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:8]
 
 
 def _to_face_hardware(hardware: ResolvedHardware) -> FaceHardware:
@@ -339,7 +327,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         hardware_capacity_profile,
     )
     hardware = _to_face_hardware(resolved_hardware)
-    hardware_metadata = resolved_hardware.metadata
     npus_count = resolved_hardware.npus_count
     system_template = _resolve_from_sh_test(parsed["system_template"])
     runtime_config_dir = (
@@ -357,13 +344,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         inference_groups=tuple((group.pg_name, group.ranks) for group in groups),
         output_dir=runtime_config_dir,
     )
-    digest_paths = [
-            config_csv.resolve(),
-            request_queue_csv,
-            hardware_path,
-            system_template,
-    ]
-    configuration_digest = _configuration_digest(tuple(digest_paths))
 
     return FaceTraceConfig(
         config_csv=config_csv.resolve(),
@@ -376,14 +356,11 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         bytes_per_elem=int(parsed["bytes_per_elem"]),
         model_name=str(parsed["model_name"]),
         mlp_variant=str(parsed["mlp_variant"]),
-        output_prefix=str(parsed["output_prefix"]),
-        output_dir=parsed["output_dir"],
         request_queue_csv=request_queue_csv,
         request_queue=request_queue,
         hardware_config=hardware_path,
         hardware_capacity_profile=hardware_capacity_profile,
         hardware=hardware,
-        hardware_metadata=hardware_metadata,
         system_template=system_template,
         system_config=runtime_configs.system,
         network_config=runtime_configs.network,
@@ -399,7 +376,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         kv_cache_policy=str(parsed["kv_cache_policy"]),
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
         record_planning_iterations=bool(parsed["record_planning_iterations"]),
-        configuration_digest=configuration_digest,
     )
 
 
@@ -591,89 +567,6 @@ def _emit_control_trigger(
         comm_size=1,
         comm_tag=tag,
     )
-
-
-def _emit_prefill_stage(
-    *,
-    config: FaceTraceConfig,
-    builders: dict[int, TraceBuilder],
-    group: InferenceGroup,
-    prefix: str,
-    stage: str,
-    tokens: int,
-    initial_context_tokens: int,
-) -> dict[int, tuple[int, int]]:
-    """Emit one chunked prefill stage; returns, per rank, the ids of the first
-    and last *real* operator/collective nodes (the artificial one-byte
-    ``*_end_barrier`` collectives are excluded), or an empty mapping when the
-    stage has no tokens.  Used only for metrics boundary recording (doc
-    sec.6.2/6.3); the emitted nodes are unchanged."""
-
-    if tokens == 0:
-        return {}
-    bounds: dict[int, list[int]] = {}
-    tensor_parallel = len(group.ranks)
-    spans: list[tuple[int, int]] = []
-    processed = 0
-    while processed < tokens:
-        chunk = min(config.prefill_chunk_size, tokens - processed)
-        spans.append((chunk, initial_context_tokens + processed + chunk))
-        processed += chunk
-    if config.trace_granularity == "token_expanded":
-        for chunk_index, (chunk, kv_length) in enumerate(spans):
-            for relative_rank, rank in enumerate(group.ranks):
-                first_node_id = builders[rank].next_id
-                transformer_pass(
-                    builders[rank],
-                    phase=f"{prefix}_{stage}_chunk{chunk_index:04d}",
-                    tokens=chunk,
-                    kv_length=kv_length,
-                    layers=config.layers,
-                    hidden_size=config.hidden_size,
-                    ffn_size=config.ffn_size,
-                    tensor_parallel=tensor_parallel,
-                    pg_name=group.pg_name,
-                    vocab_size=config.vocab_size,
-                    bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                )
-                last_node_id = builders[rank].previous_id
-                if rank in bounds:
-                    bounds[rank][1] = last_node_id
-                else:
-                    bounds[rank] = [first_node_id, last_node_id]
-                builders[rank].all_reduce(
-                    f"{prefix}_{stage}_chunk{chunk_index:04d}_end_barrier",
-                    1,
-                    group.pg_name,
-                )
-    else:
-        for relative_rank, rank in enumerate(group.ranks):
-            first_node_id = builders[rank].next_id
-            pass_count = transformer_pass_aggregated(
-                builders[rank],
-                phase=f"{prefix}_{stage}_request_aggregated",
-                pass_spans=spans,
-                layers=config.layers,
-                hidden_size=config.hidden_size,
-                ffn_size=config.ffn_size,
-                tensor_parallel=tensor_parallel,
-                pg_name=group.pg_name,
-                vocab_size=config.vocab_size,
-                bytes_per_elem=config.bytes_per_elem,
-                num_heads=config.num_heads,
-                tensor_parallel_rank=relative_rank,
-                mlp_variant=config.mlp_variant,
-            )
-            bounds[rank] = [first_node_id, builders[rank].previous_id]
-            builders[rank].all_reduce(
-                f"{prefix}_{stage}_chunks_aggregated_end_barrier",
-                pass_count,
-                group.pg_name,
-            )
-    return {rank: (pair[0], pair[1]) for rank, pair in bounds.items()}
 
 
 def main(argv=None) -> None:  # noqa: ARG001

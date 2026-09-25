@@ -14,7 +14,7 @@ history 恢复/迁移同为 KVTransfer(shard 级 noc_path 构造期已定)。
   2. 真 _emit_train 驱动 + 真 log_decision 捕获:decode 行含新字段、
      发射后 runtime.decode_target_evictions 置空;
   3. _try_admit_prefill 留存 decision.transfers(holder 模式;
-     PARTIAL 跨实例两段链 = prefix noc_migrate + suffix remote_load);
+     REMOTE_RESTORE 全量恢复 = 单段 remote_load);
   4. _kv_transfer_rows / _eviction_source_instances 手算钉子;
   5. _kv_transfer_dict(None) 透传 None。
 
@@ -54,11 +54,12 @@ from wsc_llm_scheduler import (  # noqa: E402  (只读 import)
 
 
 def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
-    """remote_store 逐出桩(source_instance_index = 受害实例)。"""
+    """remote_store 逐出桩(source_instance_index = 受害实例;整体逐出
+    形态:层域 [0, L)、本地驻留清零)。"""
     return KVTransfer(
         kind="remote_store",
         phase="prefill_admission",
-        reason="static_decode_final_kv_reservation_suffix_half",
+        reason="static_decode_final_kv_reservation_session",
         session_id=f"victim_session_{victim_instance_index}",
         trigger_request_id=trigger_request_id,
         source_instance_index=victim_instance_index,
@@ -66,10 +67,10 @@ def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
         total_bytes=0,
         shards=(),
         model_layers=32,
-        layer_start=16,
+        layer_start=0,
         layer_end=32,
         resident_prefix_layers_before=32,
-        resident_prefix_layers_after=16,
+        resident_prefix_layers_after=0,
     )
 
 
@@ -190,12 +191,12 @@ class DecodeDecisionDictTest(unittest.TestCase):
         # 契约 §3 行结构逐字段。
         self.assertEqual(decision["decode_target_evictions"], [{
             "kind": "remote_store",
-            "reason": "static_decode_final_kv_reservation_suffix_half",
+            "reason": "static_decode_final_kv_reservation_session",
             "session_id": "victim_session_0",
             "total_bytes": 0,
             "source_instance_index": 0,
             "target_instance_index": None,
-            "layer_start": 16,
+            "layer_start": 0,
             "layer_end": 32,
         }])
 
@@ -275,17 +276,17 @@ class HistoryTransfersTest(unittest.TestCase):
     """B2 prefill 侧:holder 留存 + 契约行结构序列化。"""
 
     def test_try_admit_prefill_retains_history_transfers(self):
-        """_try_admit_prefill 取 decision.transfers 赋值(PARTIAL 跨实例
-        两段链 = prefix noc_migrate + suffix remote_load 两段)。"""
-        prefix, suffix = _transfer(), KVTransfer(
+        """_try_admit_prefill 取 decision.transfers 赋值(REMOTE_RESTORE
+        全量恢复 = 单段 remote_load)。"""
+        restore = KVTransfer(
             kind="remote_load", phase="history",
-            reason="history_remote_suffix_restore", session_id="session_0",
+            reason="history_remote_restore", session_id="session_0",
             trigger_request_id="session_0_request_0",
             source_instance_index=None, target_instance_index=0,
-            total_bytes=1500,
-            shards=(KVTransferShard(1, 0, 1, 1500, (1, 0), 16, 32),),
-            model_layers=32, layer_start=16, layer_end=32,
-            resident_prefix_layers_before=16,
+            total_bytes=3000,
+            shards=(KVTransferShard(1, 0, 1, 3000, (1, 0), 0, 32),),
+            model_layers=32, layer_start=0, layer_end=32,
+            resident_prefix_layers_before=0,
             resident_prefix_layers_after=32)
         kv_manager = SimpleNamespace(
             reserve_request_capacity=lambda *a, **k: CapacityResult(
@@ -293,9 +294,9 @@ class HistoryTransfersTest(unittest.TestCase):
             session_snapshot=lambda session_id: None,
             hbm_snapshots=lambda instance_index: None,
             prepare_history=lambda *a, **k: HistoryDecision(
-                action="PARTIAL_MIGRATE", source_instance_index=1,
+                action="REMOTE_RESTORE", source_instance_index=None,
                 target_instance_index=0, history_tokens=64,
-                transfers=(prefix, suffix),
+                transfers=(restore,),
                 evictions=(), admission_blocked=False),
             grow_prefill=lambda *a, **k: CapacityResult((), True, ()),
         )
@@ -303,8 +304,8 @@ class HistoryTransfersTest(unittest.TestCase):
         scheduler.kv_manager = kv_manager
         rt = _runtime("session_0_request_0")
         self.assertTrue(scheduler._try_admit_prefill(rt, 1_000))
-        self.assertEqual(rt.history_transfers, (prefix, suffix))
-        self.assertEqual(rt.history_transfer_bytes, 4500)
+        self.assertEqual(rt.history_transfers, (restore,))
+        self.assertEqual(rt.history_transfer_bytes, 3000)
         self.assertEqual(rt.history_location_before, None)
         # local_hit / ABSENT 路径 transfers=() 自然为空元组。
         fresh = _OnlineRequestRuntime(_record("session_0_request_1"))

@@ -90,7 +90,9 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
   decode_target/completion_evictions 不再消费——同值同源防双计）；
   字段缺失（旧产物 / 新产物 NO_HISTORY）回退 history_action 四值
   （LOCAL_HIT/NOC_MIGRATE→full，RECOMPUTE→miss；旧基线 RECOMPUTE
-  全量重算，无 partial 语义）。
+  全量重算，无 partial 语义）。face-LRU 新运行（session 级 Tiered-LRU，
+  2026-09-25）仅产出 local_hbm/remote_memory 两值（恒 full），
+  partial_hbm_remote 仅旧产物可解析、新运行不产出。
 * **sh_1.0**：history_transfer.kind ∈ {local_hit, noc_migrate,
   remote_load} → full；null 且 turn=0 → no_history。shards 带 noc_path
   （hopbytes 唯一 shard 级数据源）。
@@ -257,6 +259,10 @@ prefill_context_tokens/final_context_tokens/history_tokens_before），以及
     契约行列表逐段消费（local_hit 段零搬移、noc_migrate 段真实搬移——
     列表不解析则会话字节滞留源实例，后续迁移扣错实例 → 负占用
     fail-closed）。旧产物（dict/标量/legacy 列表）原样。
+    face-LRU 新运行（session 级 Tiered-LRU，2026-09-25）：逐出恒整体
+    store（evict bytes == session bytes → partial_evictions 恒 0）、
+    恢复恒全量（restore ratio 恒 1.0，无 0.5 半层桶）；partial 判定与
+    S3 分段对账分支保留为旧产物 replay 路径。
 * **fail-closed**：缺 token manifest/trace_config、tick 回退、请求集两源
   不一致、重复决策、负占用、逐出对象不在跟踪态、逐出 bytes 超跟踪值、
   增长为负 → 退出码 2。软异常（source/kind/bytes 对账不符）计数入 JSON 不

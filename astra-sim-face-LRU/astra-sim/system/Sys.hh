@@ -77,7 +77,7 @@ class Sys : public Callable {
         std::vector<int> physical_dims,
         std::vector<int> queues_per_dim,
         double injection_scale,
-        double comm_scale,
+        double /*comm_scale*/,  // kept for call-site compat; member had no readers
         bool rendezvous_enabled,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static,
@@ -131,8 +131,6 @@ class Sys : public Callable {
     // Communicator Group Support
     // -----------------------------------------------
     LogicalTopology* get_logical_topology(ComType comm_type);
-    std::vector<CollectiveImpl*> get_collective_implementation(
-        ComType comm_type);
     //---------------------------------------------------------------------------
 
     // Collective Communication Primitives
@@ -187,7 +185,6 @@ class Sys : public Callable {
     int get_priority(int explicit_priority);
     void insert_into_ready_list(BaseStream* stream);
     void insert_stream(std::list<BaseStream*>* queue, BaseStream* baseStream);
-    void ask_for_schedule(int max);
     void schedule(int num);
     void proceed_to_next_vnet_baseline(StreamBaseline* stream);
     //---------------------------------------------------------------------------
@@ -273,7 +270,6 @@ class Sys : public Callable {
     static std::vector<Sys*> all_sys;  // vector of all Sys objects
 
     int id;
-    bool initialized;
 
     // workload
     Workload* workload;
@@ -321,7 +317,6 @@ class Sys : public Callable {
 
     // network
     AstraNetworkAPI* comm_NI;
-    double comm_scale;
     bool rendezvous_enabled;
 
     // scheduler

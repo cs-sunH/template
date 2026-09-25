@@ -471,8 +471,15 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                 state.arrival.kind = ArrivalSpec::Kind::AFTER_REQUEST;
                 state.arrival.parent_queue_index =
                     arrival.at("parent_queue_index").get<int64_t>();
-                state.arrival.interval_ns =
-                    arrival.at("interval_ns").get<Tick>();
+                // Same signed-domain guard as value_ns above: a negative
+                // interval_ns would wrap into a huge Tick (uint64_t).
+                const int64_t interval_ns =
+                    arrival.at("interval_ns").get<int64_t>();
+                if (interval_ns < 0) {
+                    fatal_metrics_error("negative arrival interval_ns: " +
+                                        std::to_string(interval_ns));
+                }
+                state.arrival.interval_ns = static_cast<Tick>(interval_ns);
             } else {
                 fatal_metrics_error("unknown arrival kind: " + kind);
             }
@@ -512,6 +519,13 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
             }
         } catch (const std::exception&) {
             fatal_metrics_error("non-integer rank key in node_events_by_rank: "
+                                + it.key());
+        }
+        // Runtime ranks come from sys->id (always non-negative): a negative
+        // key would build a bucket that can never fire, silently swallowing
+        // its events.
+        if (rank < 0) {
+            fatal_metrics_error("negative rank key in node_events_by_rank: "
                                 + it.key());
         }
         for (const auto& triple : it.value()) {
@@ -951,6 +965,18 @@ std::optional<Tick> MetricCollector::resolve_arrival(size_t request_index) {
     // after_request: parent actual completion + interval (doc sec.3.1/4.4).
     // The parent completion is an observed boundary tick and does not depend
     // on the parent's own arrival, so no recursion is needed here.
+    // A self-referencing parent is malformed input: the arrival would
+    // depend on the request's own completion. Reject it with a diagnostic
+    // instead of silently absorbing it (unresolved for an incomplete
+    // request, or a bogus own-completion+interval resolution otherwise).
+    if (state.arrival.parent_queue_index == state.queue_index) {
+        std::cerr << "[METRIC][WARN] request queue_index "
+                  << state.queue_index
+                  << " declares itself as its own after_request parent; "
+                     "its arrival stays unresolved"
+                  << std::endl;
+        return std::nullopt;
+    }
     const auto parent_it =
         this->request_index_by_queue_index_.find(state.arrival.parent_queue_index);
     if (parent_it == this->request_index_by_queue_index_.end()) {
@@ -1043,6 +1069,24 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     // Resolve arrivals now that actual completions are known (doc sec.4.4).
     for (size_t i = 0; i < this->requests_.size(); i++) {
         resolve_arrival(i);
+    }
+
+    // Leftover-event sweep: manifest node events still sitting in the
+    // routing tables never fired (their (rank, node) edge was never issued
+    // or completed -- expected for runs with incomplete requests, a wiring
+    // bug otherwise). Count and report them instead of silently dropping
+    // the buckets.
+    uint64_t unfired_issue_events = 0;
+    for (const auto& rank_entry : this->issue_events_) {
+        for (const auto& node_entry : rank_entry.second) {
+            unfired_issue_events += node_entry.second.size();
+        }
+    }
+    uint64_t unfired_complete_events = 0;
+    for (const auto& rank_entry : this->complete_events_) {
+        for (const auto& node_entry : rank_entry.second) {
+            unfired_complete_events += node_entry.second.size();
+        }
     }
 
     // Per-rank compute/DRAM records (doc sec.3.7 and 3.8), sorted by rank.
@@ -1848,6 +1892,10 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     consistency["memory_actions_unresolved"] = memory_totals.actions_unresolved;
     consistency["memory_actions_unresolved_by_reason"] =
         memory_totals.unresolved_by_reason;
+    // Same treatment for manifest node events that never fired (see the
+    // sweep at the top of finalize): reported, not silently dropped.
+    consistency["unfired_issue_events"] = unfired_issue_events;
+    consistency["unfired_complete_events"] = unfired_complete_events;
     emit_record(consistency.dump());
 
     for (const auto& violation : this->consistency_violations_) {
@@ -1857,6 +1905,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
     if (this->dropped_events_ > 0) {
         std::cerr << "[METRIC][ERROR] " << this->dropped_events_
                   << " node events referenced unknown subjects" << std::endl;
+    }
+    if (unfired_issue_events > 0 || unfired_complete_events > 0) {
+        std::cerr << "[METRIC][WARN] " << unfired_issue_events
+                  << " issue / " << unfired_complete_events
+                  << " complete manifest node events never fired (their "
+                     "node was never issued or completed)"
+                  << std::endl;
     }
     // C5 (2026-08-28): all finalize-time records are buffered -- drain the
     // channel so the [METRIC] block is complete before main_online's
@@ -1884,8 +1939,12 @@ std::string i128_to_string(__int128 value) {
 
 long double i128_to_long_double(__int128 value) {
     if (value < 0) {
-        return -u128_to_long_double(
-            static_cast<unsigned __int128>(-value));
+        // -value is signed-overflow UB exactly at INT128_MIN; negate in the
+        // unsigned domain (mod 2^128) so the magnitude is well-defined for
+        // every input.
+        const unsigned __int128 magnitude = static_cast<unsigned __int128>(
+            -static_cast<unsigned __int128>(value));
+        return -u128_to_long_double(magnitude);
     }
     return u128_to_long_double(static_cast<unsigned __int128>(value));
 }
@@ -2096,18 +2155,27 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         __int128 resident_area = 0;
         __int128 committed_area = 0;
         Tick previous = 0;
+        // Caliber note: occupancy is clamped at 0 in this direct integral
+        // exactly like the watermark walk below. The ledger can pass
+        // through negative intermediate states (a release anchor landing
+        // before its matching acquire anchor); integrating the raw signed
+        // value made the two calibers diverge systematically and
+        // false-positived the WP8 >1% timeavg crosscheck.
+        const auto clamp_nonneg = [](__int128 v) { return v > 0 ? v : 0; };
         for (const auto& delta : deltas) {
             const Tick elapsed = delta.tick - previous;
-            resident_area += (weight + resident) * elapsed;
-            committed_area += (weight + resident + reserved) * elapsed;
+            resident_area += clamp_nonneg(weight + resident) * elapsed;
+            committed_area +=
+                clamp_nonneg(weight + resident + reserved) * elapsed;
             weight += delta.weight_delta;
             resident += delta.resident_delta;
             reserved += delta.reserved_delta;
             previous = delta.tick;
         }
         const Tick tail = sim_end_tick - previous;
-        resident_area += (weight + resident) * tail;
-        committed_area += (weight + resident + reserved) * tail;
+        resident_area += clamp_nonneg(weight + resident) * tail;
+        committed_area +=
+            clamp_nonneg(weight + resident + reserved) * tail;
 
         // WP8 (CPP_SPEC §B): bucketed watermark sampling of the same step
         // function, filled by an independent walk that splits segments at
@@ -2480,9 +2548,12 @@ void MetricCollector::emit_watermark_records(
             if (changed.empty()) {
                 // Flat series (e.g. empty online planner ledger): only the
                 // window boundary buckets, both zero, note on the summary
-                // explains why.
+                // explains why. At sim_end_tick==0 the first and last
+                // boundary are the same bucket -- emit it once.
                 emit_bucket(0);
-                emit_bucket(last_bucket);
+                if (last_bucket != 0) {
+                    emit_bucket(last_bucket);
+                }
                 continue;
             }
             for (const uint64_t bucket : changed) {
@@ -2491,7 +2562,9 @@ void MetricCollector::emit_watermark_records(
             if (changed.count(0) == 0) {
                 emit_bucket(0);
             }
-            if (changed.count(last_bucket) == 0) {
+            // Same first/last-boundary dedup at sim_end_tick==0 (last_bucket
+            // == 0 was already emitted above or by the changed loop).
+            if (changed.count(last_bucket) == 0 && last_bucket != 0) {
                 emit_bucket(last_bucket);
             }
         }

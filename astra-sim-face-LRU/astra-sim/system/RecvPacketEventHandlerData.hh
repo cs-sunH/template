@@ -17,19 +17,19 @@ class WorkloadLayerHandlerData;
 class RecvPacketEventHandlerData : public BasicEventHandlerData {
   public:
     RecvPacketEventHandlerData();
+    // vnet/stream_id inputs are kept for the astraccl call sites but are no
+    // longer stored: both fields had zero readers.
     RecvPacketEventHandlerData(BaseStream* owner,
                                int sys_id,
                                EventType event,
-                               int vnet,
-                               int stream_id);
+                               int /*vnet*/,
+                               int /*stream_id*/);
 
     Workload* workload;
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
     CustomAlgorithm* custom_algorithm;
-    int vnet;
-    int stream_id;
-    Tick ready_time;
+    Tick ready_time = 0;
 };
 
 }  // namespace AstraSim

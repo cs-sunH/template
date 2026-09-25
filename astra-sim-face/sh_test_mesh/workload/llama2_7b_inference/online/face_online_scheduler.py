@@ -706,9 +706,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         count 个 chunk:与 face 的 remaining_chunks = ceil(R/p) + ceil(P/p)
         口径逐 chunk 对齐(先 recompute 段后当前段,段边界处不足 p_chunk
         的尾 chunk 分段计算——离线 :1526-1547 的 chunk 序同构;recompute
-        段 context 自 0 增长,当前段在 history_tokens_before 上追加,与
-        _emit_prefill_stage 的 span 构造一致)。返回
-        [(request_id, chunk_tokens, (tokens, kv) span), ...]。"""
+        段 context 自 0 增长,当前段在 history_tokens_before 上追加)。
+        返回 [(request_id, chunk_tokens, (tokens, kv) span), ...]。"""
         recompute_tokens = qp_head.history_recompute_tokens or 0
         prefill_tokens = qp_head.prefill_length
         completed = qp_head.prefill_tokens_completed

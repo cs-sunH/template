@@ -13,7 +13,7 @@ Request-neutral lifecycle state machine (方案 §4 步骤 1-2 操作 3):
                 IDLE (五态迁移: IDLE -> ACTIVE -> IDLE -> DRAINING -> FINISHED).
     ACTIVE   -- at least one request accepted / arrival alarm pending.
     DRAINING -- input closed, pending alarms/requests still draining.
-    FINISHED -- input closed && active==0 && no pending alarm/fence.
+    FINISHED -- input closed && active==0 && no pending alarm.
 
 Final end authority belongs exclusively to the ServiceCoordinator
 (总体方案 §5.5): EventQueue empty != FINISHED, and in online mode the

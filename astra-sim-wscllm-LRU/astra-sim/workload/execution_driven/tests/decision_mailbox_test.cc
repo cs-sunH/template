@@ -9,14 +9,13 @@ standalone test -- no network simulation, no baseline artifacts touched:
 
   Part A  Order + drain: events drain in insertion order; drain clears the
           pending set (new dedup epoch); has_decision_work toggles; seqs are
-          consecutive; StateDelta assembly (build_state_delta).
+          consecutive; StateDelta assembly (build_state_delta_v1).
   Part B  Same-epoch dedup: same identity (reason/request_id/stage/
           generation) pushes in one epoch collapse to one event; distinct
           identities stay; the same identity may legitimately return in a
           later epoch.
   Part C  Counters: event_count / delivery_count / coalescing_ratio /
-          tick_end_without_decision_count / no_decision_python_callback_count
-          / finalize_pending has_decision_work.
+          tick_end_without_decision_count.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_DecisionMailboxTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -87,13 +86,14 @@ void test_order_drain_and_delta() {
            "A: second event seq 2, decode completion, payload kept");
     expect(!mailbox.has_decision_work(), "A: drain clears the pending set");
 
-    // build_state_delta carries tick + delivery_sequence + the events.
-    StateDelta delta = build_state_delta(events, /*tick=*/1234,
-                                         /*delivery_sequence=*/7);
+    // build_state_delta_v1 carries tick + delivery_sequence + the events.
+    StateDelta delta = build_state_delta_v1(
+        events, /*tick=*/1234, /*delivery_sequence=*/7,
+        /*deferred_from_tick=*/0, {}, {});
     expect(delta.tick == 1234 && delta.delivery_sequence == 7 &&
                delta.events.size() == 2,
            "A: StateDelta carries epoch fields");
-    const auto second = build_state_delta({}, 99, 8);
+    const auto second = build_state_delta_v1({}, 99, 8, 0, {}, {});
     expect(second.events.empty() && second.delivery_sequence == 8,
            "A: empty delta is valid (no-work epochs are separate)");
 
@@ -145,7 +145,7 @@ void test_dedup() {
 }
 
 // ---------------------------------------------------------------- Part C --
-// Counters and finalize flag.
+// Counters.
 void test_counters() {
     DecisionMailbox mailbox;
     expect(mailbox.event_count() == 0 && mailbox.delivery_count() == 0 &&
@@ -162,29 +162,12 @@ void test_counters() {
     expect(mailbox.coalescing_ratio() == 2.0,
            "C: 2 events batched into 1 delivery epoch -> ratio 2.0");
 
-    // A drain with no events (finalize-only epoch) is not a delivery.
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
-    expect(mailbox.delivery_count() == 1,
-           "C: empty drain is not a delivery epoch");
-
-    // Gate counters: no-work ticks increment; the Python-error counter is
-    // only incremented by a buggy entry (phase-1 acceptance: must stay 0).
+    // Gate counter: no-work tick-end gate calls increment this normal
+    // allowed-nonzero counter.
     mailbox.count_tick_end_without_decision();
     mailbox.count_tick_end_without_decision();
-    mailbox.count_no_decision_python_callback();
     expect(mailbox.tick_end_without_decision_count() == 2,
            "C: no-work ticks counted");
-    expect(mailbox.no_decision_python_callback_count() == 1,
-           "C: python-error counter incremented explicitly");
-
-    // finalize_pending makes has_decision_work() true with no events; the
-    // drain consumes it (a finalize-only epoch delivers an empty delta).
-    expect(!mailbox.has_decision_work(), "C: no work with empty mailbox");
-    mailbox.set_finalize_pending(true);
-    expect(mailbox.has_decision_work(), "C: finalize_pending is decision work");
-    expect(mailbox.drain().empty(), "C: finalize-only drain has no events");
-    expect(!mailbox.has_decision_work(), "C: drain consumed the finalize");
 }
 
 // ---------------------------------------------------------------- Part D --

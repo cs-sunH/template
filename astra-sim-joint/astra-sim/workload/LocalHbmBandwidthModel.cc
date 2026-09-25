@@ -14,6 +14,7 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
+#include "astra-sim/workload/FailClosed.hh"
 #include "astra-sim/workload/HardwareResource.hh"
 #include "astra-sim/workload/Workload.hh"
 
@@ -57,7 +58,7 @@ bool LocalHbmBandwidthModel::complete(const Job& job) {
 
 void LocalHbmBandwidthModel::advance_to(Tick now) {
     if (now < last_update_tick) {
-        throw std::runtime_error("local HBM model time moved backwards");
+        fail_closed("local HBM model time moved backwards");
     }
     const double elapsed_ns = static_cast<double>(now - last_update_tick);
     if (elapsed_ns <= 0) {
@@ -133,8 +134,7 @@ void LocalHbmBandwidthModel::advance_to(Tick now) {
                 }
             }
             if (!clamped_residue) {
-                throw std::runtime_error(
-                    "local HBM model made no progress at a transition");
+                fail_closed("local HBM model made no progress at a transition");
             }
             continue;
         }
@@ -220,7 +220,7 @@ void LocalHbmBandwidthModel::schedule_next_transition() {
     }
 
     if (!std::isfinite(next_ns)) {
-        throw std::runtime_error("local HBM model has no schedulable transition");
+        fail_closed("local HBM model has no schedulable transition");
     }
     Tick delay = static_cast<Tick>(std::ceil(next_ns));
     delay = std::max<Tick>(1, delay);
@@ -242,8 +242,7 @@ void LocalHbmBandwidthModel::issue_job(
         // Zero-byte endpoints never create an HBM job (the Workload layer
         // already guards this); reaching here is a wiring bug, not a data
         // property: fail closed instead of silently stalling the node.
-        throw std::runtime_error(
-            "local HBM model refused a zero-byte job");
+        fail_closed("local HBM model refused a zero-byte job");
     }
     const bool joins_active_jobs = !jobs.empty();
     jobs.push_back(Job{

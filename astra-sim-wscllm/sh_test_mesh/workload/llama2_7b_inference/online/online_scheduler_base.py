@@ -140,16 +140,15 @@ STAGE_REQUEST = ""  # REQUEST_COMPLETE: 该 request 全部阶段完成(收尾/�
 
 
 class OnlineSchedulerBase:
-    """批次框架基类。run_variant_policy 由变体(replay/strategy)实现。"""
+    """批次框架基类。run_variant_policy 由变体(strategy)实现。"""
 
     def __init__(
         self,
         *,
         manifest: dict,
         config,
-        replay=None,
         digest_sink=None,
-        mode: str = "replay",
+        mode: str = "strategy",
         sensing: bool = False,
         decision_log_sink=None,
         profile_sink=None,
@@ -158,7 +157,6 @@ class OnlineSchedulerBase:
         online_stats_sink=None,
         ledger_sink=None,
     ):
-        self.mode = mode
         self.config = config
         # 运行期不保留完整 manifest 或 request_id -> manifest record 副本。
         # 唯一需要跨 delivery 保存的输入身份状态是尚未到达的 request ID：
@@ -170,20 +168,20 @@ class OnlineSchedulerBase:
         }
         if len(self.unseen_request_ids) != self.expected_request_count:
             raise ValueError("manifest request_id values must be unique")
-        self.replay = replay
         self.digest_sink = digest_sink  # callable(dict) 或 None(不写 digest)
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):
         # decision_log_sink / profile_sink 提供时逐行 append+flush 写出,
-        # 调度器不再驻留行列表(online_log_count 保留供 seq 编号与结束
-        # 计数);缺省 None = 兼容旧路径(行仍缓冲在下列 rows 列表,供
-        # 测试/夹具直读)。
+        # 调度器不驻留对应行列表(online_log_count 保留供 seq 编号与结束
+        # 计数);decision log 缺省仍缓冲在 online_log_rows(供测试/夹具
+        # 直读),profile 缺省 None = 不落盘。
         self.decision_log_sink = decision_log_sink
         self.profile_sink = profile_sink
         # B3 流式落盘(2026-08-28):sensing_query_log / online_stats 行在
-        # 产出时即完整,提供 sink 时逐行流式写出(缺省 None = 兼容旧路径,
-        # 行仍缓冲在下列 rows 列表,供测试/夹具直读)。online_stats
-        # 的 sink 写出的是未合并桥接层 processing_ns 的基础行,由
-        # online_service 结束期两遍合并成终文件(字节与改前一致)。
+        # 产出时即完整,提供 sink 时逐行流式写出;sensing 行无 sink 即
+        # 丢弃(不缓冲),online_stats 缺省 None 时行缓冲在
+        # online_stats_rows。online_stats 的 sink 写出的是未合并桥接层
+        # processing_ns 的基础行,由 online_service 结束期两遍合并成终
+        # 文件(字节与改前一致)。
         self.sensing_query_sink = sensing_query_sink
         self.online_stats_sink = online_stats_sink
         # request-neutral 簿记。
@@ -264,13 +262,10 @@ class OnlineSchedulerBase:
         # 本批次发射记录:delivery_seq -> {"tick": tick, "requests":
         # [(request_id, stage), ...]};commit ack 到达时做层转移的凭据。
         self._emitted_by_delivery = {}
-        # 决策边界两层剩余负载查询快照(感知开启时记录,写
-        # sensing_query_log.jsonl)。
-        self.sensing_query_rows = []
         # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数
         # 无关;full_scan_entries 恒为 0 = 不存在 O(总规模) 全量扫描)。
-        # 行: {delivery_sequence, tick, scanned_entries, full_scan_entries}。
-        self.profile_rows = []
+        # 行: {delivery_sequence, tick, scanned_entries, full_scan_entries}
+        # (profile_sink 逐行写出;缺省 None = 不落盘)。
         self._profile_batch = None
         # 阶段 5 §8.2:Python provisional KV 账本(commit ack 前不入账)。
         # kv_actions 在 build_graph_batch 时先入暂存区(每 delivery 一条,
@@ -464,17 +459,14 @@ class OnlineSchedulerBase:
         if self.digest_sink is not None:
             self.digest_sink(self._digest_row(batch))
         # 阶段 4 §7.3:本决策批扫描条目数入 profile(M3:行在产出时即
-        # 完整,提供 profile_sink 时逐行流式写出;缺省缓冲,供 dump_profile)。
-        profile_row = {
-            "delivery_sequence": delivery_sequence,
-            "tick": self._batch["tick"],
-            "scanned_entries": self._profile_batch["scanned_entries"],
-            "full_scan_entries": self._profile_batch["full_scan_entries"],
-        }
+        # 完整,由 profile_sink 逐行流式写出;缺省 None = 不落盘)。
         if self.profile_sink is not None:
-            self.profile_sink(profile_row)
-        else:
-            self.profile_rows.append(profile_row)
+            self.profile_sink({
+                "delivery_sequence": delivery_sequence,
+                "tick": self._batch["tick"],
+                "scanned_entries": self._profile_batch["scanned_entries"],
+                "full_scan_entries": self._profile_batch["full_scan_entries"],
+            })
         return batch
 
     # ------------------------------------------------------------- 校验/簿记 --
@@ -521,14 +513,6 @@ class OnlineSchedulerBase:
         """记录本决策批的 O(总规模) 全量扫描条目数。§7.3 之后应恒为 0;
         任何 > 0 都意味着索引队列被绕过(profile 审计 fail-closed)。"""
         self._profile_batch["full_scan_entries"] += count
-
-    def dump_profile(self, path: str) -> None:
-        """把每决策批扫描条目数写为 profile.jsonl(阶段 4 §7.3 验收输入)。
-        M3:生产路径由 profile_sink 逐行流式写出(online_service),本方法
-        仅服务缺省缓冲模式(测试/夹具)——流式模式下 rows 为空,不覆写。"""
-        with open(path, "w", encoding="utf-8") as out:
-            for row in self.profile_rows:
-                out.write(json.dumps(row, sort_keys=True) + "\n")
 
     def _validate_schema(self, delta: dict) -> None:
         """schema v1 校验器(阶段 4 §7.1;原契约 §6 各条强制,契约文档已
@@ -789,11 +773,9 @@ class OnlineSchedulerBase:
             "issued": self._sensing_issued_view(),
             "ready": self._sensing_ready_view(),
         }
-        # B3:流式落盘(行在产出时即完整;缺省缓冲,供夹具直读)。
+        # B3:流式落盘(行在产出时即完整;无 sink 即丢弃,不缓冲)。
         if self.sensing_query_sink is not None:
             self.sensing_query_sink(row)
-        else:
-            self.sensing_query_rows.append(row)
 
     def dump_ledger(self, path: str) -> None:
         """完成账本导出。
@@ -842,7 +824,7 @@ class OnlineSchedulerBase:
         self._begin_graph_batch()
 
     def _begin_graph_batch(self) -> None:
-        """变体若持有构图器(如 replay 的 GraphBatchBuilder),每批发射前
+        """变体若持有构图器(GraphBatchBuilder),每批发射前
         重建其批次累加器;没有则跳过(基类自身不构图)。"""
         graph = getattr(self, "graph", None)
         if graph is not None and hasattr(graph, "begin_batch"):

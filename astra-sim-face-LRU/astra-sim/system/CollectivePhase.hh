@@ -10,23 +10,22 @@ LICENSE file in the root directory of this source tree.
 
 namespace AstraSim {
 
-class Sys;
 class Algorithm;
 class BaseStream;
 
 class CollectivePhase {
   public:
-    CollectivePhase(Sys* sys, int queue_id, Algorithm* algorithm);
+    CollectivePhase(int queue_id, Algorithm* algorithm);
     CollectivePhase();
     void init(BaseStream* stream);
 
-    Sys* sys;
-    int queue_id;
-    Algorithm* algorithm;
-    uint64_t initial_data_size;
-    uint64_t final_data_size;
-    bool enabled;
-    ComType comm_type;
+    // Members are default-initialized so that the default constructor leaves
+    // no uninitialized field behind.
+    int queue_id = -1;
+    Algorithm* algorithm = nullptr;
+    uint64_t final_data_size = 0;
+    bool enabled = false;
+    ComType comm_type = ComType::None;
 };
 
 }  // namespace AstraSim

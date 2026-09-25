@@ -16,7 +16,8 @@ class ProtobufUtils {
     value = 0;
     int8_t shift = 0;
     while (f.read(reinterpret_cast<char*>(&byte), 1)) {
-      value |= (byte & 0x7f) << shift;
+      // unsigned arithmetic: a signed int shift at shift == 28 is UB
+      value |= static_cast<uint32_t>(byte & 0x7f) << shift;
       if (!(byte & 0x80))
         return true;
       shift += 7;
@@ -37,62 +38,41 @@ class ProtobufUtils {
     if (!readVarint32(f, size))
       return false;
     lock.lock();
+    if (size > MAX_PROTOBUF_MESSAGE_SIZE)
+      return false;
     char* buffer_use = buffer;
     if (size > DEFAULT_PROTOBUF_BUFFER_SIZE - 1) {
-      // buffer is not large enough, use a dynamic buffer
-      buffer_use = new char[size + 1];
+      // buffer is not large enough, use a dynamic buffer.
+      // size_t arithmetic: uint32 would wrap around at size == UINT32_MAX
+      // and allocate 0 bytes, turning buffer_use[size] into a wild write.
+      buffer_use = new char[static_cast<size_t>(size) + 1];
     }
-    f.read(buffer_use, size);
+    if (!f.read(buffer_use, size).good() ||
+        f.gcount() != static_cast<std::streamsize>(size)) {
+      // truncated message: never parse leftover bytes of a previous message
+      if (buffer_use != buffer)
+        delete[] buffer_use;
+      return false;
+    }
     buffer_use[size] = 0;
-    msg.ParseFromArray(buffer_use, size);
+    if (!msg.ParseFromArray(buffer_use, size)) {
+      // corrupted message: report instead of silently propagating defaults
+      if (buffer_use != buffer)
+        delete[] buffer_use;
+      return false;
+    }
     if (size > DEFAULT_PROTOBUF_BUFFER_SIZE - 1) {
       delete[] buffer_use;
-    }
-    return true;
-  }
-
-  static bool writeVarint32(std::ostream& f, uint32_t value) {
-    std::unique_lock<std::mutex> lock(_mutex);
-    uint8_t byte;
-    while (value > 0x7f) {
-      byte = (value & 0x7f) | 0x80;
-      f.write(reinterpret_cast<char*>(&byte), 1);
-      value >>= 7;
-    }
-    byte = value;
-    f.write(reinterpret_cast<char*>(&byte), 1);
-    return true;
-  }
-
-  template <typename T>
-  static bool writeMessage(std::ostream& f, T& msg) {
-    std::unique_lock<std::mutex> lock(_mutex);
-    static char buffer[DEFAULT_PROTOBUF_BUFFER_SIZE];
-    size_t size = msg.ByteSizeLong();
-    if (size > DEFAULT_PROTOBUF_BUFFER_SIZE - 1) {
-      // buffer is not large enough, use a dynamic buffer
-      char* buffer_use = new char[size];
-      msg.SerializeToArray(buffer_use, size);
-      lock.unlock();
-      writeVarint32(f, size);
-      lock.lock();
-      f.write(buffer_use, size);
-      delete[] buffer_use;
-    } else {
-      msg.SerializeToArray(buffer, size);
-      lock.unlock();
-      writeVarint32(f, size);
-      lock.lock();
-      f.write(buffer, size);
     }
     return true;
   }
 
  private:
-  static std::mutex _mutex;
+  // inline: an out-of-class definition in this header would be a redefinition
+  // as soon as any second translation unit includes it (ODR)
+  static inline std::mutex _mutex;
 };
 
-std::mutex ProtobufUtils::_mutex;
 } // namespace FeederV3
 } // namespace Chakra
 #endif

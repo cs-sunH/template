@@ -42,19 +42,21 @@ class ConfigResolverTests(unittest.TestCase):
         self.assertEqual(self.hardware.d2d_bandwidth_gbps, self.source["d2d"]["bandwidth-gbps"])
         self.assertEqual(self.hardware.d2d_latency_ns, self.source["d2d"]["latency-ns"])
         self.assertEqual(
-            self.hardware.remote_memory_bandwidth_gbps,
-            self.source["remote-memory"]["bandwidth-gbps"],
-        )
-        self.assertEqual(
             self.hardware.remote_memory_type,
             self.source["remote-memory"]["memory-type"],
         )
-        self.assertIsNone(self.hardware.remote_memory_latency_ns)
-        self.assertIsNone(self.hardware.remote_memory_npu_selection)
-        self.assertIsNone(self.hardware.remote_memory_logical_pool)
         self.assertEqual(self.hardware.peak_perf_tflops, self.source["compute"]["peak-perf-tflops"])
         self.assertEqual(self.hardware.metadata["selected-capacity-profile"], self.profile_name)
         self.assertEqual(self.hardware.metadata["selected-capacity-note"], self.profile["note"])
+
+    def test_rejects_memory_expansion_declarations(self) -> None:
+        expanded = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        expanded["remote-memory"]["memory-type"] = "PER_NPU_MEMORY_EXPANSION"
+        with tempfile.TemporaryDirectory() as temporary:
+            expanded_path = Path(temporary) / "hardware.json"
+            expanded_path.write_text(json.dumps(expanded), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "NO_MEMORY_EXPANSION"):
+                load_hardware_config(expanded_path, self.profile_name)
 
     def test_materializes_no_expansion_runtime_files_from_repo_local_sources(self) -> None:
         columns = self.hardware.mesh_cols
@@ -69,7 +71,6 @@ class ConfigResolverTests(unittest.TestCase):
             system = json.loads(paths.system.read_text(encoding="utf-8"))
             self.assertEqual(system["local-mem-bw"], self.source["local-hbm"]["bandwidth-gbps"])
             self.assertEqual(system["local-mem-latency"], self.source["local-hbm"]["latency-ns"])
-            self.assertEqual(system["local-mem-capacity-bytes"], self.profile["bytes"])
             self.assertEqual(system["peak-perf"], self.source["compute"]["peak-perf-tflops"])
 
             communicator = json.loads(paths.comm_group.read_text(encoding="utf-8"))

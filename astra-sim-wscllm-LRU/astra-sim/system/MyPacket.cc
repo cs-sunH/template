@@ -24,13 +24,7 @@ MyPacket::MyPacket(uint64_t msg_size,
     this->msg_size = msg_size;
 }
 
-void MyPacket::set_notifier(Callable* c) {
-    notifier = c;
-}
-
-void MyPacket::call(EventType event, CallData* data) {
-    cycles_needed = 0;
-    if (notifier != nullptr) {
-        notifier->call(EventType::General, nullptr);
-    }
-}
+// Callable's pure virtual must be satisfied, but nothing in the simulation
+// ever invokes MyPacket::call: MemBus and PacketBundle drive the transfer
+// completion path through PacketBundle itself, never through the packet.
+void MyPacket::call(EventType, CallData*) {}

@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/Sys.hh"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -16,7 +17,6 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CollectivePlan.hh"
 #include "astra-sim/system/DataSet.hh"
 #include "astra-sim/system/MemBus.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/QueueLevels.hh"
 #include "astra-sim/system/RendezvousRecvData.hh"
 #include "astra-sim/system/RendezvousSendData.hh"
@@ -142,7 +142,8 @@ Sys::Sys(int id,
          vector<int> physical_dims,
          vector<int> queues_per_dim,
          double injection_scale,
-         double comm_scale,
+         double /*comm_scale -- member removed (write-only); parameter kept
+                    for the unchanged call sites in the frontend/tests */,
          bool rendezvous_enabled,
          ExecutionDriven::ExecutionMode execution_mode,
          std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
@@ -178,7 +179,6 @@ Sys::Sys(int id,
     this->local_reduction_delay = 0;
 
     this->comm_NI = comm_NI;
-    this->comm_scale = comm_scale;
     this->rendezvous_enabled = rendezvous_enabled;
 
     this->scheduler_unit = nullptr;
@@ -214,7 +214,6 @@ Sys::Sys(int id,
     this->queues_per_dim = queues_per_dim;
     int element = 0;
     this->total_nodes = 1;
-    this->dim_to_break = -1;
     for (uint64_t current_dim = 0; current_dim < queues_per_dim.size();
          current_dim++) {
         if (physical_dims[current_dim] >= 1) {
@@ -268,9 +267,7 @@ Sys::Sys(int id,
                          comm_group_configuration);
     }
 
-    if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-        inter_dimension_scheduling ==
-            InterDimensionScheduling::OfflineGreedyFlex) {
+    if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy) {
         offline_greedy = new OfflineGreedy(this);
     }
 
@@ -563,6 +560,12 @@ void Sys::call_events() {
             auto logger = LoggerFactory::get_logger("system");
             logger->critical("warning! a callable is removed before call {}",
                              e.what());
+            // Restore the dispatch invariants before propagating: a fail-loud
+            // Workload exception must terminate the run instead of leaving the
+            // node half-dispatched with the bucket still installed.
+            dispatching_events = false;
+            event_queue.erase(event_list_it);
+            throw;
         }
     }
     dispatching_events = false;
@@ -693,14 +696,6 @@ void Sys::handleEvent(void* arg) {
         RendezvousRecvData* rrd = (RendezvousRecvData*)ehd;
         rrd->recv.call(EventType::General, nullptr);
         delete rrd;
-    } else if ((event == EventType::CompFinished) ||
-               (event == EventType::MemLoadFinished) ||
-               (event == EventType::MemStoreFinished)) {
-        MemEventHandlerData* mehd = (MemEventHandlerData*)ehd;
-        if (mehd->workload) {
-            mehd->workload->call(event, mehd->wlhd);
-        }
-        delete mehd;
     } else if (event == EventType::PacketReceived) {
         RecvPacketEventHandlerData* rcehd = (RecvPacketEventHandlerData*)ehd;
         if (rcehd->workload) {
@@ -842,10 +837,8 @@ DataSet* Sys::generate_collective(
     DataSet* dataset = new DataSet(streams);
     int pri = get_priority(explicit_priority);
     int count = 0;
-    if (id == 0 && (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+    if (id == 0 &&
+        inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy) {
         if (last_scheduled_collective != Sys::boostedTick()) {
             offline_greedy->reset_loads();
             last_scheduled_collective = Sys::boostedTick();
@@ -880,6 +873,11 @@ DataSet* Sys::generate_collective(
             new StreamBaseline(this, dataset, stream_id, vect, pri);
         newStream->current_queue_id = -1;
         insert_into_ready_list(newStream);
+        // Custom collectives only ever create this single stream, while the
+        // DataSet was sized from the estimated stream count above. Align the
+        // count or notify_stream_finished can never fire (hang + leaked
+        // wrapper_map entry).
+        dataset->total_streams = 1;
         return dataset;
     }
 
@@ -903,10 +901,8 @@ DataSet* Sys::generate_collective(
                 round_robin_inter_dimension_scheduler = 0;
             }
         } else if (collective_type != ComType::All_to_All &&
-                   (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+                   inter_dimension_scheduling ==
+                       InterDimensionScheduling::OfflineGreedy) {
             uint64_t prev_size = size;
             dim_mapper = offline_greedy->get_chunk_scheduling(
                 communicator_group == nullptr ? 0
@@ -923,10 +919,8 @@ DataSet* Sys::generate_collective(
         }
 
         if (collective_type == ComType::All_to_All ||
-            (inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedy &&
-             inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedyFlex)) {
+            inter_dimension_scheduling !=
+                InterDimensionScheduling::OfflineGreedy) {
             if (chunk_size > size) {
                 size = 0;
             } else {
@@ -957,11 +951,7 @@ DataSet* Sys::generate_collective(
                 remain_size = phase.final_data_size;
             }
         } else if (inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedy ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedyFlex ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OnlineGreedy) {
+                   InterDimensionScheduling::OfflineGreedy) {
             int dim = 0;
 
             // Create collective phase for each dimension in ascending order.
@@ -1154,9 +1144,13 @@ CollectivePhase Sys::generate_collective_phase(
                                         direction, InjectionPolicy::Normal));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::DoubleBinaryTree) {
+        auto* btree = dynamic_cast<BinaryTree*>(topology);
+        if (!btree) {
+            Sys::sys_panic("DoubleBinaryTree requires a BinaryTree logical "
+                           "topology");
+        }
         CollectivePhase vn(this, queue_id,
-                           new DoubleBinaryTreeAllReduce(
-                               id, (BinaryTree*)topology, data_size));
+                           new DoubleBinaryTreeAllReduce(id, btree, data_size));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::HalvingDoubling ||
                collective_impl->type ==
@@ -1178,6 +1172,12 @@ CollectivePhase Sys::generate_collective_phase(
 }
 
 uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
+    if (size == 0) {
+        // A zero-size collective has no chunk to split: hand back a unit
+        // chunk so the caller's ceil division yields zero streams instead of
+        // a NaN/inf from dividing by the chunk size.
+        return 1;
+    }
     if (preferred_dataset_splits <= 0) {
         // Zero/negative splits (e.g. the config key is missing or malformed)
         // must not reach the division below; fall back to one chunk covering
@@ -1185,6 +1185,18 @@ uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
         return size;
     }
     uint64_t chunk_size = size / preferred_dataset_splits;
+    if (chunk_size == 0 && type == ComType::All_Gather) {
+        // 0 < size < splits: integer division floors to 0, which would make
+        // the caller compute ceil(size/0) = +inf and loop forever issuing
+        // streams. Fall back to a single chunk covering the whole size.
+        // All_Gather only: its ring message IS the chunk (no per-node
+        // division), so a below-nodes chunk stays nonzero. Every other type
+        // divides the chunk by nodes_in_ring downstream and must fall
+        // through to the total_nodes floor below, or a 1-byte sync
+        // collective divides down to a zero-byte send (wscllm-LRU guards
+        // All_Gather only, for the same reason).
+        return size;
+    }
     // We want the collective size to have minimum size, otherwise, there is a
     // possibility of size overflow due to further dividing it to more
     // fine-grained messages
@@ -1393,7 +1405,6 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     stream->phases_to_go.pop_front();
     stream->initialized = false;
     stream->last_phase_change = Sys::boostedTick();
-    stream->total_packets_sent = 0;
 
     stream->net_message_latency.push_back(0);
     stream->net_message_counter = 0;

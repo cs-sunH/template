@@ -37,7 +37,7 @@ violations):
             {prefill, decode}; generation == stage (prefill 0 / decode 1);
             compute/comm/coll well-typed; type-7 collective bytes > 0 (also a
             mandatory cheap commit preflight when full validation is off);
-            comm src/dst/tag range checks are
+            comm src/dst range checks are
             scoped to the comm-typed nodes (5/6) -- send node rank ==
             comm.src, recv node rank == comm.dst (non-comm nodes carry the
             comm defaults in real data and an empty comm in fixtures).
@@ -246,10 +246,6 @@ class GraphBatchCommitter {
 
     /// One-line run-end counter report ("[online] phase-5 commit counters:").
     std::string counters_report() const;
-
-    /// The sorted unique rank set owning the batch's nodes (pure).
-    static std::vector<int> compute_touched_ranks(const GraphBatch& batch,
-                                                  int num_ranks);
 
     /// A1 (2026-08-28): amortization threshold -- the commit tail drains the
     /// per-rank GC candidate FIFOs only once this many finished nodes have

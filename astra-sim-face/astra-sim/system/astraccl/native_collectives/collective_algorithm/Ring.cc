@@ -44,9 +44,6 @@ Ring::Ring(ComType type,
     case ComType::All_to_All:
         this->stream_count = ((nodes_in_ring - 1) * nodes_in_ring) / 2;
         switch (injection_policy) {
-        case InjectionPolicy::Aggressive:
-            this->parallel_reduce = nodes_in_ring - 1;
-            break;
         case InjectionPolicy::Normal:
             this->parallel_reduce = 1;
             break;
@@ -107,15 +104,14 @@ void Ring::run(EventType event, CallData* data) {
 
 void Ring::release_packets() {
     if (NPU_to_MA == true) {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+        (new PacketBundle(stream->owner, stream, processed,
                           send_back, msg_size, transmition))
             ->send_to_MA();
     } else {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+        (new PacketBundle(stream->owner, stream, processed,
                           send_back, msg_size, transmition))
             ->send_to_NPU();
     }
-    locked_packets.clear();
 }
 
 void Ring::process_stream_count() {
@@ -146,6 +142,14 @@ void Ring::process_max_count() {
 }
 
 void Ring::reduce() {
+    // FIFO invariant (verified 2026-09-25, second-round adjudication): the
+    // ONLY caller is ready() right after it copied packets.front() into the
+    // sim_request/ehd it issued -- the pop is structurally paired with the
+    // issue that consumed the same front, in the same synchronous send path.
+    // Network completions never reach here (they arrive as PacketReceived ->
+    // insert_packet / General -> free_packets -> ready), so out-of-order
+    // completion cannot pop the wrong entry. Keep this pairing if
+    // ready()/reduce() is ever split.
     process_stream_count();
     packets.pop_front();
     free_packets--;
@@ -171,7 +175,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -182,7 +185,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -239,9 +241,6 @@ bool Ring::ready() {
 void Ring::exit() {
     if (packets.size() != 0) {
         packets.clear();
-    }
-    if (locked_packets.size() != 0) {
-        locked_packets.clear();
     }
     stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
     return;

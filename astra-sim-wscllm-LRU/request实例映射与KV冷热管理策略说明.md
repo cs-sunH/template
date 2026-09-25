@@ -12,18 +12,21 @@ WSC-LLM-LRU 是 `astra-sim-wscllm` 的 **KV 冷热管理改造仓**，由两条�
   ——静态物理 P/D 分区（Decode 实例居中、Prefill 实例环绕）+ 离线一次性
   P→D 路由规划 + 在线 prefill 最小排队选点 + 实例内严格 FCFS（队头阻塞）+
   decode 连续批处理。映射决策不感知 KV 位置、长度或内存状态的本性不变；
-- **冷热管理承袭 SH-2.0 的逐出内核与发射链路（去类型化）**：会话 KV 从
-  "片上驻留 / 删除重算"两态升级为 **LOCAL / PARTIAL / REMOTE 三态**；空间
-  不足时按**去类型化两段式 LRU**逐出（先扫全部冷会话的后半层、仍不足才整体
-  外迁）；被逐出的 KV 落入片外统一内存池，下一轮到来时按态分流**恢复**
-  （PARTIAL 恢复与前缀计算真流水重叠）——**恢复取代重算**，RECOMPUTE 路径
-  已从历史决策中删除。
+- **冷热管理为 session 级 Tiered-LRU 两态冷热管理**（2026-09-25 session 级
+  改造批；逐出/回迁的物理发射链路承袭 sh_2.0 并去类型化）：会话 KV 从
+  "片上驻留 / 删除重算"两态升级为 **LOCAL（全部层片上）/ REMOTE（全部层
+  远端）二态**（旧 PARTIAL 半层化三态与两段式流程已物理移除）；空间不足时
+  按 **session 级单阶段整体 LRU** 逐出——逐出单位恒为**完整 logical
+  session**（全部层、全部 TP shard、全部本地驻留字节一次性整体外迁，允许
+  过量释放）；被逐出的会话整体落入片外统一内存池，下一轮到来时按需**全量
+  回迁**（恢复完成前不可消费）——**恢复取代重算**，RECOMPUTE 路径已从
+  历史决策中删除。
 
-与 sh 系的关系：逐出算法本体承袭 sh_2.0 与 sh_3.0 逐行同码的共有内核，但
-**去类型化**（删除 sh 的 human/tool 类型化循环与 `next_request_type` 机制）；
-跨实例 PARTIAL 恢复链取 sh_2.0 的"前缀 NoC 迁移 + 后缀远端恢复"两段式；
-发射链路（remote_store / remote_load 的边缘端口借道、HBM 计费、真流水编排）
-照 sh_2.0 移植。**不承袭**的：sh 的"耗尽即 raise"失败语义（本仓维持 wscllm
+与 sh 系的关系：逐出/回迁的物理发射链路承袭 sh_2.0（remote_store /
+remote_load 的边缘端口借道与 HBM 计费照 sh_2.0 移植），但**去类型化**
+（删除 sh 的 human/tool 类型化循环与 `next_request_type` 机制）、**去部分化**
+（sh_2.0 的"前缀 NoC 迁移 + 后缀远端恢复"两段式与半层化逐出不再承袭）。
+**不承袭**的：sh 的"耗尽即 raise"失败语义（本仓维持 wscllm
 队头阻塞）、sh 的类型化两阶段逐出、sh 的准入预占架构与全局纪元变量。
 
 ## 2. 系统模型与记号
@@ -91,7 +94,7 @@ WSC-LLM-LRU 是 `astra-sim-wscllm` 的 **KV 冷热管理改造仓**，由两条�
 
 该指标计**请求数**而非 token 数、剩余服务时间或 Decode 压力——排一个长请求与排
 一个短请求的实例在此指标下等价。映射**不看会话 KV 位置**：历史 KV 驻留在哪个
-实例、处于三态中的哪一态，均不改变选点结果。
+实例、处于二态中的哪一态，均不改变选点结果。
 
 ### 3.3 Decode 归属与批处理
 
@@ -105,34 +108,35 @@ WSC-LLM-LRU 是 `astra-sim-wscllm` 的 **KV 冷热管理改造仓**，由两条�
 
 ## 4. KV 冷热管理策略（本仓改造核心）
 
-### 4.1 三态模型
+### 4.1 二态模型
 
 | 状态 | 含义 | 片上层数 |
 | --- | --- | --- |
-| 完整片上（LOCAL） | 全部 L 层驻留本实例 | L |
-| 部分驻留（PARTIAL） | 前 ⌈L/2⌉ 层片上 + 后 ⌊L/2⌋ 层远端 | L − ⌊L/2⌋ |
-| 完整远端（REMOTE） | 全部层在远端池，无实例归属 | 0 |
+| 完整片上（LOCAL_HBM） | 全部 L 层驻留本实例 | L |
+| 完整远端（REMOTE_MEMORY） | 全部层在远端池，无实例归属 | 0 |
 
-- 层划分按实际模型层数计算：`partial_resident_prefix_layers = L − L//2`
-  （奇数层保留较大半），**不可配置**；
-- 层区间分片逐 NPU 按整头规则计算，与全量严格守恒；字节与层数成正比，
-  半层恰好减半（`kv_cache_shard_bytes_for_layer_range` 构造期守恒断言）。
+逐出/恢复的决策粒度恒为**完整 logical session**（session 级 Tiered-LRU，
+2026-09-25）：不存在部分驻留的运行时状态。旧三态的 PARTIAL_HBM_REMOTE
+（前 ⌈L/2⌉ 层片上 + 后 ⌊L/2⌋ 层远端）已物理移除、无运行时产生者，常量
+仅为旧日志解析保留（两态白名单 fail-closed 拒绝）。字节与层数成正比；
+层区间分片逐 NPU 按整头规则计算，与全量严格守恒
+（`kv_cache_shard_bytes_for_layer_range` 构造期守恒断言）。
 
-### 4.2 去类型化两段式 LRU 逐出
+### 4.2 去类型化单阶段完整 session LRU 逐出
 
-**候选与排序**：候选池 = 本实例上"已完成（`last_completion_ns` 非空）且非活跃"
-的驻留会话；排序键 **（最后完成时刻， 会话标识）** 升序 = 纯 LRU（同时刻平局按
-会话标识字典序）；活跃会话永不被逐出，触发请求自身会话受保护。**不按
-human/tool 类型分类**——无 `next_request_type` 字段、无类型化外层循环，请求
-CSV 维持 8 列。
+**候选与排序**：候选池 = 本实例上"已完成（`last_completion_ns` 非空）且非
+活跃"的**完整本地驻留（LOCAL_HBM）**会话；排序键 **（最后完成时刻，
+会话标识）** 升序 = 纯 LRU（同时刻平局按会话标识字典序）；活跃/在途会话
+绝不入池，触发请求自身会话受保护。**不按 human/tool 类型分类**——无
+`next_request_type` 字段、无类型化外层循环，请求 CSV 维持 8 列。
 
-**两阶段**（每次逐出后立即逐 NPU 重查水位，够即停）：
-
-- **阶段 1（逐后半层）**：按 LRU 序把完整片上会话的**后 ⌊L/2⌋ 层** remote_store
-  至远端池 → 状态 LOCAL→PARTIAL；
-- **阶段 2（整体外迁 = 唯一回退）**：阶段 1 把全部候选半层化后仍不足，才按同一
-  LRU 序把驻留**前缀 [0, resident_prefix_layers) 整体** remote_store →
-  状态→REMOTE、清实例归属。
+**单阶段整体外迁**（每逐一笔立即逐 NPU 重查缺口，满足即停）：按 LRU 序
+逐 victim 把其**全部 L 层、全部 TP shard、全部本地驻留字节**一次性
+remote_store 至远端池（层域 `[0, L)`、驻留前缀 before=L / after=0，写回
+所有权交接完成后才整体释放本地占用）→ 状态→REMOTE、清实例归属；一个
+victim 恰一笔 store（多条 TP shard 传输不折算成多个 victim），事件携带
+完整 session 总字节数与完整层域；整体逐出产生的**空间过量释放被明确允许**
+（不为"恰好凑够缺口"只逐某会话的部分层）。
 
 **触发时机（四处收敛点，与原仓完全一致，不新增触发位置）**：prefill 准入
 （`prepare_history`）、decode 准入 P→D 交接（`move_prefill_to_decode`）、
@@ -142,31 +146,34 @@ KV 容量增长（prefill/decode 增长路径）、decode 终态净额预占
 收敛**：resident→reserved 1:1 换位保证任何瞬间不超订（§4.5），容量已由
 净额预占处的收敛 + 迁移删除旧驻留共同保证。
 
-**失败语义**：两阶段耗尽仍不足 → 记 deep_gap（延迟事件计数）后**队头阻塞等待**，
-容量纪元（capacity_epoch）唤醒后重试，绝不改投其他实例；不搬 sh 的"耗尽即 raise"。
+**失败语义**：候选耗尽仍不足 → 记 deep_gap（延迟事件计数）后**队头阻塞
+等待**，容量纪元（capacity_epoch）唤醒后重试，绝不改投其他实例；不搬 sh
+的"耗尽即 raise"。
 
 **显式负面清单**（设计裁决，均有测试锁定）：
 
 - **无类型化**：不引入 next_request_type / CSV next_trigger_type 列；
-- **无消融档位**：不设 `no_tiered_eviction` 类开关，逐出行为唯一（两段式，
-  整体外迁是唯一回退）；
+- **无消融档位**：不设 `no_tiered_eviction` 类开关，逐出行为唯一（session
+  级整体逐出，无部分层逐出）；
+- **无部分层/半层逐出**：不逐层、不逐半层、不按容量压力动态决定保留层数
+  （旧"先逐全部候选后半层、不足才整体外迁"的两阶段流程与 D4-I3 恰好够
+  守卫已随 2026-09-25 改造批删除）；
 - **无 R_kv 保留水位**：`kv_reserve_context_tokens` 维持 manifest-only，不驱动
   任何逐出；
 - **完成路径零逐出**：请求完成不触发逐出；
 - **无历史截断**：会话上下文单调增长，不做到达时截断回收；
-- 终局会话 `retire_terminal_session`：层域减账 + 远端账面静默核销（不发传输，
+- 终局会话 `retire_terminal_session`：本地减账 + 远端账面静默核销（不发传输，
   **不算逐出**）。
 
 **守卫与审计**（随内核承袭 sh_2.0）：
 
-- **D4-I1 受害者资格复核**：每笔逐出后重验受害者确已非活跃、非保护会话；
-- **D4-I3 过度逐出守卫**：撤销最后一笔逐出必须使至少一个受影响 rank 回到
-  不满足，否则该笔不逐（防过度逐出）；
-- `SH_STRICT_KV_INVARIANTS=1` 全量审计：三态 location 白名单、层域断言、
-  REMOTE 无实例无驻留层、逐 rank expected_resident + expected_remote 重算、
-  预占一致性。
+- **D4-I1 受害者资格复核**：逐出循环结束后复查全部受害者确已非活跃、非
+  保护会话（防候选快照过期误伤）；
+- `SH_STRICT_KV_INVARIANTS=1` 全量审计：**二态** location 白名单
+  （PARTIAL 出现即 raise）、LOCAL 恒全层断言、REMOTE 无实例无驻留层、
+  逐 rank expected_resident + expected_remote 重算、预占一致性。
 
-### 4.3 命中复用与恢复路径（六分支）
+### 4.3 命中复用与恢复路径（四分支）
 
 下一轮到达、映射照常选点后（映射不看 KV 位置），按会话态 × 实例关系分流：
 
@@ -175,9 +182,7 @@ KV 容量增长（prefill/decode 增长路径）、decode 终态净额预占
 | 新会话 | 建片上记录，随预填充增长（NO_HISTORY） |
 | LOCAL 同实例 | 零开销本地复用（LOCAL_HIT） |
 | LOCAL 跨实例 | 整份 KV NoC 迁移至目标实例（NOC_MIGRATE，1000 类配对迁移路径原样保留） |
-| PARTIAL 同实例 | **只回迁后缀层段**（REMOTE_LOAD）：首 chunk 拆前缀层段 / 后缀层段，后缀段以远端恢复的逐 NPU 完成门为依赖——**恢复流量与前缀计算真流水重叠**；拆分发射的字节与单次全层发射严格守恒 |
-| PARTIAL 跨实例 | **两段链**（PARTIAL_MIGRATE）：驻留前缀 NoC 迁移 → 目标实例容量逐出 → 后缀层段远端恢复；两段承载在**同一条 prefill 决策记录**内（对账工具按"同请求同 kind 不重复"校验） |
-| REMOTE | 全量回迁到选定实例（REMOTE_RESTORE），逐 target rank 经最近边缘端口 |
+| REMOTE（同/跨实例） | **全量回迁**到选定实例（单笔 remote_load `[0, L)`，逐 target rank 经最近边缘端口；REMOTE_RESTORE，唯一远端恢复路径）：恢复链等齐在飞 store（store→restore 前递边）、恢复完成前历史 KV 不可消费（单一全层就绪屏障），恢复后会话即完整本地可用 |
 
 - **最近边缘 NPU**：对每个源/目标 NPU 分片取曼哈顿跳数最小的边缘端口，等距取
   编号最小；
@@ -186,25 +191,34 @@ KV 容量增长（prefill/decode 增长路径）、decode 终态净额预占
   已外迁的 KV；
 - **恢复取代重算**：重算段已从调度规划中删除（remaining_chunks 不再有
   `ceil(history/p_chunk)` 加项）；恢复前的容量检查本身仍可触发对其他会话的
-  分层逐出（先收敛容量、再执行恢复）；
+  整体逐出（先收敛容量、再执行恢复）；
 - 结构注记：PD 分离下会话经 P→D 交接驻留 Decode 实例、下一轮 prefill 恒选
-  Prefill 实例，PARTIAL 恢复实际走跨实例两段链；同实例后缀回迁分支已实现并由
-  专项单测覆盖，真实 trace 无需期待其出现。
+  Prefill 实例，跨实例恢复统一走 REMOTE_RESTORE 全量回迁。旧 PARTIAL 两分支
+  （REMOTE_LOAD 同实例后缀回迁 / PARTIAL_MIGRATE 跨实例两段链）连同
+  prefix/suffix 双栅栏与首 chunk 层段拆分真流水已物理移除；legacy 动作常量
+  仅为旧日志解析保留。
 
 ### 4.4 逐出 / 回迁物理链路与 HBM 计费
 
-远端端口为严格 FIFO 单事务队列，单次访问 `耗时 = λ_rem + bytes/B_rem`；端口间
-完全并行。逐链路的发射序与计费（**每字节每链恰好在正确端点计费一次**，过路
-hop 零计费、双计有守卫拒收）：
+远端端口为**并发在途＋流平分**的流体端口（2026-09-24 SerDes 片外链路并发化
+改造，直接替换无开关，旧严格 FIFO 串行队列已删除）：同一端口上的活跃流 N 路
+均分端口带宽 `remote-mem-bw`（按 B/ns 消费），任一流耗尽带宽份额即刻完成、
+幸存流马上重分剩余带宽；固定端口时延 λ_rem 可跨事务重叠且不占带宽；端口间
+完全并行、远端池总容量不设限。**多流并发时单流服务时长 ≠ λ_rem + bytes/B_rem**
+（带宽份额随并发数动态变化；仅单事务独占空端口时退化为该式）。逐事务明细
+复算以 `results/remote_memory_transactions.jsonl`（sensing 开启时写出）的
+`fluid_finish_ns` 与区间积分字段为准，不得用 `callback_tick − issue_tick`
+Tick 差反推（含 ≤1 Tick 向上取整量化差）。逐链路的发射序与计费（**每字节
+每链恰好在正确端点计费一次**，过路 hop 零计费、双计有守卫拒收）：
 
 - **remote_store 链 A（源≠边缘）**：[可选 1B trigger] → 源 `comm_send(bytes)`
   （源端 HBM 读 = 唯一数据计费）→ 边缘 `comm_recv`（`hbm-charge=false` 过路
-  零计费）→ 边缘 `mem_store`（池写，本地零计费，仅池端口 FIFO）→ 1B ack 双端；
+  零计费）→ 边缘 `mem_store`（池写，本地零计费，仅池端口流体计时）→ 1B ack 双端；
   **源端收到 ack 后才物理释放空间**；
 - **remote_store 链 B（源==边缘，直连）**：`mem_store(hbm_access_mode=1)` =
-  池读端点唯一计费 + 池端口 FIFO 双异步 join（仅当逐出源 rank 本身在 mesh
+  池读端点唯一计费 + 池端口流体计时双异步 join（仅当逐出源 rank 本身在 mesh
   周界时发生）；
-- **remote_load（回迁）**：[1B control/arm] → 边缘 `mem_load`（仅池 FIFO）→
+- **remote_load（回迁）**：[1B control/arm] → 边缘 `mem_load`（仅池端口流体计时）→
   边缘 `comm_send`（`hbm-charge=false`）→ 目标 `comm_recv`（`hbm-charge=false`，
   目标写由 restore 承担）→ 目标 `local_hbm_kv_restore` = RESTORE DMA 唯一
   数据计费（每 rank hbm_dma 单槽：同一 rank 同时至多一个在飞 restore）；
@@ -225,10 +239,11 @@ trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9
   逐 rank 守恒；容量判决口径只计本地（远端池字节不占本地容量）；
 - **净额预占 + extend 回补（wscllm 特有，保留）**：prefill 准入在静态 decode
   目标预占终态 KV 时，若全量预约因本会话旧驻留重复计入而 deep-gap、且旧 KV
-  仍驻留于该 decode 实例（LOCAL 全额 / PARTIAL 取片上前缀账面），按净额
+  仍完整驻留于该 decode 实例（LOCAL_HBM 单态判定，credit = 全量账面
+  `local_shard_bytes`），按净额
   （终态−旧驻留账面）重试；迁移删除旧驻留后经 `extend_request_capacity`
   回补到全量——**resident→reserved 1:1 换位，任何瞬间不超订**；
-- **容量纪元纪律**：凡产生真实容量变化的 mutation（含三态化新增的逐出与回迁
+- **容量纪元纪律**：凡产生真实容量变化的 mutation（含整体逐出与回迁
   落账点）才 bump `capacity_epoch`，多源唤醒**合并覆盖**（净额失败 / 非净额
   失败 / 准入受阻释放 / 成功准入 / decode 侧五条路径逐一接齐）；仅增预占的
   extend 与无 mutation 路径不 bump——丢一次中间 epoch 会楔死等待重试的准入；
@@ -243,14 +258,16 @@ trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9
 ### 4.6 指标观测（契约方案 A）
 
 - `repo_variant` 维持 `"astra-sim-wscllm"` 不变；`kv_hit_state` **五值域不扩**：
-  REMOTE→`full`、PARTIAL→`partial`；full_local / full_remote 由 evidence 列
+  新运行二态位置 `local_hbm`/`remote_memory` 恒 `full`（partial 分支仅旧产物
+  可达，映射表保留只为旧日志解析）；full_local / full_remote 由 evidence 列
   区分（如 `history_location_before=remote_memory`）；命中率分子
-  hit_n = full + partial；
-- 后处理适配器**双级解析**：优先决策日志 `history_location_before` 三态映射，
-  字段缺失回退旧 `history_action` 四值表（旧产物兼容）；逐出条目带
-  `total_bytes` 标量回退（不静默丢）；水位工具接受 journal schema v1/v2
-  （单文件不混版），v2 remote 链参与行级自洽校验且不计入本地容量判决，
-  检测到逐段传输字段在场自动升级逐段对账重放。
+  hit_n = full + partial 公式不变；
+- 后处理适配器**双级解析**：优先决策日志 `history_location_before` 二态映射
+  （partial 仅旧产物可达），字段缺失回退旧 `history_action` 四值表（旧产物
+  兼容）；逐出条目带 `total_bytes` 标量回退（不静默丢）；水位工具接受 journal
+  schema v1/v2（单文件不混版），v2 remote 链参与行级自洽校验且不计入本地
+  容量判决，检测到逐段传输字段在场自动升级逐段对账重放（整体逐出按字节等额
+  归类，`partial_evictions` 新运行恒 0）。
 
 ## 5. 算法—体系结构映射分析
 
@@ -258,22 +275,24 @@ trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9
    D 都在邻接位置，P→D 交接只需一跳链路；离线规划同时最小化总跳数与共享链路
    数。在线调度器完全不需要理解网络拓扑与拥塞——代价是映射对 KV 位置、队列
    压力与内存状态全盲。
-2. **三态冷热 ↔ 容量压力的分流出口**：原两态基线把 KV 压力全部转化为计算压力
-   （删除-重算，预填充块数随历史线性增长）；三态化后容量压力首先转化为**带宽
-   压力**（半层外迁/整体外迁的 remote_store 与恢复的 remote_load，均经边缘
+2. **二态冷热 ↔ 容量压力的分流出口**：原两态基线把 KV 压力全部转化为计算压力
+   （删除-重算，预填充块数随历史线性增长）；冷热化后容量压力首先转化为**带宽
+   压力**（整体外迁的 remote_store 与恢复的 remote_load，均经边缘
    端口与 NoC），仅当远端往返也换不回空间时才队头阻塞。冷数据的典型生命周期：
-   片上增长 → 半层化（腾空间给热会话）→ 整体外迁 → 下一轮经边缘端口回迁。
-3. **先半层后整体 ↔ 逐出的边际成本递增序**：阶段 1 每笔只搬后 ⌊L/2⌋ 层
-   （约半份 KV）就把受害者留在 PARTIAL——下一轮只需恢复后缀（且可流水）；
-   阶段 2 整体外迁是无可奈何的回退（恢复代价升为全量）。这使"腾出单位空间
-   的恢复代价"近似单调，冷会话越冷、被搬得越彻底。
+   片上增长 → 整体外迁（LRU 最老完整 session 一次性让位）→ 下一轮经边缘端口
+   全量回迁。
+3. **完整 session 逐出 ↔ 决策粒度与物理链路解耦**：逐出单位恒为完整 session
+   （全部层/全部 shard 一次性写回），恢复代价恒为全量回迁——以恢复字节的
+   确定性换取状态机的极简（无部分驻留态、无 prefix/suffix 双栅栏）；TP 分片、
+   传输分块等物理机制保留在链路层，不上升为策略决策粒度。过量释放合法：
+   逐到缺口被覆盖即停，不为凑字节只逐部分层。
 4. **队头阻塞 + 纪元唤醒 ↔ 静态映射的活性保障**：容量不足不改映射、不扩候选
    集（保静态 P/D 的可复现性）；活性由容量纪元承担——任何真实容量变化
    （含逐出、回迁、释放）都唤醒阻塞的队头重试，多源变化合并覆盖防丢唤醒。
 5. **净额预占 ↔ PD 分离下的记账正确性**：P→D 静态路由把长会话钉死在唯一
    decode 实例，准入预占若按全量计（不扣本会话旧驻留）会出现"旧+新"双计
-   深缺口并楔死重试；净额（终态−旧驻留账面）+ 迁移后 extend 回补在不超订
-   前提下消除双计，三态化后账面按片上前缀（PARTIAL）精确折算。
+   深缺口并楔死重试；净额（终态−旧驻留账面，LOCAL_HBM 单态判定、credit =
+   全量账面）+ 迁移后 extend 回补在不超订前提下消除双计。
 6. **决策可复现性**：排序键、平局规则、层切分、边缘端口选择、路由、tag 分配
    全部确定性；`SH_STRICT_KV_INVARIANTS` 与 journal checksum 提供逐 mutation
    的账本级复算验证。
@@ -289,22 +308,30 @@ trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9
   纪元门控下重查，固定静态映射不 remap）；请求完成落 KV 完成账本并排下一轮
   到达闹钟。
 - **发射编排**（每 prefill 批内序）：到达门 → 历史逐出（挂到达门触发）→ 历史
-  恢复分流（PARTIAL 走前缀迁移/后缀恢复真流水）→ prefill 增长逐出 → 就绪
-  屏障 → prefill 主体（partial 时首 chunk 层段拆分）。decode 侧逐出挂列车头
+  恢复分流（REMOTE_RESTORE 全量回迁，单段全层）→ prefill 增长逐出 → 单一
+  全层就绪屏障（恢复完成前不能消费历史 KV）→ prefill 主体（整段聚合发射）。
+  decode 侧逐出挂列车头
   joiner 段（post-barrier 触发门）；D 侧 decode 为实例迭代列车（跨成员共享体
   节点 + joiner P→D 迁移 + 共享 end barrier），P 侧 prefill 整段聚合。逐出动
   作批始终伴随宿主请求事件同批发射（桥协议要求，防死锁）。
-- **物理模型**：Roofline 计算 + 逐 NPU HBM 流体均分（六类作业）；远端端口
-  FIFO（λ_rem + bytes/B_rem）；拥塞感知 NoC + 维度序路由；远端写回在源端收到
-  ack 后才物理释放；每链路每字节恰一次端点计费（`hbm-charge=false` 过路豁免、
+- **物理模型**：Roofline 计算 + 逐 NPU HBM 流体均分（六类作业）；远端边缘端口
+  为并发在途＋流平分流体端口（活跃流 N 路均分 `remote-mem-bw`，多流并发时
+  单流时长 ≠ λ_rem + bytes/B_rem；逐事务明细见
+  `results/remote_memory_transactions.jsonl` 的 `fluid_finish_ns`/区间积分
+  字段）；拥塞感知 NoC + 维度序路由；远端写回在源端收到 ack 后才物理释放；
+  每链路每字节恰一次端点计费（`hbm-charge=false` 过路豁免、
   `hbm_access_mode=1` 直连池读、restore DMA 目标端唯一写计费）。
-- **可观测指标**：决策日志逐请求带 `history_location_before`（三态）、
-  `history_resident_prefix_layers`、`history_transfers`（逐段传输对象：kind/
-  reason/session/bytes/源目实例/层段/边缘端口路由）与逐出条目（victim/bytes/
-  层域/stage）；journal 逐 rank delta（含 remote 列）+ run 末 checksum 五项
+- **可观测指标**：决策日志逐请求带 `history_location_before`（二态
+  local_hbm/remote_memory）、
+  `history_resident_prefix_layers`、`history_transfers`（传输对象：kind/
+  reason/session/bytes/源目实例/层域/边缘端口路由）与逐出条目（victim/bytes/
+  完整层域）；journal 逐 rank delta（含 remote 列）+ run 末 checksum 五项
   守恒；`cache_events.csv`（remote_store/remote_load/noc_migrate 次数与字节）、
   `kv_hit_states.csv`（五值域 + evidence 区分 full_local/full_remote）、逐
-  NPU HBM 水位与逐类 served bytes、边缘端口 FIFO 记账、逐请求时延与吞吐。
+  NPU HBM 水位与逐类 served bytes、边缘端口流体端口记账（PortStats 区间积分：
+  issued/completed、in-flight/streaming 峰值、`port_busy_ns`/`shared_busy_ns`/
+  `bytes_served`、重分事件计数，另含逐事务明细 `remote_memory_transactions.jsonl`）、
+  逐请求时延与吞吐。
 
 ## 7. 策略小结
 
@@ -313,18 +340,19 @@ trace 实测 1177 行已段重叠——基址上移至 100,000,000，队列 ≤9
 | P/D 组织 | 物理静态分区：n_P 个 Prefill 实例环绕、n_D 个 Decode 实例居中（保留原仓） |
 | P→D 路由 | 离线一次性规划（总跳数 → 共享链路 → 确定性破平），运行期固定（保留原仓） |
 | 在线映射 | Prefill 按（排队请求数， 实例编号）均衡；Decode 由路由唯一确定（保留原仓，不看 KV 位置） |
-| KV 层次 | LOCAL / PARTIAL（前 ⌈L/2⌉ 层片上）/ REMOTE，三级（承袭 sh_2.0，去类型化） |
-| 层划分 | 前 ⌈L/2⌉ 层驻留，后 ⌊L/2⌋ 层首迁，不可配置 |
-| 淘汰 | 去类型化两段式 LRU：（完成时刻， 会话标识）升序；先全部后半层、不足才整体外迁；逐 NPU 收敛、逐笔重查、活跃保护 |
+| KV 层次 | 完整片上（LOCAL_HBM）/ 完整远端（REMOTE_MEMORY），二态（session 级 Tiered-LRU，2026-09-25 起） |
+| 层划分 | 驻留恒全量（[0, L)）；逐 NPU 整头分片守恒；旧 PARTIAL 半层切分已物理移除 |
+| 淘汰 | 去类型化单阶段完整 session LRU：（完成时刻， 会话标识）升序逐个整体写回远端池（层域 [0, L)）；逐 NPU 收敛、逐笔重查、满足即停、过量释放允许；活跃保护、D4-I1 守卫（旧两段式与 D4-I3 恰好够守卫已删除） |
 | 触发点 | 四处收敛点（prefill 准入 / decode 准入 / 容量增长 / decode 终态净额预占），不新增位置；净额回补 extend 仅增量记账、不触发逐出收敛 |
-| 恢复 | 按需（非预取）六分支：PARTIAL 同实例后缀回迁与前缀计算真流水；PARTIAL 跨实例前缀迁移+后缀恢复两段链；REMOTE 全量回迁经最近边缘端口；RECOMPUTE 已删除 |
+| 恢复 | 按需（非预取）四分支：本地零开销 / NoC 整迁 / 远端全量回迁（REMOTE_RESTORE 单段 [0, L)，恢复完成前不可消费）；RECOMPUTE 已删除 |
 | 失败语义 | 队头阻塞 + 容量纪元唤醒重试（不改映射；不搬 sh 的 raise） |
-| 预占 | decode 目的地净额预占（终态−旧驻留账面）+ 迁移后 extend 回补，resident→reserved 1:1 不超订 |
+| 预占 | decode 目的地净额预占（终态−旧驻留账面，LOCAL_HBM 单态判定）+ 迁移后 extend 回补，resident→reserved 1:1 不超订 |
 | 水位 | 无 R_kv（kv_reserve_context_tokens 仅 manifest 记录）；完成路径零逐出；无历史截断 |
 | 守恒 | 逐 NPU 本地+远端账本守恒；journal schema v2 remote 列 + run 末 checksum 五项终态守恒 |
 | 历史感知 | 无（映射零改动）——KV 位置只影响恢复动作，不影响选点 |
 
 一句话概括：**保留 WSC-LLM 的静态 P/D 映射与队头阻塞骨架，把"删除-重算"的
-容量出口整体替换为承袭 sh_2.0（去类型化）的三态冷热管理：两段式 LRU 先扫后半层、
-不足才整体外迁，恢复按态分流并经边缘端口真流水回迁——容量压力从计算侧转移到
-带宽侧，而映射决策保持零历史感知。**
+容量出口整体替换为 session 级 Tiered-LRU 二态冷热管理（承袭 sh_2.0 物理链路，
+去类型化、去部分化）：完整 logical session 按（完成时刻， 会话标识）严格 LRU
+序逐个整体写回远端池（允许过量释放），恢复按需经最近边缘端口全量回迁、
+恢复完成前不可消费——容量压力从计算侧转移到带宽侧，而映射决策保持零历史感知。**

@@ -41,7 +41,8 @@ strategy 感知运行目录):
      digests.jsonl 批级摘要合法——每批 watch_count ∈ [0, len(ranks)] 且
      watch_count==0 ⇔ ranks 为空(空性等价;watch_count 可为 2,
      PREFILL_DRAIN 同批 prefill+decode 双 watch / DECODE_COMPLETION+
-     REQUEST_COMPLETE 可 3,禁 {0,1} 假设)、ranks ⊆ [0,53]、
+     REQUEST_COMPLETE 可 3,禁 {0,1} 假设)、ranks ⊆ [0,--max-rank]
+     (缺省 53 = 54-NPU 验收 mesh,跨硬件复用时改传)、
      sum(node_count) == C++ phase-5 total_nodes 且 sum(watch_count)
      == phase-5 total_watches;R2c:phase-4 end audit 全零(watch 生命
      周期干净收尾)。
@@ -344,6 +345,10 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--expected-accepted-sessions", type=int, default=112,
         help="输入期望 accepted 会话数(R0e;缺省 112 = 30s 验收值,同上)")
+    parser.add_argument(
+        "--max-rank", type=int, default=53,
+        help="R2b 批级摘要 rank 上界(闭区间;缺省 53 = 54-NPU 验收 mesh,"
+             "跨硬件复用时按 npus-1 改传)")
     parser.add_argument("--report", default=None,
                         help="markdown report path (default: stdout)")
     args = parser.parse_args(argv)
@@ -512,7 +517,8 @@ def main(argv=None) -> int:
     # ---- R2b 批级摘要不变量(2026-08-16 加固,wscllm 054118e 同款) ----
     # watch_count ∈ [0, len(ranks)] 且 watch_count==0 ⇔ ranks 为空(空性
     # 等价;同批双 watch(PREFILL_DRAIN 的 prefill+decode)合法,禁 {0,1}
-    # 假设——30s 实测存在 wc=2 批);ranks ⊆ [0,53];digest 双和与 C++
+    # 假设——30s 实测存在 wc=2 批);ranks ⊆ [0, --max-rank](缺省 53 =
+    # 54-NPU 验收 mesh,跨硬件复用时改传);digest 双和与 C++
     # phase-5 权威计数对平(sum(node_count)==total_nodes、
     # sum(watch_count)==total_watches)。
     digest_bad = []
@@ -539,10 +545,11 @@ def main(argv=None) -> int:
                     "delivery_sequence": seq,
                     "violation": "空性等价失配(watch_count==0 ⇔ ranks 空)",
                     "watch_count": watch_count, "ranks": ranks})
-            if any(not 0 <= rank <= 53 for rank in ranks):
+            if any(not 0 <= rank <= args.max_rank for rank in ranks):
                 digest_bad.append({
                     "delivery_sequence": seq,
-                    "violation": "rank 越界(ranks ⊄ [0,53])",
+                    "violation": "rank 越界(ranks ⊄ [0,{}])".format(
+                        args.max_rank),
                     "ranks": ranks})
         sum_bad = []
         if phase_counters["total_nodes"] is not None and \
@@ -899,14 +906,15 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
     lines.append("|---|---|")
     lines.append("| R0 集合对平(manifest / Python completed-unreconciled / C++ REQUEST_COMPLETE / cpp.log completed = {};prefill/decode 完成事实各 {};零重复) | {} |".format(
         manifest_count, manifest_count,
-        "PASS" if not failures else "FAIL"))
+        "PASS" if not any(item.startswith("R0") for item, _ in failures)
+        else "FAIL"))
     lines.append("| R1 逐 request 生命周期对平(admitted<=commit<=prefill<=decode==complete;gen 0/1/1) | {} |".format(
         "PASS" if not lifecycle_bad else "FAIL: {} 条".format(len(lifecycle_bad))))
     lines.append("| R2 committed 节点对平(每 (request, stage) 恰注册一次 watch;watch 成员数 == completed_groups node_count;成员 rank ⊆ committed rank 集) | {} |".format(
         "PASS" if not (member_bad or watch_reg_bad)
         else "FAIL: 成员 {} 条 / 注册 {} 条".format(
             len(member_bad), len(watch_reg_bad))))
-    lines.append("| R2b 批级摘要不变量(watch_count ∈ [0,len(ranks)];空性等价 watch_count==0 ⇔ ranks 空;ranks ⊆ [0,53];digest 双和 == cpp phase-5 total_nodes/total_watches;2026-08-16 加固,wscllm 054118e 同款) | {} |".format(
+    lines.append("| R2b 批级摘要不变量(watch_count ∈ [0,len(ranks)];空性等价 watch_count==0 ⇔ ranks 空;ranks ⊆ [0,--max-rank](缺省 53);digest 双和 == cpp phase-5 total_nodes/total_watches;2026-08-16 加固,wscllm 054118e 同款) | {} |".format(
         "PASS" if digest_bad is not None and not digest_bad and not any(
             "R2b" in item for item, _ in failures)
         else "FAIL: {} 条违例/失配".format(
@@ -926,7 +934,8 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
         "FAIL: admitted={} committed={}".format(
             len(admitted_left), len(committed_left))))
     lines.append("| R5 injected-unfinished 对平(末决策边界残差 = 终请求 decode end-barrier 控制节点;注入峰值 ≤ committed 节点数) | {} |".format(
-        "PASS" if balanced else "FAIL"))
+        "PASS" if not any(item.startswith("R5") for item, _ in failures)
+        else "FAIL"))
     lines.append("| R6 ready 层对平(§10.1:每边界 ready ⊆ admitted;ready ∩ issued == ∅;末边界 ready=0) | {} |".format(
         "PASS" if not ready_bad and final_ready.get("ready_count", 0) == 0
         else "FAIL: 边界违例 {} 条 / 末边界 ready={}".format(

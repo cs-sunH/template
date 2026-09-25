@@ -11,7 +11,7 @@ No general dynamic-graph platform is built (仿真加速分析.md §5.5).
 
 Interfaces implemented here:
   - NodeStore: the store itself (add_node / add_dependency / resolve_free_nodes
-    / finish_node / meta_for / pending_count / empty, plus mark_issued and
+    / finish_node / pending_count / empty, plus mark_issued and
     node() as GraphSource::take_node / lookup backing -- documented additions
     to the plan's skeleton).
   - NodeStoreGraphSource: online-mode GraphSource over a NodeStore.
@@ -165,9 +165,6 @@ class NodeStore {
     // already-finished, or duplicate terminal callbacks return false so
     // Workload can fail closed before recording statistics or observer facts.
     bool mark_terminal_observed(uint64_t node_id);
-
-    /// Reverse index (watch/fence).
-    std::optional<NodeStoreMeta> meta_for(uint64_t node_id) const;
 
     size_t pending_count() const;
     bool empty() const;

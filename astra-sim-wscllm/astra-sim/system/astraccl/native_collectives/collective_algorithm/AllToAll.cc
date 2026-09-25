@@ -59,7 +59,6 @@ void AllToAll::process_max_count() {
     }
 
     if (remained_packets_per_max_count == 0) {
-        max_count--;
         release_packets();
         remained_packets_per_max_count = 1;
 

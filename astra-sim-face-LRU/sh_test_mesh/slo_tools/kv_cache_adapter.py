@@ -29,6 +29,9 @@ manifest 提供 turn_index 等上下文）。只做输出层映射，native 日�
                    admission/decode_target/completion_evictions 不再消费
                    ——同值同源防双计）；旧产物回退 history_action 四值
                    {NO_HISTORY, LOCAL_HIT, NOC_MIGRATE, RECOMPUTE}。
+  astra-sim-face-LRU
+                   本仓（face-LRU）：同 face 映射（恒 -LRU 新产物，
+                   无旧产物回退）。
   astra-sim-wscllm 同 face 双级（旧基线 RECOMPUTE 802/802 全量重算）；
                    decode 决策另有 static_route（hopbytes.py 用）。
   astra-sim-sh_1.0 prefill.decision.history_transfer ∈ null | {kind:
@@ -95,12 +98,11 @@ def _hit_state_face_wscllm(decision: dict, turn: Optional[int],
     三态映射（照 sh_2.0 :153-157），字段缺失回退 legacy history_action
     四值表（旧产物兼容）。
 
-    -LRU 新产物的 history_action 值域已扩（PARTIAL_REMOTE_MIGRATE /
-    REMOTE_RESTORE 等）且 RECOMPUTE 消失——这些行恒携带
-    history_location_before（NO_HISTORY 恒 None，走回退级恰得 no_history），
-    不需要也不应扩 action 表。五值域不扩（REMOTE→full、PARTIAL→partial；
-    full_local/full_remote 由 evidence 列区分），命中率分子
-    hit_n=full+partial 公式不动。"""
+    session 级 Tiered-LRU（face-LRU 2026-09-25）后新运行仅产出
+    local_hbm/remote_memory 两值（整体逐出 + 全量恢复），partial_hbm_remote
+    无运行时产生者——映射表保留该键仅供旧产物解析。五值域不扩
+    （REMOTE→full、PARTIAL→partial 仅旧口径；full_local/full_remote 由
+    evidence 列区分），命中率分子 hit_n=full+partial 公式不动。"""
     location = decision.get("history_location_before")
     if location is not None:
         resident = decision.get("history_resident_prefix_layers")
@@ -465,7 +467,9 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
     "astra-sim-face": {
         "hit_state": _hit_state_face_wscllm,
         "extract_events": extract_events_face_wscllm,
-        "shard_sum_check": True,
+        # -LRU 新产物为契约行列表/无 shards 契约行，检查结构上不可达（恒 0
+        # 违例）——置 False 防误读为仍有覆盖（缘由见 adapter_consume 注）。
+        "shard_sum_check": False,
         "partial_semantics": True,
         "notes": "双级（-LRU 方案 A）：新产物 history_location_before 三态"
                  "（local_hbm=full/partial_hbm_remote=partial/"
@@ -474,10 +478,27 @@ REPO_VARIANTS: dict[str, dict[str, Any]] = {
                  "LOCAL_HIT 176/NOC_MIGRATE 1079/RECOMPUTE 83；RECOMPUTE "
                  "全量重算 → 无 partial 语义）",
     },
+    "astra-sim-face-LRU": {
+        # 本仓（face-LRU）：映射整体复制 astra-sim-face（plan_materializer.
+        # py 的 REPO_VARIANT 以本键落 manifest；未登记前 detect_repo_variant
+        # 查表即 fail）。session 级 Tiered-LRU（2026-09-25）后新运行仅产出
+        # local_hbm→full / remote_memory→full 两值（整体逐出 + 全量恢复，
+        # partial_hbm_remote 无运行时产生者）；partial_hbm_remote→partial
+        # 映射仅供旧产物解析（旧日志读侧兼容）。
+        "hit_state": _hit_state_face_wscllm,
+        "extract_events": extract_events_face_wscllm,
+        "shard_sum_check": False,
+        "partial_semantics": True,
+        "notes": "同 face 双级（恒 -LRU 新产物：history_location_before "
+                 "两态 local_hbm/remote_memory → full + history_transfers "
+                 "逐段/契约逐出行；partial_hbm_remote 仅旧产物可解析，"
+                 "新运行不产出）",
+    },
     "astra-sim-wscllm": {
         "hit_state": _hit_state_face_wscllm,
         "extract_events": extract_events_face_wscllm,
-        "shard_sum_check": True,
+        # 同 face：-LRU 契约行形态下无 shard 可验，置 False。
+        "shard_sum_check": False,
         "partial_semantics": True,
         "notes": "同 face 双级（-LRU 新产物契约字段优先，旧产物回退 "
                  "history_action 四值；旧基线 RECOMPUTE 802/802 全量重算）；"
@@ -571,6 +592,11 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
         for event in extracted)
     if variant["shard_sum_check"]:
         # native 不变量复检：Σshards == total_bytes（以 native 为准）。
+        # 仅旧格式 dict 产物可触发（现仅 sh_1.0 变体置 True）：-LRU 新产物
+        # 的 prefill_decode_transfer 是契约行列表（isinstance-dict 守卫跳
+        # 过）、history 发射的是复数 history_transfers（此处读单数恒
+        # None）、逐出契约行无 shards 键——三路均不可达，face/wscllm 变体
+        # 已置 False。
         for holder in (decision.get("prefill_decode_transfer"),
                        decision.get("history_transfer")):
             if isinstance(holder, dict):

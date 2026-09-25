@@ -315,7 +315,6 @@ class Sys : public Callable {
 
     // network
     AstraNetworkAPI* comm_NI;
-    double comm_scale;
     bool rendezvous_enabled;
 
     // scheduler
@@ -357,8 +356,6 @@ class Sys : public Callable {
     bool dispatching_events = false;
     Tick dispatching_event_time = 0;
     int total_nodes;
-    int dim_to_break;
-    std::vector<int> logical_broken_dims;
 
     std::vector<int> physical_dims;
     std::vector<int> queues_per_dim;

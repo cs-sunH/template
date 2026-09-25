@@ -73,10 +73,13 @@ Step 1-10 (runners + IDLE fixture):
   - lifecycle transition log: a ServiceCoordinator transition hook prints
     every IDLE/ACTIVE/DRAINING/FINISHED transition with elapsed + wall
     timestamps ("[online] lifecycle: ...").
-  - --command-fifo <path>: a detached external-producer thread reads JSON
+  - --command-fifo <path>: an external-producer thread reads JSON
     Submit/CloseInput/EndOfFile/Error lines from the FIFO and writes the
     thread-safe bounded ingress command queue (合同② 线程合同; the decision
-    bridge stays the decision channel only). This is the IDLE fixture's
+    bridge stays the decision channel only). main holds a silent FIFO write
+    end and joins the thread at run end (closing the write end forces EOF
+    for a producer parked in a blocking open/read), so no producer thread
+    outlives the stack objects it references. This is the IDLE fixture's
     injection channel -- the official runners never use it. Phase-7 §10.7:
     the terminal command kinds (CloseInput/EndOfFile/Error) are
     distinguished in the drain path and the run-end lifecycle audit
@@ -109,7 +112,9 @@ Step 1-10 (runners + IDLE fixture):
 #include <astra-network-analytical/congestion_aware/Helper.h>
 #include <json/json.hpp>
 
+#include <fcntl.h>
 #include <sys/resource.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstdint>
@@ -607,9 +612,10 @@ const char* service_state_name(const ServiceState state) {
 //   {"kind":"CloseInput"}
 // The FIFO open blocks until a writer opens the read end (the fixture script
 // holds one writer open for the whole injection session). EOF (writer
-// closed) exits the thread; the input stays open. The thread is detached:
-// it may be parked in the blocking FIFO open/read at run end and dies with
-// the process.
+// closed) exits the thread; the input stays open. main holds a second,
+// silent write end of the FIFO and closes it right before the run-end join,
+// so a producer parked in the blocking open/read always returns (EOF) and
+// is reaped by join instead of outliving the stack objects it references.
 void command_fifo_reader(const std::string& path, RequestIngress& ingress,
                          ServiceCoordinator& svc) {
     std::ifstream fifo(path);
@@ -997,6 +1003,12 @@ int main(int argc, char* argv[]) {
         cmd_line_parser.get<std::string>("logging-folder");
     const auto num_queues_per_dim =
         cmd_line_parser.get<int>("num-queues-per-dim");
+    if (num_queues_per_dim <= 0) {
+        std::cerr << "[Error] (execution_driven/online) --num-queues-per-dim "
+                     "must be a positive integer, got "
+                  << num_queues_per_dim << std::endl;
+        return EXIT_FAILURE;
+    }
     const auto comm_scale = cmd_line_parser.get<double>("comm-scale");
     const auto injection_scale = cmd_line_parser.get<double>("injection-scale");
     const auto rendezvous_protocol =
@@ -1205,10 +1217,17 @@ int main(int argc, char* argv[]) {
 
     // Step 1-10: external-producer command FIFO (IDLE fixture injection
     // channel; the fixture script must mkfifo it before the binary starts).
+    int command_fifo_write_fd = -1;
+    std::thread command_fifo_thread;
     if (!online_cli.command_fifo.empty()) {
-        std::thread(command_fifo_reader, online_cli.command_fifo,
-                    std::ref(ingress), std::ref(svc))
-            .detach();
+        command_fifo_thread =
+            std::thread(command_fifo_reader, online_cli.command_fifo,
+                        std::ref(ingress), std::ref(svc));
+        // Hold a write end: it pairs the producer's blocking open and lets
+        // the run-end join below force EOF for a producer parked in a
+        // blocking read.
+        command_fifo_write_fd =
+            ::open(online_cli.command_fifo.c_str(), O_WRONLY);
     }
 
     // --close-input closes external production only after every CSV row has
@@ -2001,6 +2020,19 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         gate_ok = false;
     }
+    // Terminate and reap the external producer before ingress/svc die with
+    // this stack frame: closing the held write end forces EOF for a
+    // producer parked in the blocking FIFO open/read, then join reaps it --
+    // no detached thread may outlive the objects it references. Covers both
+    // exits below (gate-failure and normal).
+    if (command_fifo_write_fd >= 0) {
+        ::close(command_fifo_write_fd);
+        command_fifo_write_fd = -1;
+    }
+    if (command_fifo_thread.joinable()) {
+        command_fifo_thread.join();
+    }
+
     if (!gate_ok) {
         print_total_wall_time();
         // The "main" logger is async: shutdown drains its queue so the

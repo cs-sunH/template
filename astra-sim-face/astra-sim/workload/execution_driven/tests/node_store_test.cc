@@ -32,7 +32,7 @@ test -- no network simulation, no baseline artifacts touched:
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm, after generating the synthetic trace):
+Run (from template/astra-sim-face, after generating the synthetic trace):
   python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py
   build/astra_analytical/build_congestion_aware/bin/\
       AstraSim_Analytical_Congestion_Aware_NodeStoreTest \

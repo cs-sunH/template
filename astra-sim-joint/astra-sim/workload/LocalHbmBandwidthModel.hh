@@ -27,7 +27,8 @@ class WorkloadLayerHandlerData;
  *   - COMPUTE     : inference COMP node (bytes = tensor_size; ops progress
  *                   at peak_perf in parallel, preserving Roofline's
  *                   max(compute time, memory time) semantics),
- *   - RESTORE     : KV-restore DMA write (serial graph semantics unchanged),
+ *   - RESTORE     : KV-restore DMA write (multiple concurrent restores are
+ *                   a supported state and share the pool),
  *   - COMM_READ   : NoC p2p send-side endpoint HBM read (bytes = comm size),
  *   - COMM_WRITE  : NoC p2p recv-side endpoint HBM write (bytes = comm size),
  *   - POOL_READ   : off-chip pool endpoint HBM read (bytes = tensor_size),
@@ -155,9 +156,10 @@ class LocalHbmBandwidthModel : public Callable {
     Workload* workload;
     // Active jobs in issue order. The old two-slot (compute/restore)
     // representation and its "second same-kind job throws" guards were
-    // removed with the N-way generalization; HardwareResource's single
-    // hbm_dma slot still structurally guarantees at most one in-flight
-    // restore per rank.
+    // removed with the N-way generalization; concurrent RESTORE jobs are a
+    // supported state (HardwareResource's hbm_dma slot is an UNLIMITED
+    // counted slot since the 2026-09-25 copy-pipelining change) and share
+    // the pool through this model's N-way equal split.
     std::vector<Job> jobs;
     Tick last_update_tick;
     uint64_t event_generation;

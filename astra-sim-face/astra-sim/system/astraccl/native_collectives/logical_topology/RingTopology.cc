@@ -13,7 +13,7 @@ using namespace std;
 using namespace AstraSim;
 
 RingTopology::RingTopology(Dimension dimension, int id, std::vector<int> NPUs)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::Ring) {
+    : BasicLogicalTopology() {
     name = "local";
     if (dimension == Dimension::Vertical) {
         name = "vertical";
@@ -46,7 +46,7 @@ RingTopology::RingTopology(Dimension dimension,
                            int total_nodes_in_ring,
                            int index_in_ring,
                            int offset)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::Ring) {
+    : BasicLogicalTopology() {
     name = "local";
     if (dimension == Dimension::Vertical) {
         name = "vertical";
@@ -78,47 +78,30 @@ RingTopology::RingTopology(Dimension dimension,
 int RingTopology::get_receiver_homogeneous(int node_id,
                                            Direction direction,
                                            int offset) {
+    // The only caller (the RingTopology constructor) always walks the ring
+    // clockwise, so the former Anticlockwise branch was dead code and was
+    // removed. The direction parameter is kept for signature compatibility.
+    (void)direction;
     assert(id_to_index.find(node_id) != id_to_index.end());
     int index = id_to_index[node_id];
-    if (direction == RingTopology::Direction::Clockwise) {
-        int receiver = node_id + offset;
-        if (index == total_nodes_in_ring - 1) {
-            receiver -= (total_nodes_in_ring * offset);
-            index = 0;
-        } else {
-            index++;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
+    int receiver = node_id + offset;
+    if (index == total_nodes_in_ring - 1) {
+        receiver -= (total_nodes_in_ring * offset);
+        index = 0;
     } else {
-        int receiver = node_id - offset;
-        if (index == 0) {
-            receiver += (total_nodes_in_ring * offset);
-            index = total_nodes_in_ring - 1;
-        } else {
-            index--;
-        }
-        if (receiver < 0) {
-            LoggerFactory::get_logger("system::topology::RingTopology")
-                ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
-                           "id: {}, offset: {}, index_in_ring {} receiver {}",
-                           name, id, name, index, node_id, offset,
-                           index_in_ring, receiver);
-        }
-        assert(receiver >= 0);
-        id_to_index[receiver] = index;
-        index_to_id[index] = receiver;
-        return receiver;
+        index++;
     }
+    if (receiver < 0) {
+        LoggerFactory::get_logger("system::topology::RingTopology")
+            ->critical("at dim: {} at id: {} dimension: {} index: {}, node "
+                       "id: {}, offset: {}, index_in_ring {} receiver {}",
+                       name, id, name, index, node_id, offset,
+                       index_in_ring, receiver);
+    }
+    assert(receiver >= 0);
+    id_to_index[receiver] = index;
+    index_to_id[index] = receiver;
+    return receiver;
 }
 
 int RingTopology::get_receiver(int node_id, Direction direction) {

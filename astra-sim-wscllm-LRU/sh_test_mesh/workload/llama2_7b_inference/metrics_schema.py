@@ -488,6 +488,10 @@ def _validate_request_collection(requests: Sequence[RequestMetadata]) -> None:
 class MetricManifestBuilder:
     """Sidecar manifest builder used by the ET generator while it emits traces.
 
+    生产弃用(2026-09-25 深挖注记):全仓生产链路无调用,唯一消费者是契约
+    夹具 sh_test_mesh/tests/test_metrics_contract.py(保留夹具定位,不迁
+    测试)。
+
     The builder performs the generation-time completeness checks: contiguous
     unique queue indices, request uniqueness, stage boundary nodes for every
     expected rank, node ids within each rank's ET node range, and digest
@@ -669,6 +673,10 @@ class RequestTiming:
 
 class RequestTimingTracker:
     """Pure-Python mirror of the collector's per-request timing semantics.
+
+    生产弃用(2026-09-25 深挖注记):全仓生产链路无调用,唯一消费者是契约
+    夹具 sh_test_mesh/tests/test_metrics_contract.py(保留夹具定位,不迁
+    测试)。
 
     Across all TP ranks of a stage the request start is the *minimum* issue
     tick and the request end is the *maximum* complete tick.  A request whose

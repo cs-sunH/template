@@ -1,7 +1,7 @@
 #ifndef ASTRASIM_WORKLOAD_STATISTICS_HH
 #define ASTRASIM_WORKLOAD_STATISTICS_HH
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 #include <array>
 #include <cstddef>
@@ -21,7 +21,6 @@ typedef uint64_t NodeId;
 
 namespace AstraSim {
 class Workload;
-class LocalMemoryTracker;
 class Statistics {
   public:
     class OperatorStatistics {
@@ -80,9 +79,6 @@ class Statistics {
     OperatorStatistics& get_operator_statistics(NodeId node_id);
 
     const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
-
-    const std::unordered_map<NodeId, OperatorStatistics>&
-    get_operator_statistics() const;
 
     void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                       Tick start_time);

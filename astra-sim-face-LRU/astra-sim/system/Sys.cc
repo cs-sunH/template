@@ -141,7 +141,8 @@ Sys::Sys(int id,
          vector<int> physical_dims,
          vector<int> queues_per_dim,
          double injection_scale,
-         double comm_scale,
+         double /*comm_scale*/,  // member removed (zero readers); the CLI
+                                 // argument is kept for call-site compat
          bool rendezvous_enabled,
          ExecutionDriven::ExecutionMode execution_mode,
          std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
@@ -154,7 +155,6 @@ Sys::Sys(int id,
     this->all_sys[id] = this;
 
     this->id = id;
-    this->initialized = false;
 
     this->workload = nullptr;
 
@@ -179,11 +179,8 @@ Sys::Sys(int id,
     this->inp_G = 0;
     this->model_shared_bus = 0;
     this->injection_scale = injection_scale;
-    this->communication_delay = 0;
-    this->local_reduction_delay = 0;
 
     this->comm_NI = comm_NI;
-    this->comm_scale = comm_scale;
     this->rendezvous_enabled = rendezvous_enabled;
 
     this->scheduler_unit = nullptr;
@@ -222,6 +219,14 @@ Sys::Sys(int id,
         }
     }
 
+    if (queues_per_dim.empty() || queues_per_dim[0] <= 0) {
+        // queues_per_dim comes from the frontend dimension list expanded by
+        // num-queues-per-dim; the frontend only rejects a malformed list much
+        // later (first fluid route), so fail closed here before the division
+        // below divides by zero or indexes an empty vector.
+        sys_panic("invalid queues-per-dim: at least one positive queue count "
+                  "is required to derive concurrent_streams");
+    }
     this->concurrent_streams =
         (int)ceil(((double)active_chunks_per_dimension) / queues_per_dim[0]);
     this->active_first_phase = 100000000;
@@ -260,8 +265,6 @@ Sys::Sys(int id,
             new Workload(this, workload_configuration,
                          comm_group_configuration);
     }
-
-    this->initialized = true;
 }
 
 Sys::~Sys() {
@@ -798,7 +801,13 @@ DataSet* Sys::generate_collective(
     // TODO(jinsun): For custom collective, we do not need the chunk_size here (since the chunk size is already determined)
     // Therefore, we also do not need the 'preferred-dataset-splits' value from the system JSON input. 
     // However, this variable is intertwined deeply in this function so that we cannot remove it for now.
-    // Therefore, we have to keep that value in the JSON input. TODO: Refactor and remove. 
+    // Therefore, we have to keep that value in the JSON input. TODO: Refactor and remove.
+    if (size == 0) {
+        // A zero-byte collective can never complete: its DataSet would wait
+        // for streams that are never created, and the chunking below would
+        // divide by zero.
+        sys_panic("collective data size must be positive");
+    }
     uint64_t chunk_size = determine_chunk_size(size, collective_type);
     int streams = ceil(((double)size) / chunk_size);
     uint64_t remain_size;
@@ -1009,14 +1018,14 @@ CollectivePhase Sys::generate_collective_phase(
     CommunicatorGroup* comm_group) {
     if (collective_impl->type == CollectiveImplType::Ring ||
         collective_impl->type == CollectiveImplType::OneRing) {
-        CollectivePhase vn(this, queue_id,
+        CollectivePhase vn(queue_id,
                            new Ring(collective_type, id,
                                     (RingTopology*)topology, data_size,
                                     direction, injection_policy));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::Direct ||
                collective_impl->type == CollectiveImplType::OneDirect) {
-        CollectivePhase vn(this, queue_id,
+        CollectivePhase vn(queue_id,
                            new AllToAll(collective_type,
                                         ((DirectCollectiveImpl*)collective_impl)
                                             ->direct_collective_window,
@@ -1024,21 +1033,21 @@ CollectivePhase Sys::generate_collective_phase(
                                         direction, InjectionPolicy::Normal));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::DoubleBinaryTree) {
-        CollectivePhase vn(this, queue_id,
+        CollectivePhase vn(queue_id,
                            new DoubleBinaryTreeAllReduce(
                                id, (BinaryTree*)topology, data_size));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::HalvingDoubling ||
                collective_impl->type ==
                    CollectiveImplType::OneHalvingDoubling) {
-        CollectivePhase vn(this, queue_id,
+        CollectivePhase vn(queue_id,
                            new HalvingDoubling(collective_type, id,
                                                (RingTopology*)topology,
                                                data_size));
         return vn;
     } else if (collective_impl->type == CollectiveImplType::CustomCollectiveImpl) {
         string filename = ((CustomCollectiveImpl*)collective_impl)->filename;
-        CollectivePhase vn(this, 0, new CustomAlgorithm(filename, id, queue_id, comm_group));
+        CollectivePhase vn(0, new CustomAlgorithm(filename, id, queue_id, comm_group));
         return vn;
     } else {
         LoggerFactory::get_logger("system")->critical(
@@ -1061,6 +1070,14 @@ uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
     if (type != ComType::All_Gather && this->total_nodes > chunk_size) {
         chunk_size = this->total_nodes;
         size = preferred_dataset_splits * chunk_size;
+    }
+    if (chunk_size == 0) {
+        // All_Gather skips the total_nodes clamp above, so a message smaller
+        // than preferred_dataset_splits yields a zero chunk. The caller
+        // divides by the chunk (UB via infinity) and subtracts it in a loop
+        // that would then never terminate. One chunk per message is the
+        // smallest usable decomposition; size > 0 is guaranteed upstream.
+        chunk_size = 1;
     }
     return chunk_size;
 }
@@ -1100,30 +1117,6 @@ void Sys::insert_stream(list<BaseStream*>* queue, BaseStream* baseStream) {
     queue->insert(it, baseStream);
 }
 
-void Sys::ask_for_schedule(int max) {
-    if (ready_list.size() == 0) {
-        return;
-    }
-    int top = ready_list.front()->stream_id;
-    uint64_t min = ready_list.size();
-    if (min > max) {
-        min = static_cast<uint64_t>(max);
-    }
-    for (auto& sys : all_sys) {
-        if (sys->ready_list.size() == 0 ||
-            sys->ready_list.front()->stream_id != top) {
-            return;
-        }
-        if (sys->ready_list.size() < min) {
-            min = sys->ready_list.size();
-        }
-    }
-    for (auto& sys : all_sys) {
-        sys->schedule(min);
-    }
-    return;
-}
-
 void Sys::schedule(int num) {
     int ready_list_size = ready_list.size();
     int counter = min(num, ready_list_size);
@@ -1161,7 +1154,6 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
         delete stream->my_current_phase.algorithm;
     }
     if (stream->phases_to_go.size() == 0) {
-        stream->take_bus_stats_average();
         stream->dataset->notify_stream_finished((StreamStat*)stream);
     }
     if (stream->current_queue_id >= 0 && stream->my_current_phase.enabled) {
@@ -1191,14 +1183,12 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
         stream->phases_to_go.front().queue_id *= -1;
     }
     stream->current_queue_id = stream->phases_to_go.front().queue_id;
-    stream->current_com_type = stream->phases_to_go.front().comm_type;
 
     CollectivePhase vi = stream->phases_to_go.front();
     stream->my_current_phase = vi;
     stream->phases_to_go.pop_front();
     stream->initialized = false;
     stream->last_phase_change = Sys::boostedTick();
-    stream->total_packets_sent = 0;
 
     stream->net_message_latency.push_back(0);
     stream->net_message_counter = 0;

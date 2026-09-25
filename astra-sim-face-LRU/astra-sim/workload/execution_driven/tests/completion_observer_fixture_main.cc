@@ -224,7 +224,10 @@ int main(int argc, char* argv[]) {
     //  - both supported statuses occurred and match their sites
     //    (site 1 = Skipped, sites 2/3 = Success).
     // 4 nodes on every rank (invalid/comp/coll/hbm-restore) + the remote-mem
-    // node on the 26 edge ranks with a configured port.
+    // node on the 26 edge ranks with a configured port. The 26 must stay in
+    // sync with REMOTE_PORT_RANKS in make_completion_fixture_et.py, which
+    // fail-closes at generation time unless it equals the bundle's
+    // remote_memory.json npu-ids.
     const uint64_t expected_nodes =
         npus_count * 4 + 26;
     std::printf("[fixture] rank_total=%u nodes_per_rank=4+edge expected_total=%llu\n",

@@ -59,12 +59,14 @@ Build: registered in the CMake build (M12②) as target
 AstraSim_Analytical_Congestion_Aware_IngressIdleTest
   (the binary is emitted to <build-tree>/bin/ via the targets'
   RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
+
+Assertions use the runtime expect() helper (same pattern as
+windowed_trace_reader_test.cc) so they survive -DNDEBUG Release builds.
 *******************************************************************************/
 
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <cassert>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -81,6 +83,15 @@ using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
 
 namespace {
+
+bool g_ok = true;
+
+void expect(const bool cond, const char* what) {
+    if (!cond) {
+        std::fprintf(stderr, "[ingress_idle_fixture] FAIL: %s\n", what);
+        g_ok = false;
+    }
+}
 
 struct Fixture {
     EventQueue eq;
@@ -122,18 +133,24 @@ void scenario1_no_requests(Fixture& f) {
     // waiting). The producer thread observes IDLE before closing.
     std::thread producer([&f]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        assert(f.svc.state() == ServiceState::IDLE);
-        assert(f.svc.active_request_count() == 0);
+        expect(f.svc.state() == ServiceState::IDLE,
+               "scenario 1: service stays IDLE with no requests");
+        expect(f.svc.active_request_count() == 0,
+               "scenario 1: no active requests while IDLE");
         f.ingress.mark_input_closed();
     });
 
     run_loop(f);
     producer.join();
 
-    assert(f.svc.state() == ServiceState::FINISHED);
-    assert(f.svc.transition_log().size() == 2);
-    assert(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    assert(f.svc.transition_log()[1] == ServiceState::FINISHED);
+    expect(f.svc.state() == ServiceState::FINISHED,
+           "scenario 1: service FINISHED after close");
+    expect(f.svc.transition_log().size() == 2,
+           "scenario 1: exactly 2 transitions logged");
+    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+           "scenario 1: first transition is DRAINING");
+    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+           "scenario 1: second transition is FINISHED");
     f.scenario1_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 1 PASS: IDLE -> DRAINING -> FINISHED "
@@ -147,7 +164,8 @@ void scenario3_close_at_startup_with_preloaded_queue(Fixture& f) {
     // while(!svc.finished()) shape exited immediately (finished() true at
     // entry because the input was already closed), silently discarding the
     // two requests.
-    assert(f.svc.state() == ServiceState::IDLE);
+    expect(f.svc.state() == ServiceState::IDLE,
+           "scenario 3: service starts IDLE");
 
     f.ingress.set_arrival_hook([&f](const RequestEnvelope& env) {
         f.arrival_ticks.push_back(f.eq.get_current_time());
@@ -162,7 +180,8 @@ void scenario3_close_at_startup_with_preloaded_queue(Fixture& f) {
     c1.envelope.prefill_length = 100;
     c1.envelope.decode_length = 50;
     c1.envelope.arrival_world_ns = 1000;
-    assert(f.ingress.enqueue_command(c1));
+    expect(f.ingress.enqueue_command(c1),
+           "scenario 3: first preloaded Submit accepted");
 
     IngressCommand c2;
     c2.kind = IngressCommandKind::Submit;
@@ -172,25 +191,33 @@ void scenario3_close_at_startup_with_preloaded_queue(Fixture& f) {
     c2.envelope.prefill_length = 80;
     c2.envelope.decode_length = 40;
     c2.envelope.arrival_world_ns = 2000;
-    assert(f.ingress.enqueue_command(c2));
+    expect(f.ingress.enqueue_command(c2),
+           "scenario 3: second preloaded Submit accepted");
 
     // close-input-at-startup: the Close is queued behind the Submits
     f.ingress.mark_input_closed();
 
     run_loop(f);
 
-    assert(f.svc.state() == ServiceState::FINISHED);
-    assert(f.svc.accepted_request_count() == 2);
-    assert(f.svc.completed_request_count() == 2);
-    assert(f.arrival_ticks == std::vector<EventTime>({1000, 2000}));
+    expect(f.svc.state() == ServiceState::FINISHED,
+           "scenario 3: service FINISHED after preloaded drain");
+    expect(f.svc.accepted_request_count() == 2,
+           "scenario 3: accepted=2");
+    expect(f.svc.completed_request_count() == 2,
+           "scenario 3: completed=2");
+    expect(f.arrival_ticks == std::vector<EventTime>({1000, 2000}),
+           "scenario 3: alarms fired at exactly 1000/2000");
     // the log records the NEW state of each transition (initial IDLE is not
     // a log entry). mark_input_closed() at startup moves IDLE -> DRAINING
     // immediately (no request accepted yet), and the preloaded requests run
     // to completion while DRAINING -- "不再接受新 request,等待已接受 request
     // 全部完成后才结束" per 合同②/总体方案 §5.5 -- then FINISHED.
-    assert(f.svc.transition_log().size() == 2);
-    assert(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    assert(f.svc.transition_log()[1] == ServiceState::FINISHED);
+    expect(f.svc.transition_log().size() == 2,
+           "scenario 3: exactly 2 transitions logged");
+    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+           "scenario 3: first transition is DRAINING");
+    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+           "scenario 3: second transition is FINISHED");
     f.scenario3_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 3 PASS: close-at-startup + preloaded "
@@ -203,24 +230,32 @@ void scenario4_eof_command(Fixture& f) {
     // and the lifecycle audit must record the source as EOF -- distinct
     // from an explicit close. The old skeleton collapsed every terminal
     // command into one mark_input_closed(); §10.7 completes the semantics.
-    assert(f.svc.state() == ServiceState::IDLE);
+    expect(f.svc.state() == ServiceState::IDLE,
+           "scenario 4: service starts IDLE");
 
     IngressCommand eof;
     eof.kind = IngressCommandKind::EndOfFile;
-    assert(f.ingress.enqueue_command(eof));
+    expect(f.ingress.enqueue_command(eof),
+           "scenario 4: EndOfFile command accepted");
     IngressCommand after_eof;
     after_eof.kind = IngressCommandKind::Submit;
     after_eof.envelope.request_id = "must_be_rejected_after_eof";
-    assert(!f.ingress.enqueue_command(after_eof));
+    expect(!f.ingress.enqueue_command(after_eof),
+           "scenario 4: Submit after EOF is rejected");
 
     run_loop(f);
 
-    assert(f.svc.state() == ServiceState::FINISHED);
-    assert(f.svc.transition_log().size() == 2);
-    assert(f.svc.transition_log()[0] == ServiceState::DRAINING);
-    assert(f.svc.transition_log()[1] == ServiceState::FINISHED);
-    assert(f.svc.input_closed());
-    assert(f.svc.input_close_reason() == InputCloseReason::EndOfFile);
+    expect(f.svc.state() == ServiceState::FINISHED,
+           "scenario 4: service FINISHED after EOF drain");
+    expect(f.svc.transition_log().size() == 2,
+           "scenario 4: exactly 2 transitions logged");
+    expect(f.svc.transition_log()[0] == ServiceState::DRAINING,
+           "scenario 4: first transition is DRAINING");
+    expect(f.svc.transition_log()[1] == ServiceState::FINISHED,
+           "scenario 4: second transition is FINISHED");
+    expect(f.svc.input_closed(), "scenario 4: input is closed");
+    expect(f.svc.input_close_reason() == InputCloseReason::EndOfFile,
+           "scenario 4: close source recorded as EOF");
 
     std::printf("[fixture] scenario 4 PASS: EndOfFile terminal command -> "
                 "IDLE -> DRAINING -> FINISHED, close_source=EOF\n");
@@ -246,11 +281,16 @@ void scenario5_overflow_audit() {
         cmd.envelope.decode_length = 50;
         cmd.envelope.arrival_world_ns = 1000 * (i + 1);
         const bool accepted = ingress.enqueue_command(cmd);
-        assert(accepted == (i < 2));
+        expect(accepted == (i < 2),
+               "scenario 5: capacity-2 ingress accepts exactly the first "
+               "two Submits");
     }
-    assert(ingress.overflow_count() == 1);
-    assert(ingress.peak_command_occupancy() == 2);
-    assert(ingress.pending_command_count() == 2);
+    expect(ingress.overflow_count() == 1,
+           "scenario 5: overflow_count is 1");
+    expect(ingress.peak_command_occupancy() == 2,
+           "scenario 5: peak command occupancy is 2");
+    expect(ingress.pending_command_count() == 2,
+           "scenario 5: two commands still pending");
 
     std::printf("[fixture] scenario 5 PASS: overflow audit "
                 "(overflow_count=1, peak_commands=2)\n");
@@ -274,9 +314,10 @@ void scenario6_error_command_aborts() {
         f.ingress.drain_commands();  // must abort
         _exit(43);                   // silent-close regression would land here
     }
-    assert(pid > 0);
+    expect(pid > 0, "scenario 6: fork succeeded");
     int status = 0;
-    assert(waitpid(pid, &status, 0) == pid);
+    expect(waitpid(pid, &status, 0) == pid,
+           "scenario 6: waitpid reclaimed the child");
     if (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT) {
         std::printf("[fixture] scenario 6 PASS: Error command aborts "
                     "fail-closed (SIGABRT, not a silent close)\n");
@@ -306,15 +347,19 @@ void scenario7_transition_log_is_bounded() {
     svc.mark_input_closed();
 
     const uint64_t transitions = cycles * 2 + 2;
-    assert(svc.finished());
-    assert(svc.transition_log().size() ==
-           ServiceCoordinator::kTransitionLogCapacity);
-    assert(svc.transition_log_dropped() ==
-           transitions - ServiceCoordinator::kTransitionLogCapacity);
-    assert(hook_count == transitions);
+    expect(svc.finished(), "scenario 7: service finished after close");
+    expect(svc.transition_log().size() ==
+           ServiceCoordinator::kTransitionLogCapacity,
+           "scenario 7: transition log capped at kTransitionLogCapacity");
+    expect(svc.transition_log_dropped() ==
+           transitions - ServiceCoordinator::kTransitionLogCapacity,
+           "scenario 7: dropped counter matches the overflow");
+    expect(hook_count == transitions,
+           "scenario 7: hook observed every transition");
     for (std::size_t i = 0; i < svc.transition_log().size(); ++i) {
-        assert(svc.transition_log()[i] ==
-               (i % 2 == 0 ? ServiceState::ACTIVE : ServiceState::IDLE));
+        expect(svc.transition_log()[i] ==
+               (i % 2 == 0 ? ServiceState::ACTIVE : ServiceState::IDLE),
+               "scenario 7: log entries alternate ACTIVE/IDLE");
     }
 
     std::printf("[fixture] scenario 7 PASS: transition memory is capped at "
@@ -367,15 +412,19 @@ void scenario8_close_submit_race_is_linearized() {
         IngressCommand after_close;
         after_close.kind = IngressCommandKind::Submit;
         after_close.envelope.request_id = "post_close";
-        assert(!f.ingress.enqueue_command(std::move(after_close)));
+        expect(!f.ingress.enqueue_command(std::move(after_close)),
+               "scenario 8: Submit after close is rejected");
 
         run_loop(f);
         const uint64_t expected = accepted.load() ? 1 : 0;
         accepted_before_close += static_cast<int>(expected);
-        assert(f.ingress.pending_command_count() == 0);
-        assert(f.svc.accepted_request_count() == expected);
-        assert(f.svc.completed_request_count() == expected);
-        assert(f.svc.finished());
+        expect(f.ingress.pending_command_count() == 0,
+               "scenario 8: no command left behind at the finished exit");
+        expect(f.svc.accepted_request_count() == expected,
+               "scenario 8: accepted count matches the race outcome");
+        expect(f.svc.completed_request_count() == expected,
+               "scenario 8: completed count matches the race outcome");
+        expect(f.svc.finished(), "scenario 8: service finished each round");
     }
     std::printf("[fixture] scenario 8 PASS: %d close-vs-submit races "
                 "linearized (%d accepted-before-close, remainder rejected)\n",
@@ -384,7 +433,8 @@ void scenario8_close_submit_race_is_linearized() {
 
 void scenario2_inject_at_ticks(Fixture& f) {
     // request-neutral startup: no requests yet
-    assert(f.svc.state() == ServiceState::IDLE);
+    expect(f.svc.state() == ServiceState::IDLE,
+           "scenario 2: service starts IDLE");
 
     // fixture requests have no graph nodes: arrival hook completes them
     // immediately (immediate drain); arrival ticks are recorded to assert
@@ -397,7 +447,8 @@ void scenario2_inject_at_ticks(Fixture& f) {
     std::thread producer([&f]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         // the loop must be blocked in wait_for_work, still IDLE
-        assert(f.svc.state() == ServiceState::IDLE);
+        expect(f.svc.state() == ServiceState::IDLE,
+               "scenario 2: loop blocked in wait_for_work, still IDLE");
 
         IngressCommand c1;
         c1.kind = IngressCommandKind::Submit;
@@ -407,7 +458,8 @@ void scenario2_inject_at_ticks(Fixture& f) {
         c1.envelope.prefill_length = 100;
         c1.envelope.decode_length = 50;
         c1.envelope.arrival_world_ns = 1000;
-        assert(f.ingress.enqueue_command(c1));
+        expect(f.ingress.enqueue_command(c1),
+               "scenario 2: first injected Submit accepted");
 
         IngressCommand c2;
         c2.kind = IngressCommandKind::Submit;
@@ -417,31 +469,42 @@ void scenario2_inject_at_ticks(Fixture& f) {
         c2.envelope.prefill_length = 80;
         c2.envelope.decode_length = 40;
         c2.envelope.arrival_world_ns = 2000;
-        assert(f.ingress.enqueue_command(c2));
+        expect(f.ingress.enqueue_command(c2),
+               "scenario 2: second injected Submit accepted");
 
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         // step 1-10: with the input still open, both requests have drained
         // long ago (alarms at 1000/2000) and the service is back to IDLE --
         // the five-state migration IDLE -> ACTIVE -> IDLE is observable
         // before the close.
-        assert(f.svc.state() == ServiceState::IDLE);
+        expect(f.svc.state() == ServiceState::IDLE,
+               "scenario 2: drained service back to IDLE before close");
         f.ingress.mark_input_closed();
     });
 
     run_loop(f);
     producer.join();
 
-    assert(f.svc.state() == ServiceState::FINISHED);
-    assert(f.svc.accepted_request_count() == 2);
-    assert(f.svc.completed_request_count() == 2);
+    expect(f.svc.state() == ServiceState::FINISHED,
+           "scenario 2: service FINISHED after close");
+    expect(f.svc.accepted_request_count() == 2,
+           "scenario 2: accepted=2");
+    expect(f.svc.completed_request_count() == 2,
+           "scenario 2: completed=2");
     // alarms fired at exactly the injected ticks, from an otherwise empty
     // queue: no dependency on any rank being idle
-    assert(f.arrival_ticks == std::vector<EventTime>({1000, 2000}));
-    assert(f.svc.transition_log().size() == 4);
-    assert(f.svc.transition_log()[0] == ServiceState::ACTIVE);
-    assert(f.svc.transition_log()[1] == ServiceState::IDLE);
-    assert(f.svc.transition_log()[2] == ServiceState::DRAINING);
-    assert(f.svc.transition_log()[3] == ServiceState::FINISHED);
+    expect(f.arrival_ticks == std::vector<EventTime>({1000, 2000}),
+           "scenario 2: alarms fired at exactly 1000/2000");
+    expect(f.svc.transition_log().size() == 4,
+           "scenario 2: exactly 4 transitions logged");
+    expect(f.svc.transition_log()[0] == ServiceState::ACTIVE,
+           "scenario 2: transition 1 is ACTIVE");
+    expect(f.svc.transition_log()[1] == ServiceState::IDLE,
+           "scenario 2: transition 2 is IDLE");
+    expect(f.svc.transition_log()[2] == ServiceState::DRAINING,
+           "scenario 2: transition 3 is DRAINING");
+    expect(f.svc.transition_log()[3] == ServiceState::FINISHED,
+           "scenario 2: transition 4 is FINISHED");
     f.scenario2_transitions = f.svc.transition_log();
 
     std::printf("[fixture] scenario 2 PASS: IDLE -> ACTIVE -> IDLE -> "
@@ -463,10 +526,12 @@ void scenario9_checked_deadline_bounds() {
 
     // normal value succeeds and produces a deadline after now
     out = clk::time_point::min();
-    assert(ServiceCoordinator::checked_wait_deadline(1.5, now, out));
-    assert(out > now);
+    expect(ServiceCoordinator::checked_wait_deadline(1.5, now, out),
+           "scenario 9: normal timeout succeeds");
+    expect(out > now, "scenario 9: deadline is after now");
     // tiny-but-legal sub-second values arm at least one tick
-    assert(ServiceCoordinator::checked_wait_deadline(0.001, now, out));
+    expect(ServiceCoordinator::checked_wait_deadline(0.001, now, out),
+           "scenario 9: sub-second 0.001 succeeds");
     // 0 / negative / non-finite fail (helper keeps the 0-fails contract;
     // the CLI layer treats 0 as "off" and never calls it with 0)
     for (const double bad : {0.0, -1.0, -0.0,
@@ -474,38 +539,48 @@ void scenario9_checked_deadline_bounds() {
                              -std::numeric_limits<double>::infinity(),
                              std::numeric_limits<double>::quiet_NaN()}) {
         clk::time_point sentinel = now + std::chrono::hours(1);
-        assert(!ServiceCoordinator::checked_wait_deadline(bad, now, sentinel));
-        assert(sentinel == now + std::chrono::hours(1));
+        expect(!ServiceCoordinator::checked_wait_deadline(bad, now, sentinel),
+               "scenario 9: 0/negative/non-finite timeout fails");
+        expect(sentinel == now + std::chrono::hours(1),
+               "scenario 9: failed call leaves the sentinel untouched");
     }
     // above duration::max() in the tick domain fails (1e9 s parses at the
     // CLI but a value beyond the clock's representable range must not)
-    assert(!ServiceCoordinator::checked_wait_deadline(9.3e9, now, out));
-    assert(!ServiceCoordinator::checked_wait_deadline(1e308, now, out));
+    expect(!ServiceCoordinator::checked_wait_deadline(9.3e9, now, out),
+           "scenario 9: 9.3e9 s beyond the clock range fails");
+    expect(!ServiceCoordinator::checked_wait_deadline(1e308, now, out),
+           "scenario 9: 1e308 s beyond the clock range fails");
     // a sub-tick positive value converts to a zero duration -> reject
-    assert(!ServiceCoordinator::checked_wait_deadline(1e-12, now, out));
+    expect(!ServiceCoordinator::checked_wait_deadline(1e-12, now, out),
+           "scenario 9: sub-tick 1e-12 converts to a zero duration "
+           "and fails");
     // near time_point::max now(): the pre-addition bound fires (the add
     // would overflow) even for a tiny timeout, and out stays untouched
     const clk::time_point near_max =
         clk::time_point::max() - std::chrono::hours(1);
     clk::time_point sentinel2 = now;
-    assert(!ServiceCoordinator::checked_wait_deadline(3600.0 * 24.0 * 3.0,
-                                                      near_max, sentinel2));
-    assert(sentinel2 == now);
+    expect(!ServiceCoordinator::checked_wait_deadline(3600.0 * 24.0 * 3.0,
+                                                      near_max, sentinel2),
+           "scenario 9: near-max now() fires the pre-addition bound");
+    expect(sentinel2 == now,
+           "scenario 9: pre-addition bound leaves out untouched");
 
     // wait_for_work_until semantics on a live coordinator: a timeout
     // consumes nothing (a racing signal stays pending), a wake consumes
     // wakeup_pending_ exactly like wait_for_work.
     ServiceCoordinator svc;
     const auto deadline = clk::now() + std::chrono::milliseconds(50);
-    assert(!svc.wait_for_work_until(deadline));  // input open, no signal
+    expect(!svc.wait_for_work_until(deadline),
+           "scenario 9: timeout consumes nothing (input open, no signal)");
     svc.signal_work();                           // pending, not yet consumed
     const bool woke = svc.wait_for_work_until(clk::now() +
                                               std::chrono::seconds(30));
-    assert(woke);
+    expect(woke, "scenario 9: pending signal wakes the bounded wait");
     // the consumed pending flag is observable: a second bounded wait with
     // no new signal and the input still open must time out again
-    assert(!svc.wait_for_work_until(clk::now() +
-                                    std::chrono::milliseconds(20)));
+    expect(!svc.wait_for_work_until(clk::now() +
+                                    std::chrono::milliseconds(20)),
+           "scenario 9: consumed signal does not wake a second wait");
 
     std::printf("[fixture] scenario 9 PASS: checked_wait_deadline bounds "
                 "(0/neg/non-finite/over-duration/sub-tick/near-max) + "
@@ -536,6 +611,11 @@ int main() {
     scenario7_transition_log_is_bounded();
     scenario8_close_submit_race_is_linearized();
     scenario9_checked_deadline_bounds();
+    if (!g_ok) {
+        std::fprintf(stderr,
+                     "[ingress_idle_fixture] FAIL: see messages above\n");
+        return 1;
+    }
     std::printf("[fixture] ALL PASS: 10 state transitions logged "
                 "(2 + 4 + 2 + 2) + overflow audit + fail-closed abort + "
                 "bounded transition audit + close/submit linearization + "

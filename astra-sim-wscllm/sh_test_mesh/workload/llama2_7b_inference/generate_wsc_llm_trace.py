@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import json
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -139,7 +138,6 @@ class WscLlmTraceConfig:
     system_config: Path
     network_config: Path
     comm_group_config: Path
-    remote_memory_config: Path
     remote_operand_loads: bool
     inference_groups: tuple[WscLlmInferenceGroup, ...]
     request_queue_session_limit: int
@@ -317,15 +315,6 @@ def _to_wsc_llm_hardware(hardware: ResolvedHardware) -> WscLlmHardware:
     )
 
 
-def _validate_no_memory_expansion(path: Path) -> None:
-    if not path.exists():
-        raise FileNotFoundError(f"remote-memory config not found: {path}")
-    with path.open(encoding="utf-8") as source:
-        raw = json.load(source)
-    if raw.get("memory-type") != "NO_MEMORY_EXPANSION":
-        raise ValueError("WSC-LLM default must use NO_MEMORY_EXPANSION")
-
-
 def select_first_session_requests(
     requests: Sequence[RequestSpec],
     session_limit: int,
@@ -463,7 +452,6 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         inference_groups=tuple((group.pg_name, group.ranks) for group in groups),
         output_dir=runtime_config_dir,
     )
-    _validate_no_memory_expansion(runtime_configs.remote_memory)
     digest_paths = [
             config_csv.resolve(),
             request_queue_csv,
@@ -495,7 +483,6 @@ def load_wsc_llm_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> WscLlmTrace
         system_config=runtime_configs.system,
         network_config=runtime_configs.network,
         comm_group_config=runtime_configs.comm_group,
-        remote_memory_config=runtime_configs.remote_memory,
         remote_operand_loads=bool(parsed["remote_operand_loads"]),
         inference_groups=tuple(groups),
         request_queue_session_limit=int(parsed["request_queue_session_limit"]),

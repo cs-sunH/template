@@ -46,7 +46,6 @@ import sys
 from pathlib import Path
 
 MODULE_DIR = Path(__file__).resolve().parent
-WORKLOAD_DIR = MODULE_DIR
 SH_TEST_DIR = MODULE_DIR.parents[1]
 GENERATED_ROOT = SH_TEST_DIR / "generated"
 
@@ -57,7 +56,31 @@ for _p in (str(MODULE_DIR), str(SH_TEST_DIR)):
 from generate_face_trace import load_face_trace_config  # noqa: E402  (READ-ONLY import)
 
 PREFIX = "llama2_7b_inference"
-REPO_VARIANT = "astra-sim-face"
+# 本仓溯源标识。该值是 slo 工具的注册表键（经 metrics_manifest → cpp.log
+# init 行 → slo_common.detect_repo_variant 查表）；astra-sim-face-LRU 已在
+# kv_cache_adapter/hbm_watermark/hopbytes/load_imbalance 四张表登记，映射
+# 复制 astra-sim-face 条目（本仓产物即其条目注释所述 -LRU 新产物形态）。
+REPO_VARIANT = "astra-sim-face-LRU"
+# kv_cache_policy 唯一合法值（2026-09-25 session 级 Tiered-LRU 命名卫生，
+# 与 generate_face_trace._parse_config_value 值域同源；旧值别名与本值同
+# 调度器（无档位分支），已随命名卫生直接清除）。
+# loader 已做值域校验，此处为防御性断言（防账本漂移同族语义）；
+# stdout 权威 provenance 记录增携 kv_cache_policy 字段
+# （物化 stdout vs 决策日志 run 头的核对锚点）。
+# 机制零改动：不写 manifest（既有字段冻结），仅 stdout 增字段。
+_KNOWN_KV_POLICIES = frozenset({"session_lru_tiered"})
+
+
+def _assert_policy_passthrough(config) -> dict:
+    """policy 透传断言（轻校验，fail-closed；机制零改动）。"""
+    policy = config.kv_cache_policy
+    if policy not in _KNOWN_KV_POLICIES:
+        raise RuntimeError(
+            f"kv_cache_policy {policy!r} not in the known set "
+            f"{sorted(_KNOWN_KV_POLICIES)} (loader value domain drifted?)")
+    return {
+        "kv_cache_policy": policy,
+    }
 
 
 def _config_digest8(config_csv: Path) -> str:
@@ -201,13 +224,27 @@ def _derive_manifest_requests(config, sidecar_rows):
     """manifest.json 的 requests[]（队列派生 9 字段）。"""
     requests = []
     last_final_by_session = {}
+    # 与 _derive_metrics_requests 同一门:load_request_queue 不校验 turn
+    # 连续性,turn>0 行缺同 session 上一 turn 行(会话首行即 turn>0、或
+    # 中间 turn 缺行)时在此 fail-closed,绝不静默按 history=0 记账——
+    # manifest / metrics 两函数对同形状输入口径一致。
+    queue_by_session_turn = {
+        (spec.session_id, spec.turn_index): index
+        for index, spec in enumerate(config.request_queue)
+    }
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
             history = 0
             # recompute 单口径:turn-0 队列 prefill 已折入 prefix
             context = int(spec.prefill_length)
         else:
-            history = last_final_by_session.get(spec.session_id, 0)
+            parent = queue_by_session_turn.get(
+                (spec.session_id, spec.turn_index - 1))
+            history = last_final_by_session.get(spec.session_id)
+            if parent is None or history is None:
+                raise RuntimeError(
+                    f"request {spec.request_id} lost its previous-turn "
+                    "parent")
             # recompute 单口径后续 turn:context = 驻留 history + 新 prefill
             context = history + int(spec.prefill_length)
         final = context + int(spec.decode_length)
@@ -293,6 +330,7 @@ def _derive_metrics_requests(config):
 
 def main() -> int:
     config = load_face_trace_config()
+    policy_provenance = _assert_policy_passthrough(config)
     if not config.request_queue:
         print(
             "[plan_materializer] request queue is empty (request-neutral "
@@ -351,6 +389,9 @@ def main() -> int:
         "plan_dir": str(output_dir),
         "requests": len(manifest["requests"]),
         "sessions": manifest["selected_session_count"],
+        # stdout 权威 provenance 增携 kv_cache_policy（与 WL 仓同构的核对
+        # 锚点；物化时点值域防御断言见 _assert_policy_passthrough）。
+        "kv_cache_policy": policy_provenance["kv_cache_policy"],
         # P0-2 (2026-08-31): span 审计字段随 stdout 权威 provenance 记录
         # 一并输出（与 manifest.json 持久字段同源同值）。
         "max_same_session_span": span_scan["max_same_session_span"],

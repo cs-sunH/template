@@ -201,42 +201,6 @@ def checked_in_topology() -> tuple[object, object]:
     return config, build_instances(config.hardware, specs)
 
 
-def small_model() -> WscLlmModel:
-    return WscLlmModel(
-        layers=2,
-        hidden_size=16,
-        ffn_size=32,
-        num_heads=4,
-        vocab_size=64,
-        bytes_per_elem=2,
-        mlp_variant="swiglu",
-    )
-
-
-def line_topology() -> tuple[WscLlmHardware, object]:
-    hardware = WscLlmHardware(
-        mesh_rows=5,
-        mesh_cols=2,
-        local_hbm_capacity_bytes=50,
-        local_hbm_bandwidth_gbps=1.0,
-        d2d_bandwidth_gbps=2.0,
-        peak_perf_tflops=1.0,
-        d2d_latency_ns=0,
-        local_hbm_latency_ns=0,
-    )
-    topology = build_instances(
-        hardware,
-        (
-            WscLlmInstanceSpec("p0", "1", (0, 1), PREFILL_ROLE),
-            WscLlmInstanceSpec("p1", "2", (2, 3), PREFILL_ROLE),
-            WscLlmInstanceSpec("d2", "3", (4, 5), DECODE_ROLE),
-            WscLlmInstanceSpec("p3", "4", (6, 7), PREFILL_ROLE),
-            WscLlmInstanceSpec("p4", "5", (8, 9), PREFILL_ROLE),
-        ),
-    )
-    return hardware, topology
-
-
 class WscLlmSchedulerTests(unittest.TestCase):
     @staticmethod
     def _request(
@@ -405,12 +369,13 @@ class WscLlmSchedulerTests(unittest.TestCase):
             ["no_history", "retain_complete"],
         )
 
-    def test_passive_only_admission_pressure_evicts_exactly_enough(self) -> None:
-        """被动逐出唯一路径 = 准入期 ensure_physical_fit 两段式:恰好够即停
-        (I3 语义),victim = (last_completion_ns, session_id) LRU 最老
-        前缀,最年轻已完成会话不动;完成期零逐出,终态驻留全量保留
-        (retire 后亦过)。B2 三态:逐出 = remote_store 整体外迁(本模型
-        L=1,无半层后缀,阶段 1 空集直入阶段 2),victim 会话转 REMOTE。"""
+    def test_passive_only_admission_pressure_evicts_whole_lru_sessions(self) -> None:
+        """被动逐出唯一路径 = 准入期 ensure_physical_fit 单阶段整体 LRU
+        逐出:victim = (last_completion_ns, session_id) LRU 最老完整
+        session,最年轻已完成会话不动;逐笔重查、满足即停,允许整体逐出
+        产生的过量释放;完成期零逐出,终态驻留全量保留(retire 后亦过)。
+        逐出 = remote_store 整体外迁(层域 [0, L) 全层),victim 会话转
+        REMOTE。"""
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
         hardware = WscLlmHardware(1, 2, 500, 1.0, 1.0, 1.0, 0, 0)
         topology = build_instances(
@@ -652,24 +617,23 @@ class WscLlmSchedulerTests(unittest.TestCase):
             manager.mark_complete(session_id, completion_ns, f"{session_id}0")
 
         candidate_calls = 0
-        original_candidates = manager._completed_resident_candidates
+        original_candidates = manager._completed_local_candidates
 
         def snapshot_candidates(*args, **kwargs):
             nonlocal candidate_calls
             candidate_calls += 1
             return original_candidates(*args, **kwargs)
 
-        manager._completed_resident_candidates = snapshot_candidates
+        manager._completed_local_candidates = snapshot_candidates
         try:
             c_decision = manager.prepare_history(
                 "c", 0, 0, 30, "c0", required_context_tokens=30
             )
         finally:
-            manager._completed_resident_candidates = original_candidates
+            manager._completed_local_candidates = original_candidates
 
-        # The admission needs two full offloads, but one stage-local LRU
-        # snapshot (B2: L=1 has no suffix half, stage 1 pool is empty and the
-        # stage-2 snapshot is taken exactly once).
+        # The admission needs two full offloads; the single whole-session
+        # LRU pool snapshot is taken exactly once (no staging stages left).
         self.assertEqual(candidate_calls, 1)
         self.assertEqual(
             tuple(transfer.session_id for transfer in c_decision.evictions),
@@ -678,6 +642,15 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertTrue(all(
             transfer.kind == "remote_store"
             for transfer in c_decision.evictions))
+        # 整体逐出形态:层域 [0, L) 全层、驻留前缀 4 → 0(L=1)。
+        self.assertEqual(
+            [(transfer.layer_start, transfer.layer_end) for transfer in
+             c_decision.evictions],
+            [(0, 1), (0, 1)])
+        self.assertEqual(
+            [transfer.resident_prefix_layers_after
+             for transfer in c_decision.evictions],
+            [0, 0])
         self.assertEqual(
             [
                 (event.event_type, event.session_id, event.phase,
@@ -690,9 +663,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
                 ("no_history", "b", "history", "window_first_request", "b0"),
                 ("retain_complete", "b", "completion", "request_completed_keep_kv", "b0"),
                 ("evict_session", "a", "history",
-                 "evict_history_and_prefill_admission_full_fallback:layers0-1", "c0"),
+                 "evict_history_and_prefill_admission_session:layers0-1", "c0"),
                 ("evict_session", "b", "history",
-                 "evict_history_and_prefill_admission_full_fallback:layers0-1", "c0"),
+                 "evict_history_and_prefill_admission_session:layers0-1", "c0"),
                 ("no_history", "c", "history", "window_first_request", "c0"),
             ],
         )
@@ -702,9 +675,59 @@ class WscLlmSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(manager.session_snapshot("a").logical_context_tokens, 10)
         self.assertEqual(manager.session_snapshot("a").location, "remote_memory")
-        # 被逐会话全部层在远端池账面,由该 rank 的账本承载(B2 三态)。
+        # 被逐会话全部层在远端池账面,由该 rank 的账本承载(二态)。
         self.assertEqual(manager.session_snapshot("a").remote_bytes, 80)
         self.assertTrue(manager.grow_prefill("c", 30, 30, "c0").admitted)
+
+    def test_eviction_victim_order_is_real_lru_with_deterministic_ties(self) -> None:
+        """victim 顺序 = 真实 LRU 升序(last_completion_ns);同 tick 并列
+        按 session_id 确定性 tie-break。"""
+        model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")
+        hardware = WscLlmHardware(1, 2, 700, 1.0, 1.0, 1.0, 0, 0)
+        topology = build_instances(
+            hardware,
+            (
+                WscLlmInstanceSpec("d", "1", (0,), DECODE_ROLE),
+                WscLlmInstanceSpec("p", "2", (1,), PREFILL_ROLE),
+            ),
+        )
+        manager = SessionKVCacheManager(topology, model)
+        # 完成时间故意非字母序:b(5) < c(15) < a(25) → LRU 序 = b,c,a。
+        for session_id, completion_ns in (
+            ("a", 25), ("b", 5), ("c", 15),
+        ):
+            decision = manager.prepare_history(
+                session_id, 0, 0, completion_ns, f"{session_id}0",
+                required_context_tokens=10)
+            self.assertFalse(decision.admission_blocked)
+            self.assertTrue(
+                manager.grow_prefill(
+                    session_id, 10, completion_ns, f"{session_id}0").admitted)
+            manager.mark_complete(
+                session_id, completion_ns, f"{session_id}0")
+        # 同 tick tie:三个会话完成时间全部改写为同一 tick 40(mark_
+        # complete 是唯一时间戳写入点;active 会话不可逐,先改 inactive
+        # 会话的时间戳语义 = mark_complete 重放,这里直接构造新会话:
+        # d/e/f 全部在 tick 50 完成)。
+        for session_id in "def":
+            decision = manager.prepare_history(
+                session_id, 0, 0, 50, f"{session_id}0",
+                required_context_tokens=10)
+            self.assertFalse(decision.admission_blocked)
+            self.assertTrue(
+                manager.grow_prefill(
+                    session_id, 10, 50, f"{session_id}0").admitted)
+            manager.mark_complete(session_id, 50, f"{session_id}0")
+
+        # 新请求需要 41 token(328 B;6 会话驻留后余 80)→ victim =
+        # LRU 序 b(5) < c(15) < a(25),仍不足后进入同 tick(50)tie 组,
+        # 组内按 session_id 字典序取 d(d < e < f)。
+        decision = manager.prepare_history(
+            "g", 0, 0, 60, "g0", required_context_tokens=41)
+        self.assertFalse(decision.admission_blocked)
+        self.assertEqual(
+            tuple(transfer.session_id for transfer in decision.evictions),
+            ("b", "c", "a", "d"))
 
     def test_terminal_retirement_releases_local_kv_and_fails_closed(self) -> None:
         model = WscLlmModel(1, 4, 4, 2, 4, 1, "gelu")

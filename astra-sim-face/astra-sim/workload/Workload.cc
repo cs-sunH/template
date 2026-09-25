@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/IntData.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
@@ -49,6 +48,29 @@ void record_node_terminal(
                                                     : nullptr,
         (nv != nullptr && !nv->stage.empty()) ? nv->stage.c_str() : nullptr,
         nv != nullptr ? nv->generation : 0, Sys::boostedTick(), status);
+}
+
+// Strict communicator-group key parsing: '7x' previously became 7 and an
+// out-of-range id escaped as an uncaught std::out_of_range. Fail loudly with
+// the offending key instead (wl-1of1#2).
+int parse_comm_group_id_strict(const std::string& comm_group_name) {
+    try {
+        size_t pos = 0;
+        const int comm_group_id = std::stoi(comm_group_name, &pos);
+        if (pos != comm_group_name.size()) {
+            LoggerFactory::get_logger("workload")
+                ->critical("invalid communicator group key '{}' (trailing "
+                           "characters)",
+                           comm_group_name);
+            exit(EXIT_FAILURE);
+        }
+        return comm_group_id;
+    } catch (const std::exception& e) {
+        LoggerFactory::get_logger("workload")
+            ->critical("invalid communicator group key '{}': {}",
+                       comm_group_name, e.what());
+        exit(EXIT_FAILURE);
+    }
 }
 
 }  // namespace
@@ -206,7 +228,7 @@ void Workload::initialize_comm_groups(string comm_group_filename) {
 
     for (json::iterator it = j.begin(); it != j.end(); ++it) {
         std::string comm_group_name = it.key();
-        int comm_group_id = std::stoi(comm_group_name);
+        int comm_group_id = parse_comm_group_id_strict(comm_group_name);
 
         std::vector<int> involved_NPUs;
         std::vector<int> dimension_sizes;
@@ -395,9 +417,7 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
         // already converted them into nanoseconds
         runtime = node.compute.runtime_ns;
     }
-    if (node.is_cpu_op) {
-        hw_resource->tics_cpu_ops += runtime;
-    } else {
+    if (!node.is_cpu_op) {
         hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
@@ -495,17 +515,17 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
         // fluid path; the calibrated branch is the online-LUT honor path).
         // tics_gpu_ops is accumulated by the model at completion.  Falls
         // through to the shared operator-statistics tail below.
-        wlhd->sys_id = sys->id;
-        wlhd->workload = this;
         local_hbm_bandwidth_model->issue_compute(
             node_num_ops, node_tensor_size, wlhd);
     } else {
-        if (node.is_cpu_op) {
-            hw_resource->tics_cpu_ops += runtime;
-        } else {
+        if (!node.is_cpu_op) {
             hw_resource->tics_gpu_ops += runtime;
         }
-        sys->register_event(this, EventType::General, wlhd, runtime);
+        // A zero runtime (roofline elapsed < 1ns and no calibrated
+        // runtime_ns) would register a same-tick event and break the event
+        // queue's strict-increase invariant; degrade to 1ns (exedrv-1of3#4).
+        sys->register_event(this, EventType::General, wlhd,
+                            std::max<Tick>(runtime, 1));
     }
 
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
@@ -596,8 +616,6 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = comm_size;
     }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
@@ -665,8 +683,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -681,8 +697,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
         // HBM).  bytes == 0 and hbm-charge == false stay on the plain
         // network-only completion path.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
-        hbm_wlhd->sys_id = sys->id;
-        hbm_wlhd->workload = this;
         hbm_wlhd->node_id = node.global_id;
         hbm_comm_join_[node.global_id] =
             HbmCommJoin{false, false, EventType::PacketSent};
@@ -714,8 +728,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         online_statistics_state_or_fail(node.global_id).comm_size = size;
-    } else {
-        stats->get_operator_statistics(node.global_id).comm_size = size;
     }
     const auto tag = node.comm.tag;
 
@@ -728,8 +740,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         // callback inside front_end_sim_recv) still finds a pending join
         // entry instead of completing the node outright.
         WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
-        hbm_wlhd->sys_id = sys->id;
-        hbm_wlhd->workload = this;
         hbm_wlhd->node_id = node.global_id;
         hbm_comm_join_[node.global_id] =
             HbmCommJoin{false, false, EventType::PacketReceived};
@@ -827,7 +837,6 @@ void Workload::call(EventType event, CallData* data) {
         collective_comm_node_id_map.erase(node_id_it);
         collective_comm_wrapper_map.erase(wrapper_it);
 
-        hw_resource->tics_gpu_comms += int_data->execution_time;
         // Step 1-8: online mode has no ETFeederNode handle (et_node ==
         // nullptr); the online branch releases / records through the
         // NodeView. The static branch below stays byte-identical.
@@ -1118,7 +1127,7 @@ std::shared_ptr<CommunicatorGroup> Workload::extract_comm_group(
         return nullptr;
     }
 
-    int comm_group_id = std::stoi(comm_group_name);
+    int comm_group_id = parse_comm_group_id_strict(comm_group_name);
     const auto comm_group_it = comm_groups.find(comm_group_id);
     if (comm_group_it == comm_groups.end() || !comm_group_it->second) {
         workload_logger_

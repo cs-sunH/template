@@ -148,7 +148,7 @@ if [[ ${cpp_exit} -ne 0 || ${py_exit} -ne 0 ]]; then
   exit 1
 fi
 # 断言:future_alarm 留痕 + 两请求完成 + r1 到达为 future-alarm 路径
-# (accepted=1,completed=2)+ 无事件丢失。
+# (accepted=1,completed=2)+ run-end 门禁通过(cpp 退出码非 0 即失败)。
 grep -q "\[fixture\] future_alarm scheduled: wg_r01 @ tick+1000" \
   "${run_dir}/python.log" || {
   echo "[wakeup_guard] FAIL(场景1): 未到期 future alarm 未调度" >&2; exit 1; }
@@ -156,8 +156,6 @@ grep -q '\[online\] service counters: accepted=1 completed=2 active=0 pending_al
   "${run_dir}/cpp.log" || {
   echo "[wakeup_guard] FAIL(场景1): 服务计数不符(期望 accepted=1 completed=2)" >&2
   grep '\[online\] service counters' "${run_dir}/cpp.log" >&2; exit 1; }
-grep -q 'no_decision_python_callback_count=0' "${run_dir}/cpp.log" || {
-  echo "[wakeup_guard] FAIL(场景1): no_decision != 0" >&2; exit 1; }
 echo "[wakeup_guard] 场景1 PASS: 蓝图形态(未到期 alarm+同 tick 里程碑)健康完成,无误触发"
 
 # ========================== 场景 2:defer-dead-end ==========================

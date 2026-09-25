@@ -119,7 +119,6 @@ const char* kSystemJson = R"({
   "reduce-scatter-implementation": ["ring", "ring"],
   "all-to-all-implementation": ["ring", "ring"],
   "collective-optimization": "localBWAware",
-  "boost-mode": 0,
   "roofline-enabled": 1,
   "replay-only": 0,
   "track-local-mem": 0,
@@ -127,9 +126,7 @@ const char* kSystemJson = R"({
   "hbm-bandwidth-contention": 0,
   "peak-perf": 261.12,
   "local-mem-bw": 1640.0,
-  "local-mem-latency": 100,
-  "remote-mem-bw": 1000.0,
-  "remote-mem-latency": 100
+  "local-mem-latency": 100
 }
 )";
 

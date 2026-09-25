@@ -96,6 +96,23 @@ A8'（2026-09-22，§4.3 补遗，F1）：上件 (3) 的 SH 侧调用落地—�
 "三件已交付"自本卡起为全链真值（此前 SH 半零调用、transfer_factor
 恒 1.0/updates 恒 0 的名实不符消除；行为面 = 仅遥测开启路径，缺省关
 臂零扰动）。
+
+规格书 §5（2026-09-25，remote-read 分阶段关键路径）：remote-read 候
+选的关键路径合成改为 prefill/decode 两阶段——prefill 前缀读流
+（home→exec）与后缀池恢复（pool→exec HBM）自同一准入 frontier 并行
+分叉，prefill 计算按层段随数据到达推进（前缀段等首 credit、后缀段
+等恢复，无"全量后缀恢复完成才开始 prefill"的全局 barrier）；decode
+只对 home 前缀新发 credit 读、后缀在 exec HBM 就地复用不再恢复；
+merge 段仍为 merge v2。合成式：prefill_stage = prefix_first_credit +
+max(prefix_remaining_stream, suffix_restore, prefill_compute)、
+decode_stage = decode_first_credit + max(decode_remaining_stream,
+decode_compute)、total = target_wait + eviction_wait + prefill_stage
++ decode_stage + merge。旧 max(history_prep, eviction_wait) +
+first_credit + max(remaining_stream, compute)（后缀恢复全量串在
+prefill 计算之前）废除、无开关可选项。breakdown 冻结字段口径全部
+保持（C5），阶段量经 notes 四键披露：remote_read_prefill_ns /
+remote_read_decode_ns / suffix_restore_ns /
+prefill_pipeline_overlap_ns。
 """
 
 from __future__ import annotations
@@ -1009,8 +1026,11 @@ class ActionCostBreakdown:
     hops: int
     notes: tuple = ()
     # credit 形态拆分披露（§4.3.1）：首 credit 块暴露时延 + 其余读流的
-    # 纯流送段。serial 形态与非 remote 动作保持缺省 0（字段仅披露 credit
-    # 拆分；remote_read_ns 恒为全流总时延口径，两形态同值）。
+    # 纯流送段——合并流（read_passes 全程、时延单计）的全局拆分口径，
+    # 日志兼容位；非 remote 动作保持缺省 0（remote_read_ns 恒为全流总
+    # 时延口径）。分阶段 prefill/decode 腿量（规格书 §5）不经本冻结
+    # schema，走 notes 四键披露（remote_read_prefill_ns / remote_read_
+    # decode_ns / suffix_restore_ns / prefill_pipeline_overlap_ns）。
     remote_read_first_credit_ns: int = 0
     remote_read_stream_ns: int = 0
 
@@ -1252,6 +1272,49 @@ def _shard_stream_ns_shards(
         default=0)
 
 
+# Keep this private planner in sync with face_scheduler's C13 planner.  The
+# cost model deliberately does not import the runtime scheduler (the latter
+# imports this module), but both sides use the same deterministic eight-layer
+# target.  A separate helper also makes the byte conservation rule explicit:
+# cumulative integer boundaries preserve every rank's original byte total.
+_COPY_HANDOFF_CHUNK_LAYERS = 8
+
+
+def _copy_handoff_layer_ranges(
+    prefix_layers: int,
+) -> tuple[tuple[int, int], ...]:
+    """Return the runtime C13 consumption-order layer chunks."""
+    if prefix_layers <= 0:
+        return ()
+    chunk_count = -(-prefix_layers // _COPY_HANDOFF_CHUNK_LAYERS)
+    span = -(-prefix_layers // chunk_count)
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < prefix_layers:
+        end = min(start + span, prefix_layers)
+        ranges.append((start, end))
+        start = end
+    return tuple(ranges)
+
+
+def _copy_handoff_chunk_bytes(
+    bytes_by_rank: Sequence[int],
+    prefix_layers: int,
+    ranges: Sequence[tuple[int, int]],
+) -> tuple[tuple[int, ...], ...]:
+    """Split each rank's prefix bytes over layer ranges without loss."""
+    if prefix_layers <= 0 or not ranges:
+        return ()
+    if any(int(value) < 0 for value in bytes_by_rank):
+        raise JointCostError("copy prefix bytes must be >= 0")
+    return tuple(
+        tuple(
+            int(total) * end // prefix_layers
+            - int(total) * start // prefix_layers
+            for total in bytes_by_rank)
+        for start, end in ranges)
+
+
 @dataclass
 class JointCostModel:
     """决策时点代价模型（只读快照 -> 每候选完成时间预测）。
@@ -1286,8 +1349,11 @@ class JointCostModel:
     # remote-read credit 块大小 K 配置（"auto" | 显式正整数字符串；
     # joint_config 同源）。执行口径 = 逐 credit 交错流唯一机制
     # （2026-09-17 用户裁定：v1 串行加法口径删除，不作为开关可选项
-    # 保留），计价恒为流水式 first_credit_ns + max(remaining_stream_ns,
-    # compute_ns)——与执行侧同公式同 K 源，无窗口矛盾。
+    # 保留），计价为分阶段关键路径（规格书 §5，2026-09-25）：prefill /
+    # decode 两腿各按 first_credit + max(remaining_stream, compute) 同
+    # 式合成、后缀池恢复并入 prefill 阶段 max——K 与执行侧切片同源
+    # （remote_credit_block_size 单一裁决点，两腿共用同一 K），无窗口
+    # 矛盾。
     remote_credit_iters: str = "auto"
     # 需求①（2026-09-17《部分层逐出kv管理改造分析方案》）：PARTIAL 基
     # remote-read 适用面消融（JOINT_REMOTE_READ_PARTIAL，on|off 缺省
@@ -1448,6 +1514,12 @@ class JointCostModel:
         R15-1/F-B：NoC 除数按候选全部 TP 并行流链路并集取瓶颈；
         R15-3：池路径除数挂池端口仲裁份额。N11：remote-read 计价基数
         补 input + 在线 decode 增长（步数仍为因果估计，因果边界）。
+        分阶段关键路径（规格书 §5，2026-09-25）：remote-read 合成改为
+        prefill/decode 两阶段——prefill 前缀读流与后缀池恢复同 frontier
+        并行分叉、prefill 计算按层段随数据到达推进（无全局 barrier），
+        decode 只对 home 前缀新发 credit 读（后缀在 exec HBM 就地复
+        用）；旧"后缀恢复全量串在 prefill 计算之前"的合成形态废除，
+        阶段量经 notes 披露（详见关键路径合成处注释）。
         """
         applicability = dict(zip(
             ACTION_ORDER,
@@ -1491,6 +1563,24 @@ class JointCostModel:
         # serial 与非 remote 动作恒 0——breakdown 审计字段同此缺省）。
         first_credit_ns = 0
         remaining_stream_ns = 0
+        # 分阶段关键路径腿（规格书 §5，2026-09-25，仅 ACTION_REMOTE 赋
+        # 值）：prefill 前缀读流与 decode 前缀 credit 读各自成腿（独立
+        # 事务、各含首块启动/逐跳时延），后缀池恢复并行项在关键路径合
+        # 成处并入 prefill 阶段 max——后缀恢复不再全量串在计算之前。
+        prefill_leg_ns = 0
+        prefill_first_credit_ns = 0
+        prefill_remaining_stream_ns = 0
+        decode_leg_ns = 0
+        decode_first_credit_ns = 0
+        decode_remaining_stream_ns = 0
+        # C13 copy handoff critical-path pieces.  ``history_prep`` remains
+        # the complete transfer amount for the frozen audit breakdown; these
+        # private values only describe the first ready chunk and the tail
+        # stream that can overlap execution.
+        copy_first_chunk_ns = 0
+        copy_remaining_stream_ns = 0
+        copy_pool_suffix_ns = 0
+        copy_streaming = False
         # E4 去重（A1，C2）：主计价腿（copy 前缀腿 / remote 读流族）算得
         # 的并集除数——breakdown 的 contention_divisor 复用之；无 NoC
         # 计价腿的动作（stay/recompute）保持 None，函数尾走单次调用。
@@ -1544,9 +1634,64 @@ class JointCostModel:
                     noc_divisor=priced_divisor)
                 self._append_u_port_note(notes, copy_paths_by_rank)
                 if missing:
-                    history_prep += _pool_transfer_ns(
+                    copy_pool_suffix_ns = _pool_transfer_ns(
                         total_bytes=missing, divisor=pool_divisor,
                         rates=self.rates)
+                    history_prep += copy_pool_suffix_ns
+                # C13: only the resident prefix handoff is streamed.  The
+                # runtime's chunk 0 is on the admission chain; later chunks
+                # are side branches whose layer ranges gate compute.  Keep
+                # pool suffix restoration on the old serial preparation path.
+                prefix_layers = min(
+                    max(int(session.resident_prefix_layers), 0),
+                    self.model_layers)
+                chunk_ranges = _copy_handoff_layer_ranges(prefix_layers)
+                chunk_bytes = _copy_handoff_chunk_bytes(
+                    session.history_bytes_by_tp_rank,
+                    prefix_layers,
+                    chunk_ranges)
+                if chunk_bytes and any(session.history_bytes_by_tp_rank):
+                    copy_streaming = True
+                    first_bytes = chunk_bytes[0]
+                    first_paths = self._shard_paths(
+                        candidate_paths, first_bytes)
+                    # Reuse the prefix union divisor already computed for the
+                    # candidate; querying the registry again would violate
+                    # the single-divisor accounting contract.
+                    first_divisor = priced_divisor
+                    copy_first_chunk_ns = _transfer_ns_shards(
+                        self.rates, self._noc_registry,
+                        self.hbm_port_registry,
+                        paths_by_rank=first_paths,
+                        bytes_by_rank=first_bytes,
+                        include_self=True, kind="copy",
+                        noc_divisor=first_divisor)
+                    if len(chunk_bytes) > 1:
+                        tail_bytes = tuple(
+                            sum(chunk[rank] for chunk in chunk_bytes[1:])
+                            for rank in range(self.instance_tp_size))
+                        tail_paths = self._shard_paths(
+                            candidate_paths, tail_bytes)
+                        # Reuse the primary prefix union divisor.  The
+                        # candidate's registered competing flows are already
+                        # priced for the full resident prefix; recomputing a
+                        # tail-only divisor would double-count the E4
+                        # contention query and could make the tail look
+                        # artificially faster when a rank has no tail bytes.
+                        tail_divisor = priced_divisor
+                        copy_remaining_stream_ns = _shard_stream_ns_shards(
+                            self.rates, self._noc_registry,
+                            self.hbm_port_registry,
+                            paths_by_rank=tail_paths,
+                            bytes_by_rank=tail_bytes,
+                            include_self=True, kind="copy",
+                            noc_divisor=tail_divisor)
+                    notes.append(f"copy_handoff_chunks={len(chunk_bytes)}")
+                    notes.append(
+                        f"copy_handoff_first_chunk_ns={copy_first_chunk_ns}")
+                    notes.append(
+                        "copy_handoff_remaining_stream_ns={}"
+                        .format(copy_remaining_stream_ns))
                 notes.append("noc_prefix+pool_suffix_restore")
         elif action == ACTION_RECOMPUTE:
             # 无历史搬运；重算缺失区间的时间计入计算段（R13：@驻留仅
@@ -1637,6 +1782,71 @@ class JointCostModel:
                     include_self=True, kind="read",
                     noc_divisor=priced_divisor)
                 notes.append(f"remote_credit_k={credit_k}")
+                # 分阶段关键路径腿（规格书 §5，2026-09-25）：prefill 腿
+                # = 前缀 [0,p) 读流（prefill_scans 遍），decode 腿 =
+                # decode 对 home 前缀新发的 credit 读（decode_steps 遍；
+                # 后缀 [p,L) 已在 exec HBM 就地复用、不再从池恢复）。
+                # 两腿为独立事务、各含首块启动/逐跳时延，其余为纯流送段
+                # （与全局拆分同纪律）；切块沿用同一 K
+                # （remote_credit_block_size 单一裁决点），腿字节基 =
+                # 同一 read_base 逐 shard 向量 ⇒ 并集除数同源复用（E4
+                # 单次计算契约不变）。零遍腿恒 0（零字节 shard 契约）。
+                prefill_credit_steps = min(credit_k, prefill_scans)
+                decode_credit_steps = min(credit_k, decode_steps)
+                prefill_leg_ns = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * prefill_scans
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                prefill_first_credit_ns = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * prefill_credit_steps
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                prefill_remaining_stream_ns = _shard_stream_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * (prefill_scans - prefill_credit_steps)
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                decode_leg_ns = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * decode_steps
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                decode_first_credit_ns = _transfer_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * decode_credit_steps
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
+                decode_remaining_stream_ns = _shard_stream_ns_shards(
+                    self.rates, self._noc_registry,
+                    self.hbm_port_registry,
+                    paths_by_rank=shard_paths,
+                    bytes_by_rank=tuple(
+                        shard_bytes * (decode_steps - decode_credit_steps)
+                        for shard_bytes in read_base_by_rank),
+                    include_self=True, kind="read",
+                    noc_divisor=priced_divisor)
         else:  # pragma: no cover - ACTION_ORDER 封闭
             raise JointCostError(f"unknown action {action!r}")
 
@@ -1669,6 +1879,15 @@ class JointCostModel:
         else:
             prefill_base_ns = (
                 prefill_tokens * self.prefill_ns_per_token)
+        # 分阶段关键路径的计算分量（规格书 §5，2026-09-25）：prefill /
+        # decode 两段各自进入所属阶段的重叠 max；compute_ns 审计字段保
+        # 持整段口径（C5 冻结字段，数值表达式不动）。
+        prefill_compute_ns = int(
+            prefill_base_ns * self.service_factors.prefill_factor)
+        decode_compute_ns = int(
+            request.estimated_decode_tokens
+            * self.decode_ns_per_token
+            * self.service_factors.decode_factor)
         compute_ns = int(
             prefill_base_ns
             * self.service_factors.prefill_factor
@@ -1786,18 +2005,65 @@ class JointCostModel:
                     merge_ns = 0
                     notes.append("merge_v2_zero_byte_flip")
 
-        # ---- 关键路径合成：目标等待 -> [历史准备 ∥ 空间准备（max 重叠
-        # 合成——两腿各自计价内已含同链路争用的串行化）] -> 计算（remote
-        # 读流与计算重叠推进） ->
-        # 合并。remote-read 流水式合成（§4.3.1 唯一口径，与 Workload.cc:
-        # 558-566 闭式 first_tile + max(remaining, compute) 同构）：首
-        # credit 块到达后计算起步，其余读流与计算重叠推进——可重叠段
-        # 取 max 即上文注释既定方向。不变量：K >= read_passes（单
-        # credit）时退化为 remote_read_ns + compute_ns（旧加法形态数值）。
-        effective_compute = (
-            first_credit_ns + max(remaining_stream_ns, compute_ns))
-        prep = max(history_prep, eviction_wait)
-        cost = target_wait + prep + effective_compute + merge_ns
+        # ---- 关键路径合成：目标等待 -> 空间准备（驱逐等待，准入前串
+        # 行）-> 阶段关键路径 -> 合并。remote-read 分阶段关键路径（规格
+        # 书 §5，2026-09-25）：prefill 前缀读流（home→exec）与后缀池恢
+        # 复（pool→exec HBM）自同一准入 frontier 并行分叉，prefill 计
+        # 算按层段等待对应数据——[0,p) 段等前缀首 credit 到达即可起步、
+        # [p,L) 段等恢复到达，无"全量后缀恢复完成才开始 prefill"的全局
+        # barrier：
+        #   prefill_stage = prefix_first_credit
+        #                   + max(prefix_remaining_stream, suffix_restore,
+        #                         prefill_compute)
+        #   decode_stage  = decode_first_credit
+        #                   + max(decode_remaining_stream, decode_compute)
+        #   total = target_wait + eviction_wait + prefill_stage
+        #           + decode_stage + merge
+        # 旧合成 max(history_prep, eviction_wait) + first_credit
+        # + max(remaining_stream, compute)（后缀恢复全量串在 prefill 计
+        # 算之前的形态）废除；可重叠段取 max、串行依赖段相加的纪律不变。
+        # 阶段量经 notes 披露（C5 冻结 schema 不动）：remote_read_prefill_
+        # ns / remote_read_decode_ns / suffix_restore_ns /
+        # prefill_pipeline_overlap_ns（最后者 = prefill 阶段三并行项之和
+        # 被 max 吸收的隐藏量）。breakdown 旧字段口径保持：history_prep_
+        # ns 仍为后缀池恢复全量审计值、remote_read_first_credit_ns /
+        # remote_read_stream_ns 仍为合并流（read_passes 全程、时延单
+        # 计）的全局 credit 拆分——仅作日志兼容披露，不再进关键路径。
+        if action == ACTION_REMOTE:
+            suffix_restore_ns = history_prep
+            prefill_stage_ns = prefill_first_credit_ns + max(
+                prefill_remaining_stream_ns, suffix_restore_ns,
+                prefill_compute_ns)
+            decode_stage_ns = decode_first_credit_ns + max(
+                decode_remaining_stream_ns, decode_compute_ns)
+            prefill_pipeline_overlap_ns = (
+                prefill_remaining_stream_ns + suffix_restore_ns
+                + prefill_compute_ns
+                - max(prefill_remaining_stream_ns, suffix_restore_ns,
+                      prefill_compute_ns))
+            notes.append(f"remote_read_prefill_ns={prefill_leg_ns}")
+            notes.append(f"remote_read_decode_ns={decode_leg_ns}")
+            notes.append(f"suffix_restore_ns={suffix_restore_ns}")
+            notes.append(
+                f"prefill_pipeline_overlap_ns={prefill_pipeline_overlap_ns}")
+            cost = (target_wait + eviction_wait
+                    + prefill_stage_ns + decode_stage_ns + merge_ns)
+        elif copy_streaming:
+            # Chunk 0 plus any pool suffix is the first ready point.  Tail
+            # chunks overlap the compute region exactly as the runtime body
+            # gates their layer segments; ``history_prep_ns`` above remains
+            # the complete transfer audit value.
+            prep = max(
+                copy_first_chunk_ns + copy_pool_suffix_ns,
+                eviction_wait)
+            effective_compute = max(
+                copy_remaining_stream_ns, compute_ns)
+            cost = target_wait + prep + effective_compute + merge_ns
+        else:
+            effective_compute = (
+                first_credit_ns + max(remaining_stream_ns, compute_ns))
+            prep = max(history_prep, eviction_wait)
+            cost = target_wait + prep + effective_compute + merge_ns
 
         # E4 去重（A1 勘误，C2）：contention_divisor 复用主计价腿已算得
         # 的并集除数（原此处对 candidate_paths 的第二次 divisor_multi
@@ -1828,8 +2094,11 @@ class JointCostModel:
                 contention_divisor=divisor,
                 hops=hops,
                 notes=tuple(notes),
-                # credit 拆分披露：serial / 非 remote 动作下两变量恒 0
-                # （仅 credit 的 ACTION_REMOTE 分支赋值），与缺省一致。
+                # credit 拆分披露（日志兼容口径）：两字段仍为合并流
+                # （read_passes 全程、时延单计）的全局 credit 拆分，
+                # serial / 非 remote 动作下恒 0；分阶段 prefill/decode
+                # 腿量不走本冻结 schema，经 notes 四键披露（见关键路径
+                # 合成处注释）。
                 remote_read_first_credit_ns=first_credit_ns,
                 remote_read_stream_ns=remaining_stream_ns,
             ),
@@ -1984,10 +2253,32 @@ class JointCostModel:
         后缀 [p,L) 物化足迹（热 KV，需求①）＋ input 增量。
         """
         size = self.instance_tp_size
-        final_total = sum(session.history_bytes_by_tp_rank) + sum(
-            session.missing_bytes_by_tp_rank) + sum(
-                request.input_kv_bytes_by_tp_rank)
-        final_ranks = self._per_rank(final_total)
+        # Keep the physical TP partition supplied by the KV ledger.  Rebuilding
+        # a per-rank vector from its aggregate total silently erases skewed
+        # shards (and can move a capacity failure from one rank to another).
+        # Every caller in the production path supplies one entry per relative
+        # TP rank; reject malformed views instead of letting ``zip`` truncate
+        # them and producing a plausible but incomplete footprint.
+        vectors = (
+            ("history_bytes_by_tp_rank", session.history_bytes_by_tp_rank),
+            ("missing_bytes_by_tp_rank", session.missing_bytes_by_tp_rank),
+            ("input_kv_bytes_by_tp_rank", request.input_kv_bytes_by_tp_rank),
+        )
+        for name, values in vectors:
+            if len(values) != size:
+                raise JointCostError(
+                    f"{name} length {len(values)} does not match "
+                    f"instance TP size {size}")
+            if any(int(value) < 0 for value in values):
+                raise JointCostError(f"{name} contains a negative byte count")
+        final_ranks = tuple(
+            int(history) + int(missing) + int(input_bytes)
+            for history, missing, input_bytes in zip(
+                session.history_bytes_by_tp_rank,
+                session.missing_bytes_by_tp_rank,
+                request.input_kv_bytes_by_tp_rank,
+            )
+        )
         resident_here = self._resident_here(session, instance_index)
         if action == ACTION_REMOTE:
             if session.location == "partial_hbm_remote":

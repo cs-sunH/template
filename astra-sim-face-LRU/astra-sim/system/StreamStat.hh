@@ -16,12 +16,11 @@ namespace AstraSim {
 
 class StreamStat : public SharedBusStat, public NetworkStat {
   public:
-    StreamStat() : SharedBusStat(BusType::Shared, 0, 0, 0, 0) {
+    StreamStat() {
         stream_stat_counter = 0;
     }
 
     void update_stream_stats(StreamStat* streamStat) {
-        update_bus_stats(BusType::Both, streamStat);
         update_network_stat(streamStat);
         if (queuing_delay.size() < streamStat->queuing_delay.size()) {
             int dif = streamStat->queuing_delay.size() - queuing_delay.size();
@@ -38,7 +37,6 @@ class StreamStat : public SharedBusStat, public NetworkStat {
     }
 
     void take_stream_stats_average() {
-        take_bus_stats_average();
         take_network_stat_average();
         for (auto& tick : queuing_delay) {
             tick /= stream_stat_counter;

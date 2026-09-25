@@ -671,6 +671,13 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         stat_node_type = Statistics::OperatorStatistics::OperatorType::COMM;
         break;
     case ChakraNodeType::INVALID_NODE:
+    case ChakraNodeType::METADATA_NODE:
+        // Metadata nodes route through issue_metadata -> skip_invalid in
+        // Workload::issue, but record_start runs for every issued node
+        // before that dispatch. Classify them INVALID here exactly like the
+        // NodeView overload below; letting METADATA fall into the default
+        // branch would return an uninitialized OperatorType in Release
+        // builds (and abort debug builds on a supported node type).
         stat_node_type = Statistics::OperatorStatistics::OperatorType::INVALID;
         break;
     default:

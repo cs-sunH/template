@@ -24,7 +24,6 @@ UsageTracker keeps its precise level without retaining transition history.
 #include <vector>
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
-#include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/BaseStream.hh"
 #include "astra-sim/system/DataSet.hh"
 #include "astra-sim/system/StreamBaseline.hh"
@@ -43,12 +42,6 @@ void expect(bool condition, const char* message) {
         g_ok = false;
     }
 }
-
-class TestRemoteMemoryApi final : public AstraSim::AstraRemoteMemoryAPI {
-  public:
-    void set_sys(int, AstraSim::Sys*) override {}
-    void issue(uint64_t, AstraSim::WorkloadLayerHandlerData*) override {}
-};
 
 class TestNetworkApi final : public AstraSim::AstraNetworkAPI {
   public:
@@ -120,10 +113,9 @@ std::string write_minimal_system_config() {
 std::unique_ptr<AstraSim::Sys> make_online_system(
     int id,
     const std::string& system_config,
-    TestRemoteMemoryApi& remote_memory,
     TestNetworkApi& network) {
     return std::make_unique<AstraSim::Sys>(
-        id, "unused", "empty", system_config, &remote_memory, &network,
+        id, "unused", "empty", system_config, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
         std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
@@ -348,22 +340,18 @@ void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
 int main() {
     const std::string system_config = write_minimal_system_config();
     {
-        TestRemoteMemoryApi remote_zero;
-        TestRemoteMemoryApi remote_one;
-        TestRemoteMemoryApi remote_two;
-        TestRemoteMemoryApi remote_three;
         TestNetworkApi network_zero;
         TestNetworkApi network_one;
         TestNetworkApi network_two;
         TestNetworkApi network_three;
         const auto rank_zero = make_online_system(
-            0, system_config, remote_zero, network_zero);
+            0, system_config, network_zero);
         const auto rank_one = make_online_system(
-            1, system_config, remote_one, network_one);
+            1, system_config, network_one);
         const auto rank_two = make_online_system(
-            2, system_config, remote_two, network_two);
+            2, system_config, network_two);
         const auto rank_three = make_online_system(
-            3, system_config, remote_three, network_three);
+            3, system_config, network_three);
         const std::array<AstraSim::Sys*, 4> ranks = {
             rank_zero.get(), rank_one.get(), rank_two.get(), rank_three.get()};
 

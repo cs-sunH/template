@@ -206,8 +206,8 @@ void ServiceCoordinator::maybe_finish() {
         return;
     }
     // Step 1-10 (合同② 目标 5 五态迁移): the input is still open and every
-    // accepted/active request has drained (active==0, no pending alarm or
-    // fence) -- the service returns to IDLE and keeps waiting for the next
+    // accepted/active request has drained (active==0, no pending alarm) --
+    // the service returns to IDLE and keeps waiting for the next
     // external injection (IDLE --ACTIVE--> ... --complete--> IDLE). The
     // official runners close the input at startup, so this branch is
     // unreachable there (input_open_ is false); it is the IDLE fixture's

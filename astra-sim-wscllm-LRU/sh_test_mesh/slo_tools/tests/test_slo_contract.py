@@ -18,6 +18,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 import slo_common  # noqa: E402
@@ -446,9 +450,13 @@ class KvHitStateMappingTests(unittest.TestCase):
         self.assertEqual(states, {"r0": "no_history", "r1": "full"})
 
     def test_face_wscllm_tiered_location_level(self):
-        """B4（-LRU 方案 A 双级）：history_location_before 三态优先。"""
+        """B4（-LRU 方案 A 双级）：history_location_before 三态优先。
+
+        session 级 Tiered-LRU 改造后新运行值域 = {local_hbm, remote_memory}
+        → 恒 full；partial_hbm_remote → partial 分支仅旧产物可达（本用例
+        即 legacy 解析证据：适配器只读旧日志、不反驱调度）。"""
         f = kv_cache_adapter._hit_state_face_wscllm
-        # 新产物：location 在场（含新 history_action 值）→ 三态映射。
+        # legacy 解析证据：partial_hbm_remote 行（旧产物）仍可读。
         for location, expected in (("local_hbm", "full"),
                                    ("partial_hbm_remote", "partial"),
                                    ("remote_memory", "full")):
@@ -476,7 +484,12 @@ class KvHitStateMappingTests(unittest.TestCase):
 
     def test_wscllm_tiered_extraction_and_reconcile(self):
         """B4（-LRU wscllm）：契约字段优先（逐段传输/契约逐出行/PD dict），
-        legacy 镜像行不消费（防双计）；--reconcile canonical==native。"""
+        legacy 镜像行不消费（防双计）；--reconcile canonical==native。
+
+        legacy 解析证据：本用例喂的是旧产物形状（PARTIAL_MIGRATE 两段
+        恢复 / suffix_half 逐出 / partial_hbm_remote 位置）；适配器只读
+        旧日志的能力必须保留。新产物形状见
+        test_wscllm_whole_session_new_output。"""
         run_dir = synthetic.make_run_dir("kvw")
         synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-wscllm")
         records = [
@@ -598,6 +611,96 @@ class KvHitStateMappingTests(unittest.TestCase):
         self.assertIn("history_location_before=partial_hbm_remote",
                       evidence["r1"])
 
+    def test_wscllm_whole_session_new_output(self):
+        """session 级 Tiered-LRU 新产物：history_location_before ∈
+        {local_hbm, remote_memory} → 恒 full；逐出为整会话 reason、层域
+        [0, L)；输出不出现 partial/suffix 词素（新运行不写 partial 状态）。"""
+        run_dir = synthetic.make_run_dir("kvwhole")
+        synthetic.write_cpp_log(run_dir, [], repo_variant="astra-sim-wscllm")
+        records = [
+            # r0：无历史。
+            {"kind": "prefill", "request_id": "r0", "tick": 1,
+             "decision": {"history_action": "NO_HISTORY",
+                          "history_location_before": None,
+                          "history_resident_prefix_layers": None,
+                          "history_transfer_bytes": 0,
+                          "history_cache_state_before": "ABSENT"}},
+            # r1：被逐会话远端全量恢复（REMOTE_RESTORE 单段）+ 整会话逐出。
+            {"kind": "prefill", "request_id": "r1", "tick": 2,
+             "decision": {
+                 "history_action": "REMOTE_RESTORE",
+                 "history_location_before": "remote_memory",
+                 "history_location_before_instance_index": None,
+                 "history_resident_prefix_layers": 0,
+                 "history_transfer_bytes": 300,
+                 "history_transfers": [
+                     {"kind": "remote_load",
+                      "reason": "history_remote_restore",
+                      "session_id": "s1", "total_bytes": 300,
+                      "source_instance_index": None,
+                      "target_instance_index": 2,
+                      "layer_start": 0, "layer_end": 32}],
+                 "history_evictions": [
+                     {"kind": "remote_store",
+                      "reason": "history_and_prefill_admission_session",
+                      "session_id": "s9", "total_bytes": 40,
+                      "source_instance_index": 2,
+                      "target_instance_index": None,
+                      "layer_start": 0, "layer_end": 32}],
+                 "prefill_evictions": [],
+                 "admission_evictions": [{
+                     "time_ns": 2, "phase": "prefill", "reason": "synthetic",
+                     "trigger_request_id": "r1", "victim_session_id": "s9",
+                     "victim_instance_index": 2,
+                     "victim_last_completion_ns": 1, "context_tokens": 1,
+                     "shard_bytes": [40]}],
+                 "decode_target_evictions": []}},
+            # r2：完整本地命中。
+            {"kind": "prefill", "request_id": "r2", "tick": 3,
+             "decision": {
+                 "history_action": "LOCAL_HIT",
+                 "history_location_before": "local_hbm",
+                 "history_location_before_instance_index": 2,
+                 "history_resident_prefix_layers": 32,
+                 "history_transfer_bytes": 0,
+                 "history_transfers": [],
+                 "history_evictions": [],
+                 "prefill_evictions": [],
+                 "admission_evictions": [],
+                 "decode_target_evictions": []}},
+        ]
+        synthetic.write_jsonl(run_dir, "online_decision_log.jsonl", records)
+        synthetic.write_metrics_manifest(
+            run_dir,
+            [synthetic.manifest_request("r0", "s0", 0, 0),
+             synthetic.manifest_request("r1", "s1", 1, 1),
+             synthetic.manifest_request("r2", "s2", 2, 2)],
+            repo_variant="astra-sim-wscllm")
+        import argparse
+        ns = argparse.Namespace(
+            run_dir=run_dir, output=str(run_dir / "events.csv"),
+            hit_states=str(run_dir / "hits.csv"), json="",
+            reconcile=True, repo_variant=None, request_manifest=None)
+        self.assertEqual(kv_cache_adapter.cmd_adapter(ns), 0)
+        _, rows = synthetic.read_csv(run_dir / "events.csv")
+        causes = [(r["bytes"], r["cause"]) for r in rows]
+        # 全量恢复单段 300 + 整会话逐出 40（单层域 [0,32)）。
+        self.assertEqual(causes, [
+            ("300", "history_transfer:remote_load:history_remote_restore"),
+            ("40", "eviction:remote_store:"
+                   "history_and_prefill_admission_session")])
+        _, hits = synthetic.read_csv(run_dir / "hits.csv")
+        states = {r["request_id"]: r["kv_hit_state"] for r in hits}
+        # 二态位置 → 恒 full；partial 仅旧产物可达。
+        self.assertEqual(
+            states, {"r0": "no_history", "r1": "full", "r2": "full"})
+        # 新产物不出现 partial eviction/suffix eviction/partial restore 词素。
+        dumped = "\n".join(cause for _, cause in causes)
+        for banned in ("suffix_half", "partial", "PARTIAL", "full_fallback",
+                       "history_remote_suffix_restore",
+                       "history_partial_prefix_migrate"):
+            self.assertNotIn(banned, dumped, banned)
+
 
 class LoadImbalanceHandTests(unittest.TestCase):
     def test_two_instances_hand_computed(self):
@@ -623,11 +726,16 @@ class LoadImbalanceHandTests(unittest.TestCase):
             {"kind": "completion", "request_id": "r2", "tick": 100,
              "decision": {}},
         ]
+        # 终态 drain 按生产 schema 只认 batch_train 行的 exits 数组
+        # （prefill_train 行的 drains 字段是 P 侧发射记录、读取端显式
+        # 跳过，wsc_llm_online_scheduler.py:_emit_train 权威口径）。
         ledger = [
-            {"train_id": "t0", "instance_index": 0, "tick": 100,
-             "drains": ["r0", "r1"], "exits": [], "joiners": []},
-            {"train_id": "t1", "instance_index": 1, "tick": 100,
-             "drains": ["r2"], "exits": [], "joiners": []},
+            {"train_id": "batch_train_i0_1", "instance_index": 0,
+             "tick": 100, "drains": [], "joiners": [],
+             "exits": ["r0", "r1"]},
+            {"train_id": "batch_train_i1_1", "instance_index": 1,
+             "tick": 100, "drains": [], "joiners": [],
+             "exits": ["r2"]},
         ]
         synthetic.write_jsonl(run_dir, "online_decision_log.jsonl",
                               decisions)

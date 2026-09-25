@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """test_joint_preadmit_visibility.py -- C8（WP2-preadmit，2026-09-22）零后端单测。
 
-覆盖（卡 C8 测试清单，设计文档 §4.1 同 tick 承诺可见性 / 遥测覆盖）：
-     1. 同 tick 两 remote-read 准入互见：第一笔 #readplan 预登记（准入事务
-     成功路径的登记通道）后，第二笔决策的 divisor_multi 已含第一笔一条
-     物理并发代表流（注册表级精确断言 + JCM estimate_action 计价抬升）；
-     HBM 端点端口同通道成对登记（C2 腿型）；
-  2. 对账核销全生命周期：drain 真计划冻结处核销估计、以真值重登记
+覆盖（卡 C8 测试清单，设计文档 §4.1 同 tick 承诺可见性 / 遥测覆盖；
+2026-09-25 规格书§二 起准入相远读足迹 = rid#prefill_read 前缀读流实流，
+#readplan 注册表半边延迟到 drain 对账）：
+     1. 同 tick 两 remote-read 准入互见：第一笔准入相前缀读流
+     （rid#prefill_read，准入事务成功路径的登记通道）后，第二笔决策的
+     divisor_multi 已含第一笔一条物理并发流（注册表级精确断言 + JCM
+     estimate_action 计价抬升）；est 账本不触注册表；HBM 端点端口同
+     通道成对登记（C2 腿型）；
+  2. 对账核销全生命周期：drain 真计划冻结处核销估计、以真值登记
      （est/actual 差值进决策日志 readplan_reconcile 行）；逐列车实际登记
      按块数核销（当前列车 rid#decode#{j} 接管、无同流量双计）；完成边界
      清残余（碎片化残差披露 readplan_settle 行）；收尾注册表全空；
-  3. 失败注入（预登记泄漏）：drain 未核销 → 收尾审计报警（复用 C2 的
+  3. 失败注入（读流 owner 泄漏）：#prefill_read 未在 prefill drain 释放
+     / #readplan drain 未核销 → 收尾审计报警（复用 C2 的
      HbmPortFlowRegistry.leaked_owners 审计通道）；
   4. 合成遥测字典 → _joint_cost_model 构造（step 3 零后端覆盖）：速率
      数值 {link_id: served_bytes/active_ns}、窗口链完备/重叠回退/键缺席
@@ -188,11 +192,37 @@ def _decision_rows(scheduler, kind):
 _REQ2_PATHS = ((2, 1, 0), (3, 2, 1))
 
 
+def _register_prefill_read(scheduler, request_id="r1", *, layers=4):
+    """准入相 prefill remote-read 前缀读流登记（owner =
+    ``{rid}#prefill_read``；home 1 → exec 0 两条 TP shard 路径，与
+    _REQ2_PATHS 同路）。2026-09-25（规格书§二）起准入相注册表上的远读
+    足迹由该实流承担——#readplan 注册表半边延迟到 drain 对账。"""
+    from face_scheduler import KVTransfer, KVTransferShard
+    transfer = KVTransfer(
+        kind="noc_migrate", phase="prefill",
+        reason="remote_read_prefill_prefix", session_id="s1",
+        trigger_request_id=request_id, source_instance_index=1,
+        target_instance_index=0, total_bytes=2 * 512 * layers,
+        shards=tuple(
+            KVTransferShard(
+                source_rank=source_rank, target_rank=target_rank,
+                edge_rank=None, bytes=512 * layers, noc_path=noc_path,
+                layer_start=0, layer_end=layers)
+            for source_rank, target_rank, noc_path in (
+                (2, 0, _REQ2_PATHS[0]), (3, 1, _REQ2_PATHS[1]))),
+        model_layers=4, layer_start=0, layer_end=layers,
+        resident_prefix_layers_before=layers,
+        resident_prefix_layers_after=layers, stream_only=True)
+    scheduler._register_transfer_flows(
+        (transfer,), owner=request_id + "#prefill_read")
+    return transfer
+
+
 # ================================================ 1. 同 tick 互见（§4.1）==
 
 
 class SameTickReadplanVisibilityTest(unittest.TestCase):
-    """同 tick 串行贪婪第二笔决策已见第一笔 #readplan 承诺。"""
+    """同 tick 串行贪婪第二笔决策已见第一笔已提交读流足迹。"""
 
     def _preregister(self, scheduler, *, estimated_decode=8):
         runtime = _make_runtime("r1")
@@ -200,8 +230,11 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
             runtime, _session_view(), 0, estimated_decode)
         return runtime
 
-    def test_second_decision_divisor_multi_includes_first_readplan(self):
-        # 卡 C8 判据：第二笔 divisor_multi 已含第一笔 #readplan 足迹。
+    def test_second_decision_divisor_multi_includes_first_prefill_read(self):
+        # 卡 C8 判据 + 规格书§二.5：第二笔 divisor_multi 已含第一笔已
+        # 提交读流足迹——2026-09-25 起该足迹 = 准入相 rid#prefill_read
+        # 前缀读流实流（#readplan 注册表半边延迟到 drain 对账以真值
+        # 建立，prefill/decode 两阶段不得算成同时并发的两条远读流）。
         # E=80、T_max=8 时账本仍披露 10 trains × 8 blocks = 80 units；
         # 但列车逐次发射、每 rank block recv 顺序链，所以该请求每 shard
         # 路径只贡献一条同时在途流。候选的两 shard 在链路 (2,1) 汇合，
@@ -213,6 +246,10 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
         runtime = self._preregister(scheduler, estimated_decode=80)
         units = runtime.remote_read_preplan["est_flow_units"]
         self.assertEqual(units, 80)  # E=80、T_max=8：10 列车 × 8 块
+        # est 账本不触注册表：准入相零 decode 承诺登记（账本在、流不在）。
+        self.assertEqual(scheduler._joint_flows.snapshot(), {})
+        self.assertFalse(runtime.remote_read_preplan["registry_active"])
+        _register_prefill_read(scheduler)
         contended = scheduler._joint_flows.divisor_multi(
             _REQ2_PATHS, include_self=True)
         self.assertEqual(contended, 4)
@@ -220,12 +257,16 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
         # C2 腿型：noc_migrate 双端点 HBM 端口同通道成对登记。
         self.assertEqual(scheduler._hbm_ports.divisor(0), 1)
         self.assertEqual(scheduler._hbm_ports.divisor(1), 1)
-        self.assertIn("r1#readplan", scheduler._hbm_ports.leaked_owners())
+        self.assertIn("r1#prefill_read", scheduler._hbm_ports.leaked_owners())
+        self.assertNotIn("r1#readplan",
+                         scheduler._hbm_ports.leaked_owners())
 
-    def test_remote_read_price_lifts_after_first_commitment(self):
+    def test_remote_read_price_lifts_after_first_prefill_read_commitment(self):
         # 决策级证据：JCM estimate_action 的 remote-read 计价在第一笔
-        # 承诺登记后抬升（contention_divisor 与 cost_ns 同向）。NoC 腿
-        # 主导配置（慢链路 / 快端点）——除数直接进入流送段墙钟。
+        # 已提交读流（rid#prefill_read 实流）登记后抬升
+        # （contention_divisor 与 cost_ns 同向）；est 账本本身不触注册
+        # 表、不抬计价。NoC 腿主导配置（慢链路 / 快端点）——除数直接
+        # 进入流送段墙钟。
         scheduler = _scheduler()
 
         def build_model():
@@ -260,6 +301,13 @@ class SameTickReadplanVisibilityTest(unittest.TestCase):
 
         quiet = remote_candidate()
         self._preregister(scheduler, estimated_decode=8)
+        ledger_only = remote_candidate()
+        # est 账本不进注册表：除数与代价零变化（两阶段不双计的账本面）。
+        self.assertEqual(
+            ledger_only.breakdown.contention_divisor,
+            quiet.breakdown.contention_divisor)
+        self.assertEqual(ledger_only.cost_ns, quiet.cost_ns)
+        _register_prefill_read(scheduler)
         contended = remote_candidate()
         self.assertGreater(
             contended.breakdown.contention_divisor,
@@ -514,14 +562,38 @@ class ReadplanLifecycleTest(unittest.TestCase):
 
 
 class ReadplanLeakAuditTest(unittest.TestCase):
-    """失败注入：预登记泄漏（drain 未核销）→ 收尾审计报警。"""
+    """失败注入：读流 owner 泄漏（prefill drain 未释放 / drain 未核销）
+    → 收尾审计报警。"""
 
-    def test_unreconciled_preregistration_raises_at_run_end(self):
+    def test_unreleased_prefill_read_raises_at_run_end(self):
+        # 规格书§二.5：泄漏审计覆盖 rid#prefill_read 新 owner——准入相
+        # 前缀读流登记后 prefill drain 未释放 ⇒ 审计 fail-closed 报警。
+        scheduler = _scheduler()
+        _register_prefill_read(scheduler)
+        self.assertTrue(scheduler._joint_flows.has_registrations)
+        with self.assertRaises(RuntimeError) as caught:
+            scheduler._assert_no_readplan_leaks()
+        self.assertIn("prefill_read", str(caught.exception))
+        self.assertIn("r1#prefill_read", str(caught.exception))
+        # drain 释放（_release_transfer_flows 幂等空放口径）后审计通过。
+        scheduler._release_transfer_flows("r1#prefill_read")
+        scheduler._assert_no_readplan_leaks()
+
+    def test_unreconciled_readplan_registration_raises_at_run_end(self):
+        # C8 半边：drain 对账登记的 #readplan 未经逐列车核销/完成清残
+        # ⇒ 审计报警（两个 remote-read 读流 owner 同一审计通道覆盖）。
         scheduler = _scheduler()
         runtime = _make_runtime("r1")
         scheduler._preregister_readplan_flows(
             runtime, _session_view(), 0, 8)
-        self.assertTrue(scheduler._joint_flows.has_registrations)
+        runtime.remote_read_credit_plan = {
+            "home_instance": 1, "exec_instance": 0, "steps": 8,
+            "context_per_step": 158, "read_prefix_layers": 4,
+            "total_bytes": 2 * 512 * 8,
+            "shard_specs": ((2, 0, 512, (2, 1, 0)),
+                            (3, 1, 512, (3, 2, 1)))}
+        scheduler._reconcile_readplan_at_drain(runtime, 500)
+        self.assertIn("r1#readplan", scheduler._hbm_ports.leaked_owners())
         with self.assertRaises(RuntimeError) as caught:
             scheduler._assert_no_readplan_leaks()
         self.assertIn("readplan", str(caught.exception))
@@ -530,8 +602,11 @@ class ReadplanLeakAuditTest(unittest.TestCase):
     def test_clean_lifecycle_passes_audit(self):
         scheduler = _scheduler()
         runtime = _make_runtime("r1")
+        # 准入相：est 账本 + 前缀读流实流（drain 边界释放）。
         scheduler._preregister_readplan_flows(
             runtime, _session_view(), 0, 8)
+        _register_prefill_read(scheduler)
+        scheduler._release_transfer_flows("r1#prefill_read")
         runtime.remote_read_credit_plan = {
             "home_instance": 1, "exec_instance": 0, "steps": 8,
             "context_per_step": 158, "read_prefix_layers": 4,

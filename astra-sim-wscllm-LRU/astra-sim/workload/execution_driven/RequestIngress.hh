@@ -217,11 +217,6 @@ class RequestIngress {
     /// observed since construction. Thread-safe.
     size_t peak_command_occupancy() const;
 
-    /// One-shot future-arrival queue-index entries currently retained.  In
-    /// the windowed reader path this is bounded by the unconsumed row window,
-    /// rather than growing with all CSV rows seen during the run.
-    size_t pending_queue_index_count() const;
-
   private:
     struct ArrivalAlarmArg {
         RequestIngress* ingress;

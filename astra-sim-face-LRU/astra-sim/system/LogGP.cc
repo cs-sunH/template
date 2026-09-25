@@ -9,7 +9,7 @@ LICENSE file in the root directory of this source tree.
 
 using namespace AstraSim;
 
-LogGP::LogGP(std::string name,
+LogGP::LogGP(std::string /*name*/,
              Sys* sys,
              Tick L,
              Tick o,
@@ -25,7 +25,6 @@ LogGP::LogGP(std::string name,
     this->prevState = State::Free;
     this->sys = sys;
     this->processing_state = ProcState::Free;
-    this->name = name;
     this->trigger_event = trigger_event;
     this->subsequent_reads = 0;
     this->THRESHOLD = 8;
@@ -75,7 +74,7 @@ void LogGP::request_read(int bytes,
                          bool processed,
                          bool send_back,
                          Callable* callable) {
-    MemMovRequest mr(request_num++, sys, this, bytes, 0, callable, processed,
+    MemMovRequest mr(request_num++, this, bytes, callable, processed,
                      send_back);
     if (NPU_MEM != nullptr) {
         mr.callEvent = EventType::Consider_Send_Back;
@@ -177,12 +176,7 @@ void LogGP::call(EventType event, CallData* data) {
                                              false, &retirements.back());
                 receives.pop_front();
             } else {
-                SharedBusStat* tmp = new SharedBusStat(
-                    BusType::Shared, receives.front().total_transfer_queue_time,
-                    receives.front().total_transfer_time,
-                    receives.front().total_processing_queue_time,
-                    receives.front().total_processing_time);
-                tmp->update_bus_stats(BusType::Mem, receives.front());
+                SharedBusStat* tmp = new SharedBusStat();
                 receives.front().callable->call(trigger_event, tmp);
                 receives.pop_front();
             }
@@ -220,13 +214,7 @@ void LogGP::call(EventType event, CallData* data) {
                                              false, &retirements.back());
                 processing.pop_front();
             } else {
-                SharedBusStat* tmp = new SharedBusStat(
-                    BusType::Shared,
-                    processing.front().total_transfer_queue_time,
-                    processing.front().total_transfer_time,
-                    processing.front().total_processing_queue_time,
-                    processing.front().total_processing_time);
-                tmp->update_bus_stats(BusType::Mem, processing.front());
+                SharedBusStat* tmp = new SharedBusStat();
                 processing.front().callable->call(trigger_event, tmp);
                 processing.pop_front();
             }
@@ -241,13 +229,8 @@ void LogGP::call(EventType event, CallData* data) {
                 ((processing.front().size / 100) * local_reduction_delay) + 50);
         }
     } else if (event == EventType::Consider_Retire) {
-        SharedBusStat* tmp = new SharedBusStat(
-            BusType::Shared, retirements.front().total_transfer_queue_time,
-            retirements.front().total_transfer_time,
-            retirements.front().total_processing_queue_time,
-            retirements.front().total_processing_time);
+        SharedBusStat* tmp = new SharedBusStat();
         MemMovRequest movRequest = *talking_it;
-        tmp->update_bus_stats(BusType::Mem, movRequest);
         movRequest.callable->call(trigger_event, tmp);
         retirements.erase(talking_it);
         delete data;

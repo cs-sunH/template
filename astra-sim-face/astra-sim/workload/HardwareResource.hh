@@ -57,7 +57,6 @@ class HardwareResource {
     [[nodiscard]] bool tracks_node_ids() const {
         return retain_node_ids_;
     }
-    void report();
 
     std::unordered_set<uint64_t> cpu_ops_node;
     std::unordered_set<uint64_t> gpu_ops_node;
@@ -75,14 +74,7 @@ class HardwareResource {
     uint32_t num_in_flight_gpu_comp_ops;
     uint32_t num_in_flight_gpu_comm_ops;
 
-    uint64_t num_cpu_ops;
-    uint64_t num_gpu_ops;
-    uint64_t num_gpu_comms;
-
-    uint64_t tics_cpu_ops;
     uint64_t tics_gpu_ops;
-    uint64_t tics_gpu_comms;
-    uint64_t tics_hbm_dma_ops;
 };
 
 }  // namespace AstraSim

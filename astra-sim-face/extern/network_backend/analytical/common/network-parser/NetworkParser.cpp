@@ -154,6 +154,12 @@ TopologyBuildingBlock NetworkParser::parse_topology_name(const std::string& topo
 }
 
 void NetworkParser::check_validity() const noexcept {
+    if (dims_count == 0) {
+        std::cerr << "[Error] (network/analytical) "
+                  << "topology/dimensions must define at least one dimension"
+                  << std::endl;
+        std::exit(-1);
+    }
     if (fluid_max_active_flows == 0 || fluid_max_route_memberships == 0 ||
         progress_report_event_interval == 0) {
         std::cerr << "[Error] (network/analytical) fluid resource limits and progress interval must be positive"

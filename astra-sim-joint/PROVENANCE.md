@@ -4280,3 +4280,79 @@ canonical（README §6 命令）= **972 passed + 1 skipped + 33 subtests**（上
 ### 43.9 限制与未验证项（承接登记）
 
 C20 决定性实验集未启动（需单独授权，本轮明确禁止）；C13 维持既有登记；2s 轻载窗 M1 流数分叉仍由单测承载（§40.6 口径不变）；C15 无改动，故 C4b 回归重跑登记 N/A；sensing 决策序列与 strategy 档的逐字节一致性未做全量 diff。另有 C4b 复核三项登记不修复残留：物化 CSV description 列文本陈旧（写 "first-30-seconds window" 与实际 2s 窗矛盾，数据与正式溯源均确证 2s）、long 案例 pre_admit_state.external_active_members 成员条目重复两见（不影响哈希一致性，身份语义待机制侧确认）、"强制 ≠ 自主选中"披露文句无证据根内成文报告文件（三层披露在案见 §43.5，正式报告若需保留该文句属证据根之外交付物）——均在 `/home/sunhao/joint_c4b_evidence` 在案。
+
+## 44. SerDes 片外链路并发化改造（远端端口流体后端 + 发射门控解耦，2026-09-24，《SerDes片外链路并发化改造执行方案.md》V5.3 joint 仓实施批）
+
+> 本节由阶段 7 文档同步员落字；所有断言仅覆盖 /tmp/serdes-joint-work/ 在案证据与本仓工作树亲读，未做的检查不冒认（见 §44.5）。
+
+### 44.1 落点与范围（仅本仓；其余仓由各自批次登记）
+
+- **后端整链替换** `extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.{hh,cc}`（hh 338 行/cc 1150 行）：旧串行 FIFO（`PendingMemoryRequest`/`pending_requests`/`ongoing_transaction`/`start_request` 与串行 runtime helper）删除，替换为每端口作业集 + 连续 ns 子步流体推进 + 挂首次 `set_sys` Sys 的单一全局最早 deadline 可取消变迁事件 + 双零一次性定时作业 + 只读 `PortStats` 快照 + 惰性逐事务明细写者（hh:35-63 顶注；事件 payload 只带 kind+seq，hh:226-231）。
+- **发射门控** `astra-sim/workload/HardwareResource.{hh,cc}`：单一代语义分类 `classify_hw_resource()`（timer no-op / local HBM KV restore→hbm_dma 单槽 / 其余 MEM_LOAD/MEM_STORE→remote_mem 独立计数制无上限槽 / cpu / comp / comm）由 ETFeederNode 与 NodeView 两套 overload 逐字共享（cc:27-90 区注释）；远端 MEM 不再落 comm 单槽（旧隐藏门两路径均除）；release 递减前 NDEBUG 无关 fatal 校验、occupy 重复 id abort、析构未释放诊断（hh:26-52）；`tics` 不为 remote MEM 新增（端口服务指标唯一来自后端流体/账本，hh:114-119）。
+- **Workload** `astra-sim/workload/Workload.{hh,cc}`：static 仿真结束门补 `num_in_flight_remote_mem_ops==0`（cc:1143-1148）；新增 `hbm_join_pending_count()` 正常结束审计入口（hh:78-85）。
+- **online main** `network_frontend/analytical/congestion_aware/main_online.cc`：`memory_api` 去 const（:1211-1215）；sensing 开启时 `enable_transaction_telemetry`（run_id 取 metrics manifest，空回退规范化 bridge_dir，:1216-1235）；正常收尾三段 = 逐 rank `hbm_join_pending` 审计（>0 报错退出，:2186-2205）→ `is_drained()` fail-closed 门 + `shutdown()/reset()`（Sys 全存活期执行，之后才删 Sys，:2207-2244）。
+- **CMake/runner**：三个 test-only 目标注册（`..._RemotePortNwayTest`/`..._RemotePortOnlineGateTest`/`..._RemotePortStaticGateTest`，不入生产门）；`run_online_strategy{,_sensing}.sh` 搬运循环加 `remote_memory_transactions`、`archive_run_outputs.sh` 常驻白名单加同名并更新头注。
+
+### 44.2 新语义（与方案 §3 逐条对应，行号为亲读锚点）
+
+- **流体**：issue→固定 latency 可重叠不占带宽→正字节入流集合 N 路均分→任一流耗尽即出分母、幸存流即刻重分；Workload 回调唯一落在 `ceil(fluid_finish_ns)`；耗尽流在速率计算前翻转（`flip_due_jobs`，cc:277-283）。
+- **双零（0B/0ns）**：独立一次性定时作业精确 +1ns 异步回调、不进带宽集合（cc:817-846）——旧同 Tick 同步完成语义废止（方案 §3.2 语义变更）。
+- **事件**：issue 恰逢已入队事件 Tick 时保留原事件（keep rule，cc:532-536/:861-862，`transition_keeps` 计数）；派发先全端口推进、收集**全部**到期作业、按 `(port_index, issue_seq)` 排序（cc:601）、端口统计结算严格先于回调、不递归派发；stale generation 无操作（payload 经 `register_event_cancellable` deleter 释放）。
+- **数值 fail-closed**：`remote-mem-bw` 正 finite（double 直读不再 uint64 截断、JSON 1e999/NaN/负值构造即拒，cc:183-206）；`remote-mem-latency` finite 非负且 Tick 可表示（cc:163-181）；bytes ≤2^53（cc:763-770）；ceil 前范围检查（cc:255-266）；残余 clamp 显式容差 1e-6 B / 1e-9 ns（cc:30-35）；`NO_MEMORY_EXPANSION` 下 issue 即 exit(1)（cc:752-756）。
+- **端口映射**：PER_NPU（`npu-ids` 显式表去重校验或 set_sys 增量）、PER_NODE（`sys_id/num-npus-per-node`，缺键/越界 fatal，cc:694-723）、MEMORY_POOL 单端口 0（cc:734-736）。
+- **PortStats**：issued/completed count+bytes、in_flight/peak（issue→callback 含 latency）、streaming/peak（事件边界重建非采样）、latency_waiting/completion_waiting 活计数（sensing 关也保留以支撑无条件审计）、`redistribution_events`（按连续完成时刻、幸存流>0 才计）与 `stream_join_events` 分列（cc:335-347）、port_busy_ns/shared_busy_ns/bytes_served 区间积分。
+- **遥测**：`enable_transaction_telemetry` 复用既有 `--sensing-enabled`（**无新配置键**）；惰性建文件（首个完成事务才建）；观测键 issue 时拷贝、完成结算时交付前写出（永不从已交付 cookie 回读）；写失败/误用 fail-closed fatal（cc:1071-1103 区；`cannot open the transaction-detail stream` FATAL 在案）。
+- **收尾合同**：`is_drained()` 无条件有效（sensing 无关）；`shutdown()` 幂等——取消事件与双零 timer（deleter 释放 payload）、销毁未交付 wlhd、结算审计查 count+bytes+活计数+容器重数+（遥测开时）行数=完成数。
+
+### 44.3 验证（证据根 `/tmp/serdes-joint-work/`，2026-09-24；均当批亲跑）
+
+- **终门禁** `gate_rerun.log`：49 步（configure + 全相关 C++ 目标构建/运行 + golden + stress）全 PASS（树=主工作树）。
+- **端口模型** `RemotePortNwayTest` S1..S10 全 PASS（`precision_rerun.log` 尾行：anchors 300｜90/120/140/150｜1B fluid 1/6 ns，三 memory-type 全覆盖）；S10 fail-closed 反例 14 项（`portnway_s10_fail_*`：bw 缺/0/负/inf/字符串、latency 负/inf/字符串、未知 memory-type、per-node 缺 shape/零 nodes/未绑定 rank、huge tensor、no-issue）。
+- **压力** `stress_results.txt`：16 端口×128 事务全并发——2048/2048 收发、peak_streaming=128、redistribution=2032=16×127（每完成时刻幸存>0 计 1、末流不计）、join=0、CPU 49.6ms、wall 54.7ms、peak RSS 13.5MiB。
+- **系统门控**：online（`r4_online.log`）同 rank 双 MEM issue pass 后 in_flight=2、peak_streaming=2、shared_busy_ns=200；MEM+COMM_SEND 独立门；static（`r4_static.log`）双 MEM 同发 300/300、恰一次 occupy/release、结束门等全部终结；`hbm_nway_test` contention ON/OFF 重锚全 PASS（`r4_hbm_on/off.log`）。HardwareResource 行为 16 项检查（`hr_online_counted.log`/`hr_static_counted.log`，/tmp 一次性探针非仓内交付）。
+- **事务明细后端级**：/tmp 编译探针 `remote_port_stats_test`（`build-joint/run11.log`，53 检查全过）——双流 2 行 JSONL 且行与统计结算严格先于每个回调（回调入口探针）、多时刻分批、join/完成两口径分列、零字节正 latency 不入分母、双零 +1 Tick、sensing 关聚合仍审计、早 shutdown 不伪造完成且零完成零文件、sensing 开零事务零残留、不可写路径 FATAL。
+- **生产 2s A/B**（`pricing-audit.md` A2）：基线 = `/tmp/serdes-joint-baseline` 隔离快照树（14:32 双树 721 文件散列 manifest 恒等；基线构建 PASS、二进制 sha256 `a0425b96…`；树差仅 C++——基线串行符号 15 命中/流体符号 0，主树反之）；validation-160gib n=21 固定输入下 e2e 分位与全部指标文件逐字节恒等、决策 86 行仅宿主墙钟差、21 条 admission 全候选 cost_ns 逐字节同；sensing-on run 明细写者已武装（cpp.log `[online] remote-memory transaction detail: enabled`）而 JSONL 合法缺席 ⇒ **窗口池后端完成事务=0，恒等属零池负载平凡一致性，不构成争用正确性/收益证据**。
+- **快照溯源补录（终审必改项，2026-09-24 晚落盘）**：任务指定的 `/tmp/serdes-joint-work/manifest-joint.txt` 此前缺失，现以可复算重建版入库——快照 tracked 基座 ≡ 工作区整备提交 `b2bfd9e420d6dee563ad13ef38eac20abf4a68cb` 的 template/astra-sim-joint 子树（678/678 文件 sha256 对 `git cat-file blob` 逐一相等、0 失配；含 2 个非 ASCII 路径单独验证）＋ 43 个 untracked（.zcode 15 / protobuf 派生 4 / 其余 .pyc 24）＋ ignored 输入散列（generated runtime_config 四件、plan 目录两件、trace_config 占位指针、traces/ 仅物化器）＋ 构建命令与双树二进制锚（基线 a0425b96… = §43.5 watchfix 冻结位逐位一致、candidate 09668a84…）＋ 五 run 输入 requests.csv 同散列 a09cef99…；自验证 V1-V6 记录在册（721/721 条对盘复核零失配）。同批入库 `/tmp/serdes-joint-work/joint-deep-audit-reconciliation.md`＝深挖条目↔快照现状对账表：方案 §2.2 指名条目（H1-H5/M3/M13/M17/M20/L7/L8/L10/L11/M18-M19/M1-M2/OfflineGreedy 整链/孤儿测试三件/P11 四组死键/run_golden_live）逐项对 b2bfd9e blob 亲验全部吻合"已修/已处置"，唯一仍在 = main_online detached command-FIFO 线程（:1333@b2bfd9e、:1357@工作树）与 §2.2 登记一致；顺带登记 M4 （CustomAlgorithm 基类成员未初始化）快照内仍未修——方案 §2.2 本未声称其已修，无冲突；其余未指名条目如实标注"未逐项复核"，不假装修复状态。
+- **计价/标定**（`pricing-audit.md` A1/A4/A5）：divisor 四口径为 Python 登记表决策面、机制上不受并发化影响；remote-read 读流本体无池端口腿（不漏计）、混合基后缀池腿已计价；**重标定零值改动**（无 SLO/LUT/因子移动依据）；离线 golden 锚 `test_golden_g1g4.py` 门禁 step48 PASS（joint 的 `run_golden_live.py` 已随死代码清除批删除，本仓 live 锚不适用——与开关清单退役登记一致，未复活）。
+
+### 44.4 文档同步（本轮交付面）
+
+- `README.md`：§7-D' 重写（FIFO→流体并发/端口共享域/事件精度/限制五条，§7 标题加偏离注记）＋ §5 迁移清单第 7 条 ＋ §3 状态表"远端端口并发后端"行 ＋ §6 远端端口 C++ 夹具块（含 ctest=0 实测口径）。
+- `experiment/仿真各功能开关清单.md`：新增 §18（零新增开关；`--sensing-enabled` J 仓行为扩展登记；`remote_memory.json` 键行为语义改写；§17"串行基线=改造前 commit 直接对拍"说法废止、改精确工作树快照口径；已退役死键 logical-pool/boost-mode/run_golden_live 不复活）；§2 路线④产物行与 §3 `--sensing-enabled` 行加 J 仓指针；§10.1 remote-memory 行补 J 仓取值。
+- 本节（§44）。
+
+### 44.5 限制与未验证项（如实登记）
+
+- **争用条件生产级行为未验证**：现有全部 run 零池事务，逐事务明细复算、Python/C++ 传输对账、完成分布无生产样本；需编排层后续含池负载（如 PARTIAL 基或驱逐压力）sensing-on run。
+- **明细写者仅后端级验证**：S7 + run11 53 检查；生产 run 零行（文件合法缺席）。
+- **裸仓还原未执行**：本轮任务边界=文档同步；joint 工作树现存 `build/` 与 `generated/` 产物，待收尾按 Agents.md 执行 `clean_test_records.sh`/`clean_build_artifacts.sh`（不得对原始工作区盲跑，须按阶段 0 manifest 保护用户未提交/未跟踪文件）。
+  - **【2026-09-24 收尾闭合】**上条已按其自记口径执行完毕：先做保护预检（`git status --porcelain` 亲核——4 个未跟踪交付件 `tests/remote_port_*_test.cc`/`make_remote_port_static_fixture_et.py` 均不在清理脚本 rm 目标内；`git diff` 亲核 `trace_config.csv` 相对 HEAD 零改动），随后亲跑 `clean_test_records.sh`（移除 `sh_test_mesh/generated/` 全部〔含本批 smoke 物化的 `llama2_7b_inference_54npus_plan_9b94e196`〕、全树 `__pycache__`/`.pytest_cache`；traces/ 仅 *.py；trace_config 占位指针未动）与 `clean_build_artifacts.sh`（移除 `build/`）。复核（均亲跑）：`diff -rq` vs `/tmp/serdes-joint-baseline` 仅余本批有意交付面（C++/CMake/runner 三脚本/README/PROVENANCE 修改 + 4 个新测试文件）与基线侧产物条目（基线自带 build/、generated/、7 处 __pycache__——工作树较基线更严格，按裸仓定义清除，基线在案 ignored 输入不回填）；裸仓四要素逐项过（指针=占位、traces 仅 .py、无 generated/、无 build*/）；`find . -name __pycache__ -o -name .pytest_cache` 零命中。
+- **detached command-FIFO 线程观察项维持不处置**（原 joint 深挖清单 §1.3）：本轮 main 收尾新增的审计/结算步均在 `svc`/`ingress` 栈作用域（main_online.cc:1272-1275）仍存活处执行、FIFO 线程 detach 语义与 :1357-1359 未动——未扩大其销毁后访问窗口；该观察项本体仍开放。
+
+## 45. PARTIAL 跨实例 copy 流水化（发射门槽位放宽 + 图侧并行化，2026-09-25，仅本仓，零新增开关）
+
+> 本节由文档同步员落字；断言覆盖任务单开发自测记录（`/tmp/joint-pipeline-work/` 在案）与本同步轮亲读亲跑复核，未做的检查不冒认（见 45.4）。
+
+### 45.1 落点与范围
+
+- **发射门 C1** `astra-sim/workload/HardwareResource.{hh,cc}`：`hbm_dma`（本地 KV restore）与 `gpu_comm`（COMM_SEND/COMM_COLL）两类单槽改**计数制无上限槽**（occupy/release 删单槽 assert、available_class 恒放行；与 remote_mem 同款合同——计数仅供 static 结束门/release 前置校验/析构诊断，永不作带宽分母；COMP/CPU 单槽门按方案保留）。`LocalHbmBandwidthModel.hh` 注释同步（并发 RESTORE 为受支持状态）。带宽仲裁零改动归既有模型：HBM 六类作业 N-way 严格均分（加入/完成动态重分）、NoC 链路按 active flows 均分（FluidScheduler）、池端口按 active streams 均分（`AnalyticalRemoteMemory`，§44 交付不回退）——单槽压住的"每 rank 至多 1 笔并发 RESTORE"结构保证删除，NoC 共享链均分模型已在位、图侧并行化后首次真生效。
+- **图侧** `graph_batch_builder.py`（发射依赖面）：P1 `_emit_copy_handoff_tail` 尾块逐笔并行支链——每块对涉及 rank `chain_checkpoint`/`restore_chain` 段内分支、全部块首节点 fork 头块后主链 frontier、块间无边；块内 ack 新形态 ack_recv_c←本块 send_c／ack_send_c←本块 recv_c；跨 rank send/recv 无图边、(src,dst,tag) 配对运行时承载；同实例 gate 逐块重 arm（等价旧"全部尾块等 gate"）；旧「home send 直连链/exec recv 顺序链/ack 链尾随」三段串行删除。P2-R2 `_arm_pending_store_edges` 公开签名/行为逐字节不变地分解为 `_match_store_entries`（纯查询+历史文案 fail-closed）／`_emit_store_relays_once`（每跨缘对恰一次 1B 中继+可选去重缓存）／`_consume_store_entries`（恰移除 matched）三助手；同实例（stay partial）与跨实例（copy/remote-read 支链）两个恢复组发射点改**组间并行**：①组 0 区间无匹配 raise 面②并集区间中继先发（中继 recv=各组共同链序父）③每组 checkpoint＋只 arm 与本组层区间交集的条目＋发射＋回滚④并集条目同批发射内消费（span 外保留；pending_store_tails 窗口有界，sh30 merge_tail_gated 判据输入不放大，sh30 零改动）；组 i 首节点依赖由"组 i-1 全部节点"弱化为"驻留前缀屏障/到达 gate＋本组交集 store 直接 arm＋本缘共享中继（链序）"，前递保障不减。P4 `_emit_credit_stream_tail` 同款并行化（home/exec 两腿图形态对称）。新增 `_restore_group_involved_ranks`。
+- **零改动面**：首块（chunk 0）准入主链、readiness barrier、逐块/逐层就绪门、FS 四步协议、merge_back v2、home/merge 账本一行未动。
+
+### 45.2 测试与验证（C++/Python 为本同步轮亲跑复验，其余为任务单在案）
+
+- **C++**：新增 `PipelineConcurrentGateTest`（场景 P：同 rank COMP＋KV-restore＋两笔 charged send 一次 pass 齐发、free 集合空、sends=650<restore=700 先于 restore 终结、COMP=500、peak=4、redistribution=5、served bytes 精确钉；场景 Q：RESTORE_A=500/RESTORE_B=650 动态重分、peak=4、redistribution=5）ALL PASS；新增 `NocSharedLinkNwayTest`（4 NPU 线拓扑：F2=12/F1=8/F3=6——共享期 2000 B/ns 严格均分、F2 完成后链路动态重分、排序 6<8<12）ALL PASS；两目标注册 analytical CMake（:192/:196，test-only 照 RemotePort* 模式）。`HbmNwayTest` **重锚 2**：rank0 node3 uncharged send 由 ≥700 floor（钉 comm 单槽串行）改精确钉 6（tick 0 齐发、网络侧到达）＋HBM 池不受泄漏复核断言——ON/OFF 双跑 ALL PASS，ON terminals r0#0=400/r0#1=600/r0#2=700/**r0#3=6**/r0#4=5400/r1#0=500/r1#1=800/r1#2=1000/r1#3=1100 全命中（其余数值锚与 OFF 臂结构性不变）。开发批整链 `/tmp/joint-pipeline-work/run_joint_cpp_regress.sh` ALL PASS（任务单在案，本节未重跑）。
+- **Python**：T2 `test_joint_copy_handoff.py` 18→23（+CopyHandoffParallelTailTests 5）、T3 `test_joint_layer_restore.py` 17→20（+RestoreGroupParallelTests 3）、T8 `test_store_restore_ordering.py` 9→13（+StoreForwardingHelperTests 4）——三文件本同步轮复跑 56 passed；窄命令 `workload/llama2_7b_inference` 实收 **846 passed + 13 subtests**（§43.8 watchfix 基线 834 → 净增 12，本同步轮复跑）。
+- **冒烟与终门禁**：2s 冒烟矩阵 13/13 臂 exit=0（证据根 `/tmp/joint-pipeline-work/smoke_evidence`，含 combo 8 臂+remote_off+shadow_verify+quota_static/quota_aimd/face_static；2s 窗 21 条 admission 全 copy 不适用——冒烟验证通用发射链路无回归，PARTIAL copy/恢复组图形态正确性由 T2/T3 结构断言与 C++ 夹具承担）；交付终门禁结果 = **回归门禁全绿＋10s 压力夹具通过**（命令面 regressionCommands，本节未逐一重跑）。
+
+### 45.3 文档同步
+
+- `README.md`：§3 状态表 copy 块级交接（18→23 用例＋P1 并行形态）/逐层恢复（逐组顺序→组间并行）/remote-read 执行流（D2 拓扑 P4 并行形态）/远端端口并发后端（comm 槽措辞）四行＋§5 迁移清单第 7 条措辞与新第 8 条＋§6 测试计数注记（T2/T3/T8 增量、窄命令 846+13）与"跨实例 copy 流水化 C++ 夹具"块＋§7-D' 槽位措辞（comm/hbm_dma 同为计数制无上限）。
+- `experiment/仿真各功能开关清单.md`：§18 已有 2026-09-25 追记（开发批落字，本核对轮逐条复核与代码一致）；§14（F/W）/§16（FL/WL）差异表无本批（仅 J 仓）涉改条目，零订正零新增开关。
+- 本节（§45）＋`PROVENANCE_hashes.txt` 的 PROVENANCE.md 行重算。
+
+### 45.4 限制与未验证项（如实登记）
+
+- canonical 全量 pytest 与 10s 压力档由终门禁统一执行，本同步轮未重跑（门禁结果以任务单为准，未复核门禁日志本体）。
+- 端到端 PARTIAL copy/恢复组时序未入 2s 冒烟窗（窗内零 copy 命中），由终门禁压力档与 T2/T3 结构断言、C++ 夹具分层承担——压力档逐请求数字本节未复核。
+- §44 已落地的 AnalyticalRemoteMemory 并发端口与 RemotePort* 绿灯未回退（本批零改动其后端；RemotePort* 三目标本同步轮未重跑，开发批整链复跑在案）。

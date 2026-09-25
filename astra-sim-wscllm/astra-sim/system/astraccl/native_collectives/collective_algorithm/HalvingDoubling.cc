@@ -25,8 +25,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->data_size = data_size;
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
     this->parallel_reduce = 1;
-    this->total_packets_sent = 0;
-    this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
@@ -42,11 +40,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
         break;
     default:
         stream_count = log2(nodes_in_ring);
-    }
-    if (type == ComType::All_Gather) {
-        max_count = 0;
-    } else {
-        max_count = log2(nodes_in_ring);
     }
     remained_packets_per_message = 1;
     remained_packets_per_max_count = 1;
@@ -108,7 +101,6 @@ void HalvingDoubling::run(EventType event, CallData* data) {
         ready();
         iteratable();
     } else if (event == EventType::PacketReceived) {
-        total_packets_received++;
         insert_packet(nullptr);
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {
@@ -118,9 +110,6 @@ void HalvingDoubling::run(EventType event, CallData* data) {
 }
 
 void HalvingDoubling::release_packets() {
-    for (auto packet : locked_packets) {
-        packet->set_notifier(this);
-    }
     if (NPU_to_MA == true) {
         (new PacketBundle(stream->owner, stream, locked_packets, processed,
                           send_back, msg_size, transmition))
@@ -136,8 +125,6 @@ void HalvingDoubling::release_packets() {
 void HalvingDoubling::process_stream_count() {
     if (remained_packets_per_message > 0) {
         remained_packets_per_message--;
-    }
-    if (id == 0) {
     }
     if (remained_packets_per_message == 0 && stream_count > 0) {
         stream_count--;
@@ -156,7 +143,6 @@ void HalvingDoubling::process_max_count() {
         remained_packets_per_max_count--;
     }
     if (remained_packets_per_max_count == 0) {
-        max_count--;
         release_packets();
         remained_packets_per_max_count = 1;
         rank_offset *= offset_multiplier;
@@ -180,7 +166,6 @@ void HalvingDoubling::reduce() {
     process_stream_count();
     packets.pop_front();
     free_packets--;
-    total_packets_sent++;
 }
 
 bool HalvingDoubling::iteratable() {
@@ -203,7 +188,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
@@ -215,7 +199,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {

@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <limits>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 
 // Using the new feeder v3 APIs.

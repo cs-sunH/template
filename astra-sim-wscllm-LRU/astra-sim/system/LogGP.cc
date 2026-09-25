@@ -79,7 +79,7 @@ void LogGP::request_read(int bytes,
                          bool processed,
                          bool send_back,
                          Callable* callable) {
-    MemMovRequest mr(request_num++, sys, this, bytes, 0, callable, processed,
+    MemMovRequest mr(request_num++, sys, this, bytes, callable, processed,
                      send_back);
     if (NPU_MEM != nullptr) {
         mr.callEvent = EventType::Consider_Send_Back;

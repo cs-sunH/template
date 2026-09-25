@@ -43,9 +43,6 @@ Counters (report at run end):
                                        into one Python round-trip.
   tick_end_without_decision_count    -- every no-work tick-end gate call
                                        (normal, allowed nonzero).
-  no_decision_python_callback_count  -- only a buggy entry into Python with
-                                       no decision work increments this
-                                       (phase-1 acceptance: must be 0).
 *******************************************************************************/
 
 #ifndef EXECUTION_DRIVEN_DECISIONMAILBOX_HH
@@ -215,17 +212,10 @@ struct StateDelta {
 /// deferred_from_tick: 0 = same-tick delivery, nonzero = the explicit
 /// T+1 wakeup delivered events formed at that tick (step 1-11).
 /// injected_unfinished: phase-3 sensing summary (empty when sensing is off).
-/// Phase-4 v1 defaults: delivery_epoch == delivery_sequence; completed_nodes
-/// / affected_ranks empty; snapshot_handle self-consistent
-/// {epoch: delivery_sequence, tick: tick, kind: ""} -- existing 4/5-arg call
-/// sites (fixtures) compile unchanged and stay v1-consistent.
-StateDelta build_state_delta(
-    std::vector<DecisionEvent> events, uint64_t tick,
-    uint64_t delivery_sequence, uint64_t deferred_from_tick = 0,
-    std::vector<RankInjectedSummary> injected_unfinished = {});
-/// v1: explicit form -- callers with completed-facts / affected-ranks
-/// payloads use the full signature (the tick-end gate in main_online.cc).
-/// injected_unfinished (phase-3 sensing) defaults to empty.
+/// v1 contract (phase 4): delivery_epoch == delivery_sequence;
+/// completed_nodes / affected_ranks are explicit payloads (callers without
+/// facts pass {}); snapshot_handle self-consistent
+/// {epoch: delivery_sequence, tick: tick, kind: ""}.
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, uint64_t tick,
     uint64_t delivery_sequence, uint64_t deferred_from_tick,
@@ -240,17 +230,14 @@ class DecisionMailbox {
     /// generation). Accepted events get consecutive seqs.
     void push(DecisionEvent e);
 
-    /// True iff a delivery epoch has work: pending events or a pending
-    /// finalize (the commit-ack finalize flag is the step-1-7+ wiring
-    /// point; nothing sets it in phase 1's step 1-6).
+    /// True iff a delivery epoch has work: pending events.
     [[nodiscard]] bool has_decision_work() const;
 
     /// Deliver all pending events in insertion order and clear the pending
     /// set (a new dedup epoch starts after the call).
     std::vector<DecisionEvent> drain();
 
-    // --- counters (report at run end; phase-1 gate asserts
-    //     no_decision_python_callback_count == 0) ---
+    // --- counters (report at run end) ---
     [[nodiscard]] uint64_t event_count() const { return event_count_; }
     [[nodiscard]] uint64_t delivery_count() const { return delivery_count_; }
     [[nodiscard]] double coalescing_ratio() const {
@@ -261,24 +248,11 @@ class DecisionMailbox {
     [[nodiscard]] uint64_t tick_end_without_decision_count() const {
         return tick_end_without_decision_count_;
     }
-    [[nodiscard]] uint64_t no_decision_python_callback_count() const {
-        return no_decision_python_callback_count_;
-    }
 
     /// Tick-end gate no-work path (normal, allowed nonzero).
     void count_tick_end_without_decision() {
         ++tick_end_without_decision_count_;
     }
-
-    /// Only a buggy Python entry with no decision work increments this
-    /// (phase-1 acceptance: must stay 0).
-    void count_no_decision_python_callback() {
-        ++no_decision_python_callback_count_;
-    }
-
-    /// Set/reset the finalize-pending flag (step-1-7+ commit-ack wiring;
-    /// kept here per the plan's has_decision_work definition).
-    void set_finalize_pending(bool pending) { finalize_pending_ = pending; }
 
   private:
     using Identity = std::tuple<int, std::string, std::string, uint64_t>;
@@ -286,12 +260,10 @@ class DecisionMailbox {
     uint64_t next_seq_ = 1;
     std::vector<DecisionEvent> events_;
     std::set<Identity> pending_identities_;
-    bool finalize_pending_ = false;
 
     uint64_t event_count_ = 0;
     uint64_t delivery_count_ = 0;
     uint64_t tick_end_without_decision_count_ = 0;
-    uint64_t no_decision_python_callback_count_ = 0;
 };
 
 }  // namespace ExecutionDriven

@@ -1,0 +1,22 @@
+session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,description
+session_0,0,session_0_request_0,15659,202,94835000,,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_1,0,session_1_request_0,10856,231,444096000,,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_1,1,session_1_request_1,768,284,,200000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_1,2,session_1_request_2,2022,55,,1187000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_1,3,session_1_request_3,594,325,,1000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,0,session_2_request_0,26056,208,723441000,,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,1,session_2_request_1,438,131,,85000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,2,session_2_request_2,659,89,,33000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,3,session_2_request_3,6597,394,,104000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,4,session_2_request_4,517,107,,46000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_2,5,session_2_request_5,1693,1676,,54000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,0,session_3_request_0,11747,90,1169316000,,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,1,session_3_request_1,6434,1,,253000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,2,session_3_request_2,367,207,,64000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,3,session_3_request_3,3026,110,,35000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,4,session_3_request_4,711,5951,,36000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,5,session_3_request_5,5993,178,,56000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,6,session_3_request_6,332,122,,72000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,7,session_3_request_7,150,144,,138000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_3,8,session_3_request_8,237,105,,133000000,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work
+session_4,0,session_4_request_0,14381,66,1500398000,,compute_20 first-2-seconds window; turn-0 prefix recomputed as prefill work

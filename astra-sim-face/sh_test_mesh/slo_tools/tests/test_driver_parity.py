@@ -35,6 +35,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import (  # noqa: E402
@@ -272,13 +276,18 @@ def build_sh10_run_dir() -> Path:
                 for record in decision_log), encoding="utf-8")
 
     # -- train_ledger（含 first_step 行以覆盖跳过打印）---------------------
+    # load_imbalance.li_collect_drains 消费的是 exits 数组（非 first_step
+    # 行携带终态 request_id；缺数组即 fail-closed）。drains 键仅 fixture
+    # 自留，工具不读取。
     (results / "train_ledger.jsonl").write_text(
         json.dumps({"tick": 1100, "instance_index": 0, "first_step": True,
-                    "train_id": "t0", "drains": []}, sort_keys=True) + "\n"
+                    "train_id": "t0", "drains": [], "exits": []},
+                   sort_keys=True) + "\n"
         + json.dumps({"tick": 20_000_001_400, "instance_index": 0, "first_step": False,
                       "train_id": "t0",
-                      "drains": ["session_A_request_0",
-                                 "session_B_request_0"]},
+                      "drains": [],
+                      "exits": ["session_A_request_0",
+                                "session_B_request_0"]},
                      sort_keys=True) + "\n", encoding="utf-8")
 
     # -- trace_config（run_dir 本地优先；hardware 用仓内 validation 档）----

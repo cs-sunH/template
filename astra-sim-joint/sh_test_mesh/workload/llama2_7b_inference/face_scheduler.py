@@ -13,7 +13,7 @@ from __future__ import annotations
 import heapq
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Optional, Sequence
 
 from joint.eviction_priority import (
@@ -1252,27 +1252,41 @@ COPY_HANDOFF_CHUNK_LAYERS = 8
 RESTORE_GROUP_LAYERS = 8
 
 
+def plan_layer_groups(
+    start: int, end: int, group_layers: int = RESTORE_GROUP_LAYERS,
+) -> tuple[tuple[int, int], ...]:
+    """层区间 [start, end) 的消费顺序层组切分（公共规划器）。
+
+    C15 后缀恢复组 / C13 copy 交接块 / prefill remote-read 前缀读流组
+    同款确定性规划：组数 n = ceil(跨度 / group_layers)，组内跨度均衡
+    （span = ceil(跨度 / n)）；返回 [(group_start, group_end), ...]
+    （层自低向高 = 消费顺序）。确定性、无运行期状态输入——前缀组与
+    后缀组切分方式一致，方便构图器铺层段。
+    """
+    span_total = end - start
+    if span_total <= 0:
+        return ()
+    group_count = -(-span_total // group_layers)
+    span = -(-span_total // group_count)
+    ranges: list[tuple[int, int]] = []
+    cursor = start
+    while cursor < end:
+        group_end = min(cursor + span, end)
+        ranges.append((cursor, group_end))
+        cursor = group_end
+    return tuple(ranges)
+
+
 def plan_suffix_restore_groups(
     suffix_start: int, model_layers: int,
 ) -> tuple[tuple[int, int], ...]:
     """C15：后缀 [suffix_start, model_layers) 的消费顺序层组切分。
 
-    与 plan_copy_handoff_layer_chunks 同款确定性规划：组数 n =
-    ceil(后缀层数 / RESTORE_GROUP_LAYERS)，组内跨度均衡；返回
-    [(layer_start, layer_end), ...]（层自低向高 = 消费顺序）。
+    plan_layer_groups 的后缀恢复特化（group_layers =
+    RESTORE_GROUP_LAYERS）：后缀 ≤ RESTORE_GROUP_LAYERS 时单组 = 旧
+    单笔口径回归锚。
     """
-    span_total = model_layers - suffix_start
-    if span_total <= 0:
-        return ()
-    group_count = -(-span_total // RESTORE_GROUP_LAYERS)
-    span = -(-span_total // group_count)
-    ranges: list[tuple[int, int]] = []
-    start = suffix_start
-    while start < model_layers:
-        end = min(start + span, model_layers)
-        ranges.append((start, end))
-        start = end
-    return tuple(ranges)
+    return plan_layer_groups(suffix_start, model_layers)
 
 
 def plan_copy_handoff_layer_chunks(
@@ -1280,21 +1294,11 @@ def plan_copy_handoff_layer_chunks(
 ) -> tuple[tuple[int, int], ...]:
     """C13：copy 驻留前缀 [0, base_prefix) 的消费顺序层块切分。
 
-    消费顺序 = 层自 0 向上（transformer 深度序）；块数 n =
-    ceil(base_prefix / COPY_HANDOFF_CHUNK_LAYERS)，块内跨度均衡
-    （span = ceil(base_prefix / n)）。确定性、无运行期状态输入。
+    plan_layer_groups 的 copy 交接特化（group_layers =
+    COPY_HANDOFF_CHUNK_LAYERS，与 RESTORE_GROUP_LAYERS 同值）：消费
+    顺序 = 层自 0 向上（transformer 深度序）。
     """
-    if base_prefix_layers <= 0:
-        return ()
-    chunk_count = -(-base_prefix_layers // COPY_HANDOFF_CHUNK_LAYERS)
-    span = -(-base_prefix_layers // chunk_count)
-    ranges: list[tuple[int, int]] = []
-    start = 0
-    while start < base_prefix_layers:
-        end = min(start + span, base_prefix_layers)
-        ranges.append((start, end))
-        start = end
-    return tuple(ranges)
+    return plan_layer_groups(0, base_prefix_layers, COPY_HANDOFF_CHUNK_LAYERS)
 
 
 @dataclass
@@ -1563,6 +1567,16 @@ class KVTransfer:
     # 构图器按组旁挂恢复支链（rank 内串行链），列车体按层段就绪门控
     # 消费——替换"整列车等整段后缀"的保守门（GB _suffix_restore_arms）。
     restore_group: Optional[int] = None
+    # 瞬时读流标记（2026-09-25 prefill remote-read 前缀读流）：True =
+    # 该传输是 transient stream——只在图上产生 send/recv/HBM 写服务节点
+    # 与完成门，**不物化入任何持久账本**：不 _add_local_shards、不改
+    # session.shard_bytes / resident_prefix_layers、不进 merge 工作副本
+    # 账（prefill remote-read 前缀流 [0,p) 置 True；decode remote-read
+    # credit 读流同口径应置 True——其构造点在 online 调度器
+    # _joint_remote_read_slice，本仓任务面未动，见 ImplHandoff 偏差）。
+    # False = 既有持久/账本口径传输（remote_load 后缀恢复、noc_migrate
+    # 工作副本/逐出写回等）。
+    stream_only: bool = False
 
     def __post_init__(self) -> None:
         if self.kind not in {
@@ -4504,6 +4518,80 @@ class KVCacheManager:
         session.working_kind = action
         self._check_invariants_after_mutation(session_ids=(session_id,))
         return before, tuple(transfers), tuple(evictions)
+
+    def plan_prefill_remote_read_transfers(
+        self,
+        session: SessionKVState,
+        target_instance_index: int,
+        history_tokens: int,
+        trigger_request_id: str,
+    ) -> tuple[KVTransfer, ...]:
+        """prefill remote-read 前缀读流规划（纯规划，不改 KV 状态）。
+
+        remote-read 轮准入时独立调用（与 prepare_prefill 并列，三元
+        返回值口径不变）：把 home 驻留前缀 [0, p) 按 plan_layer_groups
+        （与 C15 后缀恢复组 / C13 交接块同款 RESTORE_GROUP_LAYERS 切分）
+        规划成逐组 noc_migrate 读流——kind="noc_migrate"、phase=
+        "prefill"、reason="remote_read_prefill_prefix"、stream_only=
+        True、source=home、target=exec。后缀 [p, L) 不在本函数：仍由
+        prepare_prefill 内 _plan_suffix_restore_transfers 规划池恢复，
+        两条腿共享同一准入 frontier 并行分叉，构图器按层段铺支链——
+        prefill 计算 [0,p) 段等前缀读流到达、[p,L) 段等池恢复到达
+        （前缀层计算与后缀层恢复传输重叠，不设全局 barrier）。
+
+        瞬时流纪律：不 _add_local_shards、不改 session.shard_bytes /
+        resident_prefix_layers / context_tokens、不建 merge 工作副本
+        持久账本、不登记任何 journal——只返回物理 send/recv/HBM 写
+        服务节点与完成门的图侧原料；resident_prefix_layers_before/
+        after 恒 = p（读流无驻留推进，镜像 decode credit 切片口径），
+        前缀瞬时 staging 不得计入 exec 容量账本。
+
+        基形态适用性（与 prepare_prefill remote-read 分支同约束）：
+        LOCAL 基 p = L（全前缀读流，无后缀腿）；PARTIAL 基 p =
+        resident_prefix_layers（混合形态）；REMOTE 基不适用（保持现有
+        适用性约束，fail-closed）；exec == 驻留实例为选点/适用性合同
+        破损（fail-closed，防读流退化成自读/摧毁权威基础）。
+        """
+        if session.location not in (self.LOCAL_HBM, self.PARTIAL_HBM_REMOTE):
+            # REMOTE 基：remote-read 不适用（现约束保持），fail-closed。
+            raise RuntimeError(
+                f"prefill remote-read requires a LOCAL/PARTIAL base "
+                f"(session {session.session_id} at {session.location})")
+        home_instance = session.instance_index
+        if home_instance is None or home_instance == target_instance_index:
+            raise RuntimeError(
+                "prefill remote-read requires the base history to stay at "
+                f"another instance (session {session.session_id}, home="
+                f"{home_instance}, exec={target_instance_index})")
+        if history_tokens != session.context_tokens:
+            raise ValueError(
+                f"session {session.session_id} historical KV metadata does "
+                "not match request")
+        prefix_layers = session.resident_prefix_layers
+        # 字节源按请求侧 history_tokens 派生（已断言 == context_tokens，
+        # _noc_transfer 的派生口径一致）；组区间 ⊆ [0, p) 由
+        # plan_layer_groups(0, p) 构造性保证（_noc_transfer 的驻留前缀
+        # 包含守卫同式冗余成立）。
+        transfers = [
+            replace(
+                self._noc_transfer(
+                    phase="prefill",
+                    reason="remote_read_prefill_prefix",
+                    session=session,
+                    trigger_request_id=trigger_request_id,
+                    source_instance_index=home_instance,
+                    target_instance_index=target_instance_index,
+                    layer_start=layer_start,
+                    layer_end=layer_end,
+                ),
+                stream_only=True,
+                resident_prefix_layers_before=prefix_layers,
+                resident_prefix_layers_after=prefix_layers,
+            )
+            for layer_start, layer_end in plan_layer_groups(0, prefix_layers)
+        ]
+        return tuple(transfers)
+
     def _expand_local_session(
         self,
         *,

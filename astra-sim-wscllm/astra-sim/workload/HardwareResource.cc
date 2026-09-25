@@ -16,10 +16,9 @@ using namespace Chakra;
 typedef ChakraProtoMsg::NodeType ChakraNodeType;
 
 HardwareResource::HardwareResource(
-    uint32_t num_npus, int sys_id,
+    int sys_id,
     const ExecutionDriven::ExecutionMode execution_mode)
     : sys_id(sys_id),
-      num_npus(num_npus),
       retain_node_ids_(execution_mode ==
                        ExecutionDriven::ExecutionMode::Static),
       num_in_flight_cpu_ops(0),
@@ -27,7 +26,6 @@ HardwareResource::HardwareResource(
       num_in_flight_gpu_comp_ops(0) {
 
     tics_gpu_ops = 0;
-    tics_hbm_dma_ops = 0;
 
     // cpu_ops_node = NULL;
     // gpu_ops_node = NULL;
@@ -131,11 +129,17 @@ void HardwareResource::occupy(const ExecutionDriven::NodeView& node) {
         }
     } else {
         if (node.kind == ExecutionDriven::NodeKind::Compute) {
-        // Step 1-8 (root-cause #3): calibrated COMP chains run concurrently
-        // in online mode (self-timed LUT-clock chains, gate bypassed in
-        // Workload::issue_dep_free_nodes) -- the in-flight counter is a
-        // count, not a single slot. The static ETFeederNode path above keeps
-        // its single-slot assert (static mode never runs concurrent COMPs).
+        // Step 1-8 (root-cause #3): count-based, not a single slot.
+        // Correction (2026-09-25, workload-F2): the old note claimed the
+        // gate was bypassed for calibrated COMP chains in
+        // Workload::issue_dep_free_nodes -- that replay-only concurrent
+        // calibrated-COMP bypass was deleted with the replay route
+        // (2026-08-18; see the comment there), the is_available single-slot
+        // gate still applies, so the production online count stays 0/1.
+        // The count semantics are kept because watch_registry_test.cc
+        // occupies two Compute nodes directly and asserts count==2. The
+        // static ETFeederNode path above keeps its single-slot assert
+        // (static mode never runs concurrent COMPs).
         ++num_in_flight_gpu_comp_ops;
         if (retain_node_ids_) {
             gpu_ops_node.emplace(node.global_id);
@@ -171,7 +175,10 @@ void HardwareResource::release(const ExecutionDriven::NodeView& node) {
         }
     } else {
         if (node.kind == ExecutionDriven::NodeKind::Compute) {
-            // Step 1-8 (root-cause #3): count-based, see occupy().
+            // Step 1-8 (root-cause #3): count-based, see occupy() -- the
+            // single-slot COMP gate still holds in production (workload-F2),
+            // so this counter stays 0/1 there; watch_registry_test.cc is the
+            // only direct count==2 user.
             if (num_in_flight_gpu_comp_ops == 0) {
                 LoggerFactory::get_logger("HardwareResource")
                     ->critical(

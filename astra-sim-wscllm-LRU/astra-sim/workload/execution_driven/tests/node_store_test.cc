@@ -8,8 +8,8 @@ Exercises the three step-1-4 mechanisms (方案 §4 步骤 1-4) as a standalone
 test -- no network simulation, no baseline artifacts touched:
 
   Part A  NodeStore semantics: id assignment, dependency blocking/release,
-          mark_issued, finish_node idempotency, dead-parent edges, reverse
-          index (meta_for), pending_count.
+          mark_issued, finish_node idempotency, dead-parent edges,
+          pending_count.
   Part B  NodeStoreGraphSource: store-backed dep_free_nodes / lookup /
           take_node / finish_node delegation, no-auto-emit, static_all_done
           false (online authority belongs to the ServiceCoordinator).
@@ -106,11 +106,6 @@ void test_node_store() {
     const auto rec = store.node(7);
     expect(rec.has_value() && rec->kind == NodeKind::Metadata,
            "A: node() returns stored record");
-    const auto meta = store.meta_for(7);
-    expect(meta.has_value() && meta->request_id == "req-7" &&
-               meta->stage == "prefill" && meta->generation == 3,
-           "A: meta_for returns reverse index");
-    expect(!store.meta_for(999).has_value(), "A: meta_for miss is nullopt");
     expect(!store.node(999).has_value(), "A: node() miss is nullopt");
 
     // Dependency: child added after parent -> child leaves the free set.

@@ -96,7 +96,7 @@ def main() -> int:
                 "request of the synthetic queue on an empty instance "
                 "(~0.77 GiB/rank final KV) while the aggregate session "
                 "KV (~50K tokens over 3 Decode instances vs ~14.2K-token "
-                "instance budget) forces two-stage tiered eviction.",
+                "instance budget) forces whole-session tiered LRU eviction.",
     }
     hardware_path = os.path.join(work, "hw_small.json")
     with open(hardware_path, "w", encoding="utf-8") as handle:

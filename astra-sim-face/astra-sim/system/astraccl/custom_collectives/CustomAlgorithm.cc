@@ -33,6 +33,12 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
         std::exit(1);
     }
     this->id = id;
+    // The Algorithm base members below are not meaningful for a custom
+    // algorithm (sizes live in the Chakra ET), but CollectivePhase reads them
+    // unconditionally right after construction, so they must be initialized.
+    this->data_size = 0;
+    this->final_data_size = 0;
+    this->comType = ComType::None;
 }
 
 CustomAlgorithm::~CustomAlgorithm() {
@@ -40,10 +46,18 @@ CustomAlgorithm::~CustomAlgorithm() {
 }
 
 int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {
-    // In this custom algorithm implementation, we assume the algo ranks are
-    // same as real ranks. This may change in the future.
+    // When comm_group is non-null, the algorithm rank is mapped to the real
+    // NPU id by its position inside the communication group (see the contract
+    // in CustomAlgorithm.hh). When comm_group is null, algorithm ranks are
+    // the same as real ranks.
     if (comm_group == nullptr) {
         return algo_rank;
+    }
+    const int n = static_cast<int>(comm_group->involved_NPUs.size());
+    if (algo_rank < 0 || algo_rank >= n) {
+        Sys::sys_panic("custom collective algorithm rank " +
+                       std::to_string(algo_rank) +
+                       " outside communicator of size " + std::to_string(n));
     }
     int real_rank = comm_group->involved_NPUs[algo_rank];
     return real_rank;

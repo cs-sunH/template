@@ -49,7 +49,6 @@ from generate_trace import (  # noqa: E402
     REMOTE_WEIGHT_ATTR,
     RequestSpec,
     TraceBuilder,
-    load_remote_memory_config,
     shard_extent,
     transformer_pass,
     transformer_pass_aggregated,
@@ -286,23 +285,31 @@ class WscLlmSchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             select_first_session_requests(requests, -1)
 
-    def test_remote_memory_mesh_shape_rejects_malformed_legacy_value(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            source = Path(temporary) / "remote_memory.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "memory-type": "PER_NPU_MEMORY_EXPANSION",
-                        "npu-ids": [0],
-                        "mesh-shape": 4,
-                        "remote-mem-latency": 0,
-                        "remote-mem-bw": 1,
-                    }
-                ),
-                encoding="utf-8",
+    def test_hardware_remote_memory_expansion_fails_closed_at_parse(self) -> None:
+        """face A.2 alignment (wscllm removal 2026-09-24): the remote memory
+        backend was removed; a hardware config declaring any expansion must
+        fail closed at parse time."""
+
+        from config_resolver import load_hardware_config
+
+        checked_in = json.loads(
+            (MODULE_DIR.parents[1] / "hardware" / "face_case5_config_c.json").read_text(
+                encoding="utf-8"
             )
-            with self.assertRaisesRegex(ValueError, "mesh-shape"):
-                load_remote_memory_config(source, 4, mesh_shape=(2, 2))
+        )
+        expansion = dict(checked_in)
+        expansion["remote-memory"] = {
+            "memory-type": "PER_NPU_MEMORY_EXPANSION",
+            "bandwidth-gbps": 512.0,
+            "latency-ns": 100,
+            "npu-selection": "mesh-boundary",
+            "logical-pool": "unified-kv-cache-pool",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "face_case5_expansion.json"
+            source.write_text(json.dumps(expansion), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "NO_MEMORY_EXPANSION"):
+                load_hardware_config(source, "validation-160gib")
 
     def test_checked_in_config_is_request_neutral_and_fails_closed_without_input(self) -> None:
         """checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认
@@ -321,12 +328,10 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(config.system_config.name, "system.json")
         self.assertEqual(config.network_config.name, "network.yml")
         self.assertEqual(config.comm_group_config.name, "comm_group.json")
-        self.assertEqual(config.remote_memory_config.name, "remote_memory.json")
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
         self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
-        self.assertEqual(system_raw["remote-mem-bw"], 512)
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)

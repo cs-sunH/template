@@ -24,8 +24,15 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->logical_topo = ring_topology;
     this->data_size = data_size;
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
+    if (nodes_in_ring < 1 || (nodes_in_ring & (nodes_in_ring - 1)) != 0) {
+        LoggerFactory::get_logger("system::collective::HalvingDoubling")
+            ->critical(
+                "######### Exiting because HalvingDoubling only supports a "
+                "power-of-two number of nodes, but got: {} #########",
+                nodes_in_ring);
+        std::exit(1);
+    }
     this->parallel_reduce = 1;
-    this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
@@ -85,7 +92,7 @@ HalvingDoubling::HalvingDoubling(ComType type,
 }
 
 int HalvingDoubling::get_non_zero_latency_packets() {
-    return log2(nodes_in_ring) - 1 * parallel_reduce;
+    return log2(nodes_in_ring) - parallel_reduce;
 }
 
 RingTopology::Direction HalvingDoubling::specify_direction() {
@@ -107,7 +114,6 @@ void HalvingDoubling::run(EventType event, CallData* data) {
         ready();
         iteratable();
     } else if (event == EventType::PacketReceived) {
-        total_packets_received++;
         insert_packet(nullptr);
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {

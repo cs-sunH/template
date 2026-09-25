@@ -108,9 +108,23 @@ bool ServiceCoordinator::checked_wait_deadline(
     if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
         return false;
     }
-    const double duration_max_count = static_cast<double>(
-        std::chrono::steady_clock::duration::max().count());
-    if (timeout_s > duration_max_count) {
+    // Fix (2026-09-25, execdriven-F1; same landed form as the wscllm-LRU
+    // repo): the old guard compared SECONDS directly against the tick-domain
+    // duration::max() count (nanoseconds on this platform -- ~1e9x too
+    // wide), so oversized values were only rejected by the float->int
+    // conversion's UB saturation. Convert the tick bound into seconds
+    // first; the comparison stays unit-correct and still happens on the
+    // double BEFORE any float->int conversion. One second is shaved off
+    // so double rounding at the edge can never push a passing value past
+    // duration::max() in the conversion below.
+    const double ticks_per_second = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::seconds(1)).count());
+    const double max_representable_seconds =
+        (static_cast<double>(
+             std::chrono::steady_clock::duration::max().count()) -
+         ticks_per_second) / ticks_per_second;
+    if (timeout_s > max_representable_seconds) {
         return false;  // could not be represented as a duration at all
     }
     const std::chrono::steady_clock::duration timeout =

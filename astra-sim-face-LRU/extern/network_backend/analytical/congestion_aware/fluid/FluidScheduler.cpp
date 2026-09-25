@@ -90,7 +90,7 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue :33
+            // main queue from a tick-end/deferred context (EventQueue.cpp :48
             // strict-increase assert). Post-commit comm emission lands here and
             // is executed by the same-tick deferred drain.
             event_queue->schedule_event_deferred(flush_callback, this);
@@ -325,7 +325,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
 
     for (const auto& pending : pending_starts) {
         FluidFlow flow{pending.flow_id,
-                       pending.bytes,
                        static_cast<long double>(pending.bytes),
                        0.0,
                        now,

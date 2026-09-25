@@ -18,6 +18,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 import slo_common  # noqa: E402
@@ -408,6 +412,35 @@ class KvHitStateMappingTests(unittest.TestCase):
         self.assertEqual(f({"history_action": "NO_HISTORY",
                             "history_location_before": None}, 0, "r")[0],
                          "no_history")
+
+    def test_face_lru_new_run_outputs_never_partial(self):
+        """face-LRU 新运行（session 级 Tiered-LRU，2026-09-25）：仅产出
+        local_hbm/remote_memory 两值 → 恒 full；partial_hbm_remote 无运行
+        时产生者，映射键保留仅为旧产物读侧兼容；注册表 notes 同步两态
+        口径。"""
+        f = kv_cache_adapter._hit_state_face_wscllm
+        # 新运行词汇域(REMOTE_RESTORE 为唯一恢复动作)两值 → 恒 full,
+        # full_local/full_remote 由 evidence 区分。
+        for location, instance, resident in (
+                ("local_hbm", 0, 2), ("remote_memory", None, 0)):
+            state, evidence = f({
+                "history_action": "REMOTE_RESTORE",
+                "history_location_before": location,
+                "history_location_before_instance_index": instance,
+                "history_resident_prefix_layers": resident}, 1, "r")
+            self.assertEqual(state, "full")
+            self.assertIn(f"history_location_before={location}", evidence)
+        # 旧产物口径仍可解析(读侧兼容,非新运行产出)。
+        self.assertEqual(f({
+            "history_action": "PARTIAL_REMOTE_MIGRATE",
+            "history_location_before": "partial_hbm_remote",
+            "history_location_before_instance_index": 3,
+            "history_resident_prefix_layers": 16}, 1, "r")[0], "partial")
+        # 注册表:face-LRU 条目收敛两态口径(新运行不产出 partial)。
+        variant = kv_cache_adapter.REPO_VARIANTS["astra-sim-face-LRU"]
+        self.assertEqual(variant["hit_state"], f)
+        self.assertIn("两态", variant["notes"])
+        self.assertIn("partial_hbm_remote 仅旧产物可解析", variant["notes"])
 
     def test_face_tiered_extraction_and_reconcile(self):
         """B4（-LRU face）：契约字段优先（逐段传输/契约逐出/PD 列表行），

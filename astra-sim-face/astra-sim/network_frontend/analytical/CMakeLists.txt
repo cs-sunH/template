@@ -35,7 +35,8 @@ target_include_directories(AstraSim_Analytical_ChunkIdGeneratorTest PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/
         ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/network_backend/analytical/include)
 set_target_properties(AstraSim_Analytical_ChunkIdGeneratorTest
-        PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+        PROPERTIES COMPILE_WARNING_AS_ERROR OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/)
 
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
@@ -48,9 +49,11 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main_online.cc)
 
-    # Execution-driven mechanism sources (online target only). The root CMake
-    # glob over astra-sim/workload/*.cc is non-recursive, so execution_driven/
-    # is listed explicitly here; the static target must not contain any of them.
+    # Execution-driven mechanism sources. The root CMake glob (root
+    # CMakeLists.txt) already lists astra-sim/workload/execution_driven/*.cc
+    # into the AstraSim static library; this file re-globs the same directory
+    # explicitly so the online target and the fixtures below compile the
+    # layer directly.
     file(GLOB srcs_execution_driven
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
 

@@ -20,7 +20,7 @@
 #   (c) milestone 在下一 delivery epoch 交付,decode 图随后正常提交:
 #       seq=2 的 delivery reasons 恰为 ["DECODE_COMPLETION",
 #       "REQUEST_COMPLETE"],cpp 侧 completed=1,双进程 exit 0;
-#   (d) 无事件丢失(mailbox 结束审计 no_decision_python_callback_count==0)、
+#   (d) 无事件丢失(cpp run-end gate_ok 审计,退出码非 0 即失败)、
 #       无死锁(轮询有界),request 最终完成。
 #
 # Usage: bash run_online_same_tick_milestone.sh [run_root]
@@ -214,15 +214,11 @@ if grep -q 'reasons=\[.*ARRIVAL.*PREFILL_DRAIN' "${log}"; then
   exit 1
 fi
 
-# (d) cpp 侧审计:服务计数 accepted=1 completed=1 active=0;
-#     no_decision_python_callback_count==0(无事件丢失)。
+# (d) cpp 侧审计:服务计数 accepted=1 completed=1 active=0
+#     (事件丢失由 run-end gate_ok 审计覆盖,cpp 退出码非 0 即失败)。
 if ! grep -q '\[online\] service counters: accepted=1 completed=1 active=0 pending_alarm=0' "${run_dir}/cpp.log"; then
   echo "[fixture] FAIL (d): 服务计数不符(期望 accepted=1 completed=1)" >&2
   grep "\[online\] service counters" "${run_dir}/cpp.log" >&2 || true
-  exit 1
-fi
-if ! grep -q 'no_decision_python_callback_count=0' "${run_dir}/cpp.log"; then
-  echo "[fixture] FAIL (d): no_decision_python_callback_count != 0(事件丢失)" >&2
   exit 1
 fi
 
@@ -230,4 +226,4 @@ echo "[fixture] ALL PASS:"
 echo "[fixture]   (a) PREFILL_DRAIN 不在 ARRIVAL 的同一 Python 调用内(单 tick 单次 delivery)"
 echo "[fixture]   (b) 显式 T+1 下一决策边界唤醒:seq=1 tick=${T_PLUS1} deferred_from_tick=${T_NS}"
 echo "[fixture]   (c) milestone 在下一 epoch 交付,decode 提交,completed=1,双进程 exit 0"
-echo "[fixture]   (d) 无事件丢失(no_decision_python_callback_count=0)、无死锁"
+echo "[fixture]   (d) 无事件丢失(run-end gate_ok 审计)、无死锁"

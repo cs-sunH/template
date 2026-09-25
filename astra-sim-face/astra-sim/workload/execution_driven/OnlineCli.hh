@@ -21,12 +21,13 @@ online entry must parse its own family explicitly:
                         baseline config, trace_config.csv:12, stays separate
                         from the online defaults).
   --request-max-arrival-ns
-                        frozen simulation input window upper bound (ns) for
+                        optional simulation input window upper bound (ns) for
                         turn-0 arrivals; rows beyond it are rejected (never
-                        submitted, counted and reported). Frozen default is
-                        30,000,000,000 (the 20.csv first-30-seconds input
-                        boundary; the input's own max arrival is 25.96s, so
-                        the rejection counter reads 0 on the allowed input).
+                        submitted, counted and reported). Default is 0 =
+                        UNBOUNDED (backport fix, 2026-08-16, sh_2.0测试
+                        §5.1); a non-zero value is an explicit experiment
+                        knob only, and any drop it causes is counted and
+                        fails closed at the run-end completion audit.
   --command-fifo        optional FIFO path read by an external producer
                         thread (step 1-10 IDLE fixture). JSON lines:
                         {"kind":"Submit", session_id, turn_index, request_id,

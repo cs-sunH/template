@@ -137,7 +137,6 @@ Sys::Sys(int id,
          string workload_configuration,
          string comm_group_configuration,
          string system_configuration,
-         AstraRemoteMemoryAPI* remote_mem,
          AstraNetworkAPI* comm_NI,
          vector<int> physical_dims,
          vector<int> queues_per_dim,
@@ -163,14 +162,9 @@ Sys::Sys(int id,
     this->peak_perf = 0;
     this->roofline = nullptr;
 
-    this->remote_mem = remote_mem;
-    this->remote_mem->set_sys(id, this);
     this->local_mem_bw = 0;
     this->local_mem_latency = 0;
     this->hbm_bandwidth_contention = true;
-    this->remote_mem_bw = 0;
-    this->remote_mem_latency = 0;
-    this->pipeline_tile_fraction = 0;
 
     this->memBus = nullptr;
     this->inp_L = 0;
@@ -214,7 +208,6 @@ Sys::Sys(int id,
     this->queues_per_dim = queues_per_dim;
     int element = 0;
     this->total_nodes = 1;
-    this->dim_to_break = -1;
     for (uint64_t current_dim = 0; current_dim < queues_per_dim.size();
          current_dim++) {
         if (physical_dims[current_dim] >= 1) {
@@ -268,9 +261,8 @@ Sys::Sys(int id,
                          comm_group_configuration);
     }
 
-    if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-        inter_dimension_scheduling ==
-            InterDimensionScheduling::OfflineGreedyFlex) {
+    if (inter_dimension_scheduling ==
+        InterDimensionScheduling::OfflineGreedy) {
         offline_greedy = new OfflineGreedy(this);
     }
 
@@ -442,18 +434,6 @@ bool Sys::initialize_sys(string name) {
     }
     if (j.contains("local-mem-latency")) {
         local_mem_latency = j["local-mem-latency"];  // ns
-    }
-    if (j.contains("remote-mem-bw")) {
-        remote_mem_bw = j["remote-mem-bw"];
-        remote_mem_bw = remote_mem_bw * 1000000000;  // GB/sec
-    }
-    if (j.contains("remote-mem-latency")) {
-        remote_mem_latency = j["remote-mem-latency"];  // ns
-    }
-    if (j.contains("pipeline-tile-fraction")) {
-        pipeline_tile_fraction = j["pipeline-tile-fraction"];
-        pipeline_tile_fraction =
-            std::max(0.0, std::min(1.0, pipeline_tile_fraction));
     }
     if (j.contains("roofline-enabled")) {
         if (j["roofline-enabled"] != 0) {
@@ -698,7 +678,10 @@ void Sys::handleEvent(void* arg) {
         delete ehd;
     } else if ((event == EventType::NPU_to_MA) ||
                (event == EventType::MA_to_NPU)) {
-        all_sys[id]->call_events();
+        if (id >= 0 && static_cast<size_t>(id) < all_sys.size() &&
+            all_sys[id] != nullptr) {
+            all_sys[id]->call_events();
+        }
     } else if (event == EventType::RendezvousSend) {
         RendezvousSendData* rsd = (RendezvousSendData*)ehd;
         rsd->send.call(EventType::General, nullptr);
@@ -848,10 +831,8 @@ DataSet* Sys::generate_collective(
     DataSet* dataset = new DataSet(streams);
     int pri = get_priority(explicit_priority);
     int count = 0;
-    if (id == 0 && (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+    if (id == 0 && inter_dimension_scheduling ==
+                       InterDimensionScheduling::OfflineGreedy) {
         if (last_scheduled_collective != Sys::boostedTick()) {
             offline_greedy->reset_loads();
             last_scheduled_collective = Sys::boostedTick();
@@ -909,10 +890,8 @@ DataSet* Sys::generate_collective(
                 round_robin_inter_dimension_scheduler = 0;
             }
         } else if (collective_type != ComType::All_to_All &&
-                   (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+                   inter_dimension_scheduling ==
+                       InterDimensionScheduling::OfflineGreedy) {
             uint64_t prev_size = size;
             dim_mapper = offline_greedy->get_chunk_scheduling(
                 communicator_group == nullptr ? 0
@@ -929,10 +908,8 @@ DataSet* Sys::generate_collective(
         }
 
         if (collective_type == ComType::All_to_All ||
-            (inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedy &&
-             inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedyFlex)) {
+            inter_dimension_scheduling !=
+                InterDimensionScheduling::OfflineGreedy) {
             if (chunk_size > size) {
                 size = 0;
             } else {
@@ -963,11 +940,7 @@ DataSet* Sys::generate_collective(
                 remain_size = phase.final_data_size;
             }
         } else if (inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedy ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedyFlex ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OnlineGreedy) {
+                   InterDimensionScheduling::OfflineGreedy) {
             int dim = 0;
 
             // Create collective phase for each dimension in ascending order.
@@ -1191,6 +1164,12 @@ uint64_t Sys::determine_chunk_size(uint64_t& size, ComType type) {
         return size;
     }
     uint64_t chunk_size = size / preferred_dataset_splits;
+    if (type == ComType::All_Gather && chunk_size == 0) {
+        // An All_Gather payload smaller than 'preferred-dataset-splits'
+        // divides into zero-size chunks; ceil(size/0) would then overflow
+        // the stream count. Fall back to one chunk covering the whole size.
+        return size;
+    }
     // We want the collective size to have minimum size, otherwise, there is a
     // possibility of size overflow due to further dividing it to more
     // fine-grained messages

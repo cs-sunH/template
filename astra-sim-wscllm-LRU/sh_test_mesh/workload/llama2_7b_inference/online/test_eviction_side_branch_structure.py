@@ -91,23 +91,22 @@ def _shard(**kwargs):
     )
 
 
-def _store(source_rank, edge_rank, *, source_instance=1, layer_start=2,
-           after=2, session=VICTIM):
-    """受害者(VICTIM)的 remote_store 逐出 transfer(链 A/B 由
-    source==edge 与否自然选择)。"""
+def _store(source_rank, edge_rank, *, source_instance=1, session=VICTIM):
+    """受害者(VICTIM)的 remote_store 整体逐出 transfer(链 A/B 由
+    source==edge 与否自然选择;层域 [0, L) 全层、本地驻留清零)。"""
     return KVTransfer(
         kind="remote_store", phase="history",
-        reason="watermark_admission_suffix_half",
+        reason="watermark_admission_session",
         session_id=session, trigger_request_id="req",
         source_instance_index=source_instance, target_instance_index=None,
         total_bytes=900,
         shards=(_shard(source_rank=source_rank, target_rank=edge_rank,
                        edge_rank=edge_rank, bytes=900,
                        noc_path=(source_rank, edge_rank),
-                       layer_start=layer_start, layer_end=LAYERS),),
-        model_layers=LAYERS, layer_start=layer_start, layer_end=LAYERS,
+                       layer_start=0, layer_end=LAYERS),),
+        model_layers=LAYERS, layer_start=0, layer_end=LAYERS,
         resident_prefix_layers_before=LAYERS,
-        resident_prefix_layers_after=after,
+        resident_prefix_layers_after=0,
     )
 
 

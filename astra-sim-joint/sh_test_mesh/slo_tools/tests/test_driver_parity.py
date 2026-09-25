@@ -35,6 +35,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import (  # noqa: E402

@@ -75,9 +75,12 @@ REQUIRED_CONFIG_KEYS = (
 )
 OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
-    "trace_granularity": "token_expanded",
+    # 缺省即在线主链唯一支持的档位(graph_batch_builder 全部发射入口对
+    # 非 request_aggregated fail-closed);token_expanded 属已删除的离线
+    # 静态管线(main 自 2026-08-18 起为 fail-closed 拒绝桩),不再作默认。
+    "trace_granularity": "request_aggregated",
     "prefill_chunk_size": "512",
-    "kv_cache_policy": "session_lru_recompute",
+    "kv_cache_policy": "session_lru_tiered",
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
@@ -96,10 +99,6 @@ PATH_CONFIG_KEYS = {
     "hardware_config",
     "system_template",
 }
-OPERATOR_GRANULARITY = (
-    "rmsnorm,qkv,qk,scale_mask,softmax,av,out_proj,residual,"
-    "mlp_gate_up,swiglu,mlp_down,logits"
-)
 
 
 @dataclass(frozen=True)
@@ -179,14 +178,15 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "record_planning_iterations":
         return parse_bool(value, key)
     if key == "kv_cache_policy":
-        # B2(2026-09-06):新值 session_lru_tiered = 三态 KV 内核(契约
-        # §8);旧值保留在值域(兼容旧 trace_config 读取,行为上新管理器
-        # 唯一,无档位分支)。trace_config.csv 实际换值归 B3。
-        if value not in ("session_lru_recompute", "session_lru_tiered"):
+        # 唯一取值 session_lru_tiered(session 级二态冷热管理:完整本地/
+        # 完整远端、单阶段完整 session LRU 逐出 + 远端池全量恢复;
+        # 2026-09-25 session 级 Tiered-LRU 批起原 PARTIAL 半层化三态与
+        # 两段式逐出已物理移除);旧值别名与其同调度器(无档位分支),
+        # 已随 2026-09-25 命名卫生直接清除。其余取值 fail-closed。
+        if value != "session_lru_tiered":
             raise ValueError(
-                "config key kv_cache_policy must be "
-                "session_lru_recompute or session_lru_tiered, got "
-                f"{value!r}"
+                "config key kv_cache_policy must be session_lru_tiered, "
+                f"got {value!r}"
             )
         return value
     if key == "trace_granularity":
@@ -416,6 +416,15 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
 
 
 def _stage_tag(queue_index: int, category: int, relative_rank: int) -> int:
+    """Stage tag = ``queue_index*10000 + category + relative_rank``.
+
+    值域边界(契约 §6):queue_index < 1000 时恒在 KV-transfer 分配器基址
+    10_000_000 之下;queue_index >= 1000 的请求(30s 验收队列 1177 请求
+    即存在)其 stage tag 数值上进入分配器值域——当前无守卫拦截,属已登记
+    的潜伏重叠:执行驱动 C++ 路径不以 comm_tag 配对(Workload.cc 仅有
+    TODO 记载),重叠仅是审计层面的值域混用,不改变任何发射时序,故此处
+    不 fail-closed(会在验收规模直接拒绝合法运行)。
+    """
     return queue_index * 10000 + category + relative_rank
 
 
@@ -455,6 +464,10 @@ def _paired_transfer(
     # Full KV transfers retain the configured whole-head ownership.  An
     # arbitrary capacity-split remainder falls back to exact byte partitioning
     # so the total transfer volume is never rounded up.
+    # fail-closed(与 _validate_transfer_shard 的 shard.bytes<=0 门同款):
+    # 0 值经 comm_size 的 max(1,·) 会被静默钳成 1 字节,绝不发射。
+    if total_bytes <= 0:
+        raise ValueError("FACE paired KV transfers must carry positive bytes")
     if total_bytes % config.num_heads == 0:
         bytes_per_head = total_bytes // config.num_heads
         bytes_by_relative_rank = [
@@ -471,6 +484,8 @@ def _paired_transfer(
     for relative_index, (source, target) in enumerate(
         zip(source_group.ranks, target_group.ranks)
     ):
+        if bytes_by_relative_rank[relative_index] <= 0:
+            raise ValueError("emitted KV transfer shards must contain positive bytes")
         if timer_gates is not None:
             builders[source].arm_timer_gate(timer_gates.get(source))
         tag = _stage_tag(queue_index, category, relative_index)
@@ -612,7 +627,11 @@ class TransferTagAllocator:
     """sh_2.0 :158-167 with the -LRU tag-space offset (contract §6).
 
     face's stage tag formula ``queue_index*10000+{1000,1900,3000}`` occupies
-    the low segments, so the monotonic allocator starts at 10_000_000.
+    the low segments only while ``queue_index < 1000`` (see _stage_tag); the
+    monotonic allocator starts at 10_000_000 so the two spaces stay disjoint
+    under that queue-scale assumption.  comm_tag is not used for p2p matching
+    by the execution-driven C++ path, so the numeric overlap beyond that
+    scale is audit-level only.
     """
 
     def __init__(self) -> None:
@@ -627,13 +646,10 @@ class TransferTagAllocator:
 
 
 def _config_edge_ranks(config: FaceTraceConfig) -> tuple[int, ...]:
-    """Edge ranks for shard validation: the resolver's remote-memory edges
-    when present, else the mesh-boundary derivation (same set by
-    construction: npu-selection is "mesh-boundary")."""
-    remote_memory = getattr(config, "remote_memory", None)
-    edge_npus = getattr(remote_memory, "edge_npus", None)
-    if edge_npus:
-        return tuple(edge_npus)
+    """Edge ranks for shard validation: the deterministic mesh-boundary
+    derivation (npu-selection is "mesh-boundary").  FaceTraceConfig carries
+    no resolver remote-memory override, so this is the only edge-rank
+    source."""
     return physical_edge_ranks(config.hardware)
 
 

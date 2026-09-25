@@ -459,7 +459,7 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                 if (src < 0 || src >= ctx_.num_ranks || dst < 0 ||
                     dst >= ctx_.num_ranks) {
                     return fail("node[" + std::to_string(node_index) +
-                                "] p2p src/dst/tag out of range");
+                                "] p2p src/dst out of range");
                 }
                 if ((type == 5 && src != rank) ||
                     (type == 6 && dst != rank)) {
@@ -889,18 +889,6 @@ void GraphBatchCommitter::record_affine_node(const int rank,
     ++affine.store_next;
 }
 
-std::vector<int> GraphBatchCommitter::compute_touched_ranks(
-    const GraphBatch& batch, const int num_ranks) {
-    std::set<int> ranks;
-    for (const auto& parsed : batch.nodes) {
-        const int rank = parsed.node.rank;
-        if (rank >= 0 && rank < num_ranks) {
-            ranks.insert(rank);
-        }
-    }
-    return std::vector<int>(ranks.begin(), ranks.end());
-}
-
 std::optional<std::string> GraphBatchCommitter::validate_impl(
     const StateDelta& delta, const GraphBatch& batch,
     std::vector<int>* const json_id_touched_ranks) const {
@@ -995,7 +983,7 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // C1 (2026-08-29): the compute/comm/coll sub-object shape and
             // every field's JSON typing were validated once by
             // parse_graph_batch; this pass reads the typed attrs directly.
-            // The src/dst/tag range checks are scoped to the comm-typed
+            // The src/dst range checks are scoped to the comm-typed
             // nodes (types 5/6) -- the ONLY nodes whose comm fields are
             // semantically load-bearing. Real batches carry the comm
             // defaults (src=0/dst=0/tag=0) on every node and pass trivially
@@ -1241,7 +1229,15 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
             // 是哨兵标记节点,fire 后事件经四类 reason 通道送回 Python
             // 侧按 train_id 核销。
             if (request_id.rfind("batch_train_", 0) == 0) {
-                // batch sentinel: train-scoped, no request eligibility.
+                // batch sentinel: train-scoped, no request eligibility --
+                // but the namespace only exists for the prefill drain; a
+                // decode sentinel would fire on_request_completed for a
+                // batch namespace id that never arrived.
+                if (stage != "prefill") {
+                    return "watch[" + std::to_string(watch_index) +
+                           "] batch_train sentinel watch requires stage="
+                           "prefill, got " + stage + " (" + request_id + ")";
+                }
             } else if (stage == "prefill") {
                 if (in_flight.count(request_id) == 0) {
                     return "prefill watch[" + std::to_string(watch_index) +
@@ -1356,10 +1352,10 @@ std::optional<std::string> GraphBatchCommitter::validate_impl(
                 return "touched_ranks not sorted unique";
             }
             // S1 (2026-08-23): reuse this validate pass's own touched set
-            // instead of re-walking batch.nodes through
-            // compute_touched_ranks(): by this point every node has an
-            // in-range rank (fail-closed in the node pass above), so the
-            // sorted-unique rank sets are identical by construction.
+            // (accumulated by the node pass above): by this point every
+            // node has an in-range rank (fail-closed in the node pass
+            // above), so the sorted-unique rank sets are identical by
+            // construction.
             const std::vector<int> computed(touched.begin(), touched.end());
             if (declared != computed) {
                 std::ostringstream os;

@@ -89,24 +89,11 @@ DimElapsedTime::DimElapsedTime(int dim_num) {
 }
 OfflineGreedy::OfflineGreedy(Sys* sys) {
     this->sys = sys;
-    if (sys->dim_to_break == -1) {
-        this->dim_size = sys->physical_dims;
-        this->dim_BW.resize(this->dim_size.size());
-        for (uint64_t i = 0; i < this->dim_size.size(); i++) {
-            this->dim_BW[i] = sys->comm_NI->get_BW_at_dimension(i);
-            this->dim_elapsed_time.push_back(DimElapsedTime(i));
-        }
-    } else {
-        this->dim_size = sys->logical_broken_dims;
-        this->dim_BW.resize(this->dim_size.size());
-        for (uint64_t i = 0; i < this->dim_size.size(); i++) {
-            if (i > static_cast<uint64_t>(sys->dim_to_break)) {
-                this->dim_BW[i] = sys->comm_NI->get_BW_at_dimension(i - 1);
-            } else {
-                this->dim_BW[i] = sys->comm_NI->get_BW_at_dimension(i);
-            }
-            this->dim_elapsed_time.push_back(DimElapsedTime(i));
-        }
+    this->dim_size = sys->physical_dims;
+    this->dim_BW.resize(this->dim_size.size());
+    for (uint64_t i = 0; i < this->dim_size.size(); i++) {
+        this->dim_BW[i] = sys->comm_NI->get_BW_at_dimension(i);
+        this->dim_elapsed_time.push_back(DimElapsedTime(i));
     }
     if (sys->id == 0) {
         auto logger = LoggerFactory::get_logger("themis");
@@ -201,100 +188,6 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
                 dim_size[dim.dim_num] == 1) {
                 result.push_back(dim.dim_num);
                 continue;
-            } else if (inter_dim_scheduling ==
-                           InterDimensionScheduling::OfflineGreedyFlex &&
-                       !chunk_size_calculated) {
-                chunk_size_calculated = true;
-                if (comm_type == ComType::Reduce_Scatter) {
-                    double load_difference =
-                        fabs(dim_elapsed_time.back().elapsed_time -
-                             dim.elapsed_time);
-                    chunk_size = get_chunk_size_from_elapsed_time(
-                        load_difference, dim, ComType::Reduce_Scatter);
-                } else {
-                    int lastIndex = dim_elapsed_time.size() - 1;
-                    while (!dimensions_involved[dim_elapsed_time[lastIndex]
-                                                    .dim_num] ||
-                           dim_size[dim_elapsed_time[lastIndex].dim_num] == 1) {
-                        lastIndex--;
-                    }
-                    double load_difference =
-                        fabs(dim_elapsed_time[lastIndex].elapsed_time -
-                             dim.elapsed_time);
-                    chunk_size = get_chunk_size_from_elapsed_time(
-                        load_difference, dim_elapsed_time[lastIndex],
-                        ComType::All_Gather);
-                    lastIndex--;
-                    while (dim_elapsed_time_pointer <= lastIndex) {
-                        if (dimensions_involved[dim_elapsed_time[lastIndex]
-                                                    .dim_num] &&
-                            dim_size[dim_elapsed_time[lastIndex].dim_num] > 1) {
-                            chunk_size /=
-                                dim_size[dim_elapsed_time[lastIndex].dim_num];
-                        }
-                        lastIndex--;
-                    }
-                }
-                if (chunk_size < (recommended_chunk_size)) {
-                    result.resize(dim_elapsed_time.size());
-                    std::iota(std::begin(result), std::end(result), 0);
-                    scheduled_chunk_size =
-                        std::min(remaining_data_size, recommended_chunk_size);
-                    chunk_size =
-                        std::min(remaining_data_size, recommended_chunk_size);
-                    remaining_data_size -=
-                        std::min(remaining_data_size, recommended_chunk_size);
-                    std::vector<DimElapsedTime> myReordered;
-                    myReordered.resize(dim_elapsed_time.size(),
-                                       dim_elapsed_time[0]);
-                    for (uint64_t myDim = 0; myDim < dim_elapsed_time.size();
-                         myDim++) {
-                        for (uint64_t searchDim = 0;
-                             searchDim < dim_elapsed_time.size(); searchDim++) {
-                            if (dim_elapsed_time[searchDim].dim_num ==
-                                static_cast<uint64_t>(myDim)) {
-                                myReordered[myDim] =
-                                    dim_elapsed_time[searchDim];
-                                break;
-                            }
-                        }
-                    }
-                    dim_elapsed_time = myReordered;
-                    if (comm_type == ComType::All_Gather) {
-                        std::reverse(dim_elapsed_time.begin(),
-                                     dim_elapsed_time.end());
-                    }
-                    for (uint64_t myDim = 0; myDim < dim_elapsed_time.size();
-                         myDim++) {
-                        if (!dimensions_involved[myDim] ||
-                            dim_size[myDim] == 1) {
-                            result.push_back(myDim);
-                            continue;
-                        }
-                        if (comm_type == ComType::Reduce_Scatter) {
-                            dim_elapsed_time[myDim].elapsed_time +=
-                                ((((double)chunk_size) / 1048576) *
-                                 (((double)(dim_size[myDim] - 1)) /
-                                  (dim_size[myDim]))) /
-                                (dim_BW[myDim] / dim_BW[0]);
-                            chunk_size /= dim_size[myDim];
-                        } else {
-                            dim_elapsed_time[myDim].elapsed_time +=
-                                ((((double)chunk_size) / 1048576) *
-                                 (((double)(dim_size[myDim] - 1)))) /
-                                (dim_BW[myDim] / dim_BW[0]);
-                            chunk_size *= dim_size[myDim];
-                        }
-                    }
-                    OfflineGreedyScheduleJournal::publish(
-                        schedule_key, result, scheduled_chunk_size,
-                        expected_consumers);
-                    return result;
-                } else {
-                    scheduled_chunk_size =
-                        std::min(remaining_data_size, chunk_size);
-                    remaining_data_size -= scheduled_chunk_size;
-                }
             } else if (inter_dim_scheduling ==
                            InterDimensionScheduling::OfflineGreedy &&
                        !chunk_size_calculated) {

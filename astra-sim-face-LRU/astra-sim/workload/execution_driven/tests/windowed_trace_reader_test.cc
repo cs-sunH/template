@@ -643,7 +643,6 @@ void test_calendar_out_of_order_turn0() {
         "session_1,0,session_1_request_0,100,50,100,,d",
         "session_2,0,session_2_request_0,100,50,300,,d",
     });
-    expect(true, "fixture written");  // silence unused-warning style checks
 
     EventQueue eq;
     DecisionMailbox mailbox;

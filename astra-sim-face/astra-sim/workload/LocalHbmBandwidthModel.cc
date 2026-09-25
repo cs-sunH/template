@@ -335,12 +335,6 @@ void LocalHbmBandwidthModel::call(EventType, CallData* data) {
         const uint64_t elapsed = now - job.start_tick;
         if (job.kind == JobKind::COMP) {
             workload->hw_resource->tics_gpu_ops += elapsed;
-        } else {
-            // 中-4② unified rule (sh_3.0 binary classification): a non-COMP
-            // endpoint job's elapsed time is local-HBM occupancy (bandwidth
-            // stretched by equal sharing), not network transfer time --
-            // account it on tics_hbm_dma_ops.
-            workload->hw_resource->tics_hbm_dma_ops += elapsed;
         }
         workload->on_local_hbm_job_complete(job.wlhd, job.kind);
     }

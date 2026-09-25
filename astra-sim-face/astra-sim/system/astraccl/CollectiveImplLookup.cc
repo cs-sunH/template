@@ -17,6 +17,25 @@ namespace AstraSim {
 
     CollectiveImplLookup::CollectiveImplLookup(int rank_) : rank(rank_) {}
 
+    CollectiveImplLookup::~CollectiveImplLookup() {
+        // Every CollectiveImpl in these maps was independently new'd by
+        // setup_collective_impl_from_config and is owned solely by this
+        // lookup: receivers of get_collective_impl results never delete them
+        // (CollectivePlan gets clone_collective_impl copies instead), so
+        // deleting here releases everything exactly once.
+        for (auto& kv : per_node_custom_impl) {
+            delete kv.second;
+        }
+        for (auto& kv : global_custom_impl_per_coll) {
+            delete kv.second;
+        }
+        for (auto& kv : native_impl_per_coll_dim) {
+            for (CollectiveImpl* ci : kv.second) {
+                delete ci;
+            }
+        }
+    }
+
     CollectiveImpl* generate_collective_impl_from_input(
         string collective_impl_str) {
         if (collective_impl_str == "ring") {
@@ -50,11 +69,9 @@ namespace AstraSim {
         }
     }
 
-    CollectiveImpl* generate_custom_collective_impl(
-        string chakra_filepath,
-        int rank) {
-        string filename = chakra_filepath;
-        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl, filename);
+    CollectiveImpl* generate_custom_collective_impl(string chakra_filepath) {
+        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl,
+                                        chakra_filepath);
     }
 
     std::map<int, std::string> parse_per_node_yaml_file(string yaml_filepath) {
@@ -139,7 +156,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_to_All] = ci;
         }
         if (j.contains("all-gather-implementation-custom")) {
@@ -151,7 +168,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Gather] = ci;
         }
         if (j.contains("reduce-scatter-implementation-custom")) {
@@ -163,7 +180,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::Reduce_Scatter] = ci;
         }
         if (j.contains("all-reduce-implementation-custom")) {
@@ -175,7 +192,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Reduce] = ci;
         }
 
@@ -188,7 +205,7 @@ namespace AstraSim {
 
             for (auto const& [node_id, chakra_filepath] : per_node_custom_impl_filename) {
                 CollectiveImpl* ci =
-                    generate_custom_collective_impl(chakra_filepath, rank);
+                    generate_custom_collective_impl(chakra_filepath);
                 per_node_custom_impl[node_id] = ci;
             }
         }
@@ -200,8 +217,7 @@ namespace AstraSim {
         BypassRule bypass_rule) {
 
         // Check if there is a per-node custom implementation first.
-        if (bypass_rule != BypassRule::BYPASS_PERNODE_CUSTOM &&
-            bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
+        if (bypass_rule != BypassRule::BYPASS_ALL_CUSTOM) {
             auto it = per_node_custom_impl.find(static_cast<int>(workload_node_id));
             if (it != per_node_custom_impl.end()) {
                 return std::vector<CollectiveImpl*>{it->second};

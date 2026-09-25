@@ -17,6 +17,64 @@ namespace AstraSim {
 
     CollectiveImplLookup::CollectiveImplLookup(int rank_) : rank(rank_) {}
 
+    CollectiveImplLookup::~CollectiveImplLookup() {
+        for (auto& it : per_node_custom_impl) {
+            delete it.second;
+        }
+        for (auto& it : global_custom_impl_per_coll) {
+            delete it.second;
+        }
+        for (auto& it : native_impl_per_coll_dim) {
+            for (auto* ci : it.second) {
+                delete ci;
+            }
+        }
+    }
+
+    // Parses the window suffix of "direct<window>"/"oneDirect<window>" (e.g.
+    // "direct4"). A bare "direct"/"oneDirect" requests an unlimited window,
+    // which is encoded as -1. Anything else (non-numeric, trailing garbage or
+    // non-positive window) is a fatal configuration error: such a window
+    // would either be silently truncated by stoi or degenerate the Direct
+    // implementation into a zero-packet stream that can never complete.
+    int parse_direct_collective_window(const string& prefix,
+                                       const string& collective_impl_str) {
+        if (collective_impl_str == prefix) {
+            return -1;
+        }
+        string window_str = collective_impl_str.substr(prefix.size());
+        if (window_str.empty() ||
+            window_str.find_first_not_of("0123456789") != string::npos) {
+            LoggerFactory::get_logger("astraccl")
+                ->critical(
+                    "Cannot interpret the window of the direct collective "
+                    "implementation '{}'. The window must be a positive "
+                    "integer.",
+                    collective_impl_str);
+            exit(1);
+        }
+        int window = 0;
+        try {
+            window = stoi(window_str);
+        } catch (const std::exception&) {
+            LoggerFactory::get_logger("astraccl")
+                ->critical(
+                    "The window of the direct collective implementation '{}' "
+                    "is out of range.",
+                    collective_impl_str);
+            exit(1);
+        }
+        if (window <= 0) {
+            LoggerFactory::get_logger("astraccl")
+                ->critical(
+                    "The window of the direct collective implementation '{}' "
+                    "must be a positive integer.",
+                    collective_impl_str);
+            exit(1);
+        }
+        return window;
+    }
+
     CollectiveImpl* generate_collective_impl_from_input(
         string collective_impl_str) {
         if (collective_impl_str == "ring") {
@@ -26,17 +84,14 @@ namespace AstraSim {
         } else if (collective_impl_str == "doubleBinaryTree") {
             return new CollectiveImpl(CollectiveImplType::DoubleBinaryTree);
         } else if (collective_impl_str.rfind("direct", 0) == 0) {
-            int window = -1;
-            if (collective_impl_str != "direct") {
-                window = stoi(collective_impl_str.substr(6, 5));
-            }
+            int window =
+                parse_direct_collective_window("direct", collective_impl_str);
             return new DirectCollectiveImpl(CollectiveImplType::Direct, window);
         } else if (collective_impl_str.rfind("oneDirect", 0) == 0) {
-            int window = -1;
-            if (collective_impl_str != "oneDirect") {
-                window = stoi(collective_impl_str.substr(9, 5));
-            }
-            return new DirectCollectiveImpl(CollectiveImplType::OneDirect, window);
+            int window = parse_direct_collective_window("oneDirect",
+                                                        collective_impl_str);
+            return new DirectCollectiveImpl(CollectiveImplType::OneDirect,
+                                            window);
         } else if (collective_impl_str == "halvingDoubling") {
             return new CollectiveImpl(CollectiveImplType::HalvingDoubling);
         } else if (collective_impl_str == "oneHalvingDoubling") {
@@ -50,11 +105,9 @@ namespace AstraSim {
         }
     }
 
-    CollectiveImpl* generate_custom_collective_impl(
-        string chakra_filepath,
-        int rank) {
-        string filename = chakra_filepath;
-        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl, filename);
+    CollectiveImpl* generate_custom_collective_impl(string chakra_filepath) {
+        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl,
+                                        chakra_filepath);
     }
 
     std::map<int, std::string> parse_per_node_yaml_file(string yaml_filepath) {
@@ -139,7 +192,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_to_All] = ci;
         }
         if (j.contains("all-gather-implementation-custom")) {
@@ -151,7 +204,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Gather] = ci;
         }
         if (j.contains("reduce-scatter-implementation-custom")) {
@@ -163,7 +216,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::Reduce_Scatter] = ci;
         }
         if (j.contains("all-reduce-implementation-custom")) {
@@ -175,7 +228,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Reduce] = ci;
         }
 
@@ -188,7 +241,7 @@ namespace AstraSim {
 
             for (auto const& [node_id, chakra_filepath] : per_node_custom_impl_filename) {
                 CollectiveImpl* ci =
-                    generate_custom_collective_impl(chakra_filepath, rank);
+                    generate_custom_collective_impl(chakra_filepath);
                 per_node_custom_impl[node_id] = ci;
             }
         }

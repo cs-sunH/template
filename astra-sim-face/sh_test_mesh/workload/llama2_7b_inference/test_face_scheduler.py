@@ -239,7 +239,6 @@ class FaceSchedulerTests(unittest.TestCase):
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["local-mem-capacity-bytes"], 160 * 1024**3)
         self.assertEqual(system_raw["peak-perf"], 261.12)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)

@@ -15,7 +15,6 @@ BasicTopology::BasicTopology(const int npus_count,
                              const Latency latency) noexcept
     : bandwidth(bandwidth),
       latency(latency),
-      basic_topology_type(TopologyBuildingBlock::Undefined),
       Topology() {
     assert(npus_count > 0);
     assert(devices_count > 0);
@@ -36,9 +35,3 @@ BasicTopology::BasicTopology(const int npus_count,
 
 // default destructor
 BasicTopology::~BasicTopology() noexcept = default;
-
-TopologyBuildingBlock BasicTopology::get_basic_topology_type() const noexcept {
-    assert(basic_topology_type != TopologyBuildingBlock::Undefined);
-
-    return basic_topology_type;
-}

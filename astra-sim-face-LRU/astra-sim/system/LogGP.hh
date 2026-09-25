@@ -18,7 +18,7 @@ namespace AstraSim {
 class Sys;
 class LogGP : public Callable {
   public:
-    LogGP(std::string name,
+    LogGP(std::string /*name*/,  // name member had no readers; param kept for call-site compat
           Sys* sys,
           Tick L,
           Tick o,
@@ -46,7 +46,6 @@ class LogGP : public Callable {
 
     MemBus* NPU_MEM;
     int request_num;
-    std::string name;
     Tick L;
     Tick o;
     Tick g;

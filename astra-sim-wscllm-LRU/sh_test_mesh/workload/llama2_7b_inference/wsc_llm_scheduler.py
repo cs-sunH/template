@@ -62,12 +62,6 @@ class WscLlmHardware:
     def npus_count(self) -> int:
         return self.mesh_rows * self.mesh_cols
 
-    @property
-    def d2d_to_hbm_bandwidth_ratio(self) -> float:
-        """Expose the inherited hardware ratio as metadata, not a route bound."""
-
-        return self.d2d_bandwidth_gbps / self.local_hbm_bandwidth_gbps
-
 
 @dataclass(frozen=True)
 class WscLlmModel:

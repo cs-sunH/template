@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CommunicatorGroup.hh"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 #include "astra-sim/system/CollectivePlan.hh"
@@ -97,6 +98,13 @@ void CommunicatorGroup::set_id(int id) {
     // CTRL+F "default communication group"
     assert(id > 0);
     this->id = id;
+    // Each comm group owns the disjoint stream-id block [id*1e6, (id+1)*1e6).
+    // Refuse absurdly large ids instead of wrapping around via signed
+    // overflow once id*1e6 exceeds INT_MAX.
+    if (id > std::numeric_limits<int>::max() / 1000000) {
+        throw std::invalid_argument(
+            "comm group id too large: its stream-id block would overflow");
+    }
     this->num_streams = id * 1000000;
 }
 
@@ -147,7 +155,13 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
                 "No collective implementation registered for a whole-cluster "
                 "communicator");
         }
-        std::vector<bool> dimensions_involved(10, true);
+        // One involvement flag per logical dimension actually handed to
+        // Sys::generate_collective, which indexes dimensions_involved with
+        // dim_mapper[dim] over topology->get_num_of_dimensions(). The old
+        // hard-coded 10 went out of bounds for topologies with more than 10
+        // dimensions.
+        std::vector<bool> dimensions_involved(
+            logical_topology->get_num_of_dimensions(), true);
         bool should_be_removed = false;
         comm_plans[comm_type] =
             new CollectivePlan(logical_topology, collective_implementation,
@@ -171,6 +185,21 @@ CollectivePlan* CommunicatorGroup::get_collective_plan(ComType comm_type, uint64
             collective_implementation = std::vector<CollectiveImpl*>{
                 new CollectiveImpl(CollectiveImplType::Ring)};
         } else if (collective_implementation.size() == 1) {
+            if (collective_implementation[0]->type ==
+                CollectiveImplType::DoubleBinaryTree) {
+                // The plan below is hard-wired to a one-dimensional
+                // RingTopology, and Sys::generate_collective_phase hands that
+                // topology to the collective algorithm unchecked. A
+                // double-binary-tree algorithm would reinterpret the ring as
+                // a BinaryTree (type-confused memory access), so fail closed
+                // here instead; only a whole-cluster or shaped communicator
+                // can serve double-binary-tree.
+                throw std::runtime_error(
+                    "Sub-cluster communicators currently support only "
+                    "ring-compatible native collective implementations; "
+                    "double-binary-tree requires a whole-cluster "
+                    "communicator");
+            }
             // The lookup registry owns and shares this implementation across
             // all comm groups, while the plan below deletes its
             // implementations on destruction (implementations_should_be_removed

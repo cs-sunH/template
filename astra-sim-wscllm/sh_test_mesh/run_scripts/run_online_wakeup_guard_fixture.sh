@@ -34,6 +34,10 @@ set -uo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/wscllm_wakeup_guard}
+# 注入通道（cmd.fifo）与 bridge 目录会被 mkfifo/启动端/注入端三方按各自 cwd
+# 解析，必须先把 run root 归一为绝对路径，否则传相对 RUN_ROOT 时 C++ 端
+# （cd PROJECT 后启动）与注入端（exec 3>）指向不同文件。
+RUN_ROOT=$(realpath -m "${RUN_ROOT}")
 
 # ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
@@ -81,7 +85,6 @@ start_online() {  # $1=run_dir $2=scenario
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
     --system-configuration="${RC}/system.json" \
-    --remote-memory-configuration="${RC}/remote_memory.json" \
     --network-configuration="${RC}/network.yml" \
     --logging-folder=off \
     > "${run_dir}/cpp.log" 2>&1 &

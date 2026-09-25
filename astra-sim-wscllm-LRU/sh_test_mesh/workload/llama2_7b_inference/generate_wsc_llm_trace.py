@@ -83,7 +83,7 @@ OPTIONAL_CONFIG_DEFAULTS = {
     "request_queue_session_limit": "0",
     "trace_granularity": "token_expanded",
     "prefill_chunk_size": "512",
-    "kv_cache_policy": "session_lru_recompute",
+    "kv_cache_policy": "session_lru_tiered",
     "kv_reserve_context_tokens": "0",
     "record_planning_iterations": "true",
 }
@@ -244,14 +244,15 @@ def _parse_config_value(key: str, value: str) -> object:
     if key == "record_planning_iterations":
         return parse_bool(value, key)
     if key == "kv_cache_policy":
-        # B2(2026-09):值域加 session_lru_tiered(三态冷热管理:两段式
-        # LRU 逐出 + 远端池恢复);旧值 session_lru_recompute 保留(兼容
-        # 旧 trace_config 读取)。其余取值 fail-closed。
-        if value not in ("session_lru_recompute", "session_lru_tiered"):
+        # 唯一取值 session_lru_tiered(session 级二态冷热管理:完整本地/
+        # 完整远端、整体 LRU 逐出 + 远端池全量恢复;2026-09-25 session 级
+        # Tiered-LRU 批起原 PARTIAL 半层化三态与两段式逐出已物理移除);
+        # 旧值别名与其同调度器(无档位分支),
+        # 已随 2026-09-25 命名卫生直接清除。其余取值 fail-closed。
+        if value != "session_lru_tiered":
             raise ValueError(
-                "config key kv_cache_policy must be "
-                "session_lru_recompute or session_lru_tiered, got "
-                f"{value!r}"
+                "config key kv_cache_policy must be session_lru_tiered, "
+                f"got {value!r}"
             )
         return value
     if key == "trace_granularity":
@@ -585,7 +586,6 @@ def _emit_prefill_stage(
     stage: str,
     tokens: int,
     initial_context_tokens: int,
-    first_chunk_split=None,
 ) -> dict[int, tuple[int, int]]:
     """Emit one chunked prefill stage; returns, per rank, the ids of the first
     and last *real* operator/collective nodes (the artificial one-byte
@@ -593,13 +593,9 @@ def _emit_prefill_stage(
     stage has no tokens.  Used only for metrics boundary recording (doc
     sec.6.2/6.3); the emitted nodes are unchanged.
 
-    B3(2026-09-06)真流水:``first_chunk_split`` 非 None 时(``{"suffix_
-    start": int, "suffix_ready_nodes_by_rank": {rank: node_id}}`)首 chunk
-    按层段拆分发射——prefix 层段 ``[0, suffix_start)`` 不等 suffix 恢复
-    (与远端后缀回迁并行),suffix 层段 ``[suffix_start, L)`` arm 依赖
-    suffix ready 节点(跨批次边);其余 chunk 聚合段回到全层。字节总量
-    与单次全层发射逐项守恒(激活/KV/AR/权重按 active_layers 分列,输出
-    头仅 suffix 段承载恰一次;end barrier 载荷 = chunk 数不变)。"""
+    分 chunk 聚合发射(trace chunking)是合法物理机制,完整保留;首 chunk
+    层段拆分真流水(B3,只为 PARTIAL 部分恢复服务)已随该恢复路径删除。
+    """
 
     if tokens == 0:
         return {}
@@ -611,10 +607,6 @@ def _emit_prefill_stage(
         spans.append((chunk, initial_context_tokens + processed + chunk))
         processed += chunk
     tp = len(group.ranks)
-    if first_chunk_split is not None and config.trace_granularity != (
-            "request_aggregated"):
-        raise RuntimeError(
-            "first-chunk layer split requires request_aggregated granularity")
     if config.trace_granularity == "token_expanded":
         for chunk_index, (chunk, kv_length) in enumerate(spans):
             for relative_rank, rank in enumerate(group.ranks):
@@ -639,72 +631,14 @@ def _emit_prefill_stage(
     else:
         for relative_rank, rank in enumerate(group.ranks):
             first_node_id = builders[rank].next_id
-            if first_chunk_split is not None:
-                # B3 真流水:首 chunk 层段拆分(prefix 不等 suffix 恢复,
-                # suffix 段 arm 依赖 suffix ready 节点;跨批次持久边)。
-                suffix_start = int(first_chunk_split["suffix_start"])
-                suffix_ready = first_chunk_split["suffix_ready_nodes_by_rank"]
-                if rank not in suffix_ready:
-                    raise RuntimeError(
-                        "partial first-chunk rank missing its suffix ready gate")
-                if not 0 < suffix_start < config.layers:
-                    raise RuntimeError(
-                        "partial first-chunk split range is outside the model")
-                transformer_pass_aggregated(
-                    builders[rank],
-                    phase=f"{prefix}_{stage}_first_chunk_prefix",
-                    pass_spans=spans[:1], layers=config.layers,
-                    hidden_size=config.hidden_size,
-                    ffn_size=config.ffn_size, tensor_parallel=tp,
-                    pg_name=group.pg_name,
-                    vocab_size=config.vocab_size,
-                    bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                    layer_start=0, layer_end=suffix_start,
-                    include_output=False, weight_passes=1,
-                )
-                builders[rank].arm_dependency(suffix_ready[rank])
-                transformer_pass_aggregated(
-                    builders[rank],
-                    phase=f"{prefix}_{stage}_first_chunk_suffix",
-                    pass_spans=spans[:1], layers=config.layers,
-                    hidden_size=config.hidden_size,
-                    ffn_size=config.ffn_size, tensor_parallel=tp,
-                    pg_name=group.pg_name,
-                    vocab_size=config.vocab_size,
-                    bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads,
-                    tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                    layer_start=suffix_start, layer_end=config.layers,
-                    include_output=True, weight_passes=1,
-                )
-                if spans[1:]:
-                    transformer_pass_aggregated(
-                        builders[rank],
-                        phase=f"{prefix}_{stage}_remaining_aggregated",
-                        pass_spans=spans[1:], layers=config.layers,
-                        hidden_size=config.hidden_size,
-                        ffn_size=config.ffn_size, tensor_parallel=tp,
-                        pg_name=group.pg_name,
-                        vocab_size=config.vocab_size,
-                        bytes_per_elem=config.bytes_per_elem,
-                        num_heads=config.num_heads,
-                        tensor_parallel_rank=relative_rank,
-                        mlp_variant=config.mlp_variant,
-                    )
-                pass_count = len(spans)
-            else:
-                pass_count = transformer_pass_aggregated(
-                    builders[rank], phase=f"{prefix}_{stage}_request_aggregated",
-                    pass_spans=spans, layers=config.layers, hidden_size=config.hidden_size,
-                    ffn_size=config.ffn_size, tensor_parallel=tp, pg_name=group.pg_name,
-                    vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
-                    num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
-                    mlp_variant=config.mlp_variant,
-                )
+            pass_count = transformer_pass_aggregated(
+                builders[rank], phase=f"{prefix}_{stage}_request_aggregated",
+                pass_spans=spans, layers=config.layers, hidden_size=config.hidden_size,
+                ffn_size=config.ffn_size, tensor_parallel=tp, pg_name=group.pg_name,
+                vocab_size=config.vocab_size, bytes_per_elem=config.bytes_per_elem,
+                num_heads=config.num_heads, tensor_parallel_rank=relative_rank,
+                mlp_variant=config.mlp_variant,
+            )
             bounds[rank] = [first_node_id, builders[rank].previous_id]
             builders[rank].all_reduce(
                 f"{prefix}_{stage}_chunks_aggregated_end_barrier", pass_count, group.pg_name
@@ -1193,141 +1127,6 @@ def _emit_kv_transfer(
         shard_records.append(record)
 
     return _kv_transfer_dict(transfer, shard_records)
-
-
-def _emit_tp_readiness_barrier(
-    *,
-    builders: dict[int, TraceBuilder],
-    group: WscLlmInferenceGroup,
-    name: str,
-) -> dict[str, object]:
-    """TP 组就绪栅栏(all_reduce;照抄 sh_2.0 :905-927)。"""
-    node_ids_by_rank: list[list[int]] = []
-    for rank in group.ranks:
-        builders[rank].all_reduce(name, 1, group.pg_name)
-        node_id = builders[rank].previous_id
-        if node_id is None:
-            raise RuntimeError("TP readiness barrier did not generate a node")
-        node_ids_by_rank.append([rank, node_id])
-    return {
-        "name": name,
-        "collective": "all_reduce",
-        "comm_size_bytes": 1,
-        "pg_name": group.pg_name,
-        "ranks": list(group.ranks),
-        "node_ids_by_rank": node_ids_by_rank,
-    }
-
-
-def _emit_tp_point_to_point_readiness_barrier(
-    *,
-    builders: dict[int, TraceBuilder],
-    group: WscLlmInferenceGroup,
-    tag_allocator: TransferTagAllocator,
-    name: str,
-) -> dict[str, object]:
-    """并行分支就绪栅栏(1B p2p arrive→release;照抄 sh_2.0 :930-1034)。
-
-    不消费 collective 顺序:control rank 收齐各 rank 的 arrive 1B 后向
-    各 rank 发 release 1B;每 rank 的完成门 = 自己的 release recv 节点
-    (control rank = 其 release send 链尾)。跨 rank 依赖边被桥拒绝
-    (契约 §2),同 rank arm + 跨实例 1B p2p 正是为此设计。"""
-    control_rank = group.ranks[0]
-    if len(group.ranks) == 1:
-        node_id = builders[control_rank].previous_id
-        if node_id is None:
-            raise RuntimeError("single-rank readiness barrier has no predecessor")
-        return {
-            "name": name,
-            "collective": None,
-            "protocol": "single_rank_dependency",
-            "comm_size_bytes": 0,
-            "control_rank": control_rank,
-            "ranks": list(group.ranks),
-            "node_ids_by_rank": [[control_rank, node_id]],
-            "arrival_actions": [],
-            "release_actions": [],
-        }
-
-    arrival_actions: list[dict[str, int]] = []
-    for rank in group.ranks[1:]:
-        tag = tag_allocator.take()
-        builders[rank].comm_send(
-            f"{name}_rank{rank}_arrive_send",
-            src=rank,
-            dst=control_rank,
-            comm_size=1,
-            comm_tag=tag,
-        )
-        send_node_id = builders[rank].previous_id
-        builders[control_rank].comm_recv(
-            f"{name}_rank{rank}_arrive_recv",
-            src=rank,
-            dst=control_rank,
-            comm_size=1,
-            comm_tag=tag,
-        )
-        recv_node_id = builders[control_rank].previous_id
-        if send_node_id is None or recv_node_id is None:
-            raise RuntimeError("TP readiness arrival did not generate nodes")
-        arrival_actions.append(
-            {
-                "rank": rank,
-                "tag": tag,
-                "send_node_id": send_node_id,
-                "control_recv_node_id": recv_node_id,
-            }
-        )
-
-    release_actions: list[dict[str, int]] = []
-    completion_nodes: dict[int, int] = {}
-    for rank in group.ranks[1:]:
-        tag = tag_allocator.take()
-        builders[control_rank].comm_send(
-            f"{name}_rank{rank}_release_send",
-            src=control_rank,
-            dst=rank,
-            comm_size=1,
-            comm_tag=tag,
-        )
-        send_node_id = builders[control_rank].previous_id
-        builders[rank].comm_recv(
-            f"{name}_rank{rank}_release_recv",
-            src=control_rank,
-            dst=rank,
-            comm_size=1,
-            comm_tag=tag,
-        )
-        recv_node_id = builders[rank].previous_id
-        if send_node_id is None or recv_node_id is None:
-            raise RuntimeError("TP readiness release did not generate nodes")
-        completion_nodes[rank] = recv_node_id
-        release_actions.append(
-            {
-                "rank": rank,
-                "tag": tag,
-                "control_send_node_id": send_node_id,
-                "recv_node_id": recv_node_id,
-            }
-        )
-    control_completion = builders[control_rank].previous_id
-    if control_completion is None:
-        raise RuntimeError("TP readiness control rank has no release completion")
-    completion_nodes[control_rank] = control_completion
-
-    return {
-        "name": name,
-        "collective": None,
-        "protocol": "point_to_point_arrival_then_release",
-        "comm_size_bytes": 1,
-        "control_rank": control_rank,
-        "ranks": list(group.ranks),
-        "node_ids_by_rank": [
-            [rank, completion_nodes[rank]] for rank in group.ranks
-        ],
-        "arrival_actions": arrival_actions,
-        "release_actions": release_actions,
-    }
 
 
 def main(argv=None) -> None:  # noqa: ARG001

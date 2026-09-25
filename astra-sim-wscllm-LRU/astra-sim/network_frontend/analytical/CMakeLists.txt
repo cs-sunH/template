@@ -415,6 +415,110 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
     )
 
+    # Remote-memory port-model exact fixture (SerDes 并发化方案 阶段 5.1/5.2,
+    # 2026-09-24): self-contained /tmp configs in official template shape;
+    # PER_NPU/PER_NODE/MEMORY_POOL mapping, same/staggered latency, 2-stream
+    # long-short re-split, latency-ready at a stream-completion tick, same-tick
+    # multi-port/multi-job delivery order, non-divisible single transaction,
+    # tiny residue clamp, dual-zero (+1ns async), zero-byte positive latency,
+    # huge/inf/invalid-bandwidth fail-closed children, per-segment service
+    # invariants via a reference fluid model, and the plan's named math anchors
+    # (300 / 90-120-140-150 / 1B-next-tick). Test-only; never part of the
+    # baseline gates.
+    add_executable(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_port_nway_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Remote-memory ONLINE GATE system fixture (SerDes 并发化方案 阶段 5.3,
+    # 2026-09-24): real online stack (Sys + Workload + NodeStoreGraphSource/
+    # NodeView + AnalyticalRemoteMemory + congestion-aware network). One issue
+    # pass on the production entry must put two same-rank dependency-free MEMs
+    # on one port (backend PortStats issued/in-flight == 2; interval-integrated
+    # peak_streaming >= 2, shared_busy_ns > 0) with the remote slot never
+    # blocking (stage-2 gate), plus an independent MEM+COMM_SEND pair proving
+    # MEM and comm doors no longer collide. Self-written /tmp configs in
+    # official template shape; test-only, never part of the baseline gates.
+    add_executable(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_port_online_gate_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemotePortOnlineGateTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Remote-memory STATIC GATE system fixture (SerDes 并发化方案 阶段 5.4,
+    # 2026-09-24): static ET entry (replicated from the completion fixture
+    # main) over the generated trace make_remote_port_static_fixture_et.py
+    # (--out-dir <temp dir>; the binary takes --fixture-dir <same dir>).
+    # Two same-rank dependency-free remote MEMs must both issue in the first
+    # static scan (the former comm single-slot hidden gate would block the
+    # second), release counts/set exactly once, and the static sim-finish gate
+    # must wait for whole-node terminals. Official template shape configs;
+    # test-only, never part of the baseline gates.
+    add_executable(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_port_static_gate_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemotePortStaticGateTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
+    # Remote-memory SENSING transactions positive fixture (SerDes 并发化方案
+    # 阶段 5.1, round-2 smoke verification routing, 2026-09-24): with real
+    # pool traffic, enable_transaction_log writes remote_memory_transactions
+    # .jsonl rows that recompute shared_busy_ns/port_busy_ns/bytes_served
+    # (row-interval sweep == backend PortStats), callback_tick == ceil(fluid
+    # _finish_ns), completion distribution rows == delivery loop; armed +
+    # zero transactions and unarmed + traffic both leave no file (lazy create
+    # semantics the 2s smoke surface depends on). Test-only.
+    add_executable(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest
+            ${srcs_congestion_aware_shared}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/remote_port_sensing_test.cc
+            ${srcs_execution_driven})
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest LINK_PRIVATE AstraSim)
+    target_link_libraries(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest LINK_PRIVATE Analytical_Congestion_Aware)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
+    target_include_directories(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    set_target_properties(AstraSim_Analytical_Congestion_Aware_RemotePortSensingTest
+            PROPERTIES
+            COMPILE_WARNING_AS_ERROR OFF
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+            ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+    )
+
     # Orphan-test registration (face M12② same fix): the three tests below
     # previously had only a manual g++ line in their header comments (pointing
     # at the sister-repo root template/astra-sim-wscllm), so they sat outside

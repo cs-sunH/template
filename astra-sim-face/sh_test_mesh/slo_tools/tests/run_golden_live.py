@@ -544,7 +544,6 @@ def main() -> int:
     repo = args.repo_root.resolve()
     manifest_path = (args.manifest or Path(__file__).resolve().parents[1]
                      / "slo_params_manifest.json")
-    repo = args.repo_root.resolve()
     wl = repo / "sh_test_mesh/workload/llama2_7b_inference"
     traces = wl / "traces"
     work = args.work_dir

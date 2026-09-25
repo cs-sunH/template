@@ -289,7 +289,7 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 整段,并维护 completion_gates 账本。"""
 
-    def __init__(self, config, *, digest_sink=None):
+    def __init__(self, config):
         self.config = config
         # strategy 模式保持物理跨 request 链。
         self.builders = {

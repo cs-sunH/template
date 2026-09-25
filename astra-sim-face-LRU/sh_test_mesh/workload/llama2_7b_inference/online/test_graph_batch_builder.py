@@ -118,7 +118,7 @@ def _joiner_plan(request_id, context_tokens):
 
 def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
                 exits=(), stage="decode", prefill_start=None,
-                instance_index=1, sentinel=False, partial_count=None):
+                instance_index=1, sentinel=False):
     plan = {
         "train_id": train_id,
         "instance_index": instance_index,
@@ -133,8 +133,6 @@ def _train_plan(train_id, spans, iterations, joiners=(), drains=(),
         "exit_members": [{"request_id": rid, "session_id": SESSION}
                          for rid in exits],
     }
-    if partial_count is not None:
-        plan["partial_first_chunk_count"] = partial_count
     return plan
 
 
@@ -391,81 +389,40 @@ class TrainEmissionNailTest(unittest.TestCase):
                 if node["name"] == "batch_train_i0_1_end_barrier")
             self.assertEqual(seg1[rank], barrier["id"])
 
-    def test_partial_first_chunk_two_stage_pipelining(self):
-        """B3(2026-09-06,随迁 sh test_graph_batch_builder.py:388-460,
-        face builder 命名适配):partial 前缀两段式迁移的首 chunk 拆分。
-
-        队列头 history_location_before == "partial_hbm_remote" 时,
-        admission 登记 _partial_first_chunk(suffix 恢复完成门);列车
-        按 [首 chunk + 成员第 1 迭代] / [其余] 拆组发射:
-          - first_chunk_prefix(layers00_00,resident 前缀层段,face 测试
-            模型 layers=2、suffix_start=1)不依赖 suffix ready 节点
-            (流水:prefix 层段与 suffix 恢复并行);
-          - first_chunk_suffix(layers01_01)arm 依赖 suffix ready 节点;
-          - remaining_aggregated 回到全层段,weight_passes = 迭代数-1。
-        """
-        # admission 预登记 partial 流水信息(正常路径由 _emit_admission
-        # 的 partial 分支写入;此处直接钉列车侧消费契约)。
+    def test_remote_restore_session_train_is_single_aggregate(self):
+        """Session 级 Tiered-LRU(2026-09-25):远端恢复会话的列车统一
+        聚合体发射——无 first_chunk_prefix/suffix 层段拆分节点、无
+        remaining_aggregated 节点,_partial_first_chunk 账本不存在
+        (PARTIAL 真流水已随两阶段流程删除;权重经 weight_passes 摊销
+        不变)。"""
         builder = self.builder
-        suffix_ready_by_rank = {
-            rank: len(_rank_nodes(builder, rank)) + 100
-            for rank in (0, 1)}
-        builder._partial_first_chunk[REQUEST_A] = {
-            "suffix_start": 1,
-            "suffix_ready_nodes_by_rank": dict(suffix_ready_by_rank),
-        }
-        spans = [(128, 128), (1, 40), (128, 256), (1, 41)]
+        self.assertFalse(hasattr(builder, "_partial_first_chunk"))
+        spans = [(128, 128), (128, 256), (44, 300)]
         plan = _train_plan(
-            "batch_train_i0_9", spans, iterations=2, stage="prefill",
-            drains=(REQUEST_A,), instance_index=0, partial_count=2,
-            prefill_start={"request_id": REQUEST_A})  # partial ⇒ 首 chunk 列车
+            "batch_train_i0_9", spans, iterations=3, stage="prefill",
+            drains=(REQUEST_A,), instance_index=0,
+            prefill_start={"request_id": REQUEST_A})
         builder.emit_iteration_train(plan)
-        # 消费后弹出(恰一次)。
-        self.assertNotIn(REQUEST_A, builder._partial_first_chunk)
         for rank in (0, 1):
-            nodes = _rank_nodes(builder, rank)
-            # M1 适配:_collect 后 builder.edges 已清空,边改读批次累加器。
-            edges = [edge for edge in builder.batch["parent_edges"]
-                     if edge["rank"] == rank]
-            suffix_ready = suffix_ready_by_rank[rank]
-            prefix_nodes = [node for node in nodes
-                            if "first_chunk_prefix" in node["name"]]
-            suffix_nodes = [node for node in nodes
-                            if "first_chunk_suffix" in node["name"]]
-            remaining_nodes = [node for node in nodes
-                               if "remaining_aggregated" in node["name"]]
-            self.assertTrue(prefix_nodes and suffix_nodes
-                            and remaining_nodes)
-            self.assertTrue(all(
-                "layers00_00" in node["name"] for node in prefix_nodes))
-            # suffix 段含 all_passes 输出头(无层标签);层类节点必须
-            # 全部落在 resident 前缀之后的层段。
-            suffix_layer_nodes = [node for node in suffix_nodes
-                                  if "_layers" in node["name"]]
-            self.assertTrue(suffix_layer_nodes)
-            self.assertTrue(all(
-                "layers01_01" in node["name"]
-                for node in suffix_layer_nodes))
-            remaining_layer_nodes = [node for node in remaining_nodes
-                                     if "_layers" in node["name"]]
-            self.assertTrue(remaining_layer_nodes)
-            self.assertTrue(all(
-                "all_layers" in node["name"]
-                for node in remaining_layer_nodes))
-            prefix_ids = {node["id"] for node in prefix_nodes}
-            suffix_ids = {node["id"] for node in suffix_nodes}
-            # prefix 层段首节点的父边不含 suffix ready(不等恢复)。
-            prefix_first = min(prefix_ids)
-            prefix_parents = {
-                edge["from"] for edge in edges
-                if edge["to"] == prefix_first}
-            self.assertNotIn(suffix_ready, prefix_parents)
-            # suffix 层段首节点 arm 依赖 suffix ready(跨批次边)。
-            suffix_first = min(suffix_ids)
-            suffix_parents = {
-                edge["from"] for edge in edges
-                if edge["to"] == suffix_first}
-            self.assertIn(suffix_ready, suffix_parents)
+            names = [node["name"] for node in _rank_nodes(builder, rank)]
+            body = [name for name in names
+                    if name.startswith("batch_train_i0_9")]
+            # 统一聚合体:恰一个列车体节点序列(train_id 即 phase),
+            # 无任何层段拆分/余量节点。
+            self.assertTrue(body)
+            self.assertFalse(
+                any("first_chunk_prefix" in name for name in names))
+            self.assertFalse(
+                any("first_chunk_suffix" in name for name in names))
+            self.assertFalse(
+                any("remaining_aggregated" in name for name in names))
+            layer_nodes = [node for node in _rank_nodes(builder, rank)
+                           if node["request_id"] == "batch_train_i0_9"
+                           and "_layers" in node["name"]]
+            self.assertTrue(layer_nodes)
+            # 全部层类节点都在全层域(all_layers,无 0_0/1_1 层段标签)。
+            self.assertTrue(
+                all("all_layers" in node["name"] for node in layer_nodes))
 
     def test_sentinel_marker_is_batch_namespace_prefill(self):
         """(f):哨兵标记(T_max 截断列车)归属批命名空间,stage 固定
@@ -523,33 +480,33 @@ class KVTransferBillingNailTest(unittest.TestCase):
         return KVTransferShard(
             source_rank=source_rank, target_rank=target_rank,
             edge_rank=edge_rank, bytes=bytes_, noc_path=path,
-            layer_start=2, layer_end=4)
+            layer_start=0, layer_end=4)
 
     def _store(self, shards):
         from session_kv_manager import KVTransfer
         return KVTransfer(
             kind="remote_store", phase="history",
-            reason="evict_history_and_prefill_admission_suffix_half:"
-                   "layers2-4",
+            reason="evict_history_and_prefill_admission_full:"
+                   "layers0-4",
             session_id=SESSION, trigger_request_id=REQUEST_A,
             source_instance_index=0, target_instance_index=None,
             total_bytes=sum(shard.bytes for shard in shards),
             shards=tuple(shards), model_layers=4,
-            layer_start=2, layer_end=4,
+            layer_start=0, layer_end=4,
             resident_prefix_layers_before=4,
-            resident_prefix_layers_after=2)
+            resident_prefix_layers_after=0)
 
     def _load(self, shards):
         from session_kv_manager import KVTransfer
         return KVTransfer(
             kind="remote_load", phase="history",
-            reason="history_remote_suffix_restore",
+            reason="history_remote_restore",
             session_id=SESSION, trigger_request_id=REQUEST_A,
             source_instance_index=None, target_instance_index=0,
             total_bytes=sum(shard.bytes for shard in shards),
             shards=tuple(shards), model_layers=4,
-            layer_start=2, layer_end=4,
-            resident_prefix_layers_before=2,
+            layer_start=0, layer_end=4,
+            resident_prefix_layers_before=0,
             resident_prefix_layers_after=4)
 
     def _emit(self, builder, transfer, action, gate=None):

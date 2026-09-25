@@ -23,7 +23,7 @@ CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_com
         et_filename = et_filename + "." + to_string(pos_in_comm) + ".et";
         this->et_feeder = new Chakra::FeederV3::ETFeeder(et_filename);
         this->comm_group = comm_group;
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         // TODO(jinsun): Solve.
         auto logger = AstraSim::LoggerFactory::get_logger("system::astraccl::custom_collectives");
         logger->error("Error: Cannot access et file for collective algorithm: \n'" + et_filename + "'.\n"
@@ -40,8 +40,10 @@ CustomAlgorithm::~CustomAlgorithm() {
 }
 
 int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {
-    // In this custom algorithm implementation, we assume the algo ranks are
-    // same as real ranks. This may change in the future.
+    // When comm_group is non-null, the algorithm rank is mapped to the real
+    // NPU id by its position inside the communication group (see the contract
+    // in CustomAlgorithm.hh). When comm_group is null, algorithm ranks are
+    // the same as real ranks.
     if (comm_group == nullptr) {
         return algo_rank;
     }

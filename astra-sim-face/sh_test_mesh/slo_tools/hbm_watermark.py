@@ -1835,49 +1835,60 @@ def replay_journal(journal_path: Path,
     tier = TRUST_TIER_RESIDENT
     if checksum_path is not None:
         checksum = load_journal_checksum(checksum_path)
+        # 正式判决（certified 层）前置必在检查（2026-09-25 fail-open 修复）：
+        # sha256/line_count/ranks 任一缺失或类型非法即 fail-closed（退出码
+        # 2）——空壳证书（仅 checks 四项 true）不得再拿 certified。
         expected_sha = checksum.get("sha256")
-        if expected_sha is not None and expected_sha != sha256_hex:
+        if not isinstance(expected_sha, str):
+            fail(f"{checksum_path}: 证书缺 sha256 字段或非字符串——正式"
+                 f"判决要求完整证书，fail-closed 不降级")
+        if expected_sha != sha256_hex:
             fail(f"{journal_path}: journal sha256 与证书不符（journal="
                  f"{sha256_hex}，checksum={expected_sha}）——账本完整性"
                  f"破坏，fail-closed 不降级")
         expected_lines = checksum.get("line_count")
-        if isinstance(expected_lines, int) and expected_lines != replay.rows:
+        if isinstance(expected_lines, bool) or not isinstance(expected_lines, int):
+            fail(f"{checksum_path}: 证书缺 line_count 字段或非整数——正式"
+                 f"判决要求完整证书，fail-closed 不降级")
+        if expected_lines != replay.rows:
             fail(f"{journal_path}: journal 行数与证书不符（journal="
                  f"{replay.rows}，checksum={expected_lines}）")
         ranks_block = checksum.get("ranks")
-        if isinstance(ranks_block, dict) and ranks_block:
-            for rank_key, entry in sorted(ranks_block.items()):
-                try:
-                    rank = int(rank_key)
-                except ValueError:
-                    fail(f"{checksum_path}: ranks 键必须是 rank 整数"
-                         f"（实得 {rank_key!r}）")
-                state = replay.state.get(rank)
-                if state is None:
-                    fail(f"{checksum_path}: 证书含 rank {rank} 但 journal"
-                         f"无该 rank 行——账本与证书矛盾")
-                if not isinstance(entry, dict):
-                    fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
-                for field, key in (("weight", "w"), ("resident", "r"),
-                                   ("reserved", "s")):
-                    value = entry.get(field)
-                    if isinstance(value, int) and value != state[key]:
-                        fail(
-                            f"{checksum_path}: rank {rank} 终态 {field} 与"
-                            f" journal 重放不符（证书 {value}，重放 "
-                            f"{state[key]}）——账本与证书矛盾")
-                capacity = entry.get("capacity_bytes")
-                if isinstance(capacity, int) and \
-                        capacity != replay.rank_capacity.get(rank):
-                    fail(f"{checksum_path}: rank {rank} capacity 与 journal"
-                         f" 不符（证书 {capacity}，重放 "
-                         f"{replay.rank_capacity.get(rank)}）")
-            missing = sorted(set(replay.state) - {
-                int(key) for key in ranks_block if str(key).lstrip("-").isdigit()})
-            if missing:
-                fail(f"{checksum_path}: journal 含证书未覆盖的 rank"
-                     f"（{missing[:5]}，共 {len(missing)}）——账本与证书"
-                     f"矛盾")
+        if not isinstance(ranks_block, dict) or not ranks_block:
+            fail(f"{checksum_path}: 证书缺 ranks 块或为空——正式判决要求"
+                 f"完整证书，fail-closed 不降级")
+        for rank_key, entry in sorted(ranks_block.items()):
+            try:
+                rank = int(rank_key)
+            except ValueError:
+                fail(f"{checksum_path}: ranks 键必须是 rank 整数"
+                     f"（实得 {rank_key!r}）")
+            state = replay.state.get(rank)
+            if state is None:
+                fail(f"{checksum_path}: 证书含 rank {rank} 但 journal"
+                     f"无该 rank 行——账本与证书矛盾")
+            if not isinstance(entry, dict):
+                fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
+            for field, key in (("weight", "w"), ("resident", "r"),
+                               ("reserved", "s")):
+                value = entry.get(field)
+                if isinstance(value, int) and value != state[key]:
+                    fail(
+                        f"{checksum_path}: rank {rank} 终态 {field} 与"
+                        f" journal 重放不符（证书 {value}，重放 "
+                        f"{state[key]}）——账本与证书矛盾")
+            capacity = entry.get("capacity_bytes")
+            if isinstance(capacity, int) and \
+                    capacity != replay.rank_capacity.get(rank):
+                fail(f"{checksum_path}: rank {rank} capacity 与 journal"
+                     f" 不符（证书 {capacity}，重放 "
+                     f"{replay.rank_capacity.get(rank)}）")
+        missing = sorted(set(replay.state) - {
+            int(key) for key in ranks_block if str(key).lstrip("-").isdigit()})
+        if missing:
+            fail(f"{checksum_path}: journal 含证书未覆盖的 rank"
+                 f"（{missing[:5]}，共 {len(missing)}）——账本与证书"
+                 f"矛盾")
         checks = checksum.get("checks") if isinstance(
             checksum.get("checks"), dict) else {}
         if checks and all(checks.get(name) is True for name in (
@@ -1990,12 +2001,20 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
             try:
                 reserve_tokens = int(raw_reserve)
             except (TypeError, ValueError):
+                # 回退保留（兼容旧产物重放），但回退必须留痕（2026-09-25）：
+                # 配置手误不得静默改变 watermark_reserve_target 口径。
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
+                print(f"[hbm-watermark] 警告：kv_reserve_context_tokens "
+                      f"缺失/非法（原值 {raw_reserve!r}）——回退默认 "
+                      f"{DEFAULT_KV_RESERVE_CONTEXT_TOKENS}", file=sys.stderr)
             if reserve_tokens < 0:
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
-            npus_for_calibers = load_npus_per_instance(
-                args.run_dir, args.request_manifest, request_manifest_loader) \
-                if not npus else npus
+                print(f"[hbm-watermark] 警告：kv_reserve_context_tokens "
+                      f"为负（原值 {raw_reserve!r}）——回退默认 "
+                      f"{DEFAULT_KV_RESERVE_CONTEXT_TOKENS}", file=sys.stderr)
+            # capacity 非 None ⟹ npus 已在场且非零（此前条件表达式里的
+            # 重载分支不可达，2026-09-25 死分支清理：直接复用已装载值）。
+            npus_for_calibers = npus
             try:
                 calibers = compute_capacity_calibers(
                     model, npus_for_calibers, hardware["bytes"],
@@ -2275,9 +2294,12 @@ def watermark_emit(args: argparse.Namespace, repo_variant: str, prep: dict,
                        stat["evict_events"],
                        # P1-⑤：full_reconciled 也输出真实逐出 bytes（JSON
                        # 本就有，NA 展示分支只保留给 count_only 档）。
-                       stat["evict_bytes"] if coverage in ("full",
-                                                           "full_reconciled")
-                       else NA,
+                       # 2026-09-25：条件与同行 eviction_coverage 列同口径
+                       # ——journal 行该列已改写 journal_exact，evict_bytes
+                       # 不再显示 NA（此前两列口径分裂）。
+                       stat["evict_bytes"] if instances_csv_coverage in (
+                           "full", "full_reconciled",
+                           "journal_exact") else NA,
                        violation_instances.get(instance, 0),
                        upper_bound_peaks.get(instance, NA))
         write_csv(estream, INSTANCE_COLUMNS, instance_rows())

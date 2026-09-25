@@ -14,6 +14,9 @@ RecvPacketEventHandlerData::RecvPacketEventHandlerData() {
     this->wlhd = nullptr;
     this->owner = nullptr;
     this->custom_algorithm = nullptr;
+    this->vnet = 0;
+    this->stream_id = 0;
+    this->ready_time = 0;
 }
 
 RecvPacketEventHandlerData::RecvPacketEventHandlerData(

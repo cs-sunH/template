@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""test_tiered_eviction_sequence.py -- B2 三态两段式 LRU 逐出专项单测。
+"""test_tiered_eviction_sequence.py -- session 级 Tiered-LRU 整体逐出专项单测。
 
-用例 1(两段式逐出序):4 会话小容量档逼出"半层×N → 整体×M"完整序列,
+用例 1(整体逐出序):4 会话小容量档逼出完整 session 级 LRU 逐出序列,
 断言:
-  - LRU 严格序:两阶段各自按 (last_completion_ns, session_id) 升序;
-  - 阶段 1 全耗尽才进阶段 2:首笔整体外迁发生时,全部 LOCAL 候选已
-    PARTIAL(半层化);
-  - 逐笔逐 NPU 重查停机:恰好在满足需求的最后一笔停(无过度逐出,
-    D4-I3 守卫在线 = 不 raise 且无多余笔);
-  - 逐出 = remote_store KVTransfer,受害会话转 PARTIAL/REMOTE,远端
-    账面按存入 rank 记账;retire 静默核销后归零。
+  - LRU 严格序:候选池按 (last_completion_ns, session_id) 升序;
+  - 逐出单位 = 完整 logical session:每笔 evict_session 覆盖全部 L 层
+    (层域 [0, L))、全部 TP shard,事件无 evict_suffix/PARTIAL 残留;
+  - 逐笔逐 NPU 重查停机:满足需求即停,允许整体逐出产生的空间过量释放
+    (D4-I3 过度逐出守卫已删除);
+  - 逐出 = remote_store KVTransfer,受害会话转 REMOTE(无本地实例、零
+    驻留层),远端账面按存入 rank 记账;被逐会话再请求 → REMOTE_RESTORE
+    全量恢复;retire 静默核销后归零。
 
-用例 2(journal 一致性):全部新 mutation(suffix/full 逐出、PARTIAL
-同实例后缀回迁、PARTIAL 跨实例两段链、REMOTE 全量回迁、retire 远端
-核销)都在 _journal_transaction 装饰的公开方法内发生——run 末
+用例 2(journal 一致性):全部新 mutation(整体逐出、REMOTE 全量回迁、
+retire 远端核销)都在 _journal_transaction 装饰的公开方法内发生——run 末
 verify_journal_checksum 通过(重放/对账/守恒三重断言),且全部非权重
 行都归属某个事务(transaction_id != 0)。
 
@@ -37,7 +37,6 @@ from metrics_integration import MemoryActionRecorder  # noqa: E402
 from metrics_schema import MemoryMetricsObserver  # noqa: E402
 from session_kv_manager import (  # noqa: E402
     LOCAL_HBM,
-    PARTIAL_HBM_REMOTE,
     REMOTE_MEMORY,
     SessionKVCacheManager,
     set_metrics_observer,
@@ -52,8 +51,8 @@ from wsc_llm_scheduler import (  # noqa: E402
 )
 
 
-# 4 层模型:partial_resident_prefix_layers = 4 - 2 = 2,半层后缀 = 层 2-4。
-# KV = 32 B/token/rank(tp=1,heads=2);10 token 会话全量 320 B,半层 160 B;
+# 4 层模型(session 级 Tiered-LRU:逐出单位 = 完整 session 的全部 4 层)。
+# KV = 32 B/token/rank(tp=1,heads=2);10 token 会话全量 320 B;
 # 权重 480 B/rank。
 def _tiered_model() -> WscLlmModel:
     return WscLlmModel(4, 4, 4, 2, 4, 1, "gelu")
@@ -91,12 +90,12 @@ def _seed_session(manager, session_id, completion_ns, tokens=10):
 
 
 class TieredEvictionSequenceTests(unittest.TestCase):
-    def test_two_stage_sequence_strict_lru_and_per_step_recheck(self):
-        """半层×N → 整体×M 完整序列:LRU 严格序、阶段 1 全耗尽才进
-        阶段 2、逐笔重查停机(恰好 8 笔,无过度逐出)。"""
+    def test_whole_session_sequence_strict_lru_and_over_release(self):
+        """完整 session 级 LRU 逐出:严格 LRU 序、逐笔重查、允许过量释放
+        (恰 4 笔 evict_session,零 evict_suffix)。"""
         # 容量 = 权重 480 + 1300:4 会话(各 320)驻留后余 20;新请求
-        # 需 1280 → 半层 a,b,c,d(+160×4=660)仍不足 → 整体 a,b,c(+480
-        # → 1140)仍不足 → 整体 d(+160 → 1300 ≥ 1280)恰停。
+        # 需 1280 → 整体 a(340)仍不足 → 整体 b(660)→ c(980)→
+        # d(1300 ≥ 1280)满足即停(过量释放 20 字节,合法)。
         manager = SessionKVCacheManager(
             _topology(480 + 1300), _tiered_model(), strict_invariants=True)
         for session_id, completion_ns in (
@@ -109,54 +108,65 @@ class TieredEvictionSequenceTests(unittest.TestCase):
             "e", 0, 0, 50, "e0", required_context_tokens=40)
         self.assertFalse(decision.admission_blocked)
 
-        # 两段式完整序列:先全部半层化(LRU 序),再整体外迁(同一 LRU
-        # 序),恰好在满足需求的最后一笔停。
-        sequence = [
-            (transfer.session_id, "suffix" if transfer.layer_start else "full")
-            for transfer in decision.evictions
-        ]
-        self.assertEqual(sequence, [
-            ("a", "suffix"), ("b", "suffix"), ("c", "suffix"),
-            ("d", "suffix"),
-            ("a", "full"), ("b", "full"), ("c", "full"), ("d", "full"),
-        ])
+        # 整体逐出完整序列:每笔 = 完整 session(LRU 序),无 evict_suffix。
+        sequence = [transfer.session_id for transfer in decision.evictions]
+        self.assertEqual(sequence, ["a", "b", "c", "d"])
         self.assertTrue(all(
             transfer.kind == "remote_store"
             for transfer in decision.evictions))
-        # 阶段 1 的层域 = [2, 4)(半层),阶段 2 的层域 = [0, resident)。
+        # 层域 = [0, 4) 全层(完整 session),驻留前缀 4 → 0。
         self.assertEqual(
-            [transfer.layer_start for transfer in decision.evictions],
-            [2, 2, 2, 2, 0, 0, 0, 0])
-        # cause 串逐字(契约 §5):历史准入路径的 reason 占位。
+            [(transfer.layer_start, transfer.layer_end) for transfer in
+             decision.evictions],
+            [(0, 4)] * 4)
         self.assertEqual(
-            decision.evictions[0].reason,
-            "history_and_prefill_admission_suffix_half")
+            [transfer.resident_prefix_layers_before
+             for transfer in decision.evictions],
+            [4] * 4)
         self.assertEqual(
-            decision.evictions[4].reason,
-            "history_and_prefill_admission_full_fallback")
+            [transfer.resident_prefix_layers_after
+             for transfer in decision.evictions],
+            [0] * 4)
+        # 每笔 total/shard = 全向量(10 token × 32 B = 320 B;多 shard 行
+        # = 单逻辑 victim,不重复计入)。
+        for transfer in decision.evictions:
+            self.assertEqual(transfer.total_bytes, 320)
+            self.assertEqual(
+                sum(shard.bytes for shard in transfer.shards), 320)
+            self.assertEqual(len(transfer.shards), 1)
+        # reason 串逐字(契约 §5):历史准入路径的整会话 reason。
+        self.assertEqual(
+            {transfer.reason for transfer in decision.evictions},
+            {"history_and_prefill_admission_session"})
 
-        # 阶段 1 全耗尽才进阶段 2:首笔整体外迁(a)前,a..d 已全部
-        # PARTIAL(事件流序佐证:第 5 笔逐出前恰有 4 笔 evict_suffix)。
+        # 事件流:恰 4 笔 evict_session,零 evict_suffix;cause 串覆盖
+        # 完整层域 [0, model_layers)。
         event_types = [
             (event.event_type, event.session_id)
             for event in manager.events
             if event.event_type in {"evict_suffix", "evict_session"}
         ]
         self.assertEqual(event_types, [
-            ("evict_suffix", "a"), ("evict_suffix", "b"),
-            ("evict_suffix", "c"), ("evict_suffix", "d"),
             ("evict_session", "a"), ("evict_session", "b"),
             ("evict_session", "c"), ("evict_session", "d"),
         ])
+        eviction_events = [
+            event for event in manager.events
+            if event.event_type == "evict_session"]
+        for event in eviction_events:
+            self.assertEqual(
+                event.reason,
+                f"evict_history_and_prefill_admission_session:layers0-4")
+            self.assertEqual(event.total_bytes, 320)
+            self.assertEqual(tuple(event.shard_bytes), (320,))
+            self.assertEqual(event.source_instance_index, 0)
 
-        # 逐笔重查停机:恰好 8 笔,无第 9 笔;D4-I3 过度逐出守卫在线
-        # (最后一笔 d 整体外迁后 free=1300 ≥ 1280,撤销它则 1140 < 1280,
-        # 守卫不触发 = 该笔必要)。
-        self.assertEqual(len(decision.evictions), 8)
+        # 逐笔重查停机:恰好 4 笔(过量释放 20 字节合法,无 D4-I3 守卫)。
+        self.assertEqual(len(decision.evictions), 4)
         self.assertEqual(manager.deep_gap_events, 0)
 
-        # 三态落点:a..d 全部 REMOTE(无本地实例、无驻留层),e LOCAL;
-        # 远端账面 = 4×320,全部记在存入 rank(实例 0 的 rank 0)。
+        # 二态落点:a..d 全部 REMOTE(无本地实例、零驻留层、无本地残留),
+        # e LOCAL;远端账面 = 4×320,全部记在存入 rank(实例 0 的 rank 0)。
         for session_id in "abcd":
             snapshot = manager.session_snapshot(session_id)
             self.assertEqual(snapshot.location, REMOTE_MEMORY)
@@ -165,18 +175,44 @@ class TieredEvictionSequenceTests(unittest.TestCase):
             self.assertEqual(snapshot.remote_bytes, 320)
         self.assertEqual(manager.session_snapshot("e").location, LOCAL_HBM)
         self.assertEqual(manager.remote_bytes_by_rank(), {0: 1280, 1: 0})
+        # 本地不残留被逐会话部分 KV:e 尚未 grow,驻留 = 0(全部 KV 已
+        # 随整体逐出进入远端池)。
+        self.assertEqual(
+            manager.hbm_snapshots(0)[0].resident_kv_bytes, 0)
 
-        # e 长成后余量 = 20(1280 恰好占用,重查停机的字节级证据)。
+        # e 长成后余量 = 20(过量释放的字节级证据),驻留 = 全量 1280。
         self.assertTrue(manager.grow_prefill("e", 40, 51, "e0").admitted)
         self.assertEqual(manager.hbm_snapshots(0)[0].remaining_bytes, 20)
+        self.assertEqual(
+            manager.hbm_snapshots(0)[0].resident_kv_bytes, 1280)
         manager.mark_complete("e", 52, "e0")
+
+        # 被逐会话再请求 → REMOTE_RESTORE 全量恢复(唯一远端路径):
+        # a 回实例 0;容量缺口由整体逐出 e(已完成的 inactive 会话)补足。
+        restore = manager.prepare_history(
+            "a", 0, 10, 55, "a1", required_context_tokens=10)
+        self.assertEqual(restore.action, "REMOTE_RESTORE")
+        self.assertEqual(len(restore.transfers), 1)
+        transfer = restore.transfers[0]
+        self.assertEqual(transfer.kind, "remote_load")
+        self.assertEqual(transfer.reason, "history_remote_restore")
+        self.assertEqual((transfer.layer_start, transfer.layer_end), (0, 4))
+        self.assertEqual(transfer.total_bytes, 320)
+        snapshot = manager.session_snapshot("a")
+        self.assertEqual(snapshot.location, LOCAL_HBM)
+        self.assertEqual(snapshot.resident_prefix_layers, 4)
+        self.assertEqual(snapshot.remote_bytes, 0)
+        self.assertEqual(
+            manager.hbm_snapshots(0)[0].resident_kv_bytes, 320)
+        manager.mark_complete("a", 56, "a1")
 
         # retire 静默核销:本地层域减账 + 远端账面清零。
         for session_id, completion_ns in (
-            ("a", 60), ("b", 61), ("c", 62), ("d", 63), ("e", 64),
+            ("b", 60), ("c", 61), ("d", 62), ("e", 63), ("a", 64),
         ):
             manager.retire_terminal_session(
-                session_id, completion_ns, f"{session_id}0")
+                session_id, completion_ns,
+                "a1" if session_id == "a" else f"{session_id}0")
         manager.assert_final_state()
         self.assertEqual(manager.session_ids, ())
         self.assertEqual(
@@ -197,40 +233,31 @@ class TieredJournalConsistencyTests(unittest.TestCase):
             journal_path=Path(self._tmp.name) / "kv_delta_journal.jsonl")
         set_metrics_observer(recorder)
         # 容量 = 480 + 700:a、b 驻留(各 320)后余 60;预约 540 逼出
-        # "半层 a → 半层 b → 整体 a"(60→220→380→540 恰停)。
+        # "整体 a → 整体 b"(60→380→700 ≥ 540 满足即停,过量释放合法)。
         manager = SessionKVCacheManager(
             _topology(480 + 700), _tiered_model(), strict_invariants=True)
         _seed_session(manager, "a", 10)
         _seed_session(manager, "b", 20)
-        # 预约属于第三方请求(被保护会话为空):60 → 半层 a(220) →
-        # 半层 b(380) → 整体 a(540)恰停;a REMOTE、b PARTIAL 混合终态。
+        # 预约属于第三方请求(被保护会话为空):整体 a、整体 b,LURU 序。
         reservation = manager.reserve_request_capacity(
             "r0", "new_session", 0, (540,), 30,
             phase="prefill_admission",
             reason="static_decode_final_kv_reservation")
         self.assertTrue(reservation.admitted)
         self.assertEqual(
-            [(t.session_id, t.reason.rsplit("_", 1)[-1])
-             for t in reservation.evictions],
-            [("a", "half"), ("b", "half"), ("a", "fallback")])
+            [(t.session_id, t.reason) for t in reservation.evictions],
+            [("a", "static_decode_final_kv_reservation_session"),
+             ("b", "static_decode_final_kv_reservation_session")])
+        self.assertEqual(
+            [t.reason for t in reservation.evictions],
+            ["static_decode_final_kv_reservation_session"] * 2)
         self.assertEqual(
             manager.session_snapshot("a").location, REMOTE_MEMORY)
         self.assertEqual(
-            manager.session_snapshot("b").location, PARTIAL_HBM_REMOTE)
+            manager.session_snapshot("b").location, REMOTE_MEMORY)
         manager.release_request_capacity("r0", 40)
 
-        # PARTIAL 跨实例两段链:b 的前缀 NoC 迁往实例 1 + 后缀远端回迁。
-        decision = manager.prepare_history(
-            "b", 1, 10, 50, "b1", required_context_tokens=10)
-        self.assertEqual(decision.action, "PARTIAL_MIGRATE")
-        self.assertEqual(
-            [(t.kind, t.reason) for t in decision.transfers],
-            [("noc_migrate", "history_partial_prefix_migrate"),
-             ("remote_load", "history_remote_suffix_restore")])
-        manager.grow_prefill("b", 10, 51, "b1")
-        manager.mark_complete("b", 52, "b1")
-
-        # REMOTE 全量回迁:a 回实例 0。
+        # REMOTE 全量回迁(唯一远端恢复路径):a 回实例 0。
         decision = manager.prepare_history(
             "a", 0, 10, 60, "a1", required_context_tokens=10)
         self.assertEqual(decision.action, "REMOTE_RESTORE")
@@ -240,24 +267,27 @@ class TieredJournalConsistencyTests(unittest.TestCase):
         manager.grow_prefill("a", 10, 61, "a1")
         manager.mark_complete("a", 62, "a1")
 
-        manager.retire_terminal_session("b", 63, "b1")
-        manager.retire_terminal_session("a", 64, "a1")
+        manager.retire_terminal_session("a", 63, "a1")
+        manager.retire_terminal_session("b", 64, "b0")
         manager.assert_final_state()
 
         rows = [json.loads(line) for line in
                 recorder.journal_path.open(encoding="utf-8") if line.strip()]
         causes = [row["cause"] for row in rows]
-        # 新 mutation 的 cause 全部落账(契约 §5 逐字)。
+        # 新 mutation 的 cause 全部落账(契约 §5 逐字):整体逐出 +
+        # 全量恢复 + 终态核销。
         for expected in (
-            "evict_static_decode_final_kv_reservation_suffix_half:layers2-4",
-            "evict_static_decode_final_kv_reservation_full_fallback:layers0-2",
-            "history_partial_prefix_migrate_target_add",
-            "history_partial_prefix_migrate_source_remove",
-            "history_remote_suffix_restore",
+            "evict_static_decode_final_kv_reservation_session:layers0-4",
             "history_remote_restore",
             "terminal_session_retire",
         ):
             self.assertIn(expected, causes, msg=f"missing cause {expected}")
+        # 旧两段式/PARTIAL cause 不再出现。
+        for banned in (
+            "suffix_half", "full_fallback", "history_remote_suffix_restore",
+            "history_partial_prefix_migrate",
+        ):
+            self.assertNotIn(banned, "\n".join(causes))
         # 全部非权重行都在某个事务内(transaction_id != 0)——新 mutation
         # 全走 _journal_transaction 的直接证据。
         self.assertTrue(all(

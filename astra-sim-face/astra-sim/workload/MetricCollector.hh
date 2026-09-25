@@ -19,7 +19,7 @@ LICENSE file in the root directory of this source tree.
 
 #include <json/json.hpp>
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 
 namespace AstraSim {
 

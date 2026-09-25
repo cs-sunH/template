@@ -153,7 +153,7 @@ def require_bucket_edges(manifest: dict) -> tuple[list[float], list[float]]:
 def bucket_index(edges: Sequence[float], x: float) -> int:
     """interior edges 为各左桶闭上界，末桶无上限。
 
-    桶 i（非末桶）覆盖 edges[i] <= x <= edges[i+1]——interior 边界值归左桶
+    桶 i（非末桶）覆盖 edges[i] < x <= edges[i+1]——interior 边界值归左桶
     （如 decode edges [1,91,489,1785,32000] 下 91→桶 0、92→桶 1、
     1785→桶 2、1786→桶 3；prefill [1,415,2361,16470,950002] 下 415→桶 0）；
     末桶吸收一切越界值（x > edges[-1] 不再 fail-closed，归末桶）；

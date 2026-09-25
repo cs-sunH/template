@@ -18,7 +18,6 @@ class MyPacket {
              int preferred_src,
              int preferred_dest);
 
-    int stream_id;
     int preferred_vnet;
     int preferred_dest;
     int preferred_src;

@@ -84,21 +84,6 @@ void CompletedFactAccumulator::set_exact_mode(const bool exact_mode) {
     exact_mode_ = exact_mode;
 }
 
-StateDelta build_state_delta(std::vector<DecisionEvent> events,
-                             const uint64_t tick,
-                             const uint64_t delivery_sequence,
-                             const uint64_t deferred_from_tick,
-                             std::vector<RankInjectedSummary>
-                                 injected_unfinished) {
-    // Phase 4 (v1): the compatibility form fills the v1 defaults --
-    // delivery_epoch == delivery_sequence, empty completed_nodes /
-    // affected_ranks, and the self-consistent snapshot handle. Existing
-    // call sites (fixtures) compile unchanged and stay v1-consistent.
-    return build_state_delta_v1(std::move(events), tick, delivery_sequence,
-                                deferred_from_tick, {}, {},
-                                std::move(injected_unfinished));
-}
-
 StateDelta build_state_delta_v1(
     std::vector<DecisionEvent> events, const uint64_t tick,
     const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
@@ -137,16 +122,13 @@ void DecisionMailbox::push(DecisionEvent e) {
 }
 
 bool DecisionMailbox::has_decision_work() const {
-    return !events_.empty() || finalize_pending_;
+    return !events_.empty();
 }
 
 std::vector<DecisionEvent> DecisionMailbox::drain() {
     std::vector<DecisionEvent> result = std::move(events_);
     events_.clear();
     pending_identities_.clear();  // a new dedup epoch starts
-    // The drain delivers ALL pending work: events and/or the finalize flag
-    // (a finalize-only epoch delivers an empty delta).
-    finalize_pending_ = false;
     if (!result.empty()) {
         ++delivery_count_;  // delivery epochs, not events
     }

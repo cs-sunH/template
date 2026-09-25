@@ -85,22 +85,24 @@ def _make_config():
 
 
 def _store_transfer(session_id=SESSION, trigger=REQUEST_A):
+    """Session 级 Tiered-LRU:整体 store fixture(全量层域 [0,4)、
+    before=4/after=0)。"""
     from session_kv_manager import KVTransfer, KVTransferShard
     shards = (
         KVTransferShard(source_rank=0, target_rank=0, edge_rank=0,
-                        bytes=512, noc_path=(0,), layer_start=2, layer_end=4),
+                        bytes=512, noc_path=(0,), layer_start=0, layer_end=4),
         KVTransferShard(source_rank=4, target_rank=1, edge_rank=1,
-                        bytes=512, noc_path=(4, 1), layer_start=2, layer_end=4),
+                        bytes=512, noc_path=(4, 1), layer_start=0, layer_end=4),
     )
     return KVTransfer(
         kind="remote_store", phase="history",
-        reason="evict_history_admission_suffix_half:layers2-4",
+        reason="evict_history_admission_full:layers0-4",
         session_id=session_id, trigger_request_id=trigger,
         source_instance_index=0, target_instance_index=None,
         total_bytes=1024, shards=shards, model_layers=4,
-        layer_start=2, layer_end=4,
+        layer_start=0, layer_end=4,
         resident_prefix_layers_before=4,
-        resident_prefix_layers_after=2,
+        resident_prefix_layers_after=0,
     )
 
 

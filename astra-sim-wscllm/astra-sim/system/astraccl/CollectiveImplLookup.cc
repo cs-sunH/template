@@ -50,11 +50,9 @@ namespace AstraSim {
         }
     }
 
-    CollectiveImpl* generate_custom_collective_impl(
-        string chakra_filepath,
-        int rank) {
-        string filename = chakra_filepath;
-        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl, filename);
+    CollectiveImpl* generate_custom_collective_impl(string chakra_filepath) {
+        return new CustomCollectiveImpl(CollectiveImplType::CustomCollectiveImpl,
+                                        chakra_filepath);
     }
 
     std::map<int, std::string> parse_per_node_yaml_file(string yaml_filepath) {
@@ -139,7 +137,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_to_All] = ci;
         }
         if (j.contains("all-gather-implementation-custom")) {
@@ -151,7 +149,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Gather] = ci;
         }
         if (j.contains("reduce-scatter-implementation-custom")) {
@@ -163,7 +161,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::Reduce_Scatter] = ci;
         }
         if (j.contains("all-reduce-implementation-custom")) {
@@ -175,7 +173,7 @@ namespace AstraSim {
                     "that 1 ET file covers all dimensions");
             }
             CollectiveImpl* ci =
-                generate_custom_collective_impl(chakra_filepath_str_vec[0], rank);
+                generate_custom_collective_impl(chakra_filepath_str_vec[0]);
             global_custom_impl_per_coll[ComType::All_Reduce] = ci;
         }
 
@@ -188,7 +186,7 @@ namespace AstraSim {
 
             for (auto const& [node_id, chakra_filepath] : per_node_custom_impl_filename) {
                 CollectiveImpl* ci =
-                    generate_custom_collective_impl(chakra_filepath, rank);
+                    generate_custom_collective_impl(chakra_filepath);
                 per_node_custom_impl[node_id] = ci;
             }
         }

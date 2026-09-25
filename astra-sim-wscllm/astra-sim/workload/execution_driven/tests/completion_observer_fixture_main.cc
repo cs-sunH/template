@@ -28,14 +28,13 @@ Run (from template/astra-sim-wscllm, after generating the synthetic trace):
 face_case5_config_c__validation-160gib__no_memory_expansion/comm_group.json \
       --system-configuration=sh_test_mesh/generated/runtime_config/\
 face_case5_config_c__validation-160gib__no_memory_expansion/system.json \
-      --remote-memory-configuration=sh_test_mesh/generated/runtime_config/\
-face_case5_config_c__validation-160gib__no_memory_expansion/remote_memory.json \
       --network-configuration=sh_test_mesh/generated/runtime_config/\
 face_case5_config_c__validation-160gib__no_memory_expansion/network.yml \
       --logging-folder=off
 *******************************************************************************/
 
 #include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
 #include "common/CmdLineParser.hh"
@@ -43,13 +42,11 @@ face_case5_config_c__validation-160gib__no_memory_expansion/network.yml \
 #include <astra-network-analytical/common/EventQueue.h>
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
-#include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <cstdio>
 #include <cstdlib>
 
 using namespace AstraSim;
-using namespace Analytical;
 using namespace AstraSimAnalytical;
 using namespace AstraSimAnalyticalCongestionAware;
 using namespace NetworkAnalytical;
@@ -110,8 +107,6 @@ int main(int argc, char* argv[]) {
         cmd_line_parser.get<std::string>("comm-group-configuration");
     const auto system_configuration =
         cmd_line_parser.get<std::string>("system-configuration");
-    const auto remote_memory_configuration =
-        cmd_line_parser.get<std::string>("remote-memory-configuration");
     const auto network_configuration =
         cmd_line_parser.get<std::string>("network-configuration");
     const auto logging_configuration =
@@ -166,8 +161,6 @@ int main(int argc, char* argv[]) {
     // Create ASTRA-sim related resources
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
-        std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
     auto systems = std::vector<Sys*>();
 
     auto queues_per_dim = std::vector<int>();
@@ -180,7 +173,7 @@ int main(int argc, char* argv[]) {
         auto network_api = std::make_unique<CongestionAwareNetworkApi>(i);
         auto* const system =
             new Sys(i, workload_configuration, comm_group_configuration,
-                    system_configuration, memory_api.get(), network_api.get(),
+                    system_configuration, network_api.get(),
                     npus_count_per_dim, queues_per_dim, injection_scale,
                     comm_scale, rendezvous_protocol);
 

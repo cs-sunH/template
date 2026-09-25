@@ -16,9 +16,9 @@ typedef unsigned long long Tick;
 constexpr uint64_t CLOCK_PERIOD = 1;           // 1ns
 constexpr uint64_t FREQ = 1000 * 1000 * 1000;  // 1GHz
 
-enum time_type_e { SE = 0, MS, US, NS, FS };
+enum time_type_e { NS };
 
-enum req_type_e { UINT8 = 0, BFLOAT16, FP32 };
+enum req_type_e { UINT8 = 0 };
 
 struct timespec_t {
     time_type_e time_res;
@@ -45,13 +45,10 @@ enum class ComType {
     Reduce_Scatter,
     All_Gather,
     All_Reduce,
-    All_to_All,
-    All_Reduce_All_to_All
+    All_to_All
 };
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
-
-enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
 
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
 
@@ -64,21 +61,11 @@ enum class IntraDimensionScheduling {
 
 enum class InterDimensionScheduling {
     Ascending = 0,
-    OnlineGreedy,
     RoundRobin,
-    OfflineGreedy,
-    OfflineGreedyFlex
+    OfflineGreedy
 };
 
-enum class InjectionPolicy {
-    Infinite = 0,
-    Aggressive,
-    SemiAggressive,
-    ExtraAggressive,
-    Normal
-};
-
-enum class PacketRouting { Hardware = 0, Software };
+enum class InjectionPolicy { Normal };
 
 enum class BusType { Both = 0, Shared, Mem };
 
@@ -108,10 +95,7 @@ enum class EventType {
     Consider_Send_Back,
     StreamInit,
     CommProcessingFinished,
-    CollectiveCommunicationFinished,
-    CompFinished,
-    MemLoadFinished,
-    MemStoreFinished
+    CollectiveCommunicationFinished
 };
 
 }  // namespace AstraSim

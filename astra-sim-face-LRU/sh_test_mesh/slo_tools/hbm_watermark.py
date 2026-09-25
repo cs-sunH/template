@@ -408,6 +408,24 @@ REPO_VARIANTS: dict[str, dict] = {
             "local-hbm.capacity-profiles.validation-160gib.bytes=171798691840"
             "（每 NPU）",
     },
+    # face-LRU（本仓）：映射复制 FACE 条目——产物恒为上方 B4 注所述 -LRU
+    # 新产物形态（无旧产物回退）；S2 升级分支（watermark_prepare 的
+    # B3-6/B4 elif）同步覆盖本键。
+    "astra-sim-face-LRU": {
+        "eviction_lists": (
+            ("prefill", "admission_evictions", _sum_shard_bytes),
+            ("prefill", "decode_target_evictions", _sum_shard_bytes),
+            ("completion", "completion_evictions", _sum_shard_bytes),
+        ),
+        "restore": {"bytes_path": ["history_transfer_bytes"],
+                    "kind_field": "history_action",
+                    "source_field": "history_source_instance_index"},
+        "decode_move": {"bytes_path": ["prefill_decode_transfer"]},
+        "completion_relocation_field": None,  # 逐出条目已覆盖自身释放
+        "eviction_count_fields": (),
+        "eviction_coverage": "full",
+        "capacity_field_evidence": "同 FACE（hardware/face_case5_config_c.json，validation-160gib=171798691840 B/NPU）",
+    },
     # W 同 FACE 字段族 + history_cache_state_before。基线实测账本缺口：decode
     # 准入期逐出（decode_target_evictions 在 prefill 记录落盘之后才累积，
     # decode 记录不含逐出列表）不落盘——full_tracelab 本 run 实测 7,923 例
@@ -1339,7 +1357,11 @@ class WatermarkReplay:
                  f"{action['session']!r} 跟踪 bytes {session.bytes}"
                  f"（tick={action['tick']}）——账本与重放不一致")
         if action["bytes"] < session.bytes:
-            self.report.actions["partial_evictions"] += 1  # 分层部分逐出（S3 等）
+            # 分层部分逐出（S3 等旧产物 replay 路径）。session 级
+            # Tiered-LRU（face-LRU 2026-09-25）后新日志逐出恒为整体
+            # store（evict bytes == session bytes），本计数对新运行恒 0，
+            # 保留仅为旧产物兼容。
+            self.report.actions["partial_evictions"] += 1
         self._apply(action["tick"], session.instance, -action["bytes"],
                     evict_bytes=action["bytes"])
         session.bytes -= action["bytes"]
@@ -1402,9 +1424,12 @@ class WatermarkReplay:
         if kind in ("NO_HISTORY", "RECOMPUTE", "recompute", "no_history") \
                 and nbytes:
             self.report.anomalies["restore_kind_mismatch"] += 1
-        # S3 半层恢复（bytes = suffix）：恢复前本地应恰持有 f(h) − bytes
-        # （prefix 驻留）；跟踪态超出该值的部分即未落盘的静默 suffix 释放，
-        # 在此对账扣减（字节守恒；时刻同样为上界窗口）。
+        # S3 半层恢复（bytes = suffix，旧产物 replay 路径）：恢复前本地应
+        # 恰持有 f(h) − bytes（prefix 驻留）；跟踪态超出该值的部分即未落盘
+        # 的静默 suffix 释放，在此对账扣减（字节守恒；时刻同样为上界窗口）。
+        # session 级 Tiered-LRU 后新日志恢复恒全量（ratio 1.0，bytes =
+        # f(h)、恢复前本地为 0），本分支对新运行不再触发，保留仅为旧产物
+        # 兼容。
         if nbytes and source == target and session.bytes > expected - nbytes:
             excess = session.bytes - (expected - nbytes)
             self._apply(action["tick"], target, -excess)
@@ -1771,7 +1796,7 @@ class JournalReplay:
                 value = source.get(field)
                 self._require(isinstance(value, int) and not isinstance(
                     value, bool) and value >= 0,
-                    f"{field if source is after else 'before.' + field}"
+                    f"{'after.' if source is after else 'before.'}{field}"
                     f" 非非负整数")
                 target[key] = value
         current = self.state.get(rank)
@@ -1979,7 +2004,7 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
     # 的同值镜像，防双计；completion 契约行字段名不同，见函数注）。
     if repo_variant == "astra-sim-sh_2.0":
         mapping = upgrade_s2_mapping_if_fields_present(mapping, args.run_dir)
-    elif repo_variant == "astra-sim-face":
+    elif repo_variant in ("astra-sim-face", "astra-sim-face-LRU"):
         mapping = upgrade_s2_mapping_if_fields_present(
             mapping, args.run_dir,
             completion_field="completion_eviction_transfers")

@@ -49,7 +49,6 @@ class Sys : public Callable {
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
         void notify_stream_removed(int vnet, Tick running_time);
-        std::vector<double> get_average_latency_per_dimension();
 
         Sys* sys;
         int max_running_streams;
@@ -135,8 +134,6 @@ class Sys : public Callable {
     // Communicator Group Support
     // -----------------------------------------------
     LogicalTopology* get_logical_topology(ComType comm_type);
-    std::vector<CollectiveImpl*> get_collective_implementation(
-        ComType comm_type);
     //---------------------------------------------------------------------------
 
     // Collective Communication Primitives
@@ -332,7 +329,6 @@ class Sys : public Callable {
     SchedulerUnit* scheduler_unit;
     QueueLevels* vLevels;
     OfflineGreedy* offline_greedy;
-    IntraDimensionScheduling intra_dimension_scheduling;
     InterDimensionScheduling inter_dimension_scheduling;
     int round_robin_inter_dimension_scheduler;
     int active_chunks_per_dimension;
@@ -349,7 +345,6 @@ class Sys : public Callable {
     int first_phase_streams;
     int total_running_streams;
     std::map<int, std::list<BaseStream*>> active_Streams;
-    std::map<int, std::list<int>> stream_priorities;
 
     struct ScheduledEvent {
         Callable* callable;
@@ -367,8 +362,6 @@ class Sys : public Callable {
     bool dispatching_events = false;
     Tick dispatching_event_time = 0;
     int total_nodes;
-    int dim_to_break;
-    std::vector<int> logical_broken_dims;
 
     std::vector<int> physical_dims;
     std::vector<int> queues_per_dim;

@@ -14,7 +14,7 @@ using namespace AstraSim;
 
 BinaryTree::BinaryTree(
     int id, TreeType tree_type, int total_tree_nodes, int start, int stride)
-    : BasicLogicalTopology(BasicLogicalTopology::BasicTopology::BinaryTree) {
+    : BasicLogicalTopology() {
     if (total_tree_nodes < 1 ||
         (total_tree_nodes & (total_tree_nodes - 1)) != 0) {
         LoggerFactory::get_logger("system::topology::BinaryTree")

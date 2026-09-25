@@ -99,8 +99,6 @@ class FluidScheduler {
 
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
 
-    [[nodiscard]] bool link_observer_enabled() const noexcept;
-
     /// Bucket length actually in effect (echoed into every link record).
     [[nodiscard]] uint64_t link_observer_bucket_ns() const noexcept;
 

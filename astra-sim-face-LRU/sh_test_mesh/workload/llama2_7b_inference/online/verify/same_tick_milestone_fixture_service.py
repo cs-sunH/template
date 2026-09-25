@@ -22,7 +22,7 @@ run_online_same_tick_milestone.sh 的 Python 端(方案 step 1-11 / 仿真加速
   (c) milestone 在下一 delivery epoch 交付,decode 图随后正常提交
       (seq=2 reasons=[DECODE_COMPLETION, REQUEST_COMPLETE]),request
       完成(completed=1,双进程 exit 0);
-  (d) 无事件丢失(no_decision_python_callback_count==0)、无死锁(轮询有界)。
+  (d) 无事件丢失(cpp run-end gate_ok 审计)、无死锁(轮询有界)。
 
 日志:每次 delivery 一行 `[fixture] delivery ...`(seq / tick /
 deferred_from_tick / reasons / arrivals / completed_groups / wall_ms)。

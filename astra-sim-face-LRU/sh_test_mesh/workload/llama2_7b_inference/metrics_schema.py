@@ -68,7 +68,6 @@ NORMALIZATION_METHODS = frozenset(
 )
 
 NATIVE_MEMORY_SCOPE = "npu_local_hbm"
-CHIPLET_PROJECTION_SCOPE = "physical_chiplet_projection"
 CHIPLET_PROJECTION_METHOD = "measurement_only_equal_striping"
 DEFAULT_CHIPLETS_PER_NPU = 4
 

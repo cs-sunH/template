@@ -2,11 +2,12 @@
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Workload.hh"
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -55,16 +56,6 @@ Statistics::Statistics(Workload* workload) : workload(workload) {}
 Statistics::OperatorStatistics& Statistics::get_operator_statistics(
     NodeId node_id) {
     return operator_statistics.at(node_id);
-}
-
-const Statistics::OperatorStatistics& Statistics::get_operator_statistics(
-    NodeId node_id) const {
-    return operator_statistics.at(node_id);
-}
-
-const std::unordered_map<NodeId, Statistics::OperatorStatistics>& Statistics::
-    get_operator_statistics() const {
-    return operator_statistics;
 }
 
 void Statistics::record_start(std::shared_ptr<Chakra::ETFeederNode> node,
@@ -677,7 +668,8 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node_type, node.id={}, node.type={}",
                        node->id(), static_cast<uint64_t>(node->type()));
-        assert(false);
+        throw std::runtime_error("unknown Chakra node type: " +
+                                 std::to_string((int)node_type));
     }
     return stat_node_type;
 }
@@ -711,7 +703,8 @@ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::
         LoggerFactory::get_logger("statistics")
             ->critical("Invalid node kind, node.id={}, node.kind={}",
                        node.global_id, static_cast<int>(node.kind));
-        assert(false);
+        throw std::runtime_error("unknown Chakra node kind: " +
+                                 std::to_string((int)node.kind));
     }
     return stat_node_type;
 }
@@ -792,9 +785,6 @@ void Statistics::report(std::shared_ptr<spdlog::logger> logger) const {
         case OperatorStatistics::OperatorType::REMOTE_MEM:
             logger->info("sys[{}], Remote mem time: {}", sys_id, time);
             break;
-        case OperatorStatistics::OperatorType::REPLAY:
-            logger->info("sys[{}], Replay time: {}", sys_id, time);
-            break;
         case OperatorStatistics::OperatorType::INVALID:
             logger->info("sys[{}], Invalid time: {}", sys_id, time);
             break;
@@ -804,37 +794,6 @@ void Statistics::report(std::shared_ptr<spdlog::logger> logger) const {
         logger->info("sys[{}], Total compute-communication overlap: {}", sys_id,
                      this->comp_comm_overlap);
     }
-
-    // Report network bandwidth for communication operations
-    // logger->info("sys[{}], Network bandwidth details:", sys_id);
-
-    // double total_bandwidth = 0.0;
-    // size_t num_comm_ops = 0;
-
-    // for (const auto& [node_id, stat] : operator_statistics) {
-    //   if (stat.type == OperatorStatistics::OperatorType::COMM &&
-    //       stat.network_bandwidth.has_value() &&
-    //       stat.comm_size.has_value()) {
-    //     // Convert from bytes/ns to GB/s (1 GB/s = 1 byte/ns)
-    //     double bandwidth_gbps = stat.network_bandwidth.value();
-    //     total_bandwidth += bandwidth_gbps;
-    //     num_comm_ops++;
-
-    //     logger->info("  Node {}: Size: {} bytes, Duration: {} ns, Bandwidth:
-    //     {:.3f} GB/s",
-    //                 node_id,
-    //                 stat.comm_size.value(),
-    //                 stat.end_time - stat.start_time,
-    //                 bandwidth_gbps);
-    //   }
-    // }
-
-    // if (num_comm_ops > 0) {
-    //   double avg_bandwidth = total_bandwidth / num_comm_ops;
-    //   logger->info("sys[{}], Average network bandwidth: {:.3f} GB/s across {}
-    //   communication operations",
-    //               sys_id, avg_bandwidth, num_comm_ops);
-    // }
 
     // only report utilization statistics when roofline is enabled
     if (workload->sys->roofline_enabled) {

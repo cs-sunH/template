@@ -66,7 +66,7 @@ void EventQueue::proceed() noexcept {
     // schedule_event(current_time, ...) issued from inside the callback (or
     // from the deferred drain below) would try_emplace a NEW EventList at
     // current_time, and the next proceed() would immediately trip the
-    // strict-increase assert at the top of this function (:31). Same-tick
+    // strict-increase assert at the top of this function (:48). Same-tick
     // events MUST use schedule_event_deferred(); only future events may use
     // schedule_event. (If the callback were invoked before the erase, such an
     // event would instead be merged into the already-invoked current list by

@@ -48,8 +48,6 @@ enum class ComType {
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
 
-enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
-
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
 
 enum class InjectionPolicy {
@@ -59,10 +57,6 @@ enum class InjectionPolicy {
     ExtraAggressive,
     Normal
 };
-
-enum class PacketRouting { Hardware = 0, Software };
-
-enum class BusType { Both = 0, Shared, Mem };
 
 enum class StreamState {
     Created = 0,

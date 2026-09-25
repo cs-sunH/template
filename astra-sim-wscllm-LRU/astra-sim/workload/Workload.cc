@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/IntData.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
@@ -142,6 +141,18 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
 }
 
 Workload::~Workload() {
+    // 方案 §3.4 早退纪律: this destructor OWNS the HBM endpoint join state
+    // and must never silently swallow an unresolved join (a node whose port
+    // and/or local-HBM leg never terminated). Report fail-closed -- the
+    // cookies themselves belong to their issuing legs (the backend's
+    // shutdown deletes only its own port cookies; the local-HBM model owns
+    // its own) and are NOT cleaned here.
+    if (!hbm_endpoint_joins_.empty()) {
+        workload_logger_->critical(
+            "Workload sys.id={} destroyed with {} unresolved HBM endpoint "
+            "join(s); the joined node(s) never reached whole-node terminal",
+            sys != nullptr ? sys->id : -1, hbm_endpoint_joins_.size());
+    }
     comm_groups.clear();
 
     if (this->et_feeder != nullptr) {
@@ -425,27 +436,41 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
 }
 
 void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
-    WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
-    wlhd->sys_id = sys->id;
-    wlhd->workload = this;
-    wlhd->node_id = node.global_id;
     // sh_2.0 N-way HBM contention: a MEM node marked hbm-access-mode (1 =
     // local HBM read, 2 = local HBM write; bytes = tensor_size) is a pool
     // traffic endpoint -- its local HBM job competes in the N-way model and
-    // the node completes as the join of the port FIFO transaction and the
+    // the node completes as the join of the remote-port transaction and the
     // HBM job (hbm_endpoint_joins_ latch, see Workload::call).
     if (sys->hbm_bandwidth_contention &&
         local_hbm_bandwidth_model != nullptr &&
         node.hbm_access_mode > 0 && node.compute.tensor_size > 0) {
         hbm_endpoint_joins_[node.global_id] = HbmEndpointJoinState{};
+        // 方案 §3.4 (SerDes 并发化后端, 2026-09-24): the two join legs carry
+        // SEPARATE cookies. The local-HBM leg cookie belongs to the
+        // Workload/LocalHbm owner (LocalHbmBandwidthModel delivers it
+        // synchronously and never deletes it); the port-leg cookie is the
+        // backend wlhd solely owned by AnalyticalRemoteMemory's PortJob
+        // (unique_ptr) until it is handed back through a Sys event. Sharing
+        // ONE wlhd across both legs would let an early backend shutdown()
+        // delete a pointer the HBM model still holds. Workload::call deletes
+        // each arriving cookie on its own arrival; the latch below stays the
+        // single whole-node terminal.
+        WorkloadLayerHandlerData* hbm_wlhd = new WorkloadLayerHandlerData;
+        hbm_wlhd->sys_id = sys->id;
+        hbm_wlhd->workload = this;
+        hbm_wlhd->node_id = node.global_id;
         if (node.hbm_access_mode == 1) {
             local_hbm_bandwidth_model->issue_pool_read(
-                node.compute.tensor_size, wlhd);
+                node.compute.tensor_size, hbm_wlhd);
         } else {
             local_hbm_bandwidth_model->issue_pool_write(
-                node.compute.tensor_size, wlhd);
+                node.compute.tensor_size, hbm_wlhd);
         }
     }
+    WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
+    wlhd->sys_id = sys->id;
+    wlhd->workload = this;
+    wlhd->node_id = node.global_id;
     sys->remote_mem->issue(node.compute.tensor_size, wlhd);
 }
 
@@ -1047,15 +1072,15 @@ void Workload::call(EventType event, CallData* data) {
             WorkloadLayerHandlerData* wlhd = (WorkloadLayerHandlerData*)data;
             // sh_2.0 N-way HBM contention endpoint join: a comm send/recv or
             // pool MEM node carrying a local HBM job completes only when BOTH
-            // async sides have called back (network packet / remote-mem FIFO
-            // event AND the LocalHbmBandwidthModel job). The first arrival
-            // only decrements the latch and returns: the node stays in
-            // flight (no release / record_end / finish_node / wlhd delete),
-            // and the second arrival runs the terminal handling below
-            // exactly once (idempotent per arrival, either order). The early
-            // return also skips the trailing static finish check -- safe
-            // because this node has not been finish_node'd yet, so
-            // static_all_done() is necessarily false here.
+            // async sides have called back (network packet / remote-port
+            // backend event AND the LocalHbmBandwidthModel job). The first
+            // arrival only consumes its own cookie, decrements the latch and
+            // returns: the node stays in flight (no release / record_end /
+            // finish_node), and the second arrival runs the terminal handling
+            // below exactly once (idempotent per arrival, either order). The
+            // early return also skips the trailing static finish check --
+            // safe because this node has not been finish_node'd yet, so
+            // static_all_done() is necessarily false.
             auto join_it = hbm_endpoint_joins_.find(wlhd->node_id);
             bool hbm_joined = false;
             EventType hbm_join_event = EventType::General;
@@ -1093,6 +1118,20 @@ void Workload::call(EventType event, CallData* data) {
                     join_it->second.hbm_done = true;
                 }
                 if (--join_it->second.pending_completions > 0) {
+                    // 方案 §3.4 cookie 所有权: a remote-MEM join (its
+                    // completion_event is left at the General default) gives
+                    // each leg its own cookie -- the arriving one is owned by
+                    // THIS arrival and is deleted here; the partner leg's
+                    // cookie is deleted by its own arrival. The legacy p2p
+                    // comm joins (completion_event PacketSent/PacketReceived)
+                    // still share ONE wlhd between the network frontend
+                    // handler and the local-HBM job, and neither ever deletes
+                    // it mid-flight, so their first arrival must NOT delete
+                    // -- the latch-opening arrival deletes the shared cookie
+                    // at the terminal below.
+                    if (hbm_join_event == EventType::General) {
+                        delete wlhd;
+                    }
                     return;
                 }
                 hbm_endpoint_joins_.erase(join_it);
@@ -1103,6 +1142,9 @@ void Workload::call(EventType event, CallData* data) {
             finish_generic_node(
                 wlhd->node_id,
                 hbm_joined ? hbm_join_event : event);
+            // Exactly-once cookie consumption at the latch-opening arrival:
+            // a remote-MEM join deletes THIS arrival's own leg cookie, a
+            // comm join deletes the single shared wlhd.
             delete wlhd;
         }
     }
@@ -1120,6 +1162,12 @@ void Workload::call(EventType event, CallData* data) {
             (hw_resource->num_in_flight_gpu_comp_ops == 0) &&
             (hw_resource->num_in_flight_gpu_comm_ops == 0) &&
             (hw_resource->num_in_flight_hbm_dma_ops == 0) &&
+            // 方案 §4: remote-MEM node occupancy gate. A MEM node with a
+            // port transaction (optionally joined with a local-HBM endpoint
+            // job) must reach whole-node terminal before static finish; the
+            // unlimited remote-MEM slot no longer hides behind the comm
+            // counter above.
+            (hw_resource->num_in_flight_remote_mem_ops == 0) &&
             // Local-HBM contention: a still-active local-HBM job always
             // belongs to a node that has not completed, so the slot counters
             // above already cover it; the explicit has_active_jobs() check

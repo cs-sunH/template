@@ -16,6 +16,8 @@ namespace AstraSim {
 class LogGP;
 class MemMovRequest : public Callable, public SharedBusStat {
   public:
+    // The leading request_num argument is kept for the existing LogGP call
+    // site; the request_num member itself was write-only and is removed.
     MemMovRequest(int request_num,
                   Sys* sys,
                   LogGP* loggp,
@@ -26,13 +28,10 @@ class MemMovRequest : public Callable, public SharedBusStat {
     void wait_wait_for_mem_bus(std::list<MemMovRequest>::iterator pointer);
     void call(EventType event, CallData* data);
 
-    static int id;
-    int my_id;
     int size;
     Callable* callable;
     bool processed;
     bool send_back;
-    bool mem_bus_finished;
     Sys* sys;
     EventType callEvent = EventType::General;
     LogGP* loggp;
@@ -43,7 +42,6 @@ class MemMovRequest : public Callable, public SharedBusStat {
     Tick total_processing_queue_time;
     Tick total_processing_time;
     Tick start_time;
-    int request_num;
 };
 
 }  // namespace AstraSim

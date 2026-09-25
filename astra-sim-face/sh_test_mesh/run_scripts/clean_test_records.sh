@@ -9,8 +9,7 @@ set -u
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 WL="sh_test_mesh/workload/llama2_7b_inference"
-removed=0
-rm_art() { if [ -e "$1" ]; then rm -rf "$1"; echo "[clean] removed: $1"; removed=$((removed+1)); fi; }
+rm_art() { if [ -e "$1" ]; then rm -rf "$1"; echo "[clean] removed: $1"; fi; }
 
 echo "[clean] repo: $REPO_ROOT"
 # 1. 运行产物目录
@@ -19,7 +18,6 @@ rm_art "sh_test_mesh/results"
 rm_art "sh_test_mesh/run_logs"
 rm_art "log"
 rm_art "sh_test_mesh/log"
-rm_art "$WL/online_runs"
 # 2. completion_fixture 等测试再生目录
 find sh_test_mesh -maxdepth 4 -type d -name "completion_fixture" 2>/dev/null | while read -r d; do rm_art "$d"; done
 # 3. traces/ 物化数据（仅保留 *.py 物化器脚本）

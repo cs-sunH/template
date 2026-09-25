@@ -16,7 +16,6 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/CollectivePlan.hh"
 #include "astra-sim/system/DataSet.hh"
 #include "astra-sim/system/MemBus.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/QueueLevels.hh"
 #include "astra-sim/system/RendezvousRecvData.hh"
 #include "astra-sim/system/RendezvousSendData.hh"
@@ -138,14 +137,6 @@ void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
     }
 }
 
-vector<double> Sys::SchedulerUnit::get_average_latency_per_dimension() {
-    vector<double> result;
-    result.resize(latency_per_dimension.size(), -1);
-    for (uint64_t i = 0; i < result.size(); i++) {
-        result[i] = latency_per_dimension[i] / total_chunks_per_dimension[i];
-    }
-    return result;
-}
 //-----------------------------------------------------------------------------
 
 Sys::Sys(int id,
@@ -205,7 +196,6 @@ Sys::Sys(int id,
     this->scheduler_unit = nullptr;
     this->vLevels = nullptr;
     this->offline_greedy = nullptr;
-    this->intra_dimension_scheduling = IntraDimensionScheduling::FIFO;
     this->inter_dimension_scheduling = InterDimensionScheduling::Ascending;
     this->scheduling_policy = SchedulingPolicy::FIFO;
     this->round_robin_inter_dimension_scheduler = 0;
@@ -235,7 +225,6 @@ Sys::Sys(int id,
     this->queues_per_dim = queues_per_dim;
     int element = 0;
     this->total_nodes = 1;
-    this->dim_to_break = -1;
     for (uint64_t current_dim = 0; current_dim < queues_per_dim.size();
          current_dim++) {
         if (physical_dims[current_dim] >= 1) {
@@ -244,8 +233,6 @@ Sys::Sys(int id,
         for (int j = 0; j < queues_per_dim[current_dim]; j++) {
             list<BaseStream*> temp;
             active_Streams[element] = temp;
-            list<int> pri;
-            stream_priorities[element] = pri;
             element++;
         }
     }
@@ -289,9 +276,7 @@ Sys::Sys(int id,
                          comm_group_configuration);
     }
 
-    if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy ||
-        inter_dimension_scheduling ==
-            InterDimensionScheduling::OfflineGreedyFlex) {
+    if (inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy) {
         offline_greedy = new OfflineGreedy(this);
     }
 
@@ -458,8 +443,16 @@ bool Sys::initialize_sys(string name) {
             std::max(0.0, std::min(1.0, pipeline_tile_fraction));
     }
     if (j.contains("roofline-enabled")) {
-        if (j["roofline-enabled"] != 0) {
-            roofline_enabled = true;
+        const auto& roofline_flag = j["roofline-enabled"];
+        if (roofline_flag.is_boolean()) {
+            roofline_enabled = roofline_flag.get<bool>();
+        } else if (roofline_flag.is_number_integer() ||
+                   roofline_flag.is_number_unsigned()) {
+            roofline_enabled = roofline_flag.get<int64_t>() != 0;
+        } else {
+            sys_panic("roofline-enabled must be boolean or integer");
+        }
+        if (roofline_enabled) {
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
     }
@@ -496,26 +489,38 @@ bool Sys::initialize_sys(string name) {
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {
-        if (j["trace-enabled"] != 0) {
-            this->trace_enabled = true;
+        const auto& trace_flag = j["trace-enabled"];
+        if (trace_flag.is_boolean()) {
+            this->trace_enabled = trace_flag.get<bool>();
+        } else if (trace_flag.is_number_integer() ||
+                   trace_flag.is_number_unsigned()) {
+            this->trace_enabled = trace_flag.get<int64_t>() != 0;
         } else {
-            this->trace_enabled = false;
+            sys_panic("trace-enabled must be boolean or integer");
         }
     }
     this->replay_only = false;
     if (j.contains("replay-only")) {
-        if (j["replay-only"] != 0) {
-            this->replay_only = true;
+        const auto& replay_flag = j["replay-only"];
+        if (replay_flag.is_boolean()) {
+            this->replay_only = replay_flag.get<bool>();
+        } else if (replay_flag.is_number_integer() ||
+                   replay_flag.is_number_unsigned()) {
+            this->replay_only = replay_flag.get<int64_t>() != 0;
         } else {
-            this->replay_only = false;
+            sys_panic("replay-only must be boolean or integer");
         }
     }
     this->track_local_mem = false;
     if (j.contains("track-local-mem")) {
-        if (j["track-local-mem"] != 0) {
-        this->track_local_mem = true;
+        const auto& track_flag = j["track-local-mem"];
+        if (track_flag.is_boolean()) {
+            this->track_local_mem = track_flag.get<bool>();
+        } else if (track_flag.is_number_integer() ||
+                   track_flag.is_number_unsigned()) {
+            this->track_local_mem = track_flag.get<int64_t>() != 0;
         } else {
-        this->track_local_mem = false;
+            sys_panic("track-local-mem must be boolean or integer");
         }
     }
 
@@ -709,9 +714,6 @@ void Sys::handleEvent(void* arg) {
             all_sys[id]->call_events();
         }
         delete ehd;
-    } else if ((event == EventType::NPU_to_MA) ||
-               (event == EventType::MA_to_NPU)) {
-        all_sys[id]->call_events();
     } else if (event == EventType::RendezvousSend) {
         RendezvousSendData* rsd = (RendezvousSendData*)ehd;
         rsd->send.call(EventType::General, nullptr);
@@ -720,14 +722,6 @@ void Sys::handleEvent(void* arg) {
         RendezvousRecvData* rrd = (RendezvousRecvData*)ehd;
         rrd->recv.call(EventType::General, nullptr);
         delete rrd;
-    } else if ((event == EventType::CompFinished) ||
-               (event == EventType::MemLoadFinished) ||
-               (event == EventType::MemStoreFinished)) {
-        MemEventHandlerData* mehd = (MemEventHandlerData*)ehd;
-        if (mehd->workload) {
-            mehd->workload->call(event, mehd->wlhd);
-        }
-        delete mehd;
     } else if (event == EventType::PacketReceived) {
         RecvPacketEventHandlerData* rcehd = (RecvPacketEventHandlerData*)ehd;
         if (rcehd->workload) {
@@ -869,10 +863,8 @@ DataSet* Sys::generate_collective(
     DataSet* dataset = new DataSet(streams);
     int pri = get_priority(explicit_priority);
     int count = 0;
-    if (id == 0 && (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+    if (id == 0 &&
+        inter_dimension_scheduling == InterDimensionScheduling::OfflineGreedy) {
         if (last_scheduled_collective != Sys::boostedTick()) {
             offline_greedy->reset_loads();
             last_scheduled_collective = Sys::boostedTick();
@@ -930,10 +922,8 @@ DataSet* Sys::generate_collective(
                 round_robin_inter_dimension_scheduler = 0;
             }
         } else if (collective_type != ComType::All_to_All &&
-                   (inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedy ||
-                    inter_dimension_scheduling ==
-                        InterDimensionScheduling::OfflineGreedyFlex)) {
+                   inter_dimension_scheduling ==
+                       InterDimensionScheduling::OfflineGreedy) {
             uint64_t prev_size = size;
             dim_mapper = offline_greedy->get_chunk_scheduling(
                 communicator_group == nullptr ? 0
@@ -950,10 +940,8 @@ DataSet* Sys::generate_collective(
         }
 
         if (collective_type == ComType::All_to_All ||
-            (inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedy &&
-             inter_dimension_scheduling !=
-                 InterDimensionScheduling::OfflineGreedyFlex)) {
+            inter_dimension_scheduling !=
+                InterDimensionScheduling::OfflineGreedy) {
             if (chunk_size > size) {
                 size = 0;
             } else {
@@ -984,11 +972,7 @@ DataSet* Sys::generate_collective(
                 remain_size = phase.final_data_size;
             }
         } else if (inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedy ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OfflineGreedyFlex ||
-                   inter_dimension_scheduling ==
-                       InterDimensionScheduling::OnlineGreedy) {
+                   InterDimensionScheduling::OfflineGreedy) {
             int dim = 0;
 
             // Create collective phase for each dimension in ascending order.
@@ -1249,80 +1233,17 @@ void Sys::insert_into_ready_list(BaseStream* stream) {
 
 void Sys::insert_stream(list<BaseStream*>* queue, BaseStream* baseStream) {
     list<BaseStream*>::iterator it = queue->begin();
-    if (intra_dimension_scheduling == IntraDimensionScheduling::FIFO ||
-        baseStream->current_queue_id < 0 ||
-        baseStream->current_com_type == ComType::All_to_All ||
-        baseStream->current_com_type == ComType::All_Reduce) {
-        while (it != queue->end()) {
-            if ((*it)->initialized == true) {
-                advance(it, 1);
-                continue;
-            } else if ((*it)->priority >= baseStream->priority) {
-                advance(it, 1);
-                continue;
-            } else {
-                break;
-            }
-        }
-    } else if (intra_dimension_scheduling == IntraDimensionScheduling::RG) {
-        ComType one_to_last = ComType::None;
-        ComType last = ComType::None;
-        while (it != queue->end()) {
-            one_to_last = last;
-            last = (*it)->current_com_type;
-            if ((*it)->initialized == true) {
-                advance(it, 1);
-                if (it != queue->end() && (*it)->initialized == false) {
-                    one_to_last = last;
-                    last = (*it)->current_com_type;
-                    advance(it, 1);
-                }
-                continue;
-            } else if ((*it)->priority > baseStream->priority) {
-                advance(it, 1);
-                continue;
-            } else if ((last == ComType::Reduce_Scatter &&
-                        one_to_last == ComType::All_Gather) ||
-                       (last == ComType::All_Gather &&
-                        one_to_last == ComType::Reduce_Scatter)) {
-                advance(it, 1);
-                continue;
-            } else {
-                break;
-            }
-        }
-    } else if (intra_dimension_scheduling ==
-               IntraDimensionScheduling::SmallestFirst) {
-        if (baseStream->phases_to_go.size() == 1) {
-            it = queue->end();
-        }
-        while (it != queue->end()) {
-            if ((*it)->initialized == true) {
-                advance(it, 1);
-                continue;
-            } else if (max((*it)->my_current_phase.initial_data_size,
-                           (*it)->my_current_phase.final_data_size) <
-                       max(baseStream->my_current_phase.initial_data_size,
-                           baseStream->my_current_phase.final_data_size)) {
-                advance(it, 1);
-                continue;
-            } else {
-                break;
-            }
-        }
-    } else if (intra_dimension_scheduling ==
-               IntraDimensionScheduling::LessRemainingPhaseFirst) {
-        while (it != queue->end()) {
-            if ((*it)->initialized == true) {
-                advance(it, 1);
-                continue;
-            } else if ((*it)->phases_to_go.size() <
-                       baseStream->phases_to_go.size()) {
-                advance(it, 1);
-                continue;
-            } else {
-                break;
-            }
+    // Intra-dimension scheduling is pinned to FIFO: streams enter the queue
+    // ahead of not-yet-initialized streams with lower priority.
+    while (it != queue->end()) {
+        if ((*it)->initialized == true) {
+            advance(it, 1);
+            continue;
+        } else if ((*it)->priority >= baseStream->priority) {
+            advance(it, 1);
+            continue;
+        } else {
+            break;
         }
     }
     queue->insert(it, baseStream);

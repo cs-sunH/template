@@ -142,8 +142,10 @@ class MetricCollector {
                           uint64_t num_ops,
                           uint64_t local_tensor_bytes);
 
-    // Reserved for repos with a local HBM restore model (e.g. SH2). In this
-    // repo no caller exists; the accumulator is kept for interface parity.
+    // Production caller in this repo: Workload::issue_local_hbm_kv_restore
+    // accumulates the KV-restore bytes of every restore node while metrics
+    // are enabled; finalize() emits them as local_hbm_restore_bytes (rank
+    // record) and local_hbm_restore_bytes_issued (local_hbm record).
     void on_local_hbm_restore_issue(int rank, uint64_t bytes);
 
     // Compute and print all metric records. Called after the event loop,

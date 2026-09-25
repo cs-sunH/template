@@ -55,14 +55,14 @@ from wsc_llm_scheduler import (  # noqa: E402
 
 
 def _eviction(victim_instance_index, trigger_request_id, time_ns=1_000):
-    """B2 三态:逐出对象 = remote_store KVTransfer(source_instance_index
-    即受害实例,纪元唤醒/序列化消费同一字段)。"""
+    """整体逐出:逐出对象 = remote_store KVTransfer(source_instance_index
+    即受害实例,纪元唤醒/序列化消费同一字段;层域 [0, L) 全层)。"""
     from session_kv_manager import KVTransfer
 
     return KVTransfer(
         kind="remote_store",
         phase="prefill_admission",
-        reason="static_decode_final_kv_reservation_full_fallback",
+        reason="static_decode_final_kv_reservation_session",
         session_id=f"victim_session_{victim_instance_index}",
         trigger_request_id=trigger_request_id,
         source_instance_index=victim_instance_index,
@@ -307,7 +307,8 @@ class NetCreditStubTests(unittest.TestCase):
 
     def test_snapshot_off_decode_target_keeps_single_full_reserve(self):
         """旧 KV 不在 decode 目标(别的实例)/ EVICTED / ABSENT →
-        现状行为:仅一次全量预约,失败即 False,不回补。"""
+        现状行为:仅一次全量预约,失败即 False,不回补。legacy
+        PARTIAL_HBM_REMOTE 位置不可达:不再触发净额重试分支。"""
         from session_kv_manager import CapacityResult
 
         for snapshot in (
@@ -317,6 +318,9 @@ class NetCreditStubTests(unittest.TestCase):
             SimpleNamespace(location="remote_memory", instance_index=None,
                             shard_bytes=(0,),
                             local_shard_bytes=(0,)),       # 已外迁
+            SimpleNamespace(location="partial_hbm_remote", instance_index=0,
+                            shard_bytes=(200_000_000,),
+                            local_shard_bytes=(200_000_000,)),  # legacy 不可达
             None,                                          # ABSENT
         ):
             kv_manager = _StubKVManager(

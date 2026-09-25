@@ -222,7 +222,22 @@ std::string write_system_json(const std::string& name,
                               uint64_t local_mem_latency_ns) {
     const std::string path = std::string(kTempDir) + "/" + name;
     std::ofstream out(path);
+    // Official-template fixture shape (阶段5夹具避雷): scheduling-policy /
+    // preferred-dataset-splits / collective-optimization present, all four
+    // *-implementation keys non-empty. The fixture is ONE topology dimension
+    // (physical_dims = {1}), so each implementation array carries exactly one
+    // entry. With a *-implementation key missing, Sys's CONSTRUCTOR builds its
+    // per-ComType logical topologies (Sys.cc:266-272) from an empty
+    // native-impl list and GeneralComplexTopology throws "requires at least
+    // one collective implementation" before any scenario can run.
     out << "{\n"
+        << "  \"scheduling-policy\": \"LIFO\",\n"
+        << "  \"preferred-dataset-splits\": 1,\n"
+        << "  \"collective-optimization\": \"localBWAware\",\n"
+        << "  \"all-reduce-implementation\": [\"ring\"],\n"
+        << "  \"all-gather-implementation\": [\"ring\"],\n"
+        << "  \"reduce-scatter-implementation\": [\"ring\"],\n"
+        << "  \"all-to-all-implementation\": [\"ring\"],\n"
         << "  \"roofline-enabled\": 1,\n"
         << "  \"peak-perf\": 1000,\n"
         << "  \"local-mem-bw\": 3000,\n"

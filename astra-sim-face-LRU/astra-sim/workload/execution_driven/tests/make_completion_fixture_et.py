@@ -76,6 +76,7 @@ OUTPUT_DIR = (
 TRACE_PREFIX = "fixture"
 # Ranks with a configured PER_NPU_MEMORY_EXPANSION port (remote_memory.json
 # npu-ids; 26 edge ranks) -- only these get the remote-mem fixture node.
+# main() fail-closes unless this set equals the bundle's npu-ids.
 REMOTE_PORT_RANKS = frozenset(
     [0, 1, 2, 3, 4, 5, 6, 11, 12, 17, 18, 23, 24, 29, 30, 35, 36, 41, 42,
      47, 48, 49, 50, 51, 52, 53]
@@ -106,7 +107,44 @@ def build_metadata() -> GlobalMetadata:
     return metadata
 
 
+def check_remote_port_ranks(config_dir: pathlib.Path) -> None:
+    """Fail-closed cross-check of REMOTE_PORT_RANKS against the bundle.
+
+    config_resolver materializes remote_memory.json into the SAME directory
+    as comm_group.json; its PER_NPU npu-ids are the single source of the
+    edge-rank set. Verifying equality here turns a config/generator drift
+    into an immediate generation-time error instead of a downstream
+    fixture count mismatch.
+    """
+    path = config_dir / "remote_memory.json"
+    with open(path, encoding="utf-8") as source:
+        remote = json.load(source)
+    if remote.get("memory-type") != "PER_NPU_MEMORY_EXPANSION":
+        raise SystemExit(
+            f"[fixture] {path}: memory-type must be "
+            f"PER_NPU_MEMORY_EXPANSION, got {remote.get('memory-type')!r}"
+        )
+    npu_ids = remote.get("npu-ids")
+    if not isinstance(npu_ids, list) or not npu_ids:
+        raise SystemExit(f"[fixture] {path}: npu-ids must be a non-empty array")
+    for entry in npu_ids:
+        if not isinstance(entry, int) or isinstance(entry, bool) or entry < 0:
+            raise SystemExit(
+                f"[fixture] {path}: every npu-ids entry must be a "
+                f"non-negative integer, got {entry!r}"
+            )
+    configured = frozenset(npu_ids)
+    if configured != REMOTE_PORT_RANKS:
+        raise SystemExit(
+            f"[fixture] {path}: npu-ids drifted from REMOTE_PORT_RANKS "
+            f"(uncovered by the generator: "
+            f"{sorted(configured - REMOTE_PORT_RANKS)}; stale in the "
+            f"generator: {sorted(REMOTE_PORT_RANKS - configured)})"
+        )
+
+
 def main() -> None:
+    check_remote_port_ranks(COMM_GROUP.parent)
     with open(COMM_GROUP, encoding="utf-8") as source:
         comm_group = json.load(source)
     pg_for_rank = {}

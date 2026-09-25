@@ -62,19 +62,11 @@ enum class IntraDimensionScheduling {
 
 enum class InterDimensionScheduling {
     Ascending = 0,
-    OnlineGreedy,
     RoundRobin,
-    OfflineGreedy,
-    OfflineGreedyFlex
+    OfflineGreedy
 };
 
-enum class InjectionPolicy {
-    Infinite = 0,
-    Aggressive,
-    SemiAggressive,
-    ExtraAggressive,
-    Normal
-};
+enum class InjectionPolicy { Normal = 0 };
 
 enum class PacketRouting { Hardware = 0, Software };
 

@@ -61,8 +61,10 @@ store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（
   `logical_pool_shared_across_edges: true`），因此称为统一内存池。
 - **端口代价模型**：每个边缘端口为严格 FIFO 事务队列，单次访问
   `耗时 = 端口时延 + 字节数 / 端口带宽`（取硬件配置 `remote-memory` 的值）；
-  端口之间完全并行，远端池总容量不设限（sh 系仓实现于各自仓的
-  `extern/remote_memory_backend/`）。
+  端口之间完全并行，远端池总容量不设限。此段为跨仓模型描述，仅适用于仍实现
+  远端内存后端的仓（原方案《SerDes片外链路并发化改造执行方案》所辖其余仓，
+  实现于各自仓的 `extern/remote_memory_backend/`）；本仓无该机制（见下条 A.2
+  声明），astra-sim-wscllm 亦已于 2026-09-24 整链移除、与本仓对齐。
 - **本仓配置**：远端内存机制已整体移除（2026-09-05，A.2 清除）：本仓既不启用也不保留
   远端内存建模代码，硬件配置声明任何 memory expansion 会在
   `config_resolver.py` 解析层 fail-closed 拒绝。因此本仓 KV 只有片上一层——全部驻留本地
@@ -93,7 +95,7 @@ prefill 与 decode 不分池。
 | 仓库 | 实例组织 | 请求→实例映射策略 | KV 驻留与恢复 | 远端内存池 |
 |---|---|---|---|---|
 | **astra-sim-face（本仓）** | 统一实例（P+D 同实例） | FACE 原始映射：prefill 选剩余 chunk 最少；decode 在邻接图加权距离限制（阈值 = D2D 带宽 / 本地 HBM 带宽）内按 per-die Roofline 增量代价 | RESIDENT/EVICTED 两态；LRU 逐出＝零代价删除；恢复＝重算 | 不支持（机制已整体移除） |
-| astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 未启用（NO_MEMORY_EXPANSION） |
+| astra-sim-wscllm | PD 分离（Prefill-only + Decode-only 分区） | prefill 选排队请求最少；decode 用静态一跳 P→D 映射 | RESIDENT/EVICTED 两态；LRU 逐出；恢复＝重算（跨实例历史走 NoC 迁移） | 不支持（机制已整体移除，2026-09-24） |
 | astra-sim-sh_2.0 | 统一实例 | prefill Roofline 剩余负载均衡（历史 KV 全/部分驻留与全逐出统一）；decode 按 per-die Roofline 增量代价 + HBM 剩余 tie-break | 三态（含半驻留 PARTIAL）；两阶段类型感知逐出（human 类先于 tool 类）；流水化部分恢复 + HBM 恢复/推理带宽共享 | 启用（全部边缘芯粒挂端口） |
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
@@ -203,7 +205,7 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    逐字节一致；缩放与 request_type 等新信息只进 canonical sidecar 与
 #    stdout provenance，不进队列。
 
-# ③ 生成 plan 目录（runtime_config 四小件 + manifest + metrics_manifest）
+# ③ 生成 plan 目录（runtime_config 三件 + manifest + metrics_manifest）
 cd sh_test_mesh/workload/llama2_7b_inference && python3 plan_materializer.py && cd <仓根>
 
 # ④ 跑③④（GEN_MATCH：generated/ 下须恰一个 llama2_7b_inference_54npus_* 目录）
@@ -531,13 +533,29 @@ OnlineCli 在线家族解析）：
 `run_online_same_tick_milestone.sh`、`bridge_race_stress_repro.sh`——机制层健康自检。
 另有 C++ 聚焦单测（target 注册于 `astra-sim/network_frontend/analytical/CMakeLists.txt`，
 随 §2 ① 构建树编译，可执行文件落在 `build/astra_analytical/build_congestion_aware/bin/`，
-无参数直跑；2026-08-29 新增三项，四仓同构）：`..._AlarmCancellationTest`（可取消 alarm
-链路：bucket 清空时 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、
-legacy 后端回退 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot
-node bucket 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、
-sizeof 编译期锁定）、`..._RemoteFifoLedgerTest`（RemoteFifoLedger 按 backend 真实端口
-记账；自带 PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记账
-接线，账本不启用）等。Python 侧 `online/test_propagating_tail.py`
+无参数直跑）：`..._AlarmCancellationTest`（可取消 alarm 链路：bucket 清空时 outer alarm
+从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退 stale guard）、
+`..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket 擦除 + OnlineNode
+anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期锁定——锚值随
+OnlineStatisticsState 死字段清除 re-prove，2026-09-25 二轮起为 424）。2026-09-24
+工作树补录三项接入构建的既存单测（`CMakeLists.txt:402-408` 注释记录接入配方、"never
+part of the baseline gates"，target 见 `:412`/`:433`/`:455`）：`..._CliOnlineTest`
+（在线 CLI 契约测试，R1-R14 含 FP1 加固无符号词法与 watchdog 边界）、
+`..._EventQueueDeferredTest`（EventQueue tick 末收口 + 同 tick deferred 通道，含
+FluidScheduler deferred-flush 集成）、`..._IngressIdleTest`（IDLE 生命周期 fixture：
+IDLE/ACTIVE/DRAINING/FINISHED 迁移、EOF/Error 终态、溢出审计、close-vs-submit 竞态）。
+**Release 下恒真的修法（2026-09-25 深挖二轮）**：上三测试的裸 `assert` 全量改为
+运行时 expect 制（cli 105 处 / event_queue 37 处 / ingress_idle 70 处），缺省
+Release（-DNDEBUG）构建不再把断言编译掉；配套地 EventQueue 主队列 strict-increase
+不变式由 debug 断言升级为 Release 常开的 fail-closed（违规 fprintf+abort，
+`event_queue_deferred_test` case E 即验证该 abort）。两个例外不在"无参数直跑"内：
+`..._NodeStoreTest` 需先生成 `sh_test_mesh/generated/completion_fixture/`
+（`python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py`，
+依赖 §2 ③ 的 runtime_config 已物化）并传
+`--fixture-et=sh_test_mesh/generated/completion_fixture/fixture.0.et`；
+`..._LocalHbmTest` 需先跑 `make_local_hbm_fixture_et.py` 生成
+`sh_test_mesh/generated/local_hbm_fixture/`（fast/slow 两套 network.yml）。
+Python 侧 `online/test_propagating_tail.py`
 （`online_scheduler_base.py` 的在途尾部观测器 PropagatingTailTracker：对到达未完成
 请求、未 ack 交付、未确认 provisional KV 动作三类在途工作记 current/peak/按来源计数，
 超限 fail-closed 报错、绝不截断；8 用例，pytest 或直跑）。

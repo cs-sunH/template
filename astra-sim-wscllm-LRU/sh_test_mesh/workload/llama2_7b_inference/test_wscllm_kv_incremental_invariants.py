@@ -13,7 +13,9 @@ if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
 from session_kv_manager import (  # noqa: E402
+    PARTIAL_HBM_REMOTE,
     SessionKVCacheManager,
+    SessionKVState,
     kv_cache_shard_bytes_for_tokens,
 )
 from wsc_llm_scheduler import (  # noqa: E402
@@ -53,13 +55,13 @@ def _manager(strict_invariants: bool) -> SessionKVCacheManager:
 
 
 def _tiered_manager(strict_invariants: bool) -> SessionKVCacheManager:
-    """B2 三态增量不变量:2 层模型(prefix=1, suffix=1)+ 小容量,驱动
-    suffix/full 逐出与 PARTIAL/REMOTE 恢复路径的增量账本刷新。
+    """二态增量不变量:2 层模型 + 小容量,驱动整体逐出与 REMOTE 全量
+    恢复路径的增量账本刷新。
 
     手算(gelu, heads=2, tp=2 → 每 rank 1 头):权重 128 B/rank;
-    KV = 8 B/token/rank(20 token = 160,半层 = 80)。容量 400 → 每 rank
+    KV = 8 B/token/rank(20 token = 160,全层)。容量 400 → 每 rank
     空闲 272:一个 20-token 会话驻留后余 112 < 160,下一个同实例会话
-    必然逼出半层(逐笔重查恰停)。"""
+    必然逼出前一会话的整体逐出(逐笔重查,过量释放合法)。"""
     hardware = WscLlmHardware(
         mesh_rows=2,
         mesh_cols=2,
@@ -160,43 +162,44 @@ class IncrementalInvariantTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "session/rank KV accounting mismatch"):
                 manager._check_invariants()
 
-    def test_three_state_mutations_stay_equivalent_and_audit(self) -> None:
-        """B2 三态:半层逐出 → 整体外迁 → PARTIAL 同实例回迁 → REMOTE 跨
-        实例全量回迁 → retire 远端核销;增量/全量两条检查路径等价,且对
-        remote 账本的腐蚀双双 fail-closed。"""
+    def test_two_state_mutations_stay_equivalent_and_audit(self) -> None:
+        """二态:整体逐出 → REMOTE 跨实例全量回迁 → REMOTE 同实例全量
+        回迁 → retire 远端核销;增量/全量两条检查路径等价,且对 remote
+        账本的腐蚀双双 fail-closed。PARTIAL 运行态不可达(构造即 raise)。"""
         def drive(manager: SessionKVCacheManager) -> None:
             # a 在实例 0(prefill)完成(160/rank,余 112)。
             manager.prepare_history(
                 "a", 0, 0, 1, "a0", required_context_tokens=20)
             manager.grow_prefill("a", 20, 2, "a0")
             manager.mark_complete("a", 3, "a0")
-            # b 入场:112 < 160 → 半层化 a(腾 80 → 192 ≥ 160 恰停)。
+            # b 入场:112 < 160 → 整体逐出 a(腾 160 → 272 ≥ 160 满足即停)。
             decision = manager.prepare_history(
                 "b", 0, 0, 4, "b0", required_context_tokens=20)
             assert not decision.admission_blocked, decision
             assert any(t.kind == "remote_store" for t in decision.evictions)
+            assert not any(
+                t.resident_prefix_layers_after for t in decision.evictions)
             manager.grow_prefill("b", 20, 5, "b0")
             manager.mark_complete("b", 6, "b0")
-            # a 下一 turn 在实例 1(decode):PARTIAL 跨实例两段链
+            # a 下一 turn 在实例 1(decode):REMOTE 跨实例全量回迁
             #(实例 1 各 rank 空闲 272 ≥ 160,无逐出)。
             restore = manager.prepare_history(
                 "a", 1, 20, 8, "a1", required_context_tokens=20)
-            assert restore.action == "PARTIAL_MIGRATE", restore.action
+            assert restore.action == "REMOTE_RESTORE", restore.action
             manager.grow_prefill("a", 20, 9, "a1")
             manager.mark_complete("a", 10, "a1")
-            # c 入场(实例 0,余 112):半层化 b(+80 → 192 ≥ 160 恰停,
-            # 不需要整体外迁)→ b PARTIAL。
+            # c 入场(实例 0,余 112):整体逐出 b(满足即停)→ b REMOTE。
             decision = manager.prepare_history(
                 "c", 0, 0, 12, "c0", required_context_tokens=20)
             assert not decision.admission_blocked
             assert any(t.kind == "remote_store" for t in decision.evictions)
             manager.grow_prefill("c", 20, 13, "c0")
             manager.mark_complete("c", 14, "c0")
-            # b 下一 turn(实例 0,余 32):PARTIAL 同实例后缀回迁,逐出 c
-            #(半层 → 整体,逐笔重查恰停)。
+            # b 下一 turn(实例 0,余 112):REMOTE 同实例全量回迁,逐出 c
+            #(整体,满足即停)。
             remote_restore = manager.prepare_history(
                 "b", 0, 20, 16, "b1", required_context_tokens=20)
-            assert remote_restore.action == "REMOTE_LOAD", (
+            assert remote_restore.action == "REMOTE_RESTORE", (
                 remote_restore.action)
             manager.grow_prefill("b", 20, 17, "b1")
             manager.mark_complete("b", 18, "b1")
@@ -226,6 +229,41 @@ class IncrementalInvariantTests(unittest.TestCase):
         manager._remote_bytes_by_rank[rank] += 1
         with self.assertRaisesRegex(RuntimeError, "remote-pool"):
             manager._check_invariants()
+
+    def test_partial_runtime_state_is_unreachable(self) -> None:
+        """PARTIAL 不可达的运行时证明:手工构造 0<prefix<L 的会话状态
+        (legacy PARTIAL_HBM_REMOTE 位置,或 LOCAL 位置携带部分前缀),
+        _check_invariants 与增量检查都必须 raise。"""
+        manager = _tiered_manager(False)
+        manager.prepare_history(
+            "a", 0, 0, 1, "a0", required_context_tokens=20)
+        manager.grow_prefill("a", 20, 2, "a0")
+        ghost = manager._sessions["a"]
+
+        # legacy PARTIAL_HBM_REMOTE 位置(0 < prefix < L = 2)。
+        partial = SessionKVState(
+            session_id="ghost",
+            location=PARTIAL_HBM_REMOTE,
+            instance_index=0,
+            logical_context_tokens=20,
+            shard_bytes=ghost.shard_bytes,
+            resident_prefix_layers=1,
+        )
+        manager._sessions["ghost"] = partial
+        with self.assertRaisesRegex(RuntimeError, "invalid KV location"):
+            manager._check_invariants()
+        with self.assertRaisesRegex(RuntimeError, "invalid KV location"):
+            manager._check_incremental_session_invariants(partial)
+        del manager._sessions["ghost"]
+
+        # LOCAL 位置携带部分前缀(0 < prefix < L)同样不可达。
+        ghost.resident_prefix_layers = 1
+        with self.assertRaisesRegex(RuntimeError, "missing layers"):
+            manager._check_invariants()
+        with self.assertRaisesRegex(RuntimeError, "missing layers"):
+            manager._check_incremental_session_invariants(ghost)
+        ghost.resident_prefix_layers = manager.model_layers
+        manager._check_invariants()
 
 
 if __name__ == "__main__":

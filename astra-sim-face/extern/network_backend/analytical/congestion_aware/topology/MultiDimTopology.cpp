@@ -110,10 +110,6 @@ Route MultiDimTopology::route(const DeviceId src, const DeviceId dest) const noe
             route.push_back(devices[translate_address(current_address)]);
             continue;
         }
-
-        std::cerr << "[Error] (network/analytical/congestion_aware) "
-                  << "unsupported topology in multi-dimensional route" << std::endl;
-        std::exit(-1);
     }
 
     return route;
@@ -166,11 +162,6 @@ void MultiDimTopology::connect_dimension(const int dim) noexcept {
     case TopologyBuildingBlock::FullyConnected:
         connect_fully_connected_dimension(dim);
         return;
-    default:
-        std::cerr << "[Error] (network/analytical/congestion_aware) "
-                  << "multi-dimensional topology supports Line/Mesh, Ring, and FullyConnected dimensions"
-                  << std::endl;
-        std::exit(-1);
     }
 }
 

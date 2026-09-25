@@ -8,7 +8,6 @@ LICENSE file in the root directory of this source tree.
 using namespace AstraSim;
 
 SendPacketEventHandlerData::SendPacketEventHandlerData() {
-    tag = 0;
     callable = nullptr;
     wlhd = nullptr;
 }

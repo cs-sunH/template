@@ -612,7 +612,7 @@ class _TerminalKVRecorder:
     """Records terminal KV retirement without needing a real topology."""
 
     def __init__(self, released_instance_index=1,
-                 snapshot_location="partial_hbm_remote"):
+                 snapshot_location="remote_memory"):
         self.released_instance_index = released_instance_index
         self.calls = []
         # B3:REQUEST_COMPLETE 的 pending 门登记读取管理器即时快照
@@ -719,7 +719,7 @@ class CompletionGateLifetimeTest(unittest.TestCase):
             decode_length=1,
             decode_train_joined=True,
             decode_instance_index=1,
-            kv_state_after_completion="partial_hbm_remote",
+            kv_state_after_completion="remote_memory",
         )
         following = SimpleNamespace(
             request_id=REQUEST_B,
@@ -750,7 +750,7 @@ class CompletionGateLifetimeTest(unittest.TestCase):
         # 实例,位置 = 完成时点快照);per-request 发射账本释放。
         self.assertEqual(
             scheduler.graph.registered_pending,
-            [(REQUEST_B, SESSION, 1, "partial_hbm_remote")])
+            [(REQUEST_B, SESSION, 1, "remote_memory")])
         self.assertEqual(scheduler.graph.released_requests, [REQUEST_A])
 
 

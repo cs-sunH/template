@@ -34,13 +34,6 @@ class Device {
      */
     [[nodiscard]] DeviceId get_id() const noexcept;
 
-    /**
-     * Get the number of outgoing links from this device.
-     *
-     * @return number of outgoing links
-     */
-    [[nodiscard]] int get_links_count() const noexcept;
-
     [[nodiscard]] std::shared_ptr<const Link> get_link(DeviceId next_device_id) const noexcept;
 
     /**

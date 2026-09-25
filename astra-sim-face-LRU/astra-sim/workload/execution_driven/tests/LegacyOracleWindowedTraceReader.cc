@@ -193,9 +193,6 @@ void LegacyOracleWindowedTraceReader::read_one_row() {
         // completion audit fail-closes on any nonzero count (the drop is
         // visible, never silent).
         ++rejected_out_of_range_;
-        if (queue_index > consumed_idx_) {
-            consumed_idx_ = queue_index;
-        }
         outstanding_rows_.erase(queue_index);
         return;
     }
@@ -243,9 +240,6 @@ void LegacyOracleWindowedTraceReader::notify_consumed(const int64_t queue_index)
         std::abort();
     }
     outstanding_rows_.erase(queue_index);
-    if (queue_index > consumed_idx_) {
-        consumed_idx_ = queue_index;
-    }
 }
 
 void LegacyOracleWindowedTraceReader::report(std::ostream& os) const {

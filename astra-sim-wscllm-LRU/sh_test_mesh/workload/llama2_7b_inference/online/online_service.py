@@ -213,17 +213,16 @@ def main(argv=None) -> int:
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
     # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——
-    # B2(2026-09):值域 = session_lru_recompute(旧值,兼容读取)与
-    # session_lru_tiered(三态冷热管理:两段式 LRU 逐出 + 远端池恢复),
-    # 两者均 -> WscLlmOnlineScheduler(行为上新 KV 管理器唯一,无档位
-    # 分支);其余取值 fail-closed 报错(legacy 与 relevant 两个历史
-    # 变体已于 2026-09-05 随 A.5 方案清除)。
+    # B2(2026-09):唯一取值 session_lru_tiered(三态冷热管理:两段式
+    # LRU 逐出 + 远端池恢复),-> WscLlmOnlineScheduler(行为上新 KV
+    # 管理器唯一,无档位分支);旧值别名与其同调度器,已随 2026-09-25
+    # 命名卫生直接清除;其余取值 fail-closed 报错(legacy 与 relevant
+    # 两个历史变体已于 2026-09-05 随 A.5 方案清除)。
     # 分发不依赖任何代码默认值(总改造计划 §9.4:runner 显式传
     # kv_cache_policy;构造器各自 fail-closed 校验)。
     # P1 journal recorder:开关 on 时装配(见下方分支)。
     journal_recorder = None
-    if config.kv_cache_policy in (
-            "session_lru_recompute", "session_lru_tiered"):
+    if config.kv_cache_policy == "session_lru_tiered":
         # P1(2026-08-30)权威 HBM delta journal 装配:仅在调度器构造之前
         # install——manager 在构造期捕获全局 recorder 并落权重预载首
         # record。recorder 是纯观测旁路(不改任何决策);KV_DELTA_JOURNAL

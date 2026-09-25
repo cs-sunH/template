@@ -34,8 +34,9 @@
 
 输出目录：sh_test_mesh/generated/llama2_7b_wsc_llm_inference_54npus_plan_<cfg8>/（保留 54npus
 前缀以过 GEN_MATCH；<cfg8> = trace_config 内容摘要 8 位 hex）。幂等：重跑
-覆盖同目录。fail-closed：请求队列为空/占位（request-neutral 占位 csv）时
-exit 1 并说明。
+覆盖同目录。fail-closed 在 loader 侧：request_queue_csv 缺失/空队列
+（load_request_queue 要求至少一个请求行）时 load_wsc_llm_trace_config
+直接退出，本脚本因此拿到的请求队列恒非空。
 
 """
 
@@ -60,15 +61,17 @@ PREFIX = "llama2_7b_wsc_llm_inference"
 REPO_VARIANT = "astra-sim-wscllm"
 
 # A.5（2026-09-05，legacy 与 relevant 两个历史变体清除）policy 取值集：
-# B2（2026-09）加 session_lru_tiered（三态冷热管理：两段式 LRU 逐出 +
-# 远端池恢复），与 generate_wsc_llm_trace._parse_config_value 的
-# kv_cache_policy 值域同源；旧值保留（兼容旧 trace_config 读取）。
+# 唯一取值 session_lru_tiered（session 级二态冷热管理：完整本地/完整远端、
+# 整体 LRU 逐出 + 远端池全量恢复；2026-09-25 session 级 Tiered-LRU 批起
+# 原 PARTIAL 半层化三态与两段式逐出已物理移除），与
+# generate_wsc_llm_trace._parse_config_value 的
+# kv_cache_policy 值域同源；旧值别名与本值同调度器（无档位分支），已随
+# 2026-09-25 命名卫生直接清除。
 # loader 已做值域校验，此处为防御性断言（防账本漂移同族语义）；
 # stdout 权威 provenance 记录增携 kv_cache_policy 字段
 # （物化 stdout vs 决策日志 run 头的核对锚点）。
 # 机制零改动：不写 manifest（既有字段冻结），仅 stdout 增字段。
-_KNOWN_KV_POLICIES = frozenset(
-    {"session_lru_recompute", "session_lru_tiered"})
+_KNOWN_KV_POLICIES = frozenset({"session_lru_tiered"})
 
 
 def _assert_policy_passthrough(config) -> dict:
@@ -328,13 +331,6 @@ def _scan_max_session_span(queue_csv):
 
 def main() -> int:
     config = load_wsc_llm_trace_config()
-    if not config.request_queue:
-        print(
-            "[plan_materializer] request queue is empty (request-neutral "
-            "placeholder); materialize the 30s/10s input first and point "
-            "trace_config.csv request_queue_csv at it",
-            file=sys.stderr)
-        return 1
     # A.5（2026-09-05）：policy 透传断言 + provenance（见函数 docstring）。
     policy_provenance = _assert_policy_passthrough(config)
     cfg8 = _config_digest8(config.config_csv)

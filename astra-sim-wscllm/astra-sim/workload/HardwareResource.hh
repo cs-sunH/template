@@ -20,7 +20,7 @@ namespace AstraSim {
 class HardwareResource {
   public:
     HardwareResource(
-        uint32_t num_npus, int sys_id = -1,
+        int sys_id = -1,
         ExecutionDriven::ExecutionMode execution_mode =
             ExecutionDriven::ExecutionMode::Static);
     ~HardwareResource() {
@@ -64,7 +64,6 @@ class HardwareResource {
 
     const int sys_id;
 
-    const uint32_t num_npus;
     // Static mode retains exact IDs for legacy destructor diagnostics. Online
     // mode already has NodeStore's fail-closed lifecycle and keeps only exact
     // in-flight counters here, avoiding hash work on the per-node hot path.
@@ -73,12 +72,13 @@ class HardwareResource {
     uint32_t num_in_flight_gpu_comp_ops;
     uint32_t num_in_flight_gpu_comm_ops;
 
-    // Live accumulators: tics_gpu_ops feeds Workload::report's exposed-
-    // communication line; tics_hbm_dma_ops is accumulated by the local-HBM
-    // bandwidth model.  The write-only num_*/tics_cpu_ops/tics_gpu_comms
-    // debug counters (and HardwareResource::report) were removed as dead.
+    // Live accumulator: tics_gpu_ops feeds Workload::report's exposed-
+    // communication line.  The write-only num_*/tics_cpu_ops/tics_gpu_comms
+    // debug counters (and HardwareResource::report) were removed as dead,
+    // and the write-only tics_hbm_dma_ops local-HBM occupancy counter joined
+    // them (2026-09-25, workload-F4: zero readers repo-wide; the local-HBM
+    // bandwidth model no longer accumulates it).
     uint64_t tics_gpu_ops;
-    uint64_t tics_hbm_dma_ops;
 };
 
 }  // namespace AstraSim

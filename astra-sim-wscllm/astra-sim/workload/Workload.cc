@@ -100,7 +100,7 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
     }
     this->comm_groups.clear();
     // TODO: parametrize the number of available hardware resources
-    this->hw_resource = new HardwareResource(1, sys->id, execution_mode);
+    this->hw_resource = new HardwareResource(sys->id, execution_mode);
     this->local_mem_usage_tracker =
         std::make_unique<LocalMemUsageTracker>(sys->id);
     // Multi-user local-HBM bandwidth contention: one fluid model per rank
@@ -345,7 +345,12 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
     } else {
         if ((node.node_type == ChakraNodeType::MEM_LOAD_NODE) ||
             (node.node_type == ChakraNodeType::MEM_STORE_NODE)) {
-            issue_remote_mem(node);
+            // 2026-09-24 (face A.2 alignment): the remote memory backend was
+            // removed; MEM nodes have no issue path and must fail loudly
+            // like the old NO_MEMORY_EXPANSION exit(1) did.
+            throw std::runtime_error(
+                "MEM_LOAD/MEM_STORE nodes require the remote memory "
+                "backend, which this repository removes (2026-09-24)");
         } else if (node.node_type == ChakraNodeType::COMP_NODE) {
             if (!this->sys->roofline_enabled) {
                 issue_replay(node);
@@ -394,20 +399,6 @@ void Workload::issue_replay(const ExecutionDriven::NodeView& node) {
         hw_resource->tics_gpu_ops += runtime;
     }
     sys->register_event(this, EventType::General, wlhd, runtime);
-}
-
-void Workload::issue_remote_mem(const ExecutionDriven::NodeView& node) {
-    WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
-    wlhd->sys_id = sys->id;
-    wlhd->workload = this;
-    wlhd->node_id = node.global_id;
-    // R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger issue
-    // record moved INTO the backend -- AnalyticalRemoteMemory::issue counts
-    // on the real resolved port_index (Workload must not infer a port from
-    // sys_id; see RemoteFifoLedger.hh). The call below is the only issue
-    // call site in the repo, so per-request accounting coverage is
-    // unchanged, now with the correct key under every memory architecture.
-    sys->remote_mem->issue(node.compute.tensor_size, wlhd);
 }
 
 void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
@@ -476,33 +467,9 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     double elapsed_time = compute_elapsed_time;
 
     if (node.compute.has_remote_weight_bytes) {
-        if (local_hbm_bandwidth_model != nullptr) {
-            // The remote-operand pipeline roofline and the shared-HBM fluid
-            // model are two different timing authorities for the same COMP
-            // node; combining them is a configuration error, not a data
-            // property.  (This repository materializes traces with
-            // remote_operand_loads=false, so the branch is unreachable in
-            // the standard pipeline -- kept fail-closed for parity.)
-            throw std::runtime_error(
-                "HBM bandwidth contention cannot be combined with remote "
-                "operand pipeline loads on the same COMP node");
-        }
-        if (sys->remote_mem_bw <= 0) {
-            throw std::runtime_error(
-                "Pipeline roofline requires remote-mem-bw in system config");
-        }
-
-        double remote_weight_bytes =
-            static_cast<double>(node.compute.remote_weight_bytes);
-        double first_tile_time =
-            (static_cast<double>(sys->remote_mem_latency) / 1e9) +
-            (sys->pipeline_tile_fraction * remote_weight_bytes) /
-                sys->remote_mem_bw;
-        double remaining_transfer_time =
-            ((1.0 - sys->pipeline_tile_fraction) * remote_weight_bytes) /
-            sys->remote_mem_bw;
-        elapsed_time = first_tile_time +
-            std::max(remaining_transfer_time, compute_elapsed_time);
+        throw std::runtime_error(
+            "remote operand pipeline loads are not supported in this "
+            "repository (no remote memory backend)");
     }
 
     uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
@@ -1027,14 +994,6 @@ void Workload::finish_generic_node(uint64_t node_id, EventType event) {
             MetricCollector::instance().on_node_complete(
                 sys->id, node_id, Sys::boostedTick());
         }
-        // R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger
-        // completion record moved INTO the backend --
-        // AnalyticalRemoteMemory::call counts from its own completion
-        // payload (this transaction's port AND bytes). Accounting here
-        // had two defects: the key was sys_id (a shared port's queue was
-        // split into per-rank virtual ledgers) and the record moment was
-        // the node terminal, which an HBM join can hold past the real
-        // port-transaction completion.
     } else {
         node = graph_source_->et_node(node_id);
 
@@ -1060,8 +1019,8 @@ void Workload::finish_generic_node(uint64_t node_id, EventType event) {
     }
 
     // Step 1-3: unconditional node-terminal record (generic wlhd branch;
-    // also reached by AnalyticalRemoteMemory completions, which
-    // register_event back into Workload::call); step 1-5 reverse-index fill
+    // completion paths register_event back into Workload::call);
+    // step 1-5 reverse-index fill
     // in online mode.
     record_node_terminal(execution_mode_, sys->id, node_id,
                          ExecutionDriven::NodeTerminalStatus::Success, nv);

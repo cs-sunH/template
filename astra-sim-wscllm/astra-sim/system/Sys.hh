@@ -9,7 +9,6 @@ LICENSE file in the root directory of this source tree.
 #include <chrono>
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
-#include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CollectivePhase.hh"
 #include "astra-sim/system/CommunicatorGroup.hh"
@@ -73,7 +72,6 @@ class Sys : public Callable {
         std::string workload_configuration,
         std::string comm_group_configuration,
         std::string system_configuration,
-        AstraRemoteMemoryAPI* remote_mem,
         AstraNetworkAPI* comm_NI,
         std::vector<int> physical_dims,
         std::vector<int> queues_per_dim,
@@ -301,10 +299,6 @@ class Sys : public Callable {
     // it (a zero-rate fluid model would stall forever); false restores the
     // legacy closed-form roofline + comm-without-HBM behavior.
     bool hbm_bandwidth_contention;
-    double remote_mem_bw;
-    uint64_t remote_mem_latency;
-    double pipeline_tile_fraction;
-    AstraRemoteMemoryAPI* remote_mem;
 
     // memory bus
     MemBus* memBus;
@@ -361,8 +355,6 @@ class Sys : public Callable {
     bool dispatching_events = false;
     Tick dispatching_event_time = 0;
     int total_nodes;
-    int dim_to_break;
-    std::vector<int> logical_broken_dims;
 
     std::vector<int> physical_dims;
     std::vector<int> queues_per_dim;

@@ -55,10 +55,12 @@ run_dir 上"旧链复刻 vs 单遍 driver"13 产物+日志逐字节对拍，含 
 ## 与 slo_params_manifest.json 的关系
 
 `slo_params_manifest.json` 是 B 类参数的唯一来源（schema_version=1，四仓
-逐字节相同）。当前所有 `value=null`（B4 批次按 derivation_program 引用的
-主规格条款推导后填充）。**所有依赖参数的命令 fail-closed**：遇 null/缺失
-即退出码 2 并指明参数名与推导条款，绝不内置示例值。`bucket_percentiles`
-填充后 value 结构为 `{"percentiles":[...], "prefill_edges_tokens":[...],
+逐字节相同）。B4b 批次已按 derivation_program 引用的主规格条款全部填充
+（value/evidence/rationale 冻结，契约测试 `tests/test_slo_contract.py`
+断言非空）。**所有依赖参数的命令 fail-closed**：slo_tools 各命令遇
+null/缺失即退出码 2 并指明参数名与推导条款，绝不内置示例值；C++
+plan_materializer 侧遇 null 则回退临时锚点并置 provisional=true。
+`bucket_percentiles` value 结构为 `{"percentiles":[...], "prefill_edges_tokens":[...],
 "decode_edges_tokens":[...]}`（含首尾哨兵；interior edges 为各左桶
 闭上界——如 decode=91 归 d1、prefill=415 归 p1，末桶无上限、
 吸收 x > edges[-1]；2026-09-05 口径裁决，与 campaign_common.BucketGrid

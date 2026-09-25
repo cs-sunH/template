@@ -36,6 +36,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 from slo_common import (  # noqa: E402
@@ -116,11 +120,21 @@ class BoundedSorterTests(unittest.TestCase):
         sorter = BoundedSorter(chunk_size=2)
         for value in range(50):
             sorter.add(value)
-        consumed = list(sorter.sorted_iter())
+        it = sorter.sorted_iter()
+        first = next(it)
+        # 迭代存续期：spill 文件在本 sorter 自己的路径上（按 spill_paths
+        # 精确断言；不 glob 共享系统临时目录——门禁按规格两仓套件都会
+        # 执行，并发进程会产生同前缀的在飞/残留文件，与本 sorter 的
+        # 清理契约无关，全局 glob 会误伤）。
+        spill_paths = tuple(sorter.spill_paths)
+        self.assertTrue(spill_paths)
+        self.assertTrue(all(path.exists() for path in spill_paths))
+        consumed = [first, *it]
         self.assertEqual(consumed, list(range(50)))
-        leftovers = list(Path(tempfile.gettempdir()).glob(
-            "slo_bounded_sort_*"))
-        self.assertEqual(leftovers, [])
+        # 迭代结束：本 sorter 的 spill 文件全部删除、持有表清空。
+        self.assertEqual(sorter.spill_paths, ())
+        self.assertTrue(
+            all(not path.exists() for path in spill_paths))
 
 
 class PercentileManyTests(unittest.TestCase):

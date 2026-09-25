@@ -237,6 +237,10 @@ def _scheduler(*, quota_mode="static"):
                 base_resident_prefix_layers=4),
         },
         _reservations={},
+        # 规格书§二.2（2026-09-25）：prefill remote-read 前缀读流规划
+        # （_try_admit_request 事务前调用）——中性桩缺省空规划；需要
+        # #prefill_read 真实登记的测试（A10b 回滚面）在用例内覆写。
+        plan_prefill_remote_read_transfers=lambda *args, **kwargs: (),
         release_request_capacity_reservation=lambda rid: None,
         request_hbm_eventually_feasible_instances=lambda **kw: (
             [True, True, True, True]),
@@ -872,6 +876,24 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
             lambda **kw: (eviction,))
         scheduler.kv_manager.prepare_prefill = (
             lambda **kw: (None, (), ()))
+        # 规格书§二.2/§二.5（2026-09-25）：前缀读流规划桩返回单条
+        # noc_migrate prefill 读流（home 1 → exec 3 真实 mesh 路径
+        # (2,3,7)）——事务成功段以 rid#prefill_read 真实登记，入册失败
+        # 回滚路径覆盖新 owner。
+        prefill_read = KVTransfer(
+            kind="noc_migrate", phase="prefill",
+            reason="remote_read_prefill_prefix",
+            session_id="s1", trigger_request_id="rX",
+            source_instance_index=1, target_instance_index=3,
+            total_bytes=8,
+            shards=(KVTransferShard(
+                source_rank=2, target_rank=7, edge_rank=None, bytes=8,
+                noc_path=(2, 3, 7), layer_start=0, layer_end=4),),
+            model_layers=4, layer_start=0, layer_end=4,
+            resident_prefix_layers_before=4,
+            resident_prefix_layers_after=4, stream_only=True)
+        scheduler.kv_manager.plan_prefill_remote_read_transfers = (
+            lambda *args, **kwargs: (prefill_read,))
         # 选中 remote-read@3：模块级 select_instance_and_action 打桩
         # （场景设定——被测机器 = 防御分支回滚，非 argmin）。路由 1→3
         # 每链需求恰 Q=2（读流 1 + 预留 fwd 1，quota 夹具同款事实）不
@@ -905,8 +927,9 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
         captured = {}
 
         def fake_enroll(runtime_, session_view, action, target, now_ns):
-            # 回滚断言锚：入册失败时刻注册表必须非空（rid 历史迁移 +
-            # rid#readplan 预登记均已落地）。
+            # 回滚断言锚：入册失败时刻注册表必须非空（rid#evict 逐出支
+            # 链 + rid#prefill_read 前缀读流均已落地；#readplan 注册表
+            # 半边 2026-09-25 起延迟到 drain 对账，准入相零登记）。
             captured["flows"] = scheduler._joint_flows.snapshot()
             captured["preplan"] = runtime_.remote_read_preplan
             captured["hbm_leaks"] = dict(
@@ -930,10 +953,12 @@ class A10bQuotaEnrollFailureRollbackTest(unittest.TestCase):
         self.assertEqual(
             scheduler._quota_deferred_wait_counts["quota_link"], 1)
         self.assertFalse(scheduler.pending_admissions)  # 调用方回队职责
-        # 回滚前非空（证明回滚真的清了东西，而非空放）。
+        # 回滚前非空（证明回滚真的清了东西，而非空放）：#prefill_read
+        # 前缀读流在册；#readplan 不在册（准入相零登记，规格书§二.5）。
         self.assertTrue(captured["flows"])
         self.assertIsNotNone(captured["preplan"])
-        self.assertIn("rX#readplan", captured["hbm_leaks"])
+        self.assertIn("rX#prefill_read", captured["hbm_leaks"])
+        self.assertNotIn("rX#readplan", captured["hbm_leaks"])
         # 注册表归零：链路流 / 池端口 / HBM 端口 / preplan 账目
         # （LinkFlowRegistry.has_registrations 是"本 run 登记过"的粘滞
         # 披露旗标，不随释放回落——非归零判据）。

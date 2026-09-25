@@ -506,5 +506,102 @@ class InterleavedFullEvictionImmediateRestoreTest(unittest.TestCase):
             SESSION_X, harness.builder.pending_store_tails)
 
 
+class StoreForwardingHelperTests(unittest.TestCase):
+    """T8（P2-R2 助手级单测，PARTIAL 跨实例 copy 流水化 2026-09-25）：
+    _arm_pending_store_edges 的三段分解——_match_store_entries（纯查询
+    + 历史文案 fail-closed）/ _emit_store_relays_once（每 (store_edge,
+    restore_edge) 对恰一次发射 + relay_cache 去重）/ _consume_store_
+    entries（恰移除 matched、其余保留）。公开 _arm_pending_store_edges
+    的消费/arm/中级行为不变由上面各直调用例钉住。"""
+
+    def _harness(self):
+        return _OrderingHarness(_make_config(
+            npus_count=4,
+            groups=[("tp_prefill", (0,)), ("tp_decode", (3,))],
+            edge_npus=(1, 2)))
+
+    def test_match_is_pure_query_with_intersection_semantics(self):
+        builder = self._harness().builder
+        builder.pending_store_tails[SESSION_X] = [
+            (1, 11, 11, 0, 8),
+            (2, 22, 22, 8, 16),
+            (2, 33, 33, 20, 32),
+        ]
+        matched, retained = builder._match_store_entries(SESSION_X, 4, 12)
+        self.assertEqual(
+            [(entry[0], entry[1]) for entry in matched],
+            [(1, 11), (2, 22)],
+            "entries intersecting [4, 12) match; [20, 32) does not")
+        self.assertEqual(
+            [(entry[0], entry[1]) for entry in retained], [(2, 33)])
+        # 纯查询：账本不被改动（消费由 _consume_store_entries 单独承担）。
+        self.assertEqual(len(builder.pending_store_tails[SESSION_X]), 3)
+
+    def test_match_no_overlap_raises_with_historical_message(self):
+        builder = self._harness().builder
+        builder.pending_store_tails[SESSION_X] = [(2, 33, 33, 20, 32)]
+        with self.assertRaises(RuntimeError) as ctx:
+            builder._match_store_entries(SESSION_X, 8, 16)
+        message = str(ctx.exception)
+        self.assertIn(SESSION_X, message)
+        self.assertIn("[8, 16)", message)      # restore 区间
+        self.assertIn("[20, 32)", message)     # 现有条目区间
+
+    def test_consume_removes_exactly_matched_entries(self):
+        builder = self._harness().builder
+        entries = [(1, 11, 11, 0, 8), (2, 22, 22, 8, 16), (2, 33, 33, 20, 32)]
+        builder.pending_store_tails[SESSION_X] = list(entries)
+        builder._consume_store_entries(SESSION_X, [entries[0], entries[2]])
+        self.assertEqual(
+            builder.pending_store_tails[SESSION_X], [entries[1]],
+            "only the matched entries are removed; retained survive")
+        builder._consume_store_entries(SESSION_X, [entries[1]])
+        self.assertNotIn(
+            SESSION_X, builder.pending_store_tails,
+            "emptying the matched set pops the session key")
+
+    def test_relays_emit_once_per_pair_and_cache_dedups(self):
+        builder = self._harness().builder
+        # 同一跨缘对 (1,2) 的两条 matched 条目共享一次中继发射。
+        matched = [(1, 11, 11, 0, 8), (1, 12, 12, 8, 16)]
+        relay_cache = {}
+        first = builder._emit_store_relays_once(
+            matched, [2], "relay_probe", relay_cache=relay_cache)
+
+        def relay_nodes(b):
+            return [
+                node for rank_builder in b.builders.values()
+                for node in rank_builder.nodes
+                if "store_sidelink" in node["name"]]
+
+        sends = [
+            node for node in relay_nodes(builder)
+            if node["type"] == COMM_SEND_NODE]
+        recvs = [
+            node for node in relay_nodes(builder)
+            if node["type"] == COMM_RECV_NODE]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(len(recvs), 1)
+        self.assertEqual(
+            sends[0]["comm"]["tag"], recvs[0]["comm"]["tag"],
+            "relay send/recv are tag-paired")
+        self.assertEqual(sends[0]["comm"]["bytes"], 1)
+        self.assertIn((1, 2), relay_cache)
+        self.assertEqual(first, {2: relay_cache[(1, 2)]})
+        # 同批同对第二次调用命中缓存：零新节点（评审 #2 中继膨胀回归
+        # 钉——恢复组支链的中继提升到组循环之前，组数无关）。
+        nodes_after_first = len(relay_nodes(builder))
+        second = builder._emit_store_relays_once(
+            matched, [2], "relay_probe", relay_cache=relay_cache)
+        self.assertEqual(second, first)
+        self.assertEqual(len(relay_nodes(builder)), nodes_after_first)
+        # 无缓存调用面（公开 _arm_pending_store_edges 路径）不去重——
+        # 每调用恰一次发射（对现有三消费者语义 = 历史行为）。
+        other = self._harness().builder
+        uncached = other._emit_store_relays_once(matched, [2], "relay_probe")
+        self.assertEqual(len(uncached), 1)
+        self.assertEqual(len(relay_nodes(other)), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

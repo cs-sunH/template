@@ -114,7 +114,6 @@ from online.online_scheduler_base import (  # noqa: E402
 )
 from session_kv_manager import (  # noqa: E402
     LOCAL_HBM,
-    PARTIAL_HBM_REMOTE,
     SessionKVCacheManager,
     kv_cache_shard_bytes_for_tokens,
 )
@@ -214,12 +213,12 @@ class _OnlineRequestRuntime:
         self.history_source_instance_index = None
         self.history_transfer_bytes = None
         self.history_recompute_tokens = None
-        # B2(2026-09-06):三态恢复路径的 KVTransfer 对象组(契约 §4)。两段
-        # 式恢复(前缀 NoC 迁移 + 后缀远端回迁)在同一条 prefill 决策记录
-        # 内逐段承载——hbm_watermark 同请求同 kind 两次即 fail,不得拆两条。
+        # B2(2026-09-06):恢复路径的 KVTransfer 对象组(契约 §4);session
+        # 级 Tiered-LRU 下恒为单笔全量 remote_load(一条 prefill 决策记录
+        # 承载——hbm_watermark 同请求同 kind 两次即 fail,不得拆两条)。
         self.history_transfers = ()
         # B3(2026-09-06):准入时点(prepare_history 之前)的会话 KV 快照
-        # (SessionKVSnapshot;构图器 partial 流水/位置对账消费)+ 三段
+        # (SessionKVSnapshot;构图器恢复发射/位置对账消费)+ 三段
         # 逐出 KVTransfer 账本(history = prepare_history、prefill = grow_
         # prefill、decode = move/grow_decode;跨阻塞 attempt 累积,发射后
         # 核销)+ drain 列车块末(joiner decode_evictions 触发门来源)+
@@ -367,8 +366,9 @@ def _eviction_hop_rows(records) -> list:
 class FaceOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:face 真实策略(关感知)在在线骨架中运行。
 
-    蓝本: _plan_face_session_lru_recompute(face_scheduler.py),
-    kv_cache_policy == "session_lru_recompute"(主变体)。拓扑 / 加权实例图 /
+    蓝本: _plan_face_session_lru_recompute(face_scheduler.py)(离线保留
+    对象的历史命名;本调度器现值域唯一合法 kv_cache_policy ==
+    "session_lru_tiered",见 __init__ 校验)。拓扑 / 加权实例图 /
     Roofline 估计 / KV 账本(与离线同一函数、同参数)在运行期按当前候选
     直接计算,策略输入全部来自这些 Python 账本(关感知)。
     """
@@ -397,17 +397,15 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         if mode != "strategy":
             raise ValueError("FaceOnlineScheduler requires mode == 'strategy'")
         # B2(2026-09-06):kv_cache_policy 值域 fail-closed 同步(契约 §8)。
-        # 新值 session_lru_tiered = 三态 KV 内核(本仓唯一行为,无档位
-        # 分支);旧值 session_lru_recompute 保留在值域(trace_config 实际
-        # 换值归 B3)。
-        if config.kv_cache_policy not in (
-            "session_lru_recompute",
-            "session_lru_tiered",
-        ):
+        # 2026-09-25 session 级 Tiered-LRU 命名卫生起唯一合法值
+        # session_lru_tiered(session 级二态冷热管理,本仓唯一行为,无档位
+        # 分支);旧值别名 session_lru_recompute 已清除,其余取值
+        # fail-closed。
+        if config.kv_cache_policy != "session_lru_tiered":
             raise ValueError(
                 "strategy scheduler supports kv_cache_policy "
-                "'session_lru_recompute'/'session_lru_tiered' only, got "
-                "{!r}".format(config.kv_cache_policy))
+                "'session_lru_tiered' only, got {!r}".format(
+                    config.kv_cache_policy))
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用;基类经 self.graph 调 begin_batch)
 
         # 蓝图 :1314:拓扑(统一实例,require_equal_size)。
@@ -746,21 +744,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         if self._train_max_iter and iterations > self._train_max_iter:
             iterations = self._train_max_iter
             capped = True
-        # B3(sh :630-635):partial 恢复列车判定——队列头首 chunk 且历史
-        # 位置为 partial(准入时点快照)。该列车 span 平铺改为 [首 chunk]
-        # + [各成员第 1 迭代 span] + [其余 chunk + 成员剩余 span],首组
-        # 进列车的 prefix/suffix 层段两段发射(真流水,见构图器)。
-        partial = (
-            qp_head is not None
-            and qp_head.prefill_tokens_completed == 0
-            and qp_head.history_location_before is not None
-            and qp_head.history_location_before.location == PARTIAL_HBM_REMOTE
-        )
+        # Session-level Tiered-LRU (2026-09-25):partial 恢复列车判定与
+        # 首 chunk prefix/suffix 层段两段发射随 PARTIAL 态一并删除——恢复
+        # 恒为全量 remote_load,列车体统一聚合发射(构图器契约同步)。
         member_parts = []
         exit_members = []
-        member_first_spans = []
-        member_rest_spans = []
-        member_spans = []
         pass_spans: list[tuple[int, int]] = []
         chunk_records = []
         if qp_head is not None:
@@ -768,22 +756,12 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             pass_spans.extend(span for _, _, span in chunk_records)
         for runtime, context, consumed, remaining in members:
             participation = min(remaining, iterations)
-            member_first_spans.append((1, context + consumed + 1))
-            member_rest_spans.extend(
-                (1, context + consumed + step)
-                for step in range(2, participation + 1))
-            member_spans.extend(
+            pass_spans.extend(
                 (1, context + consumed + step)
                 for step in range(1, participation + 1))
             member_parts.append((runtime.request_id, participation))
             if participation >= remaining:
                 exit_members.append(runtime.request_id)
-        if partial:
-            pass_spans = (
-                pass_spans[:1] + member_first_spans + pass_spans[1:]
-                + member_rest_spans)
-        else:
-            pass_spans.extend(member_spans)
         # 队列头在列车内完成其全部剩余 chunk(列车长度 = 头部剩余 chunk
         # 数)⇒ 列车终于头部 drain 迭代(drain 是先验已知的列车边界)。
         # T_max 截断时头部未必 drain —— 重算。
@@ -804,7 +782,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 "exits": exit_members,
                 "drains": drain_members,
                 "chunks": [(rid, tokens) for rid, tokens, _ in chunk_records],
-                "partial": partial,
                 "capped": capped,
             },
             sort_keys=True,
@@ -821,9 +798,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 (rid, tokens) for rid, tokens, _ in chunk_records],
             "head_first_chunk": head_first_chunk,
             "pass_spans": pass_spans,
-            "partial": partial,
-            "partial_first_chunk_count": (
-                1 + len(member_parts) if partial else None),
             "capped": capped,
             "sentinel": bool(capped and not drain_members
                              and not exit_members),
@@ -836,11 +810,12 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         """face 队头 prefill 段的接下来 count 个 chunk。
 
         B2(2026-09-06):RECOMPUTE 从调度器规划中删除(策略 §1.4)——
-        被逐出会话的历史经三态恢复路径回迁(local_hit/noc_migrate/
-        remote_load),不再生成重算段;remaining_chunks 口径同步去掉
-        ceil(R/p_chunk) 项(见 _try_admit_prefill)。当前段在
-        history_tokens_before 上追加,span 构造与离线 chunk 序同构。
-        返回 [(request_id, chunk_tokens, (tokens, kv) span), ...]。"""
+        被逐出会话的历史经恢复路径回迁(local_hit/noc_migrate/remote_load,
+        session 级 Tiered-LRU 下恢复恒全量),不再生成重算段;
+        remaining_chunks 口径同步去掉 ceil(R/p_chunk) 项(见
+        _try_admit_prefill)。当前段在 history_tokens_before 上追加,span
+        构造与离线 chunk 序同构。返回 [(request_id, chunk_tokens, (tokens,
+        kv) span), ...]。"""
         prefill_tokens = qp_head.prefill_length
         completed = qp_head.prefill_tokens_completed
         history = qp_head.history_tokens_before
@@ -958,9 +933,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                  "session_id": self.runtime_by_request_id[request_id].session_id}
                 for request_id in plan["exit_members"]],
         }
-        if plan.get("partial"):
-            train_plan["partial_first_chunk_count"] = (
-                plan["partial_first_chunk_count"])
         first_token = self._first_token_plan(plan, joiners)
         if first_token is not None:
             train_plan["first_token"] = first_token
@@ -1021,13 +993,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         求和与顺序无关,两组的激活/KV/AR 字节总量与整列一致;权重经
         weight_passes(1 + iterations-1)合计不变。
 
-        B3(sh :779-786):partial 恢复列车的 layout 本就是 [首 chunk]
-        + [各成员第 1 迭代 span] + [其余 chunk + 成员剩余 span],前缀组
-        恰为首步组(partial_first_chunk_count 切点)。"""
+        Session-level Tiered-LRU (2026-09-25):partial 恢复列车的专用
+        layout(partial_first_chunk_count 切点)随 PARTIAL 态一并删除。"""
         spans = list(plan["pass_spans"])
-        if plan.get("partial"):
-            cut = int(plan["partial_first_chunk_count"])
-            return list(spans[:cut]), list(spans[cut:])
         chunk_count = len(plan["prefill_chunk_tokens"])
         member_parts = plan["members"]
         if chunk_count + sum(p for _, p in member_parts) != len(spans):
@@ -1098,8 +1066,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             "drains": list(plan["drain_members"]),
             "exits": list(plan["exit_members"]),
             "prefill_chunks": len(plan["prefill_chunk_tokens"]),
-            # B3:partial 恢复列车标记(首 chunk 层段拆分发射的审计行)。
-            "partial": bool(plan.get("partial")),
             "pass_spans": len(plan["pass_spans"]),
         }
         if first_step:
@@ -1132,12 +1098,15 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         state.first_step_remainder = train_plan
         self._pending_first_steps[first_token["wakeup_id"]] = state.index
         self._ready_frontier.discard(state.index)  # §7.3:发射即忙
-        # B3:joiner 的 decode 逐出账本已随首步批列车头消费,核销防重发
-        # (drain_block_ends 不在此清——余量批的 watch 注册不消费它,
-        # joiner 消费点已过)。
+        # B3:joiner 的 decode 逐出账本已随首步批列车头消费,核销防重发;
+        # drain_block_ends 同点清空(与整列发射的 joiner 核销同款——消费
+        # 点在 _emit_train 的列车计划快照,每个 joiner 恰消费一次,余量批
+        # 与后续完成链都不再读 runtime 上的该字段,不清则残留 dict 钉到
+        # runtime 释放)。
         for request_id in train_plan["joiner_ids_of_record"]:
             joiner_runtime = self.runtime_by_request_id[request_id]
             joiner_runtime.decode_evictions = ()
+            joiner_runtime.drain_block_ends = None
         self._emit_train_ledger_row(
             state, plan, train_plan["joiner_ids_of_record"],
             tick, first_step=True)
@@ -1305,8 +1274,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             runtime.session_id)  # :1670
         if completed_snapshot is None:  # :1671-1672
             raise RuntimeError("completed session disappeared from KV manager")
-        # B2(2026-09-06):快照状态字段换三态 location(local_hbm/
-        # partial_hbm_remote/remote_memory)。
+        # Session-level Tiered-LRU(2026-09-25):快照状态字段为两态
+        # location(local_hbm/remote_memory)。
         runtime.kv_state_after_completion = completed_snapshot.location  # :1673
         runtime.kv_instance_after_completion = (  # :1674
             completed_snapshot.instance_index)
@@ -1483,11 +1452,11 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         before_snapshot = self.kv_manager.session_snapshot(  # :1392
             runtime.session_id)
         runtime.history_cache_state_before = (  # :1393-1395
-            # B2:三态 location 值域(local_hbm/partial_hbm_remote/
+            # Session-level Tiered-LRU:两态 location 值域(local_hbm/
             # remote_memory);ABSENT 语义不变。
             "ABSENT" if before_snapshot is None else before_snapshot.location
         )
-        # B3:准入时点快照对象随 runtime 走(构图器 partial 流水与位置
+        # B3:准入时点快照对象随 runtime 走(构图器恢复发射与位置
         # 对账消费;prepare_history 会改会话态,先捕获)。
         runtime.history_location_before = before_snapshot
         runtime.hbm_before_request = self.kv_manager.hbm_snapshots(  # :1396
@@ -1539,9 +1508,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             transfer.total_bytes for transfer in decision.transfers
             if transfer.kind != "local_hit")
         runtime.history_recompute_tokens = decision.recompute_tokens  # :1416
-        # B2:KVTransfer 对象组由管理器构造(kind 载体,契约 §4);两段式
-        # 恢复(前缀 noc_migrate + 后缀 remote_load)两段同 holder 承载,
-        # 一条 prefill 决策记录序列化(不得拆两条)。
+        # B2:KVTransfer 对象组由管理器构造(kind 载体,契约 §4);session
+        # 级 Tiered-LRU 下恢复恒为单笔全量 remote_load(holder 单段)。
         runtime.history_transfers = decision.transfers
         growth = self.kv_manager.grow_prefill(  # :1430-1435
             runtime.session_id,
@@ -1791,12 +1759,12 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 "history_transfer_bytes": runtime.history_transfer_bytes,
                 "history_recompute_tokens": runtime.history_recompute_tokens,
                 # ---- B3(契约 §3,sh :1500-1541 逐字对齐)----
-                # 逐出 victim/bytes 逐条序列化 + partial 两段式恢复逐段
-                # 对象(一条 prefill 记录承载——hbm_watermark"同请求同
-                # kind 两次即 fail");准入时点的会话历史位置三态序列化
-                # (kv_cache_adapter S2 分支映射 kv_hit_state);hopbytes
-                # 逐传输对象 noc 路由摘要。纯输出字段,进 A/B 对拍剥离
-                # 清单。
+                # 逐出 victim/bytes 逐条序列化 + 恢复传输逐段对象(一条
+                # prefill 记录承载——hbm_watermark"同请求同 kind 两次即
+                # fail";session 级 Tiered-LRU 下恒单段全量 remote_load);
+                # 准入时点的会话历史位置两态序列化(kv_cache_adapter 映射
+                # kv_hit_state);hopbytes 逐传输对象 noc 路由摘要。纯输出
+                # 字段,进 A/B 对拍剥离清单。
                 "history_eviction_count": len(runtime.history_evictions),
                 "history_evictions": _transfer_rows(
                     runtime.history_evictions),
@@ -1869,7 +1837,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
     def _plan_dict(self, runtime) -> dict:
         """graph_batch_builder 消费的 plan 字段(request 事实 + 在线决策)。
 
-        B3:三态 KV 发射面——history_location_before(准入时点快照对象)、
+        B3:两态 KV 发射面——history_location_before(准入时点快照对象)、
         history_transfers(KVTransfer 组)、history/prefill 逐出账本、
         kv_location_after_completion(上一 turn 完成时预置的 pending
         location 链初值,turn>0 消费)。"""
@@ -1889,7 +1857,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             "prefill_context_tokens": runtime.prefill_context_tokens,
             "prefill_length": runtime.prefill_length,
             "decode_length": runtime.decode_length,
-            # ---- B3 三态 KV 发射面 ----
+            # ---- B3 两态 KV 发射面 ----
             "history_location_before": runtime.history_location_before,
             "history_transfers": runtime.history_transfers,
             "history_evictions": runtime.history_evictions,
@@ -1933,9 +1901,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         快照与纯函数,严禁触碰 ensure_physical_fit / reserve_* / 逐出 /
         放置(ensure_physical_fit 边逐出边检查、失败不回滚,只能进最终
         commit,不进探测循环)。保守剩余容量口径(remaining-only,不含
-        冷会话逐出信用——B2 三态化后候选池换私有 _completed_*_
-        candidates,口径裁决不变:预检不换 reclaimable,误判不可行时原选
-        择保持,由 P0-1 在下一边界重试兜底;策略 §5 裁决 1)。
+        冷会话逐出信用——B2 三态化后候选池换私有 _completed_local_
+        candidates(session 级 Tiered-LRU 下唯一 victim 池),口径裁决不变:
+        预检不换 reclaimable,误判不可行时原选择保持,由 P0-1 在下一边界
+        重试兜底;策略 §5 裁决 1)。
         """
         return all(
             required <= snapshot.remaining_bytes
@@ -1954,10 +1923,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         需求口径严格镜像 move_prefill_to_decode(session_kv_manager.py,
         只读版):final_shards = kv_cache_shard_bytes_for_tokens(model,
         final_context_tokens, tp);候选 c 的需求 = final_shards −(会话
-        本地驻留(location ∈ {local_hbm, partial_hbm_remote})且已在 c 上
-        的 local_shard_bytes),即 source==target 按增量、否则全量(双
-        驻留:源副本仍占源)。B2:三态口径——增量信用 = 驻留前缀层段
-        (local_shard_bytes),PARTIAL 会话只按前缀折减(镜像管理器账本)。
+        本地驻留(location == local_hbm)且已在 c 上的 local_shard_bytes),
+        即 source==target 按增量、否则全量(双驻留:源副本仍占源)。
+        Session-level Tiered-LRU:本地驻留恒为全量(local_shard_bytes 即
+        全 session 字节),镜像管理器两值账本。
 
         选择规则(决策确定性,总文档 §4 P1):
           - 原 selected 可行 -> 原样返回:决策日志与原实现零差异,
@@ -1979,10 +1948,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         for cost in costs:
             required = final_shards
             if (session_shards is not None
-                    and session_shards.location in (LOCAL_HBM, PARTIAL_HBM_REMOTE)
+                    and session_shards.location == LOCAL_HBM
                     and session_shards.instance_index == cost.instance_index):
                 # source==target 增量口径(镜像 move_prefill_to_decode 的
-                # existing_target;B2:驻留前缀层段)。
+                # existing_target;两态口径:本地驻留 = 全量层域)。
                 required = tuple(
                     want - have for want, have in zip(
                         final_shards, session_shards.local_shard_bytes))
@@ -2173,8 +2142,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with unretired completion gates: {!r}"
                 .format(sorted(self.graph.completion_gates)))
-        # B3:三态 KV 发射账本收尾审计——pending location 链/partial 流水
-        # 登记必须全部被消费(与 §7.3 frontier 同款 fail-closed)。
+        # B3:两态 KV 发射账本收尾审计——pending location 链登记必须
+        # 全部被消费(与 §7.3 frontier 同款 fail-closed)。
         if getattr(self.graph, "deferred_session_locations", None):
             raise RuntimeError(
                 "strategy run ended with deferred session locations: {!r}"
@@ -2183,11 +2152,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with pending request-by-session: {!r}"
                 .format(sorted(self.graph.pending_request_by_session)))
-        if getattr(self.graph, "_partial_first_chunk", None):
-            raise RuntimeError(
-                "strategy run ended with unconsumed partial first-chunk "
-                "ledgers: {!r}".format(
-                    sorted(self.graph._partial_first_chunk)))
         if getattr(self.graph, "_block_ends", None):
             raise RuntimeError(
                 "strategy run ended with unretired request block ends: {!r}"

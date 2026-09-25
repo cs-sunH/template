@@ -38,6 +38,7 @@ from joint.joint_cost_model import (  # noqa: E402
     ACTION_COPY,
     ACTION_REMOTE,
     InstanceLoadView,
+    JointCostError,
     JointCostModel,
     JointHardwareRates,
     LinkFlowRegistry,
@@ -90,6 +91,48 @@ def _request(input_tokens=50, decode=10, input_bytes=(25, 25),
 def _disjoint_paths(source, target):
     """tp=2 逐 rank 不相交路径（rank 对 (2s,2t)/(2s+1,2t+1)，各 1 跳）。"""
     return ((2 * source, 2 * target), (2 * source + 1, 2 * target + 1))
+
+
+class PerRankFootprintTest(unittest.TestCase):
+    """Capacity footprints preserve the KV ledger's physical TP partition."""
+
+    def test_copy_footprint_keeps_skewed_rank_bytes(self):
+        model = _model()
+        session = _session(
+            history_bytes=(100, 900), missing=(0, 0), resident=0)
+        request = _request(input_bytes=(7, 13))
+        self.assertEqual(
+            model._space_footprint_by_tp_rank(
+                session, request, instance_index=1, action=ACTION_COPY),
+            (107, 913))
+
+    def test_footprint_rejects_tp_vector_length_mismatch(self):
+        model = _model()
+        session = _session(history_bytes=(100, 900))
+        request = _request(input_bytes=(7,))
+        with self.assertRaisesRegex(JointCostError, "length"):
+            model._space_footprint_by_tp_rank(
+                session, request, instance_index=1, action=ACTION_COPY)
+
+
+class CopyStreamingCostTest(unittest.TestCase):
+    """Copy cost starts at the first C13 chunk and overlaps the tail."""
+
+    def test_copy_prefix_tail_overlaps_compute(self):
+        model = _model(rates=_rates(noc=10.0, hbm=100.0, lat=0))
+        model.model_layers = 16
+        candidate = model.estimate_action(
+            session=_session(
+                history_bytes=(1600, 1600), prefix=16, resident=0),
+            request=_request(input_tokens=50, decode=10),
+            instance_index=1, action=ACTION_COPY, remote_enabled=True)
+        self.assertTrue(candidate.applicable)
+        # Full prefix transfer is retained in the audit breakdown (160 ns),
+        # while the critical path is first chunk 80 ns + max(tail 80 ns,
+        # compute 70 ns) = 160 ns.
+        self.assertEqual(candidate.breakdown.history_prep_ns, 160)
+        self.assertEqual(candidate.cost_ns, 160)
+        self.assertIn("copy_handoff_chunks=2", candidate.breakdown.notes)
 
 
 def _route(source, target):

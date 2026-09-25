@@ -731,5 +731,212 @@ class AdaptiveDecisionDisciplineTests(unittest.TestCase):
         self.assertEqual(row["pool_divisor"], 3)
 
 
+class RestoreGroupParallelTests(unittest.TestCase):
+    """T3（P2-R2 锚，PARTIAL 跨实例 copy 流水化 2026-09-25）：恢复组并行
+    发射的新形态断言：
+
+      (a) 组间无边：各组首节点（边缘 mem_load）父集合 = {驻留前缀屏障
+          （或共享中继 recv）} ∪ {与本组层区间交集的 store 节点}——两组
+          fork 同一 frontier，互不链；
+      (b) 交集语义：合成中段条目 [10,12) 只被与其交集的组 1 arm（组 0
+          的首节点祖先不含它）——勿"每组 arm 全部条目"；
+      (c) store_sidelink 中继每 (store_edge, restore_edge) 对**恰一对**
+          节点（与组数无关——O(跨缘对数) 回归钉）；中继 recv 是两组首
+          节点的共同链序父（共享中继语义）；
+      (d) span 内条目在准入批发射内消费（pending_store_tails 窗口有界
+          ——merge_tail_gated 纯度回归钉）；span 外条目保留；
+      (e) 组门逐 rank 落点全在 Prefill ranks（目标 HBM 落点 = 执行实例）
+          且层区间连续铺满后缀。
+    """
+
+    def setUp(self):
+        self.builder = GraphBatchBuilder(_graph_config())
+        self.builder.begin_batch()
+
+    def _nodes(self):
+        return self.builder.batch["nodes"]
+
+    def _parents_by_rank(self):
+        parents = {}
+        for edge in self.builder.batch["parent_edges"]:
+            parents.setdefault((edge["rank"], edge["to"]), []).append(
+                edge["from"])
+        return parents
+
+    def _seed_arrival_and_stores(self, extra_entries=()):
+        """turn-1 到达门 + 在飞池写登记。基础条目 A = 后缀 [8,16) 双缘
+        （store 节点 id = 到达门种子节点）；extra_entries = ((层区间),
+        edge_rank) 合成条目——store 节点 id 取该缘新种子节点。返回
+        store 节点 id 映射 {(edge_rank, 层区间): store_id}。"""
+        from generate_face_trace import PendingHistoryGate
+        gate_ids = {}
+        for rank in (0, 1):
+            self.builder.builders[rank].comp(
+                f"arrival_seed_rank{rank}", 1, 1)
+            gate_ids[rank] = self.builder.builders[rank].previous_id
+        self.builder.pending_history[REQUEST_R] = PendingHistoryGate(
+            source_instance_index=0,
+            timer_gates=(gate_ids[0], gate_ids[1]),
+            location="partial_hbm_remote")
+        store_ids = {(0, (8, 16)): gate_ids[0], (1, (8, 16)): gate_ids[1]}
+        self.builder._register_store_tails(
+            _store_transfer(8, 16), {"shards": [
+                {"edge_rank": 0, "edge_store_node_id": gate_ids[0],
+                 "source_ack_recv_node_id": gate_ids[0]},
+                {"edge_rank": 1, "edge_store_node_id": gate_ids[1],
+                 "source_ack_recv_node_id": gate_ids[1]}]})
+        for layer_start, layer_end, edge_rank in extra_entries:
+            self.builder.builders[edge_rank].comp(
+                f"extra_store_seed_rank{edge_rank}_"
+                f"ls{layer_start}", 1, 1)
+            store_id = self.builder.builders[edge_rank].previous_id
+            store_ids[(edge_rank, (layer_start, layer_end))] = store_id
+            self.builder._register_store_tails(
+                _store_transfer(layer_start, layer_end), {"shards": [
+                    {"edge_rank": edge_rank,
+                     "edge_store_node_id": store_id,
+                     "source_ack_recv_node_id": store_id}]})
+        return store_ids
+
+    def _emit_admission(self, groups):
+        self.builder.emit_admission_batch(_restore_admission_plan(groups))
+
+    def _group_first_node(self, group_position, rank):
+        """第 group_position 组在该 rank 的首节点（边缘 mem_load，shard
+        序 = (target, edge) 序）。"""
+        fragment = (
+            f"_history_transfer_action{group_position:03d}_")
+        matches = [
+            node for node in self._nodes()
+            if node["rank"] == rank
+            and fragment in node["name"]
+            and node["name"].endswith("_remote_load")]
+        self.assertEqual(
+            len(matches), 1,
+            f"expected exactly one edge mem_load for group "
+            f"{group_position} on rank {rank}, got {len(matches)}")
+        return matches[0]
+
+    def test_groups_fork_frontier_with_intersection_arms(self):
+        # 条目 B = 合成中段 [10,12)（仅与组 1 [10,16) 交集）。
+        store_ids = self._seed_arrival_and_stores(extra_entries=(
+            (10, 12, 0),
+        ))
+        groups = (_restore_transfer(4, 10, 0), _restore_transfer(10, 16, 1))
+        self._emit_admission(groups)
+        parents = self._parents_by_rank()
+        barrier = {
+            node["rank"]: node["id"] for node in self._nodes()
+            if node["name"].endswith("_prefill_resident_prefix_ready_barrier")}
+        a0 = store_ids[(0, (8, 16))]
+        a1 = store_ids[(1, (8, 16))]
+        b0 = store_ids[(0, (10, 12))]
+        # 双缘登记 ⇒ 对侧 store 经共享中继承载（s1→r0 / s0→r1 各恰一对
+        # ——见 test_shared_relay_emitted_once_per_cross_pair）；本缘
+        # store 直接 arm。中继链锚 = 该 rank 最后发射的 sidelink 节点
+        # （每组区域 checkpoint 捕获其后 previous_id ⇒ 组首节点经链序
+        # 排在全部并集匹配 store 之后）。
+        relay_anchor = {}
+        for rank in (0, 1):
+            relay_anchor[rank] = max(
+                node["id"] for node in self._nodes()
+                if node["rank"] == rank
+                and "store_sidelink" in node["name"])
+        # 组 0 首节点：{屏障, 中继链锚} ∪ {本缘 A}（B 与组 0 无交集
+        # ——交集语义，不被 arm）。
+        for rank, a_id in ((0, a0), (1, a1)):
+            first = self._group_first_node(0, rank)
+            self.assertEqual(
+                set(parents.get((rank, first["id"]), ())),
+                {barrier[rank], a_id, relay_anchor[rank]},
+                "group-0 first node must fork from the barrier/shared "
+                "relay chain with only its intersecting same-edge store "
+                "armed")
+        # 组 1 首节点：fork 同一 {屏障, 中继链锚}（组间无边——父集合的
+        # 共享部分与组 0 相等，无任何组 0 节点入父）∪ {本缘 A, B}（B 与
+        # 组 1 交集——直接 arm，不靠组间链传递性）。
+        for rank, a_id in ((0, a0), (1, a1)):
+            first = self._group_first_node(1, rank)
+            expected = {barrier[rank], a_id, relay_anchor[rank]}
+            if rank == 0:
+                expected.add(b0)
+            self.assertEqual(
+                set(parents.get((rank, first["id"]), ())), expected,
+                "group-1 first node must fork from the same frontier (no "
+                "inter-group edge) with its intersecting stores armed")
+        # 交集语义正面钉：B 在组 1 的父集合、不在组 0 的父集合。
+        self.assertIn(b0, parents.get((0, self._group_first_node(1, 0)["id"]), ()))
+        self.assertNotIn(
+            b0, parents.get((0, self._group_first_node(0, 0)["id"]), ()),
+            "mid-span entry must not be armed by the non-intersecting "
+            "group")
+
+    def test_shared_relay_emitted_once_per_cross_pair(self):
+        # 条目 D = 后缀 [8,16) 登记在跨缘 edge 2（restore 缘 = 0/1）→
+        # 跨缘对 (2,0) 与 (2,1)。
+        store_ids = self._seed_arrival_and_stores(extra_entries=(
+            (8, 16, 2),
+        ))
+        groups = (_restore_transfer(4, 10, 0), _restore_transfer(10, 16, 1))
+        self._emit_admission(groups)
+        relay_sends = [
+            node for node in self._nodes()
+            if "store_sidelink" in node["name"]]
+        # 每 (store_edge, restore_edge) 对恰一对节点：s2_r0 与 s2_r1 各
+        # 一次发射（send+recv 同名同 rank）——与组数无关（2 组不产生
+        # 2 对）。
+        for pair in ("_store_sidelink_s2_r0", "_store_sidelink_s2_r1"):
+            pair_nodes = [
+                node for node in relay_sends if pair in node["name"]]
+            self.assertEqual(
+                len(pair_nodes), 2,
+                f"relay pair {pair} must be emitted exactly once "
+                f"(send+recv), got {len(pair_nodes)} nodes")
+        # 中继 recv 是两组首节点的共同链序父（共享中继语义）。
+        parents = self._parents_by_rank()
+        for rank in (0, 1):
+            recv_node = next(
+                node for node in self._nodes()
+                if node["rank"] == rank
+                and f"_store_sidelink_s2_r{rank}" in node["name"]
+                and node["type"] == 6)  # COMM_RECV_NODE
+            for group_position in (0, 1):
+                first = self._group_first_node(group_position, rank)
+                self.assertIn(
+                    recv_node["id"],
+                    parents.get((rank, first["id"]), ()),
+                    "group first node must chain after the shared relay "
+                    "recv (all union stores precede every group)")
+
+    def test_span_entries_consumed_in_batch_outside_retained(self):
+        # 条目 B = [10,12)（span 内）；C = [0,2)（span 外——并集 [4,16)
+        # 之外）→ 发射后 B 消费、C 保留（窗口有界回归钉）。
+        self._seed_arrival_and_stores(extra_entries=(
+            (10, 12, 0),
+            (0, 2, 1),
+        ))
+        groups = (_restore_transfer(4, 10, 0), _restore_transfer(10, 16, 1))
+        self._emit_admission(groups)
+        ranges = sorted(
+            (layer_start, layer_end)
+            for _edge, _store, _ack, layer_start, layer_end
+            in self.builder.pending_store_tails.get("s", ()))
+        self.assertEqual(
+            ranges, [(0, 2)],
+            "in-span store entries must be consumed by the admission "
+            "batch itself; only out-of-span entries survive")
+        # 组门登记完整（组序 + 连续铺满 + 落点全在 Prefill ranks）。
+        arms = self.builder._suffix_restore_arms[REQUEST_R]
+        self.assertEqual(
+            [(g, ls, le) for g, ls, le, _gates in arms],
+            [(0, 4, 10), (1, 10, 16)])
+        for _g, _ls, _le, gates in arms:
+            self.assertTrue(
+                set(gates) <= {0, 1},
+                "restore gate leaked outside the Prefill instance "
+                "(target HBM landing must be the exec instance)")
+            self.assertEqual(sorted(gates), [0, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

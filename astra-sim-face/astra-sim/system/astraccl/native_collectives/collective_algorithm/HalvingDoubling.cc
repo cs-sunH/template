@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 #include <cmath>
 #include <iostream>
+#include <string>
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/PacketBundle.hh"
@@ -24,6 +25,11 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->logical_topo = ring_topology;
     this->data_size = data_size;
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
+    if (nodes_in_ring < 2 || (nodes_in_ring & (nodes_in_ring - 1)) != 0) {
+        Sys::sys_panic("HalvingDoubling requires a power-of-two number of "
+                       "nodes, got " +
+                       std::to_string(nodes_in_ring));
+    }
     this->parallel_reduce = 1;
     this->total_packets_received = 0;
     this->free_packets = 0;
@@ -118,15 +124,14 @@ void HalvingDoubling::run(EventType event, CallData* data) {
 
 void HalvingDoubling::release_packets() {
     if (NPU_to_MA == true) {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+        (new PacketBundle(stream->owner, stream, processed,
                           send_back, msg_size, transmition))
             ->send_to_MA();
     } else {
-        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+        (new PacketBundle(stream->owner, stream, processed,
                           send_back, msg_size, transmition))
             ->send_to_NPU();
     }
-    locked_packets.clear();
 }
 
 void HalvingDoubling::process_stream_count() {
@@ -171,6 +176,12 @@ void HalvingDoubling::process_max_count() {
 }
 
 void HalvingDoubling::reduce() {
+    // FIFO invariant (verified 2026-09-25, second-round adjudication, same
+    // proof as Ring::reduce): the only caller is ready() immediately after
+    // copying packets.front() into the issued sim_request/ehd -- pop is
+    // structurally paired with the consuming issue in the same synchronous
+    // send path, so out-of-order network completion cannot pop the wrong
+    // entry. Keep this pairing if ready()/reduce() is ever split.
     process_stream_count();
     packets.pop_front();
     free_packets--;
@@ -196,7 +207,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
         NPU_to_MA = true;
@@ -207,7 +217,6 @@ void HalvingDoubling::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             msg_size, stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {
             processed = true;
@@ -264,9 +273,6 @@ bool HalvingDoubling::ready() {
 void HalvingDoubling::exit() {
     if (packets.size() != 0) {
         packets.clear();
-    }
-    if (locked_packets.size() != 0) {
-        locked_packets.clear();
     }
     stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
 }

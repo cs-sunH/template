@@ -42,7 +42,6 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
       total_completed_flows(0),
       max_active_flows(max_active_flows),
       max_route_memberships(max_route_memberships),
-      link_state_epoch_(0),
       progress_report_event_interval(progress_report_event_interval),
       scheduler_event_count(0),
       dirty_batch_count(0),
@@ -77,7 +76,13 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
     if (bytes == 0 || route == nullptr || route->link_ids.empty() || callback == nullptr) {
-        std::cerr << "[Error] (network/analytical/congestion_aware) invalid fluid flow" << std::endl;
+        std::cerr << "[Error] (network/analytical/congestion_aware) invalid fluid flow"
+                  << " (bytes=" << bytes
+                  << ", route=" << (route == nullptr ? "null" : "present")
+                  << ", link_ids="
+                  << (route == nullptr ? "n/a" : std::to_string(route->link_ids.size()))
+                  << ", callback=" << (callback == nullptr ? "null" : "present")
+                  << ")" << std::endl;
         std::exit(-1);
     }
     if (next_flow_id == std::numeric_limits<FlowId>::max()) {
@@ -107,14 +112,6 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
 
 void FluidScheduler::set_deferred_flush_mode(const bool enabled) noexcept {
     deferred_flush_mode = enabled;
-}
-
-void FluidScheduler::flush_pending_starts_deferred() noexcept {
-    if (flush_scheduled) {
-        return;
-    }
-    flush_scheduled = true;
-    event_queue->schedule_event_deferred(flush_callback, this);
 }
 
 void FluidScheduler::flush_callback(void* const context) noexcept {
@@ -334,7 +331,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
 
     for (const auto& pending : pending_starts) {
         FluidFlow flow{pending.flow_id,
-                       pending.bytes,
                        static_cast<long double>(pending.bytes),
                        0.0,
                        now,
@@ -367,7 +363,6 @@ void FluidScheduler::flush_pending_starts() noexcept {
     active_route_memberships += new_memberships;
     total_started_flows += pending_starts.size();
     pending_starts.clear();
-    ++link_state_epoch_;  // Phase-7 §10.2: membership added to link_states
 
     recalculate_dirty_rates(now);
     maybe_rebuild_completion_heap();
@@ -531,7 +526,6 @@ void FluidScheduler::handle_service_wakeup(const uint64_t generation) noexcept {
         ++flow.rate_version;
         schedule_tail_arrival(flow, now);
     }
-    ++link_state_epoch_;  // Phase-7 §10.2: memberships removed from link_states
 
     recalculate_dirty_rates(now);
     maybe_rebuild_completion_heap();
@@ -593,41 +587,8 @@ uint64_t FluidScheduler::get_active_flow_count() const noexcept {
     return active_flow_count;
 }
 
-uint64_t FluidScheduler::link_state_epoch() const noexcept {
-    return link_state_epoch_;
-}
-
 size_t FluidScheduler::link_count() const noexcept {
     return link_states.size();
-}
-
-std::optional<LinkCongestionSnapshot> FluidScheduler::link_congestion_snapshot(
-    const LinkId link_id, const uint64_t expected_tick,
-    const uint64_t expected_epoch) const noexcept {
-    // Phase-7 §10.2 expired-handle semantics: a snapshot is only valid for the
-    // (tick, epoch) it was taken at; stale tick or stale epoch is rejected.
-    if (expected_tick != event_queue->get_current_time() ||
-        expected_epoch != link_state_epoch_) {
-        return std::nullopt;
-    }
-    if (link_id >= link_states.size()) {
-        return std::nullopt;
-    }
-    const auto& link = link_states[link_id];
-    long double remaining_bytes = 0.0L;
-    for (const auto& active : link.active_flows) {
-        const auto found = flows_by_id.find(active.flow_id);
-        if (found == flows_by_id.end() ||
-            found->second.state != FluidFlowState::Active) {
-            continue;  // defensive: link membership must be self-consistent
-        }
-        // Each active flow contributes its full outstanding bytes (the fluid
-        // model transfers the whole flow over every link of its route).
-        remaining_bytes += found->second.remaining_bytes;
-    }
-    return LinkCongestionSnapshot{link_id, remaining_bytes,
-                                  static_cast<uint64_t>(link.active_flows.size()),
-                                  expected_tick, expected_epoch};
 }
 
 uint64_t FluidScheduler::get_active_route_memberships() const noexcept {

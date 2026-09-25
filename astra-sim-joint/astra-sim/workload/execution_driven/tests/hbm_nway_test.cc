@@ -38,8 +38,11 @@ all completions land on integer ticks, so equalities are exact):
     - redistribution: after COMP completes at 400 the RESTORE rate doubles
       (300 remaining bytes served in 200 ns at 1.5 B/ns -> terminal 600);
     - hbm-charge=false: comm_read bytes == 900 exactly (the 64B pass-through
-      send contributes nothing); its terminal is strictly after its issue
-      (>= 800, network-only);
+      send contributes nothing); its terminal is the network-only arrival
+      at tick 0 + 6 (issued at tick 0 -- the comm slot is an UNLIMITED
+      counted slot since the 2026-09-25 copy-pipelining gate relaxation;
+      the former floor >= 700 pinned the old comm single-slot
+      serialization and was re-derived per the 重锚 rules below);
     - 中-5 honor pin: rank0 #4 calibrated COMP terminal == 5400（honor：不进
       流体模型；单 COMP 槽使其在 node0 后发射，终点=发射+5000）;
     - join fires exactly once: every (rank, node) terminal is recorded
@@ -53,6 +56,52 @@ all completions land on integer ticks, so equalities are exact):
     - peak concurrent jobs == 2;
     - 中-5 honor pin: rank0 #4 calibrated COMP terminal == 5300（honor：不进
       流体模型；单 COMP 槽使其在 node0 后发射，终点=发射+5000）.
+
+重锚 (2026-09-24, SerDes片外链路并发化改造执行方案 阶段5.5): every 700-era
+timestamp above was RE-DERIVED under the current worktree model (fluid N-way
+remote port backend + HardwareResource §4 classification where plain
+MEM_LOAD/MEM_STORE occupy the dedicated UNLIMITED remote-MEM slot instead of
+the former comm single slot) and then verified empirically (ON and OFF runs,
+exit 0).  The recomputation leaves every value UNCHANGED, for structural
+reasons -- not by assuming the old anchors:
+  - rank0's 700-chain hangs on (a) the LocalHbmBandwidthModel 3-way/2-way/
+    solo splits (COMP/RESTORE/COMM_READ, untouched by the 改造) and (b) the
+    COMM_SEND comm-single-slot serialization for the uncharged 64B send
+    (COMM classification unchanged: sends occupy the single comm slot,
+    COMM_RECV occupies nothing -- identical at HEAD).  No plain MEM node
+    exists on rank0, so the comm-slot reclassification cannot touch it.
+  - rank1's MEM_STORE (hbm-access-mode=1) is the ONLY node whose class
+    moved (comm slot -> unlimited remote-MEM slot).  At HEAD it was already
+    the sole comm-slot user on its rank (COMM_RECV was occupy-no-op there
+    too), so its issue tick stays 0 either way; its port leg (issue 0 ->
+    100 ns latency + 1200 B at 6 B/ns solo = tick 300) is identical under
+    the fluid backend for this single-transaction port, and the join with
+    the untouched HBM pool leg keeps MEM_STORE == 1100.
+  - The generalized MEM/COMM interlock the 改造 removed is covered by the
+    new remote_port_online_gate_test.cc (scenario B) and
+    remote_port_static_gate_test.cc double-MEM fixtures; this fixture's
+    per-rank single-MEM shape cannot express it (方案 阶段5.4 note).
+
+重锚 2 (2026-09-25, PARTIAL 跨实例 copy 流水化 C1): the HardwareResource
+comm/hbm_dma gates became UNLIMITED counted slots, so the uncharged 64B
+send no longer waits for the comm slot to free at 700 -- it issues at
+tick 0 and its terminal is the network-only arrival (rank0 node3: 6,
+pinned empirically; the old floor >= 700 asserted the single-slot
+serialization itself and was replaced by that exact pin).  Every other
+anchor is unchanged for structural reasons, re-verified empirically (ON
+and OFF runs, exit 0):
+  - rank0 node2 (charged send) stays HBM-dominated: its HBM comm_read
+    job finishes at 700 under the 3/2/1-way splits; the network side
+    only gets faster when the pass-through flow shares the link from
+    t=0 (join takes the max).
+  - rank1 node2/node3 joins stay HBM-dominated (1000/1100): the recv is
+    a occupy-no-op and the pool leg runs on the AnalyticalRemoteMemory
+    port, not the NoC -- neither is affected by the comm-slot
+    relaxation.
+  - The HBM pool itself is untouched (same jobs, same splits): served
+    bytes, peak concurrent jobs and redistribution events are
+    identical; COMP/CPU single-slot gates are intentionally out of
+    scope (kept) and the calibrated-COMP honor pins (5400/5300) hold.
 
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_HbmNwayTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
@@ -279,16 +328,23 @@ int main(int argc, char* argv[]) {
         // Solo tail at 3 B/ns: the comm job's remaining 300 B take 100 ns.
         expect_eq_u64(tick_of(fixture, 0, 2), 700,
                       "rank0 charged send terminal (join)");
-        // The uncharged pass-through send issues only after the comm slot
-        // frees at 700 and carries no HBM job.
-        if (tick_of(fixture, 0, 3) < 700) {
-            std::fprintf(stderr,
-                         "[hbm_nway_test] FAIL: uncharged send terminal %llu "
-                         "< issue time 700\n",
-                         static_cast<unsigned long long>(
-                             tick_of(fixture, 0, 3)));
-            return 1;
-        }
+        // The uncharged pass-through send issues at tick 0 alongside the
+        // charged send (comm slot is an UNLIMITED counted slot since the
+        // 2026-09-25 copy-pipelining gate relaxation) and carries no HBM
+        // job: its terminal is the network-only arrival. Re-derived under
+        // the shared 0->1 link (both sends active from t=0, so this flow
+        // runs at half the link rate) and pinned empirically: 6 ticks
+        // (per-dim latency + sub-ns fluid transfer of 64 B; identical to
+        // the pre-relaxation network-side offset of the charged send's
+        // solo-tail run, 700 -> 706).
+        expect_eq_u64(tick_of(fixture, 0, 3), 6,
+                      "rank0 uncharged pass-through send terminal "
+                      "(network-only, issued at tick 0)");
+        // The relaxation must not have leaked into the HBM pool: the
+        // charged send's terminal stays HBM-dominated (700), and the
+        // hbm-charge=false exclusion keeps comm_read bytes at exactly 900
+        // (asserted below) -- i.e. the 64 B pass-through contributed
+        // nothing to the model.
         expect_eq_d(model0->compute_bytes_served(), 300.0,
                     "rank0 compute bytes served");
         expect_eq_d(model0->restore_bytes_served(), 600.0,

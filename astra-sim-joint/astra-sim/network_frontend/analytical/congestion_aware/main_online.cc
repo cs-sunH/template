@@ -119,6 +119,7 @@ Step 1-10 (runners + IDLE fixture):
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -1207,8 +1208,33 @@ int main(int argc, char* argv[]) {
     // Create ASTRA-sim related resources
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
+    // §3.4: deliberately NOT const -- normal end must reset() (destroy) the
+    // remote API while the host Sys objects are still alive, so the backend
+    // can cancel its events against the live host Sys one last time.
+    auto memory_api =
         std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
+    // §5.1: the remote-memory transaction-detail JSONL writer reuses the
+    // EXISTING --sensing-enabled switch (no new configuration key).  The run
+    // association key prefers the metrics manifest's non-empty run_id; runs
+    // without one fall back to the fully normalized bridge directory (never
+    // a reusable basename) as the association key.
+    if (online_cli.sensing_enabled) {
+        std::string transaction_run_id =
+            MetricCollector::instance().metric_run_id();
+        if (transaction_run_id.empty()) {
+            transaction_run_id =
+                std::filesystem::path(online_cli.bridge_dir)
+                    .lexically_normal()
+                    .string();
+        }
+        memory_api->enable_transaction_telemetry(online_cli.bridge_dir,
+                                                 transaction_run_id);
+        std::cout << "[online] remote-memory transaction detail: "
+                     "enabled (--sensing-enabled; "
+                  << online_cli.bridge_dir
+                  << "/remote_memory_transactions.jsonl, run_id="
+                  << transaction_run_id << ")" << std::endl;
+    }
     auto systems = std::vector<Sys*>();
 
     auto queues_per_dim = std::vector<int>();
@@ -2156,6 +2182,56 @@ int main(int argc, char* argv[]) {
         AstraSim::LoggerFactory::shutdown();
         return EXIT_FAILURE;
     }
+
+    // §3.4 normal-end audit (Workload side): an armed-but-unfired HBM
+    // endpoint join means a node whose port/network leg or local-HBM leg
+    // never fired -- an unfinished node. Report it per rank and fail; never
+    // clean up silently. (The local-HBM-side join cookies are Workload-owned;
+    // this audit reads only the pending-join count.)
+    for (const Sys* system : systems) {
+        const uint64_t pending_joins =
+            system->workload->hbm_join_pending_count();
+        if (pending_joins != 0) {
+            std::cerr << "[Error] (execution_driven/online) rank "
+                      << system->id << " has " << pending_joins
+                      << " unfinished HBM endpoint join(s) at normal end "
+                         "(a port/network or local-HBM leg never fired)"
+                      << std::endl;
+            memory_api->shutdown();
+            memory_api.reset();
+            print_total_wall_time();
+            AstraSim::LoggerFactory::shutdown();
+            return EXIT_FAILURE;
+        }
+    }
+    // §3.4/§5.1 normal-end backend gate (sensing-independent): a completed
+    // run must leave the remote-memory backend with empty port job sets, no
+    // dual-zero timers, no queued transition event and consistent settled
+    // statistics; shutdown() then runs the full settlement audit (per-port
+    // issued/completed counts AND bytes, live per-state counts, telemetry
+    // handle consistency) and flushes/closes the transaction-detail stream.
+    // Runs while the host Sys is alive so a residual event could still be
+    // cancelled safely; the failure path releases the backend first for the
+    // same reason.
+    if (!memory_api->is_drained()) {
+        std::cerr << "[Error] (execution_driven/online) remote-memory "
+                     "backend not drained at normal end: port jobs, "
+                     "dual-zero timers or the transition event remain "
+                     "(completed-request audit above passed, so this is a "
+                     "backend accounting inconsistency)"
+                  << std::endl;
+        memory_api->shutdown();
+        memory_api.reset();
+        print_total_wall_time();
+        AstraSim::LoggerFactory::shutdown();
+        return EXIT_FAILURE;
+    }
+    // §3.4: shutdown() settles the backend, then reset() destroys the object
+    // itself while every host Sys is still alive (the destructor only re-runs
+    // the idempotent shutdown). Only after the remote API is gone are the
+    // Sys objects deleted.
+    memory_api->shutdown();
+    memory_api.reset();
 
     for (auto it : systems) {
         delete it;

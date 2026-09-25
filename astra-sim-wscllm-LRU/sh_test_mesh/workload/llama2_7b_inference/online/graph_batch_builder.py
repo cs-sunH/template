@@ -67,8 +67,6 @@ from generate_wsc_llm_trace import (  # noqa: E402
     TransferTriggerGate,
     _emit_kv_transfer,
     _emit_prefill_stage,
-    _emit_tp_point_to_point_readiness_barrier,
-    _emit_tp_readiness_barrier,
     _paired_transfer,
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
@@ -213,13 +211,14 @@ class OnlineTraceBuilder:
 
     def arm_dependency(self, node_id) -> None:
         """B3(2026-09-06)链操作三件套之一(照抄 sh_2.0 builder :228-233):
-        挂一条同 rank 的持久依赖边(suffix 层段的 suffix ready 门)。"""
+        挂一条同 rank 的持久依赖边(旁路支链触发门/store→restore 前递边)。"""
         if node_id is not None:
             self.pending_extra_dependencies.append(int(node_id))
 
     def chain_checkpoint(self):
         """链检查点:(previous_id, pending_extra_dependencies) 快照——
-        并行分支(suffix 恢复)自检查点悬挂,主链随后 restore 回检查点。"""
+        逐出旁路支链 fork 自检查点前的主链 frontier,发射后 restore 回
+        检查点(分支不 join)。"""
         return self.previous_id, tuple(self.pending_extra_dependencies)
 
     def restore_chain(self, checkpoint) -> None:
@@ -370,20 +369,15 @@ class GraphBatchBuilder:
         # turn-0 deferred 通道(历史事故修复版,sh_2.0 :1276-1291):无门
         # 可更新的会话位置延迟到下一 gate 登记点消费。
         self.deferred_session_locations = {}
-        # request_id -> {"suffix_start": int, "suffix_ready_nodes_by_rank":
-        # {rank: node_id}}——PARTIAL 恢复两段式流水信息(prefill 段发射的
-        # partial 分支登记,首 chunk 层段拆分消费后弹出,恰一次)。
-        self._partial_first_chunk = {}
         # request_id -> {rank: prefill 段 end barrier 节点 id}(post-
         # barrier 口径;joiner decode_evictions 的触发门来源)。
         self._prefill_segment_ends = {}
         # ---- 逐出旁路支链(2026-09-13)store→restore 前递登记表 ----
-        # session_id -> [(edge_rank, mem_store_node_id)]——该会话全部
-        # 在飞逐出 store 支链的池写尾部。同会话两段式逐出(suffix/full)
-        # 各登记一条;回迁(remote_load)发射前查表补 store→restore 依赖
-        # 边(主方案 §3.3);retire_terminal_session 边界(retire_
-        # completion_gate)清除。懒处理:store 早已物理完成时补的边即刻
-        # 满足,无额外时延。
+        # session_id -> [(edge_rank, mem_store_node_id)]——该会话在飞逐出
+        # store 支链的池写尾部(整体逐出每会话恰一条);回迁(remote_load)
+        # 发射前查表补 store→restore 依赖边(主方案 §3.3);retire_
+        # terminal_session 边界(retire_completion_gate)清除。懒处理:
+        # store 早已物理完成时补的边即刻满足,无额外时延。
         self.pending_store_tails = {}
         self._tag_allocator = TransferTagAllocator()
         # 每 request 的 action_sequence 账本(action 名含 _action{seq:03d}_,
@@ -484,10 +478,11 @@ class GraphBatchBuilder:
         history 门(sh 在完成段发射时建门;本仓无完成段,改由调度器在
         REQUEST_COMPLETE 边界调用,timer_gates 留待下一 turn prefill
         发射时由 interval gate 节点 id 填充)。"""
-        if location not in ("local_hbm", "partial_hbm_remote", "remote_memory"):
+        if location not in ("local_hbm", "remote_memory"):
             raise RuntimeError(
                 f"completed session {session_id!r} has no valid KV location "
-                f"for its pending turn (got {location!r})")
+                f"for its pending turn (got {location!r}; the legacy "
+                f"partial_hbm_remote runtime location is unreachable)")
         self.pending_history[request_id] = PendingHistoryGate(
             source_instance_index=source_instance_index,
             timer_gates=(),
@@ -510,19 +505,18 @@ class GraphBatchBuilder:
         """B3 决策时点补偿(照抄 sh_2.0 builder :1253-1260,seq4689 修订
         版):KV 变更点返回的逐出转移立即镜像到 pending 门——决策时点
         同步是唯一标记路径,发射侧不重复标记(多级逐出乱序时迟到的旧
-        转移标记会把门回退到过期位置)。partial_hbm_remote/remote_
-        memory 的半驻留语义由 _mark_pending_history_store 自身推导。"""
+        转移标记会把门回退到过期位置)。remote_memory 的全量语义由
+        _mark_pending_history_store 自身推导。"""
         for transfer in transfers or ():
             if transfer is not None and transfer.kind == "remote_store":
                 self._mark_pending_history_store(transfer)
 
     def _mark_pending_history_store(self, transfer: KVTransfer) -> None:
-        if transfer.resident_prefix_layers_after == 0:
-            location = "remote_memory"
-        elif transfer.resident_prefix_layers_after < transfer.model_layers:
-            location = "partial_hbm_remote"
-        else:
+        if transfer.resident_prefix_layers_after != 0:
+            # 整会话逐出必须把本地驻留清零;半层/部分逐出已删除,
+            # 任何非零残留即 fail-closed。
             raise RuntimeError("remote store did not reduce resident KV layers")
+        location = "remote_memory"
         session_id = transfer.session_id
         pending_request_id = self.pending_request_by_session.get(session_id)
         if pending_request_id is None:
@@ -614,9 +608,8 @@ class GraphBatchBuilder:
 
     def _register_store_tails(self, records) -> None:
         """逐出发射后登记该会话的在飞 store 支链尾部(§3.3):每条
-        remote_store shard 记 (edge_rank, 边缘 mem_store 节点)。两段式
-        逐出的 suffix/full 各登记一条;restore 须等齐(两笔写层区间互不
-        相交,但 restore 读全区间)。"""
+        remote_store shard 记 (edge_rank, 边缘 mem_store 节点)。整体
+        逐出每会话恰一条;restore 须等齐(restore 读全层区间)。"""
         for record in records:
             if record.get("kind") != "remote_store":
                 continue
@@ -691,7 +684,7 @@ class GraphBatchBuilder:
     def _emit_prelim(self, request_plan: dict) -> dict:
         """发射动态 GraphBatch 的 turn-gates/history/barrier/current-prefill 块。
 
-        B3(2026-09-06)三态发射重构(照抄 sh_2.0 _emit_admission :1019-1251
+        B3(2026-09-06)发射编排(照抄 sh_2.0 _emit_admission :1019-1251
         的动作编排,适配本仓 P/D 分离骨架:prefill 主体仍在 P 实例整段
         发射,不经实例迭代列车)。逐出旁路支链(2026-09-13):下述 2/4
         两段的逐出链 fork 到旁路分支(不 join),与主链计算并行。
@@ -706,22 +699,15 @@ class GraphBatchBuilder:
              逐出旁路支链(2026-09-13):fork 自各 rank frontier、不 join,
              逐出物理传输与主链计算并行;
           3. history 恢复/迁移分流:NO_HISTORY/LOCAL_HIT 仅 arm 门;
-             NOC_MIGRATE/REMOTE_RESTORE 经 _emit_kv_transfer(remote_
-             load 发射前查 pending_store_tails 补 store→restore 前递
-             边,§3.3);PARTIAL(REMOTE_LOAD 同实例 / PARTIAL_MIGRATE
-             跨实例)走两段式真流水——prefix 就绪栅栏(同实例
-             all_reduce / 跨实例 1B p2p arrive-release)→ chain
-             checkpoint → suffix 远端恢复分支(自检查点并行悬挂,发射
-             前同样补 store→restore 边)→ suffix ready p2p 栅栏 →
-             restore chain,登记 _partial_first_chunk 供首 chunk 层段
-             拆分;
+             NOC_MIGRATE/REMOTE_RESTORE(全量恢复,唯一远端路径)经
+             _emit_kv_transfer(remote_load 发射前查 pending_store_tails
+             补 store→restore 前递边,§3.3);
           4. prefill 增长逐出(grow_prefill 的 fit 逐出,逐出旁路支链,
              支链根 = rank frontier;fork 点的主链 armed 依赖由
              _emit_side_branch 暂存清空、恢复后归还原主链消费者);
-          5. 就绪屏障(非 partial:保持本仓既有 history_tp_ready_barrier
-             命名与位置;partial:上文的 prefix/suffix 双栅栏已承载);
-          6. prefill 主体(partial 时首 chunk 层段拆分,suffix 段 arm 依赖
-             suffix ready 节点)。
+          5. 就绪屏障(history_tp_ready_barrier:恢复完成前不能消费
+             历史 KV——单一全层就绪屏障);
+          6. prefill 主体(整段聚合发射,无层段拆分)。
 
         返回 PREFILL_DRAIN watch 成员:{rank: 末个真实 prefill 节点 id}
         (排除 end barrier);post-barrier 的段末节点记入 _prefill_
@@ -814,38 +800,30 @@ class GraphBatchBuilder:
                     for transfer in history_evictions)
             self._emit_side_branch(_emit_history_eviction_branch)
 
-        # ---- history 恢复/迁移分流(非 partial 段;partial 的两段链在
-        #      prefill 逐出之后发射,照抄 sh :1112-1140 的段序)----
+        # ---- history 恢复/迁移分流(REMOTE_RESTORE 全量恢复为唯一远端
+        #      路径;恢复完成前不能消费历史 KV,由下方单一全层就绪屏障
+        #      保障)----
         history_transfers = tuple(request_plan.get("history_transfers") or ())
-        history_action = request_plan.get("history_action")
-        partial_restore = (
-            history_action in ("REMOTE_LOAD", "PARTIAL_MIGRATE")
-            or (history_transfers
-                and history_transfers[0].kind == "remote_load"
-                and history_transfers[0].layer_start > 0)
-        )
-        suffix_start = None
-        if not partial_restore:
-            if len(history_transfers) > 1:
-                raise RuntimeError(
-                    "non-partial history must carry at most one transfer")
-            if history_transfers:
-                # 回迁发射前补 store→restore 前递边(§3.3;懒处理,无在飞
-                # store 时补边即刻满足、零成本)。
-                self._arm_store_tail_dependencies(
-                    history_transfers[0], prefix)
-                self._emit_plan_transfer(
-                    request_plan, history_transfers[0], "history_transfer",
-                    gate=pending_gate)
-            else:
-                # NO_HISTORY / LOCAL_HIT(以及合成 plan 的 None):无数据
-                # 传输,到达/interval 门直接由门源实例各 rank 的后续链
-                # 消费(turn-0 门源 = prefill 实例,与既有行为一致)。
-                gate_group = self.group_by_index[
-                    pending_gate.source_instance_index]
-                for relative_index, rank in enumerate(gate_group.ranks):
-                    builders[rank].arm_timer_gate(
-                        pending_gate.timer_gates[relative_index])
+        if len(history_transfers) > 1:
+            raise RuntimeError(
+                "history must carry at most one transfer")
+        if history_transfers:
+            # 回迁发射前补 store→restore 前递边(§3.3;懒处理,无在飞
+            # store 时补边即刻满足、零成本)。
+            self._arm_store_tail_dependencies(
+                history_transfers[0], prefix)
+            self._emit_plan_transfer(
+                request_plan, history_transfers[0], "history_transfer",
+                gate=pending_gate)
+        else:
+            # NO_HISTORY / LOCAL_HIT(以及合成 plan 的 None):无数据
+            # 传输,到达/interval 门直接由门源实例各 rank 的后续链
+            # 消费(turn-0 门源 = prefill 实例,与既有行为一致)。
+            gate_group = self.group_by_index[
+                pending_gate.source_instance_index]
+            for relative_index, rank in enumerate(gate_group.ranks):
+                builders[rank].arm_timer_gate(
+                    pending_gate.timer_gates[relative_index])
 
         # ---- prefill 增长逐出(grow_prefill fit 逐出;逐出旁路支链,
         #      2026-09-13 统一契约:无显式触发门,支链根 = fork 时各
@@ -862,154 +840,22 @@ class GraphBatchBuilder:
 
             self._emit_side_branch(_emit_prefill_eviction_branch)
 
-        # ---- PARTIAL 恢复真流水 / 非 partial 就绪屏障 ----
-        if partial_restore:
-            resident_layers = request_plan.get("history_resident_prefix_layers")
-            if resident_layers is None or not (
-                    0 < resident_layers < self.config.layers):
-                raise RuntimeError(
-                    "partial history restore is missing its resident "
-                    "prefix layer count")
-            suffix_start = int(resident_layers)
-            if history_action == "PARTIAL_MIGRATE":
-                if len(history_transfers) != 2:
-                    raise RuntimeError(
-                        "cross-instance partial history needs exactly a "
-                        "prefix migration and a suffix load")
-                prefix_transfer, suffix_transfer = history_transfers
-                if (prefix_transfer.kind != "noc_migrate"
-                        or prefix_transfer.phase != "history"
-                        or prefix_transfer.reason
-                        != "history_partial_prefix_migrate"
-                        or prefix_transfer.source_instance_index
-                        != request_plan["history_source_instance_index"]
-                        or prefix_transfer.target_instance_index
-                        != request_plan["prefill_instance_index"]
-                        or prefix_transfer.source_instance_index
-                        == prefix_transfer.target_instance_index
-                        or prefix_transfer.layer_start != 0
-                        or prefix_transfer.layer_end != suffix_start
-                        or prefix_transfer.resident_prefix_layers_before
-                        != suffix_start
-                        or prefix_transfer.resident_prefix_layers_after
-                        != suffix_start):
-                    raise RuntimeError(
-                        "partial history prefix migration is invalid")
-                self._emit_plan_transfer(
-                    request_plan, prefix_transfer, "history_prefix_transfer",
-                    gate=pending_gate)
-                prefix_readiness = _emit_tp_point_to_point_readiness_barrier(
-                    builders=builders,
-                    group=prefill_group,
-                    tag_allocator=self._tag_allocator,
-                    name="{}_prefill_prefix_ready_barrier".format(prefix),
-                )
-                prefix_ready_nodes = tuple(
-                    int(node_id)
-                    for _, node_id in prefix_readiness["node_ids_by_rank"]
-                )
-            else:
-                if len(history_transfers) != 1:
-                    raise RuntimeError(
-                        "same-instance partial history needs exactly a "
-                        "suffix load")
-                suffix_transfer = history_transfers[0]
-                if (request_plan["prefill_instance_index"]
-                        != request_plan["history_source_instance_index"]):
-                    raise RuntimeError(
-                        "same-instance partial history action carries a "
-                        "different source instance")
-                if (pending_gate.source_instance_index
-                        != request_plan["prefill_instance_index"]):
-                    # 门不在 prefill 实例上时,门节点与 prefill rank 跨
-                    # rank——依赖边会被桥拒绝(契约 §2)。wscllm 的 P/D
-                    # 分离使该分支实际不可达(会话经 P→D move 驻留 D 实例),
-                    # fail-closed 防合成 plan 误用。
-                    raise RuntimeError(
-                        "same-instance partial history gate is not on the "
-                        "Prefill instance")
-                for relative_index, rank in enumerate(prefill_group.ranks):
-                    builders[rank].arm_timer_gate(
-                        pending_gate.timer_gates[relative_index])
-                _emit_tp_readiness_barrier(
-                    builders=builders,
-                    group=prefill_group,
-                    name="{}_prefill_resident_prefix_ready_barrier".format(
-                        prefix),
-                )
-                prefix_ready_nodes = tuple(
-                    builders[rank].previous_id
-                    for rank in prefill_group.ranks
-                )
-            if (suffix_transfer.kind != "remote_load"
-                    or suffix_transfer.layer_start != suffix_start
-                    or suffix_transfer.layer_end != self.config.layers):
-                raise RuntimeError(
-                    "partial history load does not match its suffix")
-            checkpoints = {
-                rank: builders[rank].chain_checkpoint()
-                for rank in prefill_group.ranks
-            }
-            branch_gate = PendingHistoryGate(
-                source_instance_index=request_plan["prefill_instance_index"],
-                timer_gates=prefix_ready_nodes,
-                location=pending_gate.location,
-            )
-            # 回迁发射前补 store→restore 前递边(§3.3;在 fork 快照之后
-            # arm,挂在 suffix 恢复支链的首节点上,不泄回主链)。
-            self._arm_store_tail_dependencies(suffix_transfer, prefix)
-            history_record = self._emit_plan_transfer(
-                request_plan, suffix_transfer, "history_transfer",
-                gate=branch_gate,
-            )
-            suffix_ready_nodes_by_rank = {}
-            for shard_record in history_record["shards"]:
-                target_rank = shard_record.get("target_rank")
-                completion_node = shard_record.get(
-                    "target_hbm_completion_node_id")
-                if not isinstance(target_rank, int) or not isinstance(
-                        completion_node, int):
-                    raise RuntimeError(
-                        "suffix restore is missing a target HBM gate")
-                suffix_ready_nodes_by_rank[target_rank] = completion_node
-            if set(suffix_ready_nodes_by_rank) != set(prefill_group.ranks):
-                raise RuntimeError(
-                    "suffix restore did not cover every Prefill rank; "
-                    "request={}".format(request_plan["request_id"]))
-            suffix_readiness = _emit_tp_point_to_point_readiness_barrier(
-                builders=builders,
-                group=prefill_group,
-                tag_allocator=self._tag_allocator,
-                name="{}_prefill_suffix_ready_barrier".format(prefix),
-            )
-            suffix_ready_nodes_by_rank = {
-                int(rank): int(node_id)
-                for rank, node_id in suffix_readiness["node_ids_by_rank"]
-            }
-            for rank in prefill_group.ranks:
-                builders[rank].restore_chain(checkpoints[rank])
-            # 两段式流水信息登记:本段首 chunk 层段拆分在下文消费(同段
-            # 发射,登记即取用;弹出恰一次)。
-            self._partial_first_chunk[request_plan["request_id"]] = {
-                "suffix_start": suffix_start,
-                "suffix_ready_nodes_by_rank": dict(
-                    suffix_ready_nodes_by_rank),
-            }
-        else:
-            for rank in prefill_group.ranks:
-                builders[rank].all_reduce(
-                    "{}_history_tp_ready_barrier".format(prefix), 1,
-                    prefill_group.pg_name)
+        # ---- 恢复完成门:单一全层就绪屏障(history_tp_ready_barrier,
+        #      既有命名与位置)——恢复完成前不能消费历史 KV;整体恢复
+        #      恒为单段全层传输,无需 prefix/suffix 双栅栏与首 chunk
+        #      层段拆分(该 PARTIAL 真流水已随部分恢复路径删除)。----
+        for rank in prefill_group.ranks:
+            builders[rank].all_reduce(
+                "{}_history_tp_ready_barrier".format(prefix), 1,
+                prefill_group.pg_name)
 
-        # ---- prefill 主体(partial 时首 chunk 层段拆分真流水)----
-        partial_info = self._partial_first_chunk.pop(
-            request_plan["request_id"], None)
+        # ---- prefill 主体(整段聚合发射;trace chunking 为合法物理
+        #      机制,无层段拆分)----
         prefill_bounds = _emit_prefill_stage(
             config=self.config, builders=builders, group=prefill_group,
             prefix=prefix, stage="current_prefill",
             tokens=request_plan["prefill_length"],
             initial_context_tokens=request_plan["history_tokens_before"],
-            first_chunk_split=partial_info,
         )
         # PREFILL_DRAIN watch 成员 = 每 rank 末个真实 prefill 节点
         # (遵循共享 EVENT_PREFILL_END 锚点口径，排除 end barrier)。

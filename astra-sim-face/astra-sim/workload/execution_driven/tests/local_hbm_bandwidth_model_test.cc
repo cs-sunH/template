@@ -42,17 +42,17 @@ Numeric model under test (local-mem-bw 6 GB/s = 6 B/ns, latency 100 ns):
   and complete on the network event alone (they also wait for the static
   single comm slot).  Fast-network joins complete at the HBM ticks above;
   slow-network joins complete at the network ticks.  The fluid drain rate
-  of a yml "GB/s" link is bandwidth * 2^30 / 1e9 B/ns (NetworkFunction
-  convention, 1 GB = 2^30 B): the 0.5 link drains at 0.536870912 B/ns, so
-  60 B takes ceil(111.76)=112 ns, 120 B takes ceil(223.52)=224 ns and
-  40 B takes ceil(74.51)=75 ns, each +20 ns propagation latency.
+  of a yml "GB/s" link is 1 B/ns per GB/s (bw_GBps_to_Bpns decimal SI,
+  1 GB = 1e9 B, H2 fix): the 0.5 link drains at 0.5 B/ns, so
+  60 B takes ceil(120)=120 ns, 120 B takes ceil(240)=240 ns and
+  40 B takes ceil(80)=80 ns, each +20 ns propagation latency.
 
 Expected completions (tick == exact value, and each (rank, node) fires
 exactly once):
   fast: rank0 {1:115, 2:125, 3:135, 4:146}, rank1 {1:130, 2:120, 3:146}
-  slow: rank0 {1:115, 2:132, 3:244, 4:227}, rank1 {1:244, 2:132, 3:227}
-  (slow rank0 node 4 issues at 132, when the joined send frees the comm
-  slot: 132 + 75 + 20 = 227)
+  slow: rank0 {1:115, 2:140, 3:260, 4:240}, rank1 {1:260, 2:140, 3:240}
+  (slow rank0 node 4 issues at 140, when the joined send frees the comm
+  slot: 140 + 80 + 20 = 240)
 
 Model side-band counters (identical in both scenarios; the HBM side does
 not depend on the network):
@@ -334,12 +334,12 @@ int main(int argc, char* argv[]) {
         ok = expect_tick(1, 3, 146) && ok;  // uncharged RECV 40, net only
     } else if (scenario == "slow") {
         ok = expect_tick(0, 1, 115) && ok;
-        ok = expect_tick(0, 2, 132) && ok;  // join(net@132, hbm@125)
-        ok = expect_tick(0, 3, 244) && ok;  // join(net@244, hbm@135)
-        ok = expect_tick(0, 4, 227) && ok;
-        ok = expect_tick(1, 1, 244) && ok;  // join(net@244, hbm@130)
-        ok = expect_tick(1, 2, 132) && ok;  // join(net@132, hbm@120)
-        ok = expect_tick(1, 3, 227) && ok;
+        ok = expect_tick(0, 2, 140) && ok;  // join(net@140, hbm@125)
+        ok = expect_tick(0, 3, 260) && ok;  // join(net@260, hbm@135)
+        ok = expect_tick(0, 4, 240) && ok;
+        ok = expect_tick(1, 1, 260) && ok;  // join(net@260, hbm@130)
+        ok = expect_tick(1, 2, 140) && ok;  // join(net@140, hbm@120)
+        ok = expect_tick(1, 3, 240) && ok;
     } else {
         // Legacy fallback (flag off, fast network): closed-form COMP
         // duration max(num_ops/peak_perf, latency + tensor/bw) = 105 ns and

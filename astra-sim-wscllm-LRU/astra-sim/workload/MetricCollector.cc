@@ -533,10 +533,18 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                                 + it.key());
         }
         for (const auto& triple : it.value()) {
-            if (!triple.is_array() || triple.size() != 3) {
+            // Type-guard every element BEFORE get<int64_t>: a string/bool/
+            // null/array element would throw a nlohmann type_error that no
+            // caller catches (std::terminate), bypassing the fail-closed
+            // channel. Same guard pattern as the top-level metadata above;
+            // short-circuit keeps triple[x] inside the size==3 domain.
+            if (!triple.is_array() || triple.size() != 3 ||
+                !triple[0].is_number_integer() ||
+                !triple[1].is_number_integer() ||
+                !triple[2].is_number_integer()) {
                 fatal_metrics_error(
                     "node event must be a [node_id, event_code, subject_id] "
-                    "triple");
+                    "triple of integers");
             }
             // Validate in the wide int64 domain BEFORE narrowing: an event
             // code like 256 wraps to a legal-looking uint8_t and a negative
@@ -602,9 +610,41 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
     }
 
     // Planner memory peaks (doc sec.7.7), kept raw for passthrough with
-    // annotations at finalize.
+    // annotations at finalize. The payload stays untyped EXCEPT for the
+    // fields the finalize readers consume with typed accessors: guard them
+    // HERE, at the single write point of planner_memory_peaks_, so every
+    // later value("rank")/ledger.value(...) read (peaks_by_rank, the
+    // ledger capacity lookup, the passthrough sort comparator) is safe by
+    // construction -- a wrong-typed field would otherwise throw a nlohmann
+    // type_error at finalize that nothing catches (std::terminate),
+    // bypassing the fail-closed channel.
     const json peaks = manifest.value("planner_memory_peaks", json::array());
     for (const auto& entry : peaks) {
+        if (!entry.is_object()) {
+            fatal_metrics_error(
+                "planner_memory_peaks entry must be an object");
+        }
+        if (entry.contains("rank") && !entry["rank"].is_number_integer()) {
+            fatal_metrics_error(
+                "planner_memory_peaks entry rank must be an integer");
+        }
+        if (entry.contains("ledger")) {
+            const json& ledger = entry["ledger"];
+            if (!ledger.is_object()) {
+                fatal_metrics_error(
+                    "planner_memory_peaks ledger must be an object");
+            }
+            for (const char* ledger_key : {"capacity_bytes",
+                                           "physical_used_bytes",
+                                           "committed_used_bytes"}) {
+                if (ledger.contains(ledger_key) &&
+                    !ledger[ledger_key].is_number_integer()) {
+                    fatal_metrics_error(
+                        "planner_memory_peaks ledger field must be an "
+                        "integer: " + std::string(ledger_key));
+                }
+            }
+        }
         this->planner_memory_peaks_.push_back(entry);
     }
 
@@ -1951,6 +1991,8 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
     }
 
     // Per-rank capacity and final planner ledger from the peaks payload.
+    // Entries are object-typed with an optional integer "rank" by the
+    // load_manifest parse guard, so this value() read cannot throw.
     std::map<int, const json*> peaks_by_rank;
     for (const auto& entry : this->planner_memory_peaks_) {
         const int rank = entry.value("rank", -1);
@@ -2093,7 +2135,9 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
 
         // Per-rank capacity and final planner ledger from the peaks
         // payload. Resolved BEFORE the integrals: the WP8 watermark walk
-        // needs the capacity for its violation counters too.
+        // needs the capacity for its violation counters too. "ledger" and
+        // its byte fields are object/integer-typed by the load_manifest
+        // parse guard, so the value() reads below cannot throw.
         const auto peak_it = peaks_by_rank.find(rank);
         std::optional<int64_t> capacity;
         std::optional<int64_t> planner_physical;
@@ -2234,7 +2278,6 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                 seg_start = seg_end;
             }
             series.direct_resident_area = resident_area;
-            series.direct_committed_area = committed_area;
             watermark_series_by_rank[rank] = std::move(series);
         }
 
@@ -2345,6 +2388,8 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         WatermarkSeries series;
         series.replayed = false;
         const auto peak_it = peaks_by_rank.find(rank);
+        // Ledger byte fields are integer-typed by the load_manifest parse
+        // guard, so this value() read cannot throw.
         if (peak_it != peaks_by_rank.end() &&
             peak_it->second->contains("ledger")) {
             series.capacity_bytes = (*peak_it->second)["ledger"].value(
@@ -2365,6 +2410,8 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
         for (const auto& entry : this->planner_memory_peaks_) {
             sorted_peaks.push_back(&entry);
         }
+        // Sort by rank; entries carry an optional integer "rank" by the
+        // load_manifest parse guard, so the comparator cannot throw.
         std::sort(sorted_peaks.begin(), sorted_peaks.end(),
                   [](const json* a, const json* b) {
                       return a->value("rank", -1) < b->value("rank", -1);
@@ -2569,8 +2616,10 @@ void MetricCollector::emit_watermark_records(
             record["committed_capacity_timeavg_util"] = nullptr;
         }
 
-        // A-class cross-check: the watermark-walk integral must agree with
-        // the direct delta-loop integral of the same replay to <=1%.
+        // A-class cross-check (resident side only): the watermark-walk
+        // resident integral must agree with the direct delta-loop resident
+        // integral of the same replay to <=1%. No committed-side cross-check
+        // exists (the committed direct integral is not kept).
         if (series.replayed && sim_end_tick > 0) {
             const long double watermark =
                 i128_to_long_double(series.resident_area);

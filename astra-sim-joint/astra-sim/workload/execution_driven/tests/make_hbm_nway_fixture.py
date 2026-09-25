@@ -44,6 +44,8 @@ local-mem-latency = 100 ns are asserted by hbm_nway_test.cc:
     3-way equal split @ 1 B/ns each from t=100 -> COMP done t=400;
     2-way @ 1.5 -> RESTORE done t=600; solo @ 3 -> COMM_READ done t=700;
     send(2) terminal = join(net ~15, hbm 700) = 700; send(3) has no job
+    and issues at tick 0 alongside send(2) (comm slot is an UNLIMITED
+    counted slot since 2026-09-25; network-only terminal = 6)
     (comm_read bytes stay exactly 900, not 964); peak jobs = 3;
     redistributions = 4 (2 joining issues + 2 completions with survivors).
   contention ON, rank 1 (COMP 300 / RESTORE 600 / COMM_WRITE 900 /

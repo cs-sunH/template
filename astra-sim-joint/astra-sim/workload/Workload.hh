@@ -75,6 +75,15 @@ class Workload : public Callable {
     // stats
     void report();
 
+    // 方案 §3.4 normal-end audit: number of nodes with an armed (half-fired)
+    // HBM endpoint join. Zero at a normal end; > 0 means a node whose port /
+    // network leg or local-HBM leg never fired -- the online main gate must
+    // report it instead of cleaning up silently. (The HBM-side cookie inside
+    // each pending join is owned by Workload, never by the remote backend.)
+    [[nodiscard]] uint64_t hbm_join_pending_count() const {
+        return hbm_join_pending_.size();
+    }
+
     Chakra::ETFeeder* et_feeder;
     std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
     HardwareResource* hw_resource;

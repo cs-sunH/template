@@ -2,15 +2,6 @@
   "schema_version": 1,
   "detail_level": "full",
   "memory": {
-    "chiplets_per_npu": 4,
-    "projection": "equal_striping",
-    "wasted_definition": "capacity_minus_weight_minus_resident_kv"
-  },
-  "microbenchmark": {
-    "tp_degrees": [1, 2, 4, 6, 8],
-    "prefill_chunks": [128, 256, 512],
-    "decode_batches": [1, 2, 4, 8, 16, 32],
-    "kv_lengths": [128, 256, 512, 1024, 2048, 4096],
-    "repeats": 1
+    "chiplets_per_npu": 4
   }
 }

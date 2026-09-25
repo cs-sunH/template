@@ -1,26 +1,32 @@
-"""Session-scoped tiered KV cache management (LOCAL / PARTIAL / REMOTE).
+"""Session-scoped tiered KV cache management (LOCAL / REMOTE).
 
-B2 (2026-09-06, face-LRU 三态化): the two-state RESIDENT/EVICTED model with
-zero-cost delete + full recompute is replaced by the sh_2.0 three-state
-tiered model, adapted onto face's existing external integration surface
-(KVCacheEvent audit stream, deep-gap int counter, admission_blocked retry
-semantics, reservation API):
+Session-level Tiered-LRU (2026-09-25): the eviction unit is the complete
+logical session — every layer, every TP shard, every locally resident byte
+is stored to the remote pool in one transfer and then released as a whole.
+Partial-layer reclamation (the former stage-1 suffix-half eviction, the
+PARTIAL_HBM_REMOTE state, and the two-segment restore pipeline) is deleted,
+not gated: the runtime state machine has exactly two resident states,
 
-- ``LOCAL_HBM``           all ``model.layers`` layers resident on one instance;
-- ``PARTIAL_HBM_REMOTE``  leading ``partial_resident_prefix_layers`` layers
-  resident, trailing half in the remote pool;
-- ``REMOTE_MEMORY``       every layer in the remote pool, no local instance.
+- ``LOCAL_HBM``      the full ``[0, model_layers)`` layer domain of one
+  session resident on one instance (``resident_prefix_layers ==
+  model.layers``);
+- ``REMOTE_MEMORY``  every layer in the remote pool, no local instance
+  (``resident_prefix_layers == 0``).
 
-Reclamation is the de-typed two-stage LRU order (no ``_eviction_class``, no
-``trigger_type``, no ``next_request_type``): stage 1 suffix-halves completed
-inactive LOCAL sessions oldest-first; only after every candidate is halved
-does stage 2 fully offload resident sessions (the sole fallback).  The
-requirement is rechecked after every single eviction.  Exhaustion keeps the
-face failure semantics (``admission_blocked`` graceful deferral with the
-deep-gap ledger; only a structurally impossible request raises).
+plus the required no-history / retired states.  Reclamation is the de-typed
+LRU order (no ``_eviction_class``, no ``trigger_type``, no
+``next_request_type``): ``ensure_physical_fit`` walks completed inactive
+sessions oldest-first and offloads each chosen victim whole, rechecking the
+per-rank shortfall after every single eviction; over-release caused by a
+whole-session eviction is explicitly allowed (spec §7).  Exhaustion keeps
+the face failure semantics (``admission_blocked`` graceful deferral with
+the deep-gap ledger; only a structurally impossible request raises).
+Restore is whole-session too: a remotely resident session comes back with
+a single ``remote_load`` over ``[0, model_layers)``.
 
-The blueprint is sh_2.0 ``face_scheduler.py``'s ``KVCacheManager``; face's
-mapping module (``face_scheduler.py`` in this repository) is untouched.
+The legacy PARTIAL constants below survive only for old-log parsing; they
+have no runtime producer (the state whitelists reject them — unreachable
+by construction).
 """
 
 from __future__ import annotations
@@ -42,12 +48,20 @@ NO_HISTORY = "NO_HISTORY"
 LOCAL_HIT = "LOCAL_HIT"
 NOC_MIGRATE = "NOC_MIGRATE"
 
-# B2 three-state session locations and the restore-path history actions.
+# Session locations.  Session-level Tiered-LRU (2026-09-25) keeps exactly
+# two runtime resident states: LOCAL_HBM (full layer domain on one instance)
+# and REMOTE_MEMORY (whole session in the remote pool).  The legacy PARTIAL
+# constants below are parse-only compat surface: no code path produces them
+# (both state whitelists raise on them — the unreachable proof lives in
+# test_face_kv_incremental_invariants), they exist solely so old decision
+# logs and old external interfaces stay readable.
 LOCAL_HBM = "local_hbm"
-PARTIAL_HBM_REMOTE = "partial_hbm_remote"
 REMOTE_MEMORY = "remote_memory"
+# legacy-parse-only 旧日志/旧接口解析专用,无运行时产生者:
+PARTIAL_HBM_REMOTE = "partial_hbm_remote"
 _REMOTE_SUFFIX_RESTORE = "REMOTE_SUFFIX_RESTORE"
 _PARTIAL_REMOTE_MIGRATE = "PARTIAL_REMOTE_MIGRATE"
+# and the (whole-session) restore-path history action:
 _REMOTE_RESTORE = "REMOTE_RESTORE"
 
 # B1 已消费前缀的摊销压缩水位(2026-08-28,风格对齐 graph_batch_builder
@@ -348,12 +362,15 @@ class NodeHBMState:
 
 @dataclass(frozen=True)
 class SessionKVSnapshot:
-    """B2 three-state snapshot with local/remote byte derivations.
+    """Two-state snapshot with local/remote byte derivations.
 
     ``shard_bytes`` remains the full-model logical shard vector (all layers
     at ``logical_context_tokens``); the physically resident distribution is
-    ``local_shard_bytes`` (layer range ``[0, resident_prefix_layers)``) and
-    the remote remainder is ``remote_shard_bytes`` (sh ``:1748-1787``).
+    ``local_shard_bytes`` (the whole ``[0, model_layers)`` domain for
+    LOCAL_HBM, empty otherwise) and the remote remainder is
+    ``remote_shard_bytes`` (the exact dual).  ``resident_prefix_layers`` is
+    a compat field kept for old-log consumers: new writes are always
+    ``model.layers`` (local) or ``0`` (remote).
     """
 
     session_id: str
@@ -508,11 +525,9 @@ class HistoryDecision:
     evictions: tuple[EvictionRecord, ...]
     admission_blocked: bool = False
     insufficient_ranks: tuple[int, ...] = ()
-    # B2: contract §4 KVTransfer objects for the restore/migrate path.  A
-    # PARTIAL cross-instance restore carries both segments (prefix NoC
-    # migrate + suffix remote load) in ONE decision so the scheduler logs a
-    # single prefill record (hbm_watermark "same request + same kind twice
-    # fails" guard).
+    # Contract §4 KVTransfer objects for the restore/migrate path (one
+    # whole-session transfer; hbm_watermark's "same request + same kind
+    # twice fails" guard keeps a single prefill record per request).
     transfers: tuple[KVTransfer, ...] = ()
     location_before: Optional[str] = None
     resident_prefix_layers_before: Optional[int] = None
@@ -581,10 +596,6 @@ class SessionKVCacheManager:
         self.topology = topology
         self.model = model
         self.tp_degree = next(iter(instance_sizes))
-        # B2 (sh ``:1210-1214``): keep the larger half resident for odd-layer
-        # models; exactly floor(L/2) trailing layers form the stage-1 suffix.
-        # Not configurable (contract §9).
-        self.partial_resident_prefix_layers = model.layers - model.layers // 2
         self.model_weight_bytes_by_tp_rank = model_weight_shard_bytes_by_tp_rank(
             model, self.tp_degree
         )
@@ -661,7 +672,7 @@ class SessionKVCacheManager:
         self._initialize_incremental_invariants()
         # Metrics observation state (doc sec.7.4): resident KV is tracked as
         # per-session parts that carry their own token counts and layer
-        # ranges (B2, sh ``:1267-1274``), so suffix-half evictions and
+        # ranges (B2, sh ``:1267-1274``), so whole-session evictions and
         # restores always remove the exact recorded distribution of an
         # earlier add under its own allocation key.
         self._metrics_recorder = _METRICS_RECORDER
@@ -730,14 +741,23 @@ class SessionKVCacheManager:
         )
 
     def _snapshot_of(self, state: SessionKVState) -> SessionKVSnapshot:
-        """B2 (sh ``session_snapshot :1748-1787``): local/remote derivation."""
+        """Two-state local/remote derivation (session-level Tiered-LRU).
+
+        ``shard_bytes`` remains the full-model logical shard vector (all
+        layers at ``logical_context_tokens``); a LOCAL_HBM session holds the
+        complete vector locally and nothing remotely, a REMOTE_MEMORY session
+        the exact dual."""
         local_shard_bytes = self._local_shards_for(state)
-        remote_shard_bytes = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            state.logical_context_tokens,
-            self.tp_degree,
-            layer_start=state.resident_prefix_layers,
-            layer_end=self.model.layers,
+        remote_shard_bytes = (
+            ()
+            if state.location == LOCAL_HBM
+            else kv_cache_shard_bytes_for_layer_range(
+                self.model,
+                state.logical_context_tokens,
+                self.tp_degree,
+                layer_start=0,
+                layer_end=self.model.layers,
+            )
         )
         return SessionKVSnapshot(
             session_id=state.session_id,
@@ -793,14 +813,17 @@ class SessionKVCacheManager:
         )
 
     def _local_shards_for(self, state: SessionKVState) -> tuple[int, ...]:
-        """Resident (local) shards = layer range [0, resident_prefix_layers)."""
+        """Resident (local) shards, two-valued: a LOCAL_HBM session holds the
+        full ``[0, model_layers)`` domain, anything else holds nothing."""
 
         return kv_cache_shard_bytes_for_layer_range(
             self.model,
             state.logical_context_tokens,
             self.tp_degree,
             layer_start=0,
-            layer_end=state.resident_prefix_layers,
+            layer_end=(
+                self.model.layers if state.location == LOCAL_HBM else 0
+            ),
         )
 
     @staticmethod
@@ -815,36 +838,22 @@ class SessionKVCacheManager:
         )
         return candidates
 
-    def _completed_full_candidates(
+    def _completed_local_candidates(
         self,
         instance_index: int,
     ) -> list[SessionKVState]:
-        """Stage-1 pool: completed inactive LOCAL sessions on the instance.
+        """Sole victim pool: completed inactive fully-local sessions on the
+        instance, in deterministic LRU order.
 
-        B2 去类型化(契约 §9):无 trigger_type 参数、无 _eviction_class。
+        去类型化(契约 §9):无 trigger_type 参数、无 _eviction_class;session
+        级 Tiered-LRU 下也再无阶段 1/阶段 2 两级候选池——victim 只能是
+        完整本地驻留的会话,整体外迁。
         """
 
-        if self.partial_resident_prefix_layers == self.model.layers:
-            return []
         return self._fifo_sort([
             session
             for session in self._sessions.values()
             if session.location == LOCAL_HBM
-            and session.instance_index == instance_index
-            and not session.active
-            and session.last_completion_ns is not None
-        ])
-
-    def _completed_resident_candidates(
-        self,
-        instance_index: int,
-    ) -> list[SessionKVState]:
-        """Stage-2 pool: any completed inactive locally resident session."""
-
-        return self._fifo_sort([
-            session
-            for session in self._sessions.values()
-            if session.location in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
             and session.instance_index == instance_index
             and not session.active
             and session.last_completion_ns is not None
@@ -1026,18 +1035,15 @@ class SessionKVCacheManager:
     def _incremental_session_contribution(
         self, session: SessionKVState
     ) -> Optional[tuple[int, tuple[int, ...]]]:
-        # B2 (sh ``:1825-1846``): the rank ledger only ever sees the resident
-        # prefix layer range of a LOCAL/PARTIAL session.
+        # Session-level Tiered-LRU: only a fully local session contributes
+        # rank-resident bytes; a remote session contributes nothing.
         if (
-            session.location not in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
+            session.location != LOCAL_HBM
             or session.instance_index is None
             or len(session.shard_bytes) != self.tp_degree
         ):
             return None
-        if session.location == LOCAL_HBM:
-            if session.resident_prefix_layers != self.model.layers:
-                return None
-        elif not 0 < session.resident_prefix_layers < self.model.layers:
+        if session.resident_prefix_layers != self.model.layers:
             return None
         return session.instance_index, tuple(
             int(value) for value in self._local_shards_for(session)
@@ -1112,11 +1118,12 @@ class SessionKVCacheManager:
         return affected_ranks
 
     def _check_incremental_session_invariants(self, session: SessionKVState) -> None:
-        # B2 (sh ``:1931-1957``): three-state location whitelist, layer-domain
-        # assertions, REMOTE without instance or resident layers.
+        # Session-level Tiered-LRU (2026-09-25): two-state location
+        # whitelist, full-domain layer assertions, REMOTE without instance
+        # or resident layers.  A PARTIAL location (legacy parse-only
+        # constant) fails closed here — no runtime producer exists.
         if session.location not in {
             LOCAL_HBM,
-            PARTIAL_HBM_REMOTE,
             REMOTE_MEMORY,
         }:
             raise RuntimeError(f"unknown KV location: {session.location}")
@@ -1130,11 +1137,8 @@ class SessionKVCacheManager:
             if session.resident_prefix_layers != 0:
                 raise RuntimeError("remote KV session retained resident layers")
             return
-        if session.location == LOCAL_HBM:
-            if session.resident_prefix_layers != self.model.layers:
-                raise RuntimeError("fully local KV session is missing layers")
-        elif not 0 < session.resident_prefix_layers < self.model.layers:
-            raise RuntimeError("partial KV session has an invalid prefix length")
+        if session.resident_prefix_layers != self.model.layers:
+            raise RuntimeError("fully local KV session is missing layers")
         if session.instance_index is None:
             raise RuntimeError("local KV session has no instance")
         if len(session.shard_bytes) != self.tp_degree:
@@ -1221,8 +1225,8 @@ class SessionKVCacheManager:
     # tracked as per-session parts that carry their own token count and
     # layer range (sh ``:2151-2418``); because
     # kv_cache_shard_bytes_for_layer_range is exactly linear in tokens,
-    # suffix-half evictions and restores remove precisely the distribution
-    # an earlier add recorded under the same allocation key.
+    # whole-session evictions and restores remove precisely the
+    # distribution an earlier add recorded under the same allocation key.
     # ------------------------------------------------------------------
 
     def _metrics_add_segment(
@@ -1309,7 +1313,9 @@ class SessionKVCacheManager:
         request_id: str,
         cause: str,
     ) -> None:
-        """Full-session eviction: remove every resident part under its key."""
+        """Whole-session removal: pop every resident part under its own
+        allocation key (eviction and terminal retirement mirror path; add
+        and remove keys stay paired for metrics conservation)."""
 
         if self._metrics_recorder is None:
             return
@@ -1324,59 +1330,6 @@ class SessionKVCacheManager:
                 request_id=request_id,
                 cause=cause,
             )
-
-    def _metrics_suffix_evict_parts(
-        self,
-        session_id: str,
-        suffix_start: int,
-        *,
-        now_ns: int,
-        anchor_kind: str,
-        request_id: str,
-        cause: str,
-    ) -> None:
-        """Suffix-half eviction: clamp every part to its intersection with
-        the retained prefix layers, removing the exact per-part suffix
-        distribution (never a merged guess, doc sec.7.4/9.4)."""
-
-        if self._metrics_recorder is None:
-            return
-        parts = self._metrics_parts.get(session_id, [])
-        kept_parts: list[dict[str, Any]] = []
-        for part in parts:
-            new_layer_end = min(part["layer_end"], suffix_start)
-            if new_layer_end <= part["layer_start"]:
-                removed = part["shards"]
-                new_shards = None
-            else:
-                new_shards = kv_cache_shard_bytes_for_layer_range(
-                    self.model,
-                    part["tokens"],
-                    self.tp_degree,
-                    layer_start=part["layer_start"],
-                    layer_end=new_layer_end,
-                )
-                removed = tuple(
-                    old - new for old, new in zip(part["shards"], new_shards)
-                )
-            if any(removed):
-                self._metrics_remove_part(
-                    session_id,
-                    part,
-                    removed,
-                    now_ns=now_ns,
-                    anchor_kind=anchor_kind,
-                    request_id=request_id,
-                    cause=cause,
-                )
-            if new_shards is not None:
-                part["layer_end"] = new_layer_end
-                part["shards"] = new_shards
-                kept_parts.append(part)
-        if kept_parts:
-            self._metrics_parts[session_id] = kept_parts
-        else:
-            self._metrics_parts.pop(session_id, None)
 
     def _metrics_move_session_parts(
         self,
@@ -1509,64 +1462,6 @@ class SessionKVCacheManager:
             resident_prefix_layers_after=self.model.layers,
         )
 
-    def _partial_prefix_noc_transfer(
-        self,
-        *,
-        session: SessionKVState,
-        trigger_request_id: str,
-        source_instance_index: int,
-        target_instance_index: int,
-    ) -> KVTransfer:
-        """B2 (sh ``:2493-2554``): history action for a partial resident
-        prefix — transfers only the locally resident prefix and leaves the
-        suffix to the canonical remote-load segment."""
-
-        resident_layers = session.resident_prefix_layers
-        if not 0 < resident_layers < self.model.layers:
-            raise RuntimeError("partial-prefix migration requires partial KV")
-        if source_instance_index == target_instance_index:
-            raise ValueError("partial-prefix migration requires distinct instances")
-        source = self.topology.instance(source_instance_index)
-        target = self.topology.instance(target_instance_index)
-        prefix_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            session.logical_context_tokens,
-            self.tp_degree,
-            layer_start=0,
-            layer_end=resident_layers,
-        )
-        shards = tuple(
-            KVTransferShard(
-                source_rank=source_rank,
-                target_rank=target_rank,
-                edge_rank=None,
-                bytes=shard_bytes,
-                noc_path=self._xy_path(source_rank, target_rank),
-                layer_start=0,
-                layer_end=resident_layers,
-            )
-            for source_rank, target_rank, shard_bytes in zip(
-                source.ranks, target.ranks, prefix_shards
-            )
-            if shard_bytes > 0
-        )
-        return KVTransfer(
-            kind="noc_migrate",
-            phase="history",
-            reason="history_partial_prefix_migrate",
-            session_id=session.session_id,
-            trigger_request_id=trigger_request_id,
-            source_instance_index=source_instance_index,
-            target_instance_index=target_instance_index,
-            total_bytes=sum(prefix_shards),
-            shards=shards,
-            model_layers=self.model.layers,
-            layer_start=0,
-            layer_end=resident_layers,
-            resident_prefix_layers_before=resident_layers,
-            resident_prefix_layers_after=resident_layers,
-        )
-
     def _remote_load_transfer(
         self,
         *,
@@ -1675,93 +1570,14 @@ class SessionKVCacheManager:
         )
 
     # ------------------------------------------------------------------
-    # B2 tiered eviction (contract §9; sh ``_evict_suffix :2725-2772`` /
-    # ``_evict_session :2774-2819``, adapted with face's KVCacheEvent audit
-    # stream and EvictionRecord currency).
+    # Session-level Tiered-LRU eviction (2026-09-25).  The sole eviction
+    # path is whole-session: every layer, every TP shard, every locally
+    # resident byte is stored to the remote pool in ONE transfer (layer
+    # domain [0, model_layers), before=model_layers / after=0) and then
+    # released as a whole.  The former stage-1 ``_evict_suffix`` half-layer
+    # path is deleted, not gated.  Over-release caused by a whole-session
+    # eviction is allowed (spec §7 — the D4-I3 exact-fit guard is gone).
     # ------------------------------------------------------------------
-
-    def _evict_suffix(
-        self,
-        victim: SessionKVState,
-        *,
-        now_ns: int,
-        phase: str,
-        reason: str,
-        trigger_request_id: str,
-    ) -> EvictionRecord:
-        if victim.active or victim.last_completion_ns is None:
-            raise RuntimeError("only completed inactive sessions may be evicted")
-        if victim.location != LOCAL_HBM or victim.instance_index is None:
-            raise RuntimeError("suffix eviction requires a fully local session")
-        suffix_start = self.partial_resident_prefix_layers
-        if suffix_start >= self.model.layers:
-            raise RuntimeError("configured model has no non-empty half-layer suffix")
-        instance_index = victim.instance_index
-        suffix_shards = kv_cache_shard_bytes_for_layer_range(
-            self.model,
-            victim.logical_context_tokens,
-            self.tp_degree,
-            layer_start=suffix_start,
-            layer_end=self.model.layers,
-        )
-        before = self._remaining(instance_index)
-        transfer = self._remote_store_transfer(
-            phase=phase,
-            reason=f"{reason}_suffix_half",
-            session=victim,
-            trigger_request_id=trigger_request_id,
-            layer_start=suffix_start,
-            layer_end=self.model.layers,
-            resident_prefix_layers_after=suffix_start,
-        )
-        self._remove_shards(instance_index, suffix_shards)
-        victim.location = PARTIAL_HBM_REMOTE
-        victim.resident_prefix_layers = suffix_start
-        self._check_invariants_after_mutation(session_ids=(victim.session_id,))
-        self._metrics_suffix_evict_parts(
-            victim.session_id,
-            suffix_start,
-            now_ns=now_ns,
-            anchor_kind=_metrics_anchor_for_phase(phase),
-            request_id=trigger_request_id,
-            cause=(
-                f"evict_{reason}_suffix_half:"
-                f"layers{suffix_start}-{self.model.layers}"
-            ),
-        )
-        after = self._remaining(instance_index)
-        record = EvictionRecord(
-            time_ns=now_ns,
-            phase=phase,
-            reason=reason,
-            trigger_request_id=trigger_request_id,
-            victim_session_id=victim.session_id,
-            victim_instance_index=instance_index,
-            victim_last_completion_ns=victim.last_completion_ns,
-            context_tokens=victim.logical_context_tokens,
-            shard_bytes=suffix_shards,
-            transfer=transfer,
-        )
-        self._event(
-            now_ns=now_ns,
-            phase=phase,
-            event_type="evict_suffix",
-            reason=(
-                f"evict_{reason}_suffix_half:"
-                f"layers{suffix_start}-{self.model.layers}"
-            ),
-            trigger_request_id=trigger_request_id,
-            session_id=victim.session_id,
-            source_instance_index=instance_index,
-            target_instance_index=None,
-            context_tokens=victim.logical_context_tokens,
-            total_bytes=sum(suffix_shards),
-            shard_bytes=suffix_shards,
-            last_completion_ns=victim.last_completion_ns,
-            before=before,
-            after=after,
-        )
-        return record
 
     def _evict_session(
         self,
@@ -1772,32 +1588,34 @@ class SessionKVCacheManager:
         reason: str,
         trigger_request_id: str,
     ) -> EvictionRecord:
+        """Whole-session eviction — the only eviction path.
+
+        守卫:已完成(last_completion_ns 非空)、非 active、完整本地驻留
+        (LOCAL_HBM)且属于本实例。每 victim 恰一笔 remote_store——多条
+        TP shard 传输不折算成多个逻辑 victim;事件 total_bytes = 该
+        session 全量字节、layer range = [0, model_layers)。
+        """
+
         if victim.active or victim.last_completion_ns is None:
             raise RuntimeError("only completed inactive sessions may be evicted")
-        if (
-            victim.location not in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
-            or victim.instance_index is None
-        ):
-            raise RuntimeError("only locally resident sessions may be evicted")
+        if victim.location != LOCAL_HBM or victim.instance_index is None:
+            raise RuntimeError("only fully local sessions may be evicted")
         instance_index = victim.instance_index
-        resident_layers = victim.resident_prefix_layers
-        if resident_layers <= 0:
-            raise RuntimeError("session has no local layers left to evict")
         local_shards = kv_cache_shard_bytes_for_layer_range(
             self.model,
             victim.logical_context_tokens,
             self.tp_degree,
             layer_start=0,
-            layer_end=resident_layers,
+            layer_end=self.model.layers,
         )
         before = self._remaining(instance_index)
         transfer = self._remote_store_transfer(
             phase=phase,
-            reason=f"{reason}_full_fallback",
+            reason=f"{reason}_full",
             session=victim,
             trigger_request_id=trigger_request_id,
             layer_start=0,
-            layer_end=resident_layers,
+            layer_end=self.model.layers,
             resident_prefix_layers_after=0,
         )
         self._remove_shards(instance_index, local_shards)
@@ -1812,7 +1630,7 @@ class SessionKVCacheManager:
             now_ns=now_ns,
             anchor_kind=_metrics_anchor_for_phase(phase),
             request_id=trigger_request_id,
-            cause=f"evict_{reason}_full_fallback:layers0-{resident_layers}",
+            cause=f"evict_{reason}_full:layers0-{self.model.layers}",
         )
         after = self._remaining(instance_index)
         record = EvictionRecord(
@@ -1831,7 +1649,7 @@ class SessionKVCacheManager:
             now_ns=now_ns,
             phase=phase,
             event_type="evict_full",
-            reason=f"evict_{reason}_full_fallback:layers0-{resident_layers}",
+            reason=f"evict_{reason}_full:layers0-{self.model.layers}",
             trigger_request_id=trigger_request_id,
             session_id=victim.session_id,
             source_instance_index=instance_index,
@@ -1856,15 +1674,14 @@ class SessionKVCacheManager:
         phase: str = "admission",
         reason: str = "request_physical_fit",
     ) -> CapacityResult:
-        """B2 de-typed two-stage tiered reclamation (contract §9).
+        """Session-level Tiered-LRU reclamation (single stage).
 
-        Stage 1 suffix-halves completed inactive LOCAL sessions oldest-first
-        (LRU); only when every candidate is halved does stage 2 fully
-        offload resident sessions (the sole fallback).  The shortfall is
-        rechecked after every single eviction.  Exhaustion keeps the face
-        failure semantics: deep-gap ledger + ``admission_blocked`` graceful
-        deferral (sh's raise-on-exhaustion is deliberately NOT imported);
-        only a request that cannot fit an empty instance raises.
+        按 ``_fifo_sort``（(last_completion_ns, session_id) 升序 = LRU）逐个
+        取已完成 inactive 的完整本地驻留会话作 victim，每笔整体
+        ``_evict_session`` 写回远端池后立即重查逐 NPU 缺口，够即停；整体
+        逐出产生的过量释放被明确允许（spec §7——D4-I3 恰好够守卫已随
+        两阶段流程删除）。耗尽保持 face 失败语义：deep-gap 台账 +
+        ``admission_blocked`` 优雅推迟；仅结构不可行（空实例装不下）raise。
         """
 
         required = tuple(int(value) for value in required_shards)
@@ -1901,25 +1718,25 @@ class SessionKVCacheManager:
         protected = set(protected_sessions)
         insufficient = self._insufficient(instance_index, required)
 
-        # Stage 1: oldest-first, move only each eligible session's latter half.
-        # A suffix eviction affects only its selected victim, so the remaining
-        # stage candidates retain both eligibility and deterministic LRU
-        # order; the snapshot is taken once (sh ``:2873-2885``).
+        # Single-stage LRU loop: oldest-first, one whole session per
+        # eviction.  A whole-session eviction only mutates its selected
+        # victim, so the remaining candidates retain both eligibility and
+        # deterministic LRU order; the snapshot is taken once.
         if insufficient:
-            suffix_candidates = [
+            candidates = [
                 session
-                for session in self._completed_full_candidates(instance_index)
+                for session in self._completed_local_candidates(instance_index)
                 if session.session_id not in protected
             ]
-            suffix_candidate_index = 0
+            candidate_index = 0
             while insufficient:
-                if suffix_candidate_index >= len(suffix_candidates):
+                if candidate_index >= len(candidates):
                     break
-                victim = suffix_candidates[suffix_candidate_index]
-                suffix_candidate_index += 1
+                victim = candidates[candidate_index]
+                candidate_index += 1
                 # I1 (2026-09-05): 被动逐出受害者必须是已完成 inactive 的
-                # 本实例驻留会话(镜像逐出守卫与候选过滤,捕获候选快照与
-                # 执行间的状态漂移)。
+                # 本实例完整本地驻留会话(镜像逐出守卫与候选过滤,捕获
+                # 候选快照与执行间的状态漂移)。
                 if (
                     victim.location != LOCAL_HBM
                     or victim.instance_index != instance_index
@@ -1927,47 +1744,9 @@ class SessionKVCacheManager:
                     or victim.last_completion_ns is None
                 ):
                     raise RuntimeError(
-                        "passive suffix-eviction victim must be a completed "
-                        f"inactive local resident of instance {instance_index}: "
-                        f"{victim.session_id}"
-                    )
-                evictions.append(
-                    self._evict_suffix(
-                        victim,
-                        now_ns=now_ns,
-                        phase=phase,
-                        reason=reason,
-                        trigger_request_id=trigger_request_id,
-                    )
-                )
-                insufficient = self._insufficient(instance_index, required)
-
-        # Stage 2: only after every inactive full session has been halved,
-        # evict complete resident sessions (the remaining prefix for partial
-        # sessions) in the same deterministic LRU order; rebuilt because the
-        # newly partial sessions become eligible here (sh ``:2902-2933``).
-        if insufficient:
-            resident_candidates = [
-                session
-                for session in self._completed_resident_candidates(instance_index)
-                if session.session_id not in protected
-            ]
-            resident_candidate_index = 0
-            while insufficient:
-                if resident_candidate_index >= len(resident_candidates):
-                    break
-                victim = resident_candidates[resident_candidate_index]
-                resident_candidate_index += 1
-                if (
-                    victim.location not in {LOCAL_HBM, PARTIAL_HBM_REMOTE}
-                    or victim.instance_index != instance_index
-                    or victim.active
-                    or victim.last_completion_ns is None
-                ):
-                    raise RuntimeError(
-                        "passive full-eviction victim must be a completed "
-                        f"inactive resident of instance {instance_index}: "
-                        f"{victim.session_id}"
+                        "passive eviction victim must be a completed "
+                        f"inactive fully local resident of instance "
+                        f"{instance_index}: {victim.session_id}"
                     )
                 evictions.append(
                     self._evict_session(
@@ -1983,7 +1762,7 @@ class SessionKVCacheManager:
         if insufficient:
             before = self._remaining(instance_index)
             # D4 (2026-09-05): 候选耗尽出口——优雅推迟(admission_
-            # blocked)前记深缺口(两阶段逐光全部已完成会话仍不够)。
+            # blocked)前记深缺口(逐光全部已完成会话仍不够)。
             self._record_deep_gap(
                 instance_index=instance_index,
                 now_ns=now_ns,
@@ -2014,38 +1793,6 @@ class SessionKVCacheManager:
                 raise RuntimeError(
                     "passive eviction victim is active or uncompleted: "
                     f"{record.victim_session_id}")
-        # D4-I3 过度逐出守卫 (sh ``:2982-3009``,face 现版无、B2 新增):
-        # 撤销最后一笔逐出后至少一个受影响 rank 必须回到不满足,否则该笔
-        # 逐出超出"恰好够"边界。
-        if evictions:
-            last_eviction = evictions[-1]
-            last_transfer = last_eviction.transfer
-            if last_transfer is not None:
-                freed_by_rank: dict[int, int] = {}
-                for shard in last_transfer.shards:
-                    if shard.source_rank is None:
-                        continue
-                    freed_by_rank[shard.source_rank] = (
-                        freed_by_rank.get(shard.source_rank, 0) + shard.bytes
-                    )
-                if freed_by_rank:
-                    remaining_now = dict(
-                        zip(
-                            self.topology.instance(instance_index).ranks,
-                            self._remaining(instance_index),
-                        )
-                    )
-                    if all(
-                        remaining_now[rank] - freed_bytes
-                        >= required[self._rank_relative_indexes[rank]]
-                        for rank, freed_bytes in freed_by_rank.items()
-                    ):
-                        raise RuntimeError(
-                            "passive eviction over-evicted: last eviction of "
-                            f"{last_eviction.victim_session_id} freed {freed_by_rank} "
-                            "bytes beyond the admission shortfall (instance "
-                            f"{instance_index}, phase {phase}, reason {reason}, "
-                            f"trigger {trigger_request_id})")
         return CapacityResult(tuple(evictions), True, ())
 
     def reserve_request_capacity(
@@ -2150,14 +1897,14 @@ class SessionKVCacheManager:
         required_context_tokens: Optional[int] = None,
         phase: str = "history",
     ) -> HistoryDecision:
-        """B2 six-branch history preparation (contract §1.4; RECOMPUTE gone).
+        """Four-branch history preparation (session-level Tiered-LRU).
 
         无历史 -> NO_HISTORY;LOCAL 同实例 -> LOCAL_HIT;LOCAL 跨实例 ->
-        NOC_MIGRATE;PARTIAL 同实例 -> REMOTE_SUFFIX_RESTORE(后缀回迁);
-        PARTIAL 跨实例 -> PARTIAL_REMOTE_MIGRATE(前缀 NoC 迁移 + 后缀远端
-        恢复,两段合一条决策);REMOTE -> REMOTE_RESTORE(全量回迁)。
+        NOC_MIGRATE;REMOTE -> REMOTE_RESTORE(唯一恢复路径:单笔 remote_load
+        全量回迁 [0, model_layers),恢复完成前会话保持 REMOTE 不可消费)。
         容量收敛先于恢复(先 ensure_physical_fit 再放置),恢复容量检查
-        本身可触发对其他会话的两段式逐出。
+        本身可触发对其他会话的整体逐出。未知 location(含 legacy 的
+        partial_hbm_remote 串)fail-closed raise。
         """
 
         _require_nonnegative_int(history_tokens, "history_tokens")
@@ -2379,224 +2126,10 @@ class SessionKVCacheManager:
                 resident_prefix_layers_before=prefix_layers_before,
             )
 
-        if state.location == PARTIAL_HBM_REMOTE:
-            if state.instance_index is None:
-                raise RuntimeError("partial history has no source instance")
-            source_instance = state.instance_index
-            suffix_start = state.resident_prefix_layers
-            prefix_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model,
-                history_tokens,
-                self.tp_degree,
-                layer_start=0,
-                layer_end=suffix_start,
-            )
-            suffix_shards = kv_cache_shard_bytes_for_layer_range(
-                self.model,
-                history_tokens,
-                self.tp_degree,
-                layer_start=suffix_start,
-                layer_end=self.model.layers,
-            )
-            if source_instance == target_instance_index:
-                # PARTIAL 同实例:只回迁后缀层段(容量门 = 后缀 + 增长)。
-                existing_target = prefix_shards
-                needed = tuple(
-                    want - current for want, current in zip(desired, existing_target)
-                )
-                if any(value < 0 for value in needed):
-                    raise RuntimeError(
-                        "session KV would shrink during history preparation"
-                    )
-                fit = self.ensure_physical_fit(
-                    target_instance_index,
-                    needed,
-                    now_ns,
-                    trigger_request_id,
-                    (session_id,),
-                    phase=phase,
-                    reason="history_and_prefill_admission",
-                )
-                if not fit.admitted:
-                    return blocked_decision(
-                        _REMOTE_SUFFIX_RESTORE, source_instance, fit
-                    )
-                transfer = self._remote_load_transfer(
-                    phase=phase,
-                    reason="history_remote_suffix_restore",
-                    session=state,
-                    trigger_request_id=trigger_request_id,
-                    target_instance_index=target_instance_index,
-                    layer_start=suffix_start,
-                    layer_end=self.model.layers,
-                )
-                before = self._remaining(target_instance_index)
-                self._add_shards(target_instance_index, suffix_shards)
-                state.location = LOCAL_HBM
-                state.resident_prefix_layers = self.model.layers
-                state.active = True
-                state.last_request_id = trigger_request_id
-                self._check_invariants_after_mutation(session_ids=(session_id,))
-                # Suffix restore gets its own segment id / allocation key (doc
-                # sec.7.4/9.4): a later suffix eviction removes exactly this
-                # distribution again.
-                self._metrics_add_segment(
-                    session_id,
-                    target_instance_index,
-                    history_tokens,
-                    suffix_start,
-                    self.model.layers,
-                    suffix_shards,
-                    now_ns=now_ns,
-                    anchor_kind="transfer_complete",
-                    request_id=trigger_request_id,
-                    cause="history_remote_suffix_restore",
-                )
-                after = self._remaining(target_instance_index)
-                self._event(
-                    now_ns=now_ns,
-                    phase=phase,
-                    event_type="remote_load",
-                    reason="history_remote_suffix_restore",
-                    trigger_request_id=trigger_request_id,
-                    session_id=session_id,
-                    source_instance_index=source_instance,
-                    target_instance_index=target_instance_index,
-                    context_tokens=history_tokens,
-                    total_bytes=sum(suffix_shards),
-                    shard_bytes=suffix_shards,
-                    last_completion_ns=state.last_completion_ns,
-                    before=before,
-                    after=after,
-                )
-                return HistoryDecision(
-                    action=_REMOTE_SUFFIX_RESTORE,
-                    source_instance_index=source_instance,
-                    target_instance_index=target_instance_index,
-                    history_tokens=history_tokens,
-                    transfer_shards=(),
-                    recompute_tokens=0,
-                    evictions=fit.evictions,
-                    transfers=(transfer,),
-                    location_before=location_before,
-                    resident_prefix_layers_before=prefix_layers_before,
-                )
-
-            # PARTIAL 跨实例:两段链——前缀 NoC 迁移 + 后缀远端恢复。
-            # 两段承载于同一条决策(B2 契约:hbm_watermark 同请求同 kind
-            # 两次即 fail,拆两条 prefill 记录被禁止)。
-            fit = self.ensure_physical_fit(
-                target_instance_index,
-                desired,
-                now_ns,
-                trigger_request_id,
-                (session_id,),
-                phase=phase,
-                reason="history_and_prefill_admission",
-            )
-            if not fit.admitted:
-                return blocked_decision(_PARTIAL_REMOTE_MIGRATE, source_instance, fit)
-            prefix_transfer = self._partial_prefix_noc_transfer(
-                session=state,
-                trigger_request_id=trigger_request_id,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-            )
-            before = self._remaining(target_instance_index)
-            self._remove_shards(source_instance, prefix_shards)
-            self._add_shards(target_instance_index, prefix_shards)
-            # The session remains partial while its remote suffix is restored,
-            # but physical ownership now follows the target.
-            state.instance_index = target_instance_index
-            self._check_invariants_after_mutation(session_ids=(session_id,))
-            self._metrics_move_session_parts(
-                session_id,
-                target_instance_index,
-                history_tokens,
-                suffix_start,
-                prefix_shards,
-                now_ns=now_ns,
-                anchor_kind="transfer_complete",
-                request_id=trigger_request_id,
-                cause="history_partial_prefix_migrate",
-            )
-            after_prefix = self._remaining(target_instance_index)
-            self._event(
-                now_ns=now_ns,
-                phase=phase,
-                event_type="noc_migrate",
-                reason="history_partial_prefix_migrate",
-                trigger_request_id=trigger_request_id,
-                session_id=session_id,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                context_tokens=history_tokens,
-                total_bytes=sum(prefix_shards),
-                shard_bytes=prefix_shards,
-                last_completion_ns=state.last_completion_ns,
-                before=before,
-                after=after_prefix,
-            )
-            suffix_transfer = self._remote_load_transfer(
-                phase=phase,
-                reason="history_remote_suffix_restore",
-                session=state,
-                trigger_request_id=trigger_request_id,
-                target_instance_index=target_instance_index,
-                layer_start=suffix_start,
-                layer_end=self.model.layers,
-            )
-            self._add_shards(target_instance_index, suffix_shards)
-            state.location = LOCAL_HBM
-            state.resident_prefix_layers = self.model.layers
-            state.active = True
-            state.last_request_id = trigger_request_id
-            self._check_invariants_after_mutation(session_ids=(session_id,))
-            self._metrics_add_segment(
-                session_id,
-                target_instance_index,
-                history_tokens,
-                suffix_start,
-                self.model.layers,
-                suffix_shards,
-                now_ns=now_ns,
-                anchor_kind="transfer_complete",
-                request_id=trigger_request_id,
-                cause="history_remote_suffix_restore",
-            )
-            after = self._remaining(target_instance_index)
-            self._event(
-                now_ns=now_ns,
-                phase=phase,
-                event_type="remote_load",
-                reason="history_remote_suffix_restore",
-                trigger_request_id=trigger_request_id,
-                session_id=session_id,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                context_tokens=history_tokens,
-                total_bytes=sum(suffix_shards),
-                shard_bytes=suffix_shards,
-                last_completion_ns=state.last_completion_ns,
-                before=after_prefix,
-                after=after,
-            )
-            return HistoryDecision(
-                action=_PARTIAL_REMOTE_MIGRATE,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                history_tokens=history_tokens,
-                transfer_shards=prefix_transfer.shards,
-                recompute_tokens=0,
-                evictions=fit.evictions,
-                transfers=(prefix_transfer, suffix_transfer),
-                location_before=location_before,
-                resident_prefix_layers_before=prefix_layers_before,
-            )
-
         if state.location != REMOTE_MEMORY:
             raise RuntimeError(f"unknown history location: {state.location}")
-        # REMOTE:全量回迁到选定实例。
+        # REMOTE:唯一恢复路径——全量回迁到选定实例(单笔 remote_load
+        # [0, model_layers),规格恢复语义 2/4)。
         history_shards = self._history_shards(history_tokens)
         fit = self.ensure_physical_fit(
             target_instance_index,
@@ -2926,13 +2459,13 @@ class SessionKVCacheManager:
         completion_ns: int,
         request_id: Optional[str] = None,
     ) -> Optional[int]:
-        """Forget terminal KV while preserving the partial/remote state model.
+        """Forget terminal KV in the two-state model.
 
         B2 (sh ``:3434-3510``): no eviction transfer is emitted and this is
-        not counted as an eviction.  Only the prefix still physically
-        resident in local HBM is decremented; remote-only bytes are silently
-        written off with their terminal session metadata (远端账面静默核销,
-        不发传输、不算逐出)。face 语义保留:不发 KVCacheEvent。
+        not counted as an eviction.  Only the bytes still physically
+        resident in local HBM are decremented; remote-only bytes are
+        silently written off with their terminal session metadata (远端账面
+        静默核销,不发传输、不算逐出)。face 语义保留:不发 KVCacheEvent。
         """
 
         state = self._sessions.get(session_id)
@@ -2974,7 +2507,7 @@ class SessionKVCacheManager:
             self.release_request_capacity(reservation_id)
 
         released_instance_index: Optional[int] = None
-        if state.location in {LOCAL_HBM, PARTIAL_HBM_REMOTE}:
+        if state.location == LOCAL_HBM:
             if state.instance_index is None:
                 raise RuntimeError("local completed session has no instance")
             released_instance_index = state.instance_index
@@ -3014,9 +2547,10 @@ class SessionKVCacheManager:
             raise RuntimeError(f"planning ended with active KV sessions: {sorted(active)}")
 
     def _check_invariants(self) -> None:
-        """B2 full audit (sh ``:2037-2108``): three-state location whitelist,
-        layer-domain assertions, REMOTE without instance or resident layers,
-        and per-rank expected-KV recomputation from the resident prefix."""
+        """Session-level Tiered-LRU full audit: two-state location whitelist
+        (PARTIAL fails closed — unreachable), full-domain layer assertions,
+        REMOTE without instance or resident layers, and per-rank expected-KV
+        recomputation from the two-valued residency."""
 
         for state in self._rank_states.values():
             if state.resident_kv_bytes < 0 or state.reserved_request_bytes < 0:
@@ -3035,7 +2569,6 @@ class SessionKVCacheManager:
         for session in self._sessions.values():
             if session.location not in {
                 LOCAL_HBM,
-                PARTIAL_HBM_REMOTE,
                 REMOTE_MEMORY,
             }:
                 raise RuntimeError(f"unknown KV location: {session.location}")
@@ -3049,11 +2582,8 @@ class SessionKVCacheManager:
                 if session.resident_prefix_layers != 0:
                     raise RuntimeError("remote KV session retained resident layers")
                 continue
-            if session.location == LOCAL_HBM:
-                if session.resident_prefix_layers != self.model.layers:
-                    raise RuntimeError("fully local KV session is missing layers")
-            elif not 0 < session.resident_prefix_layers < self.model.layers:
-                raise RuntimeError("partial KV session has an invalid prefix length")
+            if session.resident_prefix_layers != self.model.layers:
+                raise RuntimeError("fully local KV session is missing layers")
             if session.instance_index is None:
                 raise RuntimeError("local KV session has no instance")
             if len(session.shard_bytes) != self.tp_degree:

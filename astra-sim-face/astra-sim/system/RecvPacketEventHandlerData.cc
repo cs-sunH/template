@@ -16,14 +16,15 @@ RecvPacketEventHandlerData::RecvPacketEventHandlerData() {
     this->custom_algorithm = nullptr;
 }
 
-RecvPacketEventHandlerData::RecvPacketEventHandlerData(
-    BaseStream* owner, int sys_id, EventType event, int vnet, int stream_id)
+RecvPacketEventHandlerData::RecvPacketEventHandlerData(BaseStream* owner,
+                                                       int sys_id,
+                                                       EventType event,
+                                                       int /*vnet*/,
+                                                       int /*stream_id*/)
     : BasicEventHandlerData(sys_id, event) {
     this->workload = nullptr;
     this->wlhd = nullptr;
     this->owner = owner;
     this->custom_algorithm = nullptr;
-    this->vnet = vnet;
-    this->stream_id = stream_id;
     ready_time = Sys::boostedTick();
 }

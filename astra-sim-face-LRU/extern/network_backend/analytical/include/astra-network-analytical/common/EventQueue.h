@@ -90,7 +90,7 @@ class EventQueue {
      * callback or a deferred handler, same-tick events MUST go through
      * schedule_event_deferred(); schedule_event(current_time, ...) would
      * try_emplace a current_time EventList into the main map and trip the
-     * strict-increase assert (EventQueue.cpp :31) on the next proceed().
+     * strict-increase assert (EventQueue.cpp :48) on the next proceed().
      */
     void set_tick_end_callback(Callback callback, CallbackArg arg) noexcept;
 

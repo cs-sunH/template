@@ -48,17 +48,12 @@ class ResolvedHardware:
     remote_memory_bandwidth_gbps: float
     remote_memory_latency_ns: int | None
     remote_memory_npu_selection: str | None
-    remote_memory_logical_pool: str | None
     peak_perf_tflops: float
     metadata: dict[str, object]
 
     @property
     def npus_count(self) -> int:
         return self.mesh_rows * self.mesh_cols
-
-    @property
-    def mesh_label(self) -> str:
-        return f"{self.mesh_rows}x{self.mesh_cols}"
 
     @property
     def remote_memory_runtime_label(self) -> str:
@@ -231,7 +226,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         )
         remote_memory_latency = None
         remote_memory_npu_selection = None
-        remote_memory_logical_pool = None
     elif remote_memory_type == "PER_NPU_MEMORY_EXPANSION":
         _require_exact_keys(
             remote_memory,
@@ -259,11 +253,13 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
                 "Hardware configuration.remote-memory.npu-selection must be "
                 "'mesh-boundary'"
             )
-        remote_memory_logical_pool = _require_string(
-            remote_memory,
-            "logical-pool",
-            "Hardware configuration.remote-memory",
-        )
+        # P11 死键清除（2026-09-23 深挖审计；2026-09-25 字段退役）：源侧
+        # "logical-pool" 键的值不再解析——它曾写入 remote_memory.json，
+        # 但 C++ 远端内存后端零读取（纯审计键——开关清单 §10.7
+        # remote_memory.json 键集表口径），写入链连同其专属 fail-closed
+        # 守卫一并退役。键本身仍由上方 _require_exact_keys 键集校验
+        # （canonical 源缺键/多键照常 fail-closed），ResolvedHardware 不
+        # 再携带该死字段。
     else:
         raise ValueError(
             "Hardware configuration.remote-memory.memory-type is unsupported"
@@ -302,7 +298,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         remote_memory_bandwidth_gbps=remote_memory_bandwidth,
         remote_memory_latency_ns=remote_memory_latency,
         remote_memory_npu_selection=remote_memory_npu_selection,
-        remote_memory_logical_pool=remote_memory_logical_pool,
         peak_perf_tflops=peak_perf,
         metadata=metadata,
     )
@@ -338,10 +333,9 @@ def _prepare_remote_memory(hardware: ResolvedHardware) -> dict[str, Any]:
         raise ValueError("Remote-memory expansion requires mesh-boundary selection")
     # P11 死键清除（2026-09-23 深挖审计）：logical-pool 曾写入
     # remote_memory.json，但 C++ 远端内存后端零读取（纯审计键——开关清单
-    # §10.7 remote_memory.json 键集表口径）——写入链连同其专属 fail-closed
-    # 守卫一并退役；canonical 硬件源字段与
-    # ResolvedHardware.remote_memory_logical_pool 保留（源侧 schema/审计
-    # 用途，不经派生件透传）。
+    # §10.7 remote_memory.json 键集表口径）——写入链已退役，此处不落该
+    # 键；源侧键值解析与字段亦已随 2026-09-25 清理退役（键集校验仍由
+    # load_hardware_config 的 _require_exact_keys 承担）。
 
     boundary_ranks = []
     for row in range(hardware.mesh_rows):

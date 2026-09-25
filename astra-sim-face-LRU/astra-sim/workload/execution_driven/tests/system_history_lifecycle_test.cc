@@ -2,12 +2,12 @@
 BaseStream and UsageTracker bounded-lifecycle regression fixture.
 
 BaseStream used to append one entry per stream id to three static maps.  The
-maps had no production consumers: ask_for_schedule already proves readiness by
-checking every rank's ready-list front, and ready_counter/suspended_streams
-have no writers/readers.  This fixture proves the retained ready-list decision
-is exact, including subgroup-shaped lifetimes and same-local-id collisions,
-then stress-constructs one million streams.  It also checks that online
-UsageTracker keeps its precise level without retaining transition history.
+maps had no production consumers and were removed; readiness is now gated by
+the per-rank ready list alone through Sys::schedule.  This fixture proves the
+retained ready-list decision is exact, including subgroup-shaped lifetimes and
+same-local-id collisions, then stress-constructs one million streams.  It also
+checks that online UsageTracker keeps its precise level without retaining
+transition history.
 *******************************************************************************/
 
 #include <unistd.h>
@@ -137,7 +137,6 @@ ReadyStream make_ready_stream(AstraSim::Sys& sys, int stream_id) {
     AstraSim::CollectivePhase phase;
     phase.queue_id = 0;
     phase.algorithm = nullptr;
-    phase.initial_data_size = 0;
     phase.final_data_size = 0;
     phase.enabled = false;
     phase.comm_type = AstraSim::ComType::None;
@@ -174,74 +173,49 @@ void reset_schedule_counters(const std::array<AstraSim::Sys*, 4>& ranks) {
     }
 }
 
-void test_ready_list_equivalence(const std::array<AstraSim::Sys*, 4>& ranks) {
-    // The caller has no front: old and new code both return before any work.
-    ranks[0]->ask_for_schedule(3);
+void test_ready_list_scheduling_gate(
+    const std::array<AstraSim::Sys*, 4>& ranks) {
+    // An empty ready list never schedules, whatever max is asked for.
+    ranks[0]->schedule(3);
     expect_not_scheduled(ranks, {0, 0, 0, 0},
-                         "empty caller ready list never schedules");
+                         "empty ready list never schedules");
 
-    // At least one rank is empty: the all-rank front scan rejects scheduling.
-    {
-        std::vector<ReadyStream> streams;
-        streams.push_back(make_ready_stream(*ranks[0], 10));
-        ranks[0]->ask_for_schedule(3);
-        expect_not_scheduled(ranks, {1, 0, 0, 0},
-                             "an empty peer ready list blocks scheduling");
-        clear_ready_lists(ranks);
-    }
-
-    // Every rank has work but their fronts disagree: the same scan rejects it.
-    {
-        std::vector<ReadyStream> streams;
-        for (size_t index = 0; index < ranks.size(); ++index) {
-            streams.push_back(make_ready_stream(
-                *ranks[index], index == 1 ? 21 : 20));
-        }
-        ranks[0]->ask_for_schedule(3);
-        expect_not_scheduled(ranks, {1, 1, 1, 1},
-                             "mismatched all-rank ready fronts block scheduling");
-        clear_ready_lists(ranks);
-    }
-
-    // Matching fronts schedule no more than max, even when each rank has more.
+    // Scheduling never exceeds the requested max even with more ready work.
     {
         std::vector<ReadyStream> streams;
         for (auto* rank : ranks) {
             streams.push_back(make_ready_stream(*rank, 30));
             streams.push_back(make_ready_stream(*rank, 31));
         }
-        ranks[0]->ask_for_schedule(1);
+        for (auto* rank : ranks) {
+            rank->schedule(1);
+        }
         for (auto* rank : ranks) {
             expect(rank->ready_list.size() == 1 &&
                        rank->total_running_streams == 1 &&
                        rank->first_phase_streams == 1,
-                   "matching fronts honor ask_for_schedule max");
+                   "schedule honors the requested max");
         }
         clear_ready_lists(ranks);
         reset_schedule_counters(ranks);
     }
 
-    // With max above every queue depth, the smallest ready-list length wins.
+    // With max above every queue depth, at most the ready list drains.
     {
         std::vector<ReadyStream> streams;
-        streams.push_back(make_ready_stream(*ranks[0], 40));
-        streams.push_back(make_ready_stream(*ranks[0], 41));
-        streams.push_back(make_ready_stream(*ranks[1], 40));
-        streams.push_back(make_ready_stream(*ranks[2], 40));
-        streams.push_back(make_ready_stream(*ranks[2], 41));
-        streams.push_back(make_ready_stream(*ranks[2], 42));
-        streams.push_back(make_ready_stream(*ranks[3], 40));
-        streams.push_back(make_ready_stream(*ranks[3], 41));
-        ranks[0]->ask_for_schedule(8);
-        expect(ranks[0]->ready_list.size() == 1 &&
-                   ranks[1]->ready_list.empty() &&
-                   ranks[2]->ready_list.size() == 2 &&
-                   ranks[3]->ready_list.size() == 1,
-               "matching fronts honor the global ready-list minimum");
         for (auto* rank : ranks) {
-            expect(rank->total_running_streams == 1 &&
-                       rank->first_phase_streams == 1,
-                   "minimum scheduling advances all ranks exactly once");
+            streams.push_back(make_ready_stream(*rank, 40));
+            streams.push_back(make_ready_stream(*rank, 41));
+            streams.push_back(make_ready_stream(*rank, 42));
+        }
+        for (auto* rank : ranks) {
+            rank->schedule(8);
+        }
+        for (auto* rank : ranks) {
+            expect(rank->ready_list.empty() &&
+                       rank->total_running_streams == 3 &&
+                       rank->first_phase_streams == 3,
+                   "schedule drains at most the ready-list length");
         }
         clear_ready_lists(ranks);
         reset_schedule_counters(ranks);
@@ -300,11 +274,17 @@ void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
                second.level == 1 && second.start == 0 && second.end == 0,
            "default UsageTracker record contents remain unchanged");
 
+    // The ready-list gate above scheduled rank-0 streams on queue 0, which
+    // raised this online-mode tracker (retain_history=false) to level 1, and
+    // no stream ever finished.  Round-tripping the level must retain nothing.
     auto& online = ranks[0]->scheduler_unit->usage.at(0);
-    online.set_usage(1);
+    online.decrease_usage();
+    expect(online.current_level == 0 && online.usage.empty(),
+           "online scheduler drops level without retaining history");
+    online.increase_usage();
     expect(online.current_level == 1 && online.usage.empty(),
-           "online scheduler changes level without retaining history");
-    online.set_usage(0);
+           "online scheduler raises level without retaining history");
+    online.decrease_usage();
 
     constexpr uint64_t kIterations = 1000000;
     for (uint64_t index = 0; index < kIterations; ++index) {
@@ -343,7 +323,7 @@ int main() {
         const std::array<AstraSim::Sys*, 4> ranks = {
             rank_zero.get(), rank_one.get(), rank_two.get(), rank_three.get()};
 
-        test_ready_list_equivalence(ranks);
+        test_ready_list_scheduling_gate(ranks);
         test_subgroup_lifetimes_and_id_collisions(ranks);
         test_stream_lifecycle_stress(ranks);
         test_usage_tracker_contract(ranks);

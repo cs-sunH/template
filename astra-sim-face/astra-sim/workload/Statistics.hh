@@ -1,7 +1,7 @@
 #ifndef ASTRASIM_WORKLOAD_STATISTICS_HH
 #define ASTRASIM_WORKLOAD_STATISTICS_HH
 
-#include "astra-sim/common/Common.hh"
+#include "astra-sim/system/Common.hh"
 #include "astra-sim/common/Logging.hh"
 #include <array>
 #include <cstddef>
@@ -27,7 +27,7 @@ class Statistics {
     class OperatorStatistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
-        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, REPLAY, INVALID };
+        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
         static OperatorType get_operator_type(
             const std::shared_ptr<Chakra::ETFeederNode> node);
         // Step 1-8: online-mode overload dispatching on the NodeView fields
@@ -66,23 +66,13 @@ class Statistics {
         std::optional<double> operation_intensity;
         std::optional<bool> is_memory_bound;
 
-        // communication node
-        std::optional<uint64_t> comm_size;  // Size of communication in bytes
-
         // remote memory node
-
-        // replay node
     };
 
   public:
     Statistics(Workload* workload);
 
     OperatorStatistics& get_operator_statistics(NodeId node_id);
-
-    const OperatorStatistics& get_operator_statistics(NodeId node_id) const;
-
-    const std::unordered_map<NodeId, OperatorStatistics>&
-    get_operator_statistics() const;
 
     void record_start(std::shared_ptr<Chakra::ETFeederNode> node,
                       Tick start_time);

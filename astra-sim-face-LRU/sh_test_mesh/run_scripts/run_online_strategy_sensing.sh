@@ -29,6 +29,13 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
+# RC 显式存在性闸(对齐上方 GEN_MATCH 闸):runtime_config 四小件由
+# plan_materializer.py 经 config_resolver 物化于 generated/runtime_config/
+# (裸仓还原会删 generated/),缺失即在此报错,不等 C++ 打开 system.json 失败。
+if [[ ! -d "${RC}" ]]; then
+  echo "[runner] runtime_config dir missing: ${RC} (materialized under sh_test_mesh/generated/runtime_config/ by plan_materializer.py; bare-repo restore deletes generated/)" >&2
+  exit 1
+fi
 
 # 桥侧看门狗（2026-08-22 引入；P0-2 2026-08-31 常态化+定位修正；收尾批
 # 2026-09-01 与主 runner 统一武装——sensing 变体此前保留旧"缺省不设=永等"
@@ -175,7 +182,10 @@ fi
 #    下次运行 rm -rf "${RUN_DIR}" 全量清理。
 mkdir -p "${RUN_DIR}/results"
 ARCHIVED=0
-for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger; do
+# 2026-09-24 SerDes 并发化改造(方案 §5.1/阶段 3):remote_memory_transactions
+# 为 C++ 后端事务明细(仅 --sensing-enabled 跑产生;文件惰性建,关感知零残留),
+# 与既有审计 jsonl 同路径同搬移,两 runner(run_online_strategy*.sh)一次同改。
+for j in request_journal online_decision_log graph_batch_digests ledger online_stats profile sensing_query_log train_ledger remote_memory_transactions; do
   if [ -f "${RUN_DIR}/bridge/${j}.jsonl" ]; then
     mv "${RUN_DIR}/bridge/${j}.jsonl" "${RUN_DIR}/results/${j}.jsonl"
     ARCHIVED=$((ARCHIVED + 1))

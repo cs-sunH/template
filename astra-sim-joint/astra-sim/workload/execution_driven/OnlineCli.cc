@@ -19,7 +19,6 @@ removed).
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <string>
 
 namespace AstraSim {
@@ -250,12 +249,12 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
                 }
                 bridge_timeout_ms = static_cast<int>(parsed);
             } else {
-                if (parsed > static_cast<unsigned long long>(
-                                 std::numeric_limits<uint64_t>::max())) {
-                    error = "option --request-max-arrival-ns exceeds "
-                            "uint64_t range, got: " + value;
-                    return false;
-                }
+                // --request-max-arrival-ns: the strtoull + ERANGE rejection
+                // above already fails every value beyond the 64-bit unsigned
+                // range (unsigned long long == uint64_t on the target
+                // platform), so no reachable upper-bound check remains here
+                // (the deep-review 2026-09 always-false uint64_max leg was
+                // removed).
                 request_max_arrival_ns = static_cast<uint64_t>(parsed);
             }
         } else if (name == "--idle-watchdog-s") {

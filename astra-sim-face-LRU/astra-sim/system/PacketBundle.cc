@@ -9,13 +9,12 @@ using namespace AstraSim;
 
 PacketBundle::PacketBundle(Sys* sys,
                            BaseStream* stream,
-                           std::list<MyPacket*> locked_packets,
+                           std::list<MyPacket*> /*locked_packets*/,
                            bool needs_processing,
                            bool send_back,
                            uint64_t size,
                            MemBus::Transmition transmition) {
     this->sys = sys;
-    this->locked_packets = locked_packets;
     this->needs_processing = needs_processing;
     this->send_back = send_back;
     this->size = size;
@@ -52,6 +51,15 @@ void PacketBundle::send_to_NPU() {
 void PacketBundle::call(EventType event, CallData* data) {
     if (needs_processing == true) {
         needs_processing = false;
+        // Fail closed: local_mem_bw defaults to 0 and stays 0 when the system
+        // config omits local-mem-bw. Dividing by it yields +inf whose cast to
+        // an integer type is UB and would park this event in the far future,
+        // hanging the simulation silently.
+        if (sys->local_mem_bw <= 0) {
+            sys->sys_panic(
+                "PacketBundle collective processing requires a positive "
+                "local-mem-bw in the system config");
+        }
         // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
         // HBM write/read pays the configured fixed access latency.
         const auto local_mem_access_delay =

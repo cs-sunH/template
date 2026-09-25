@@ -352,11 +352,6 @@ size_t RequestIngress::peak_command_occupancy() const {
     return peak_command_occupancy_;
 }
 
-size_t RequestIngress::pending_queue_index_count() const {
-    std::lock_guard<std::mutex> lock(mtx_);
-    return queue_index_map_.size();
-}
-
 std::map<int64_t, RequestIngress::StaticCsvArrivalRecord>
 RequestIngress::static_csv_arrivals() const {
     std::lock_guard<std::mutex> lock(mtx_);

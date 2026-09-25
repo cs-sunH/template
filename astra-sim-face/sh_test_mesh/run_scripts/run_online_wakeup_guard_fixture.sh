@@ -17,7 +17,8 @@
 #       "lost-wakeup dead end" 且 active=1 计数入消息(替代 50 分钟静默
 #       挂死/busy-spin);
 #     EXPECT_MODE=legacy-stall:预修复二进制不退出(RED 基线采集用;
-#       runner 断言 N 秒无退出后 SIGTERM 记录现场)。
+#       runner 断言 10s 无退出后打印 REPRODUCED 并以 0 退出;现场目录
+#       留给调用方检查,由 EXIT trap kill -9(SIGKILL) 清理进程)。
 #
 # 用法:
 #   bash run_online_wakeup_guard_fixture.sh [run_root]
@@ -183,7 +184,7 @@ if [[ "${EXPECT_MODE}" == "legacy-stall" ]]; then
     exit 1
   fi
   echo "[wakeup_guard] legacy-stall REPRODUCED: 预修复二进制 CloseInput 后 10s+ 无退出"
-  echo "[wakeup_guard]   (busy-spin/挂死现场保留于 ${run_dir};由 trap SIGTERM 清理)"
+  echo "[wakeup_guard]   (busy-spin/挂死现场保留于 ${run_dir};进程由 EXIT trap kill -9 清理)"
   exit 0
 fi
 

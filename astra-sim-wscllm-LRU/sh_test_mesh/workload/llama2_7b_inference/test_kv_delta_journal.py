@@ -184,9 +184,9 @@ class KvDeltaJournalTests(unittest.TestCase):
 
     def test_evict_restore_and_terminal_retire_transactions(self) -> None:
         # 容量收到每 rank weight+20:一个 4-token 会话(16B)驻留后,第二个
-        # 会话增长必然逐出前者(LRU completed inactive,B2 三态:整体外迁
-        # remote_store;L=1 无半层后缀,阶段 1 空集直入阶段 2),随后被逐
-        # 会话的下一 turn 走 REMOTE 全量回迁(再次逐出现驻留者)。
+        # 会话增长必然整体逐出前者(LRU completed inactive,二态:整会话
+        # remote_store 全层外迁),随后被逐会话的下一 turn 走 REMOTE 全量
+        # 回迁(再次整体逐出现驻留者)。
         weight = 72  # WscLlmModel(1,4,4,2,4,1,gelu) 的每 rank TP 权重分片
         manager, recorder = self._manager(capacity=weight + 20)
         manager.prepare_history(
@@ -195,9 +195,9 @@ class KvDeltaJournalTests(unittest.TestCase):
         manager.mark_complete("sA", 12, "rA0")
         manager.prepare_history(
             "sB", 0, 0, 13, "rB0", required_context_tokens=4)
-        manager.grow_prefill("sB", 4, 14, "rB0")  # 逐出 sA(remote_store)
+        manager.grow_prefill("sB", 4, 14, "rB0")  # 整体逐出 sA(remote_store)
         manager.mark_complete("sB", 15, "rB0")
-        decision = manager.prepare_history("sA", 0, 4, 16, "rA1")  # 远端回迁
+        decision = manager.prepare_history("sA", 0, 4, 16, "rA1")  # 远端全量回迁
         self.assertEqual(decision.action, "REMOTE_RESTORE")
         manager.grow_prefill("sA", 4, 17, "rA1")  # 零 delta 增长(零行事务)
         manager.mark_complete("sA", 18, "rA1")
@@ -207,17 +207,22 @@ class KvDeltaJournalTests(unittest.TestCase):
 
         rows = _journal_rows(recorder)
         causes = [row["cause"] for row in rows]
-        # 契约 §5 cause 串逐字:外迁 full_fallback / 远端回迁 / 终局核销。
+        # 契约 §5 cause 串逐字:整会话外迁(层域 [0,L))/远端全量回迁/
+        # 终局核销;旧 suffix_half/full_fallback 词素不再出现。
         self.assertTrue(any(
-            "evict_history_and_prefill_admission_full_fallback" in cause
+            "evict_history_and_prefill_admission_session:layers0-1" in cause
             for cause in causes))
         self.assertTrue(any(
-            "evict_history_target_capacity_full_fallback" in cause
+            "evict_history_target_capacity_session:layers0-1" in cause
             for cause in causes))
         self.assertTrue(
             any("history_remote_restore" in cause for cause in causes))
         self.assertTrue(
             any("terminal_session_retire" in cause for cause in causes))
+        self.assertNotIn(
+            "suffix_half", "\n".join(causes))
+        self.assertNotIn(
+            "full_fallback", "\n".join(causes))
         # 远端列(B2 新增):外迁 +16、回迁 -16、核销兜底,重放终态归零。
         remote_rows = [row for row in rows if row["remote_delta_bytes"]]
         self.assertTrue(remote_rows)

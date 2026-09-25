@@ -8,7 +8,7 @@
 #   未到期 future alarm(r1 @T+1000)] -> 里程碑与 r1 ARRIVAL 在 T+1000
 #   同一 epoch 交付 -> r0/r1 全部完成 -> CloseInput -> 双进程 exit 0。
 #   断言:completed=2/accepted=1(future-alarm 到达不计 accepted)、
-#   no_decision=0、future_alarm 调度留痕、无死锁。
+#   future_alarm 调度留痕、无死锁(cpp 服务计数审计)。
 #   ——证明修复后的空队列分支在健康蓝图形态上不误触发 fail-closed。
 #
 # 场景 2 defer-dead-end(唤醒真空死端):
@@ -46,7 +46,6 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${BIN:-${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online}
-SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/wakeup_guard_fixture_service.py
 EXPECT_MODE=${EXPECT_MODE:-fixed}
 
 T_NS=3000000000
@@ -153,7 +152,8 @@ if [[ ${cpp_exit} -ne 0 || ${py_exit} -ne 0 ]]; then
   exit 1
 fi
 # 断言:future_alarm 留痕 + 两请求完成 + r1 到达为 future-alarm 路径
-# (accepted=1,completed=2)+ 无事件丢失。
+# (accepted=1,completed=2)+ 无事件丢失(服务计数审计;no_decision 结束
+# 审计行已删)。
 grep -q "\[fixture\] future_alarm scheduled: wg_r01 @ tick+1000" \
   "${run_dir}/python.log" || {
   echo "[wakeup_guard] FAIL(场景1): 未到期 future alarm 未调度" >&2; exit 1; }
@@ -161,8 +161,6 @@ grep -q '\[online\] service counters: accepted=1 completed=2 active=0 pending_al
   "${run_dir}/cpp.log" || {
   echo "[wakeup_guard] FAIL(场景1): 服务计数不符(期望 accepted=1 completed=2)" >&2
   grep '\[online\] service counters' "${run_dir}/cpp.log" >&2; exit 1; }
-grep -q 'no_decision_python_callback_count=0' "${run_dir}/cpp.log" || {
-  echo "[wakeup_guard] FAIL(场景1): no_decision != 0" >&2; exit 1; }
 echo "[wakeup_guard] 场景1 PASS: 蓝图形态(未到期 alarm+同 tick 里程碑)健康完成,无误触发"
 
 # ========================== 场景 2:defer-dead-end ==========================

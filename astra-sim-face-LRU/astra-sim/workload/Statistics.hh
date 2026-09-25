@@ -66,8 +66,9 @@ class Statistics {
         std::optional<double> operation_intensity;
         std::optional<bool> is_memory_bound;
 
-        // communication node
-        std::optional<uint64_t> comm_size;  // Size of communication in bytes
+        // communication node: no comm_size field -- the achieved-bandwidth
+        // chain that consumed it had no production reader and was removed
+        // (Workload.cc note at the former record_network_bandwidth site).
 
         // remote memory node
 

@@ -5,6 +5,9 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventQueue.h"
 #include <cassert>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
 
 using namespace NetworkAnalytical;
 
@@ -44,8 +47,20 @@ void EventQueue::proceed() noexcept {
     auto current_event_list_it = event_queue.begin();
     auto& current_event_list = current_event_list_it->second;
 
-    // check the validity and update current time
-    assert(current_event_list.get_event_time() > current_time);
+    // check the validity and update current time.  Release-active on
+    // purpose: a same-tick/past EventList here means some caller bypassed
+    // schedule_event_deferred() -- the invariant is a hard queue rule, not
+    // a debug-only assumption (event_queue_deferred_test case E proves the
+    // abort).
+    if (!(current_event_list.get_event_time() > current_time)) {
+        std::fprintf(stderr,
+                     "[EventQueue] strict-increase violated: next event at "
+                     "%" PRIu64 " but current time is %" PRIu64
+                     " (same-tick events must go through "
+                     "schedule_event_deferred)\n",
+                     current_event_list.get_event_time(), current_time);
+        std::abort();
+    }
     current_time = current_event_list.get_event_time();
 
     // invoke events. in_invoke_ marks the only context in which a same-tick

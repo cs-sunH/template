@@ -8,7 +8,6 @@ legacy NodeView/map behavior for microbenchmark window queries.
 *******************************************************************************/
 
 #include "astra-sim/common/AstraNetworkAPI.hh"
-#include "astra-sim/common/AstraRemoteMemoryAPI.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -83,12 +82,6 @@ void expect_same_double_bits(double actual, double expected,
     expect(double_bits(actual) == double_bits(expected), message);
 }
 
-class TestRemoteMemoryApi final : public AstraSim::AstraRemoteMemoryAPI {
-  public:
-    void set_sys(int, AstraSim::Sys*) override {}
-    void issue(uint64_t, AstraSim::WorkloadLayerHandlerData*) override {}
-};
-
 class TestNetworkApi final : public AstraSim::AstraNetworkAPI {
   public:
     TestNetworkApi() : AstraNetworkAPI(0) {}
@@ -150,10 +143,9 @@ std::string write_minimal_system_config() {
 
 std::unique_ptr<AstraSim::Sys> make_online_test_system(
     const std::string& system_config,
-    TestRemoteMemoryApi& remote_memory,
     TestNetworkApi& network) {
     return std::make_unique<AstraSim::Sys>(
-        0, "unused", "empty", system_config, &remote_memory, &network,
+        0, "unused", "empty", system_config, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
         std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
@@ -285,10 +277,8 @@ void test_compact_post_processing_fails_closed_without_mutation() {
 
 void test_history_preserving_legacy_post_processing_succeeds(
     const std::string& system_config) {
-    TestRemoteMemoryApi remote_memory;
     TestNetworkApi network;
-    const auto system =
-        make_online_test_system(system_config, remote_memory, network);
+    const auto system = make_online_test_system(system_config, network);
     Statistics& stats = *system->workload->stats;
     stats.configure_online_history_preservation(true);
 
@@ -308,10 +298,8 @@ void test_compact_workload_report_fails_closed_without_mutation(
     const std::string& system_config) {
     expect_child_failure(
         "compact Workload::report fails closed without mutation", [&] {
-            TestRemoteMemoryApi remote_memory;
             TestNetworkApi network;
-            const auto system =
-                make_online_test_system(system_config, remote_memory, network);
+            const auto system = make_online_test_system(system_config, network);
             Statistics& stats = *system->workload->stats;
             const NodeView gpu = gpu_node(5);
             OnlineStatisticsState state;

@@ -1515,6 +1515,106 @@ class FaceTieredUpgradeTests(unittest.TestCase):
         self.assertEqual(summary["instances"]["0"]
                          ["residual_occupancy_bytes"], 260)
 
+    def test_face_lru_new_run_whole_eviction_restore_ratio_one(self):
+        """face-LRU 新运行形状（session 级 Tiered-LRU，2026-09-25）：
+        逐出恒为整体 store（evict bytes == session tracked bytes →
+        partial_evictions == 0），恢复恒全量（ratio 恒 1.0）；reason/
+        layer 域为全量域（layers0-1、before/after = 1/0）。"""
+
+        def _records_tokens():
+            reset_seq()
+            records = [
+                prefill_record("a_r0", 0, decision={
+                    "history_action": "NO_HISTORY",
+                    "history_location_before": None,
+                    "history_transfer_bytes": 0,
+                    "history_evictions": [], "prefill_evictions": [],
+                    "history_transfers": [],
+                    "admission_evictions": [],
+                    "decode_target_evictions": []}),
+                decode_record("a_r0", 10, decision={
+                    "prefill_decode_transfer": None,
+                    "decode_evictions": [], "decode_target_evictions": []}),
+                completion_record("a_r0", 20, decision={
+                    "kv_state_after_completion": "local_hbm"}),
+                # b_r0 准入:整体逐出 a(evict bytes == session bytes 200,
+                # layer 全量域 [0,1))。
+                prefill_record("b_r0", 30, decision={
+                    "history_action": "NO_HISTORY",
+                    "history_location_before": None,
+                    "history_transfer_bytes": 0,
+                    "history_evictions": [{
+                        "kind": "remote_store",
+                        "reason":
+                            "history_and_prefill_admission_full:layers0-1",
+                        "session_id": "session_A", "total_bytes": 200,
+                        "source_instance_index": 0,
+                        "target_instance_index": None,
+                        "layer_start": 0, "layer_end": 1}],
+                    "prefill_evictions": [],
+                    "history_transfers": [],
+                    "admission_evictions": [],
+                    "decode_target_evictions": []}),
+                decode_record("b_r0", 40, decision={
+                    "prefill_decode_transfer": None,
+                    "decode_evictions": [], "decode_target_evictions": []}),
+                completion_record("b_r0", 45, decision={
+                    "kv_state_after_completion": "local_hbm"}),
+                # a_r1 回迁:REMOTE_RESTORE 全量(nbytes == f(history) →
+                # ratio 1.0)。
+                prefill_record("a_r1", 50, decision={
+                    "history_action": "REMOTE_RESTORE",
+                    "history_location_before": "remote_memory",
+                    "history_location_before_instance_index": None,
+                    "history_resident_prefix_layers": 0,
+                    "history_transfer_bytes": 200,
+                    "history_evictions": [], "prefill_evictions": [],
+                    "history_transfers": [{
+                        "kind": "remote_load",
+                        "reason": "history_remote_restore",
+                        "session_id": "session_A", "total_bytes": 200,
+                        "source_instance_index": None,
+                        "target_instance_index": 0,
+                        "layer_start": 0, "layer_end": 1}],
+                    "admission_evictions": [],
+                    "decode_target_evictions": []}),
+                decode_record("a_r1", 60, decision={
+                    "prefill_decode_transfer": None,
+                    "decode_evictions": [], "decode_target_evictions": []}),
+                completion_record("a_r1", 70, decision={
+                    "kv_state_after_completion": "local_hbm"}),
+            ]
+            tokens = [token_row("a_r0", "session_A", 0, 1, 2),
+                      token_row("b_r0", "session_B", 0, 1, 1)]
+            a_r1 = token_row("a_r1", "session_A", 2, 3, 3)
+            a_r1["turn_index"] = 1
+            a_r1["queue_index"] = 2
+            tokens.append(a_r1)
+            return records, tokens
+
+        records, tokens = _records_tokens()
+        run_dir = make_run_dir("faceL")
+        write_fixture(run_dir, repo_variant="astra-sim-face-LRU",
+                      records=records, token_requests=tokens)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["eviction_coverage"], "full")
+        self.assertEqual(summary["violation_events"], 0)
+        # 新运行形状:整体逐出 → partial 计数恒 0;逐出字节 = 全 session。
+        self.assertEqual(summary["actions"]["evictions"], 1)
+        self.assertEqual(summary["actions"]["evict_bytes"], 200)
+        self.assertEqual(summary["actions"]["partial_evictions"], 0)
+        # 恢复恒全量:ratio 桶只有 1.000、无 0.5 半层桶。
+        self.assertEqual(
+            summary["restore_bytes_ratio_histogram"], {"1.000": 1})
+        self.assertEqual(summary["actions"]["restore_remote_add"], 1)
+        self.assertEqual(sum(summary["anomalies"].values()), 0)
+        # 台账守恒:i0 残留 = b(100) + a 回迁(200) + a_r1 prefill 增长
+        # (f(3)-f(2)=100)。
+        self.assertEqual(summary["instances"]["0"]
+                         ["residual_occupancy_bytes"], 400)
+
 
 class AdmissionProbeSkipTests(unittest.TestCase):
     """P0-1/P1 probe 观测行适配（收尾批 2026-09-01）：

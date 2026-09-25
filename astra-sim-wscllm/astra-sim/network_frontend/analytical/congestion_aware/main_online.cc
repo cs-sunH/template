@@ -108,7 +108,6 @@ Step 1-10 (runners + IDLE fixture):
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
 #include <json/json.hpp>
-#include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
 
 #include <sys/resource.h>
 
@@ -131,7 +130,6 @@ Step 1-10 (runners + IDLE fixture):
 #include <vector>
 
 using namespace AstraSim;
-using namespace Analytical;
 using namespace AstraSimAnalytical;
 using namespace AstraSimAnalyticalCongestionAware;
 using namespace AstraSim::ExecutionDriven;
@@ -992,8 +990,6 @@ int main(int argc, char* argv[]) {
         cmd_line_parser.get<std::string>("comm-group-configuration");
     const auto system_configuration =
         cmd_line_parser.get<std::string>("system-configuration");
-    const auto remote_memory_configuration =
-        cmd_line_parser.get<std::string>("remote-memory-configuration");
     const auto network_configuration =
         cmd_line_parser.get<std::string>("network-configuration");
     const auto logging_configuration =
@@ -1090,8 +1086,6 @@ int main(int argc, char* argv[]) {
     // Create ASTRA-sim related resources
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
-        std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
     auto systems = std::vector<Sys*>();
 
     auto queues_per_dim = std::vector<int>();
@@ -1114,7 +1108,7 @@ int main(int argc, char* argv[]) {
         // runs real physics.
         auto* const system = new Sys(
             i, workload_configuration, comm_group_configuration,
-            system_configuration, memory_api.get(), network_api.get(),
+            system_configuration, network_api.get(),
             npus_count_per_dim, queues_per_dim, injection_scale, comm_scale,
             rendezvous_protocol, ExecutionMode::Online, graph_source);
 

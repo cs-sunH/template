@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_kv_transfer_emission.py -- B3(2026-09-06)三态 KV 转移发射钉子测试。
+"""test_kv_transfer_emission.py -- B3(2026-09-06)KV 转移发射钉子测试。
 
 照抄 sh_2.0 test_graph_batch_builder.py:388-460(流水锁定)并适配本仓
 P/D 分离发射骨架,另钉 remote_store/remote_load/noc_migrate 三链的
@@ -16,12 +16,13 @@ HBM 计费键(策略文档 §9 地图,计费三险逐节点核对):
       RESTORE 唯一数据计费);
   (d) noc_migrate:send/recv 默认 charged + 1B ack 对;全部转移 tag
       ≥ 100_000_000(契约 §6 基址,H8 修正后与 _stage_tag 段错开);
-  (e) PARTIAL 真流水(REMOTE_LOAD 同实例 / PARTIAL_MIGRATE 跨实例):
-      prefix 就绪栅栏 → checkpoint → suffix 远端恢复分支 → suffix
-      ready p2p 栅栏 → restore chain;首 chunk 层段拆分(prefix 段
-      不等 suffix 恢复,suffix 段 arm 依赖 suffix ready 节点;字节
-      总量与单次全层发射逐项守恒);
-  (f) pending history 门账本:sync 镜像逐出、turn-0 deferred 通道、
+  (e) REMOTE_RESTORE 全量恢复(session 级 Tiered-LRU 唯一远端路径):
+      全层 [0, L) 单段 remote_load 发射 + 单一全层就绪屏障
+      (history_tp_ready_barrier;恢复完成前不能消费历史 KV);
+      prefix/suffix 双栅栏与首 chunk 层段拆分真流水已随 PARTIAL
+      恢复路径删除;
+  (f) pending history 门账本:sync 镜像逐出(整体逐出后位置恒
+      remote_memory;非零残留 fail-closed)、turn-0 deferred 通道、
       retire 清理;
   (g) 列车头 joiner decode 逐出:触发门 = prefill 段块末(post-
       barrier),control rank 与源 rank 跨实例时 1B p2p 触发。
@@ -159,7 +160,7 @@ class RemoteStoreChainTest(unittest.TestCase):
                                     noc_path=(5, 1))],
             source_instance_index=1,
             resident_prefix_layers_before=LAYERS,
-            resident_prefix_layers_after=2,
+            resident_prefix_layers_after=0,
         )
         # (source 5 ∈ decode 实例;近缘 edge = 1,source≠edge → 链 A)
         record = _emit(self.builder, transfer)[ "shards" ][0]
@@ -310,53 +311,32 @@ def _prefill_plan(*, turn_index=0, history_action=None,
     return plan
 
 
-def _suffix_load_transfer(layer_start=2):
-    # 分片覆盖 prefill 实例全部 rank(0/1 均为边界 rank → 直连池端点)。
+def _full_load_transfer():
+    # 分片覆盖 prefill 实例全部 rank(0/1 均为边界 rank → 直连池端点);
+    # REMOTE_RESTORE 全层 [0, L) 单段恢复(多 shard 行 = 单逻辑 victim)。
     return _transfer(
         "remote_load",
         [_shard(source_rank=0, target_rank=0, edge_rank=0, bytes=1500,
-                noc_path=(0,), layer_start=layer_start),
+                noc_path=(0,)),
          _shard(source_rank=1, target_rank=1, edge_rank=1, bytes=1500,
-                noc_path=(1,), layer_start=layer_start)],
+                noc_path=(1,))],
         target_instance_index=0,
-        reason="history_remote_suffix_restore",
-        layer_start=layer_start, layer_end=LAYERS,
-        resident_prefix_layers_before=layer_start,
+        reason="history_remote_restore",
+        layer_start=0, layer_end=LAYERS,
+        resident_prefix_layers_before=0,
         resident_prefix_layers_after=LAYERS,
     )
 
 
-def _prefix_noc_transfer(suffix_start=2):
-    # 相对 TP rank 保持:decode(5,6) → prefill(0,1)。noc_path 与生产
-    # _xy_route 同序(先列向对齐、后行向):6→1 经 5(col 2→1),再 5→1
-    # (row 1→0);5→0 经 4(col 1→0),再 4→0(row 1→0)。
-    return _transfer(
-        "noc_migrate",
-        [_shard(source_rank=5, target_rank=0, bytes=2500,
-                noc_path=(5, 4, 0), layer_start=0, layer_end=suffix_start),
-         _shard(source_rank=6, target_rank=1, bytes=2500,
-                noc_path=(6, 5, 1), layer_start=0, layer_end=suffix_start)],
-        source_instance_index=1, target_instance_index=0,
-        reason="history_partial_prefix_migrate",
-        layer_start=0, layer_end=suffix_start,
-        resident_prefix_layers_before=suffix_start,
-        resident_prefix_layers_after=suffix_start,
-    )
-
-
-class PartialPipelineTest(unittest.TestCase):
-    """(e):PARTIAL 恢复真流水(首 chunk 层段拆分 + 双栅栏 + 并行分支)。
-
-    随迁 sh_2.0 test_graph_batch_builder.py:388-460 并适配本仓:首 chunk
-    所在"列车"= P 侧 prefill 整段(emit_prefill_batch),层段拆分在其
-    current_prefill 段内完成。"""
+class RemoteRestoreEmissionTest(unittest.TestCase):
+    """(e):REMOTE_RESTORE 全量恢复发射(单一全层就绪屏障,无层段拆分)。"""
 
     def setUp(self):
         self.config = _make_config()
         self.builder = GraphBatchBuilder(self.config)
         self.builder.begin_batch()
 
-    def _arm_pending_gate(self, request_id, location="partial_hbm_remote",
+    def _arm_pending_gate(self, request_id, location="remote_memory",
                           source_instance=1):
         self.builder.completion_gates[SESSION] = (
             source_instance, {rank: None for rank in
@@ -366,117 +346,61 @@ class PartialPipelineTest(unittest.TestCase):
             request_id=request_id, session_id=SESSION,
             source_instance_index=source_instance, location=location)
 
-    def _stage_bytes(self):
-        total_tensor = 0
-        total_coll = 0
-        for node in self.builder.batch["nodes"]:
-            if "current_prefill" not in node["name"]:
-                continue
-            total_tensor += node["compute"]["tensor_size"]
-            total_coll += node["coll"]["bytes"]
-        return total_tensor, total_coll
-
-    def test_same_instance_remote_load_pipeline(self):
-        """REMOTE_LOAD(同实例):prefix 不等恢复,suffix 段 arm 依赖
-        suffix ready;字节守恒。"""
-        plan = _prefill_plan(
-            history_action="REMOTE_LOAD", history_source=0,
-            history_transfers=(_suffix_load_transfer(),),
-            resident_layers=2, location="partial_hbm_remote")
-        # 同实例分支:门源 = prefill 实例(合成口径;真实 P/D 分离下
-        # 该分支不可达,见 builder 注释)。
-        self._arm_pending_gate(plan["request_id"], source_instance=0)
-        self.builder.emit_prefill_batch(plan)
-        self._assert_pipeline_shape()
-        split_tensor, split_coll = self._stage_bytes()
-        # 对照:同工作量的无历史 plan 单次全层发射。
-        plain_builder = GraphBatchBuilder(self.config)
-        plain_builder.begin_batch()
-        plain_builder.emit_prefill_batch(
-            _prefill_plan(turn_index=0, history_action=None,
-                          history_source=None))
-        plain_tensor = plain_coll = 0
-        for node in plain_builder.batch["nodes"]:
-            if "current_prefill" not in node["name"]:
-                continue
-            plain_tensor += node["compute"]["tensor_size"]
-            plain_coll += node["coll"]["bytes"]
-        self.assertEqual((split_tensor, split_coll),
-                         (plain_tensor, plain_coll))
-        # 消费恰一次:流水账本弹出。
-        self.assertNotIn(plan["request_id"],
-                         self.builder._partial_first_chunk)
-
-    def test_cross_instance_partial_migrate_pipeline(self):
-        """PARTIAL_MIGRATE:prefix noc 迁移 + prefix ready p2p 栅栏 +
-        suffix 恢复分支 + 首 chunk 层段拆分(两段同批发射)。"""
+    def test_remote_restore_full_layer_single_segment(self):
+        """REMOTE_RESTORE:全层 [0, L) 单段 remote_load + 单一
+        history_tp_ready_barrier;恢复完成前不能消费历史 KV。"""
         plan = _prefill_plan(
             turn_index=1,
-            history_action="PARTIAL_MIGRATE", history_source=1,
-            history_transfers=(_prefix_noc_transfer(),
-                               _suffix_load_transfer()),
-            resident_layers=2, location="partial_hbm_remote")
-        # 跨实例分支:门源 = 上一 turn 的 decode 实例(真实口径)。
+            history_action="REMOTE_RESTORE", history_source=1,
+            history_transfers=(_full_load_transfer(),),
+            resident_layers=0, location="remote_memory")
         self._arm_pending_gate(plan["request_id"])
         self.builder.emit_prefill_batch(plan)
-        # prefix 迁移节点(5→0)存在。
-        self.assertTrue(_by_name(_nodes(self.builder, 5), "_send"))
-        self._assert_pipeline_shape()
-
-    def _assert_pipeline_shape(self):
-        builder = self.builder
+        # 恢复链:每 prefill rank 一个 target HBM 写回节点(两 shard 行
+        # = 单逻辑 victim 的物理表达)。
         for rank in PREFILL_RANKS:
-            nodes = _nodes(builder, rank)
-            edges = [edge for edge in builder.batch["parent_edges"]
-                     if edge["rank"] == rank]
-            prefix_nodes = _by_name(nodes, "first_chunk_prefix")
-            suffix_nodes = _by_name(nodes, "first_chunk_suffix")
-            remaining_nodes = _by_name(nodes, "remaining_aggregated")
-            self.assertTrue(prefix_nodes and suffix_nodes
-                            and remaining_nodes)
-            # 层标签:prefix = layers00_01;suffix 层类节点 = layers02_03。
+            nodes = _nodes(self.builder, rank)
+            restores = _by_name(nodes, "_target_hbm_write")
+            self.assertEqual(len(restores), 1)
+            self.assertTrue(restores[0]["is_local_hbm_kv_restore"])
+            # 单一全层就绪屏障(既有命名与位置)。
+            barriers = _by_name(nodes, "history_tp_ready_barrier")
+            self.assertEqual(len(barriers), 1)
             self.assertTrue(all(
-                "layers00_01" in node["name"] for node in prefix_nodes))
-            suffix_layer_nodes = [node for node in suffix_nodes
-                                  if "_layers" in node["name"]]
-            self.assertTrue(suffix_layer_nodes)
-            self.assertTrue(all(
-                "layers02_03" in node["name"]
-                for node in suffix_layer_nodes))
-            self.assertTrue(all(
-                "all_layers" in node["name"]
-                for node in remaining_nodes
-                if "_layers" in node["name"]))
-            # suffix ready 门 = suffix ready p2p 栅栏的完成节点(非
-            # control rank = release recv;control rank = 其 release
-            # send 链尾——p2p 栅栏协议,sh 同款)。
-            release = _by_name(nodes, "_suffix_ready_barrier_rank{}_"
-                               "release_recv".format(rank))
-            if release:
-                self.assertEqual(len(release), 1)
-                suffix_ready = release[0]["id"]
-            else:
-                # control rank:release_send 节点名携带的是被释放 rank
-                # 的编号,此处按片段匹配。
-                sends = _by_name(nodes, "_suffix_ready_barrier")
-                sends = [node for node in sends
-                         if "_release_send" in node["name"]]
-                self.assertTrue(sends)
-                suffix_ready = max(node["id"] for node in sends)
-            prefix_ids = {node["id"] for node in prefix_nodes}
-            suffix_ids = {node["id"] for node in suffix_nodes}
-            # prefix 层段首节点的父边不含 suffix ready(不等恢复)。
-            prefix_first = min(prefix_ids)
-            prefix_parents = {
-                edge["from"] for edge in edges
-                if edge["to"] == prefix_first}
-            self.assertNotIn(suffix_ready, prefix_parents)
-            # suffix 层段首节点 arm 依赖 suffix ready(跨批次持久边)。
-            suffix_first = min(suffix_ids)
-            suffix_parents = {
-                edge["from"] for edge in edges
-                if edge["to"] == suffix_first}
-            self.assertIn(suffix_ready, suffix_parents)
+                node["coll"]["bytes"] >= 1 for node in barriers))
+            # 无层段拆分/无 prefix-suffix 双栅栏(PARTIAL 真流水已删除)。
+            for banned in ("first_chunk_prefix", "first_chunk_suffix",
+                           "remaining_aggregated", "prefix_ready_barrier",
+                           "suffix_ready_barrier",
+                           "resident_prefix_ready_barrier"):
+                self.assertFalse(_by_name(nodes, banned), banned)
+        # 恢复转移对象为单段全层 remote_load。
+        records = [
+            node for node in self.builder.batch["nodes"]
+            if "_remote_load" in node["name"]]
+        self.assertTrue(records)
+
+    def test_multi_shard_store_registers_single_victim_tails(self):
+        """多 shard = 单逻辑 victim:一条两 shard 的 remote_store 整体
+        逐出,store 尾部登记在该会话名下(单 victim,非多 victim)。"""
+        from generate_wsc_llm_trace import PendingHistoryGate
+        store = _transfer(
+            "remote_store",
+            [_shard(source_rank=5, target_rank=1, edge_rank=1, bytes=900,
+                    noc_path=(5, 1)),
+             _shard(source_rank=6, target_rank=0, edge_rank=0, bytes=900,
+                    noc_path=(6, 5, 0))],
+            source_instance_index=1,
+            resident_prefix_layers_before=LAYERS,
+            resident_prefix_layers_after=0)
+        record = _emit(self.builder, store)
+        self.assertEqual(record["session_id"], SESSION)
+        self.assertEqual(len(record["shards"]), 2)
+        self.builder._register_store_tails([record])
+        self.assertEqual(
+            len(self.builder.pending_store_tails[SESSION]), 2)
+        # 单会话键(非按 shard 拆分多会话/多 victim)。
+        self.assertEqual(list(self.builder.pending_store_tails), [SESSION])
 
     def test_plain_history_has_no_layer_split(self):
         """无历史/LOCAL_HIT:无层段拆分节点(单次全层 request_aggregated)。"""
@@ -504,6 +428,19 @@ class PartialPipelineTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.builder.emit_prefill_batch(plan)
 
+    def test_partial_history_action_fails_closed(self):
+        """PARTIAL 消费侧不可达:携带 legacy PARTIAL 迁移对象/动作的
+        合成 plan 直接被拒(多于一段的恢复)。"""
+        plan = _prefill_plan(
+            turn_index=1,
+            history_action="PARTIAL_MIGRATE", history_source=1,
+            history_transfers=(_full_load_transfer(),
+                               _full_load_transfer()),
+            resident_layers=2, location="remote_memory")
+        self._arm_pending_gate(plan["request_id"])
+        with self.assertRaises(RuntimeError):
+            self.builder.emit_prefill_batch(plan)
+
 
 class HistoryEvictionTriggerTest(unittest.TestCase):
     """history 逐出的触发门:turn-0 = 到达门(同实例直接 arm);
@@ -517,7 +454,7 @@ class HistoryEvictionTriggerTest(unittest.TestCase):
                     bytes=900, noc_path=(5, 1))],
             source_instance_index=1,
             resident_prefix_layers_before=LAYERS,
-            resident_prefix_layers_after=2)
+            resident_prefix_layers_after=0)
 
     def test_turn0_history_eviction_arms_arrival_gate(self):
         builder = GraphBatchBuilder(_make_config())
@@ -583,19 +520,19 @@ class PendingHistoryLedgerTest(unittest.TestCase):
         )
 
     def test_sync_updates_gate_location(self):
+        # 整体逐出(resident→0)把门位置镜像为 remote_memory;
+        # 半驻留残留(after 非零)是不可达的旧机制,fail-closed。
         self.builder.register_pending_history(
             request_id="r1", session_id=SESSION,
             source_instance_index=1, location="local_hbm")
-        self.builder.sync_pending_history_after_evictions(
-            (self._store(2),))
-        self.assertEqual(
-            self.builder.pending_history["r1"].location,
-            "partial_hbm_remote")
         self.builder.sync_pending_history_after_evictions(
             (self._store(0),))
         self.assertEqual(
             self.builder.pending_history["r1"].location,
             "remote_memory")
+        with self.assertRaises(RuntimeError):
+            self.builder.sync_pending_history_after_evictions(
+                (self._store(2),))
 
     def test_turn0_deferred_channel(self):
         """有 session 键无门(turn-0 在途)→ 延迟;下一登记点消费。"""
@@ -642,7 +579,7 @@ class TrainHeadDecodeEvictionTest(unittest.TestCase):
                     bytes=700, noc_path=(5, 1))],
             source_instance_index=1,
             resident_prefix_layers_before=LAYERS,
-            resident_prefix_layers_after=2)
+            resident_prefix_layers_after=0)
         joiner = _prefill_plan(turn_index=0, history_action=None)
         joiner["decode_evictions"] = (eviction,)
         train_plan = {
@@ -703,7 +640,7 @@ class TrainHeadDecodeEvictionTest(unittest.TestCase):
                     bytes=700, noc_path=(5, 1))],
             source_instance_index=1,
             resident_prefix_layers_before=LAYERS,
-            resident_prefix_layers_after=2)
+            resident_prefix_layers_after=0)
         joiner = _prefill_plan(turn_index=0, history_action=None)
         joiner["decode_evictions"] = (eviction,)
         train_plan = {

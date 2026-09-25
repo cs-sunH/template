@@ -554,7 +554,6 @@ def main() -> int:
         "--manifest", type=Path, default=None,
         help="slo_params_manifest override (B4 pending -> provisional file)")
     args = parser.parse_args()
-    repo = args.repo_root.resolve()
     manifest_path = (args.manifest or Path(__file__).resolve().parents[1]
                      / "slo_params_manifest.json")
     repo = args.repo_root.resolve()
@@ -572,36 +571,41 @@ def main() -> int:
     notes: list[str] = []
     failures: list[str] = []
     status: dict[str, str] = {}
-    for name, (queue_rows, sidecar_rows) in scenarios.items():
-        queue_path = traces / f"{name}_request_queue_recompute.csv"
-        sidecar_path = traces / f"{name}_canonical_sidecar.csv"
-        write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
-        write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
-        rel = (f"llama2_7b_inference/traces/{queue_path.name}")
-        try:
-            run_dir = run_scenario(repo, work, name, rel)
-            if name == "golden_g1":
-                scenario_g1(run_dir, notes)
-            elif name == "golden_g2":
-                scenario_g2(run_dir, notes, expected_overflow=3,
-                           manifest_path=manifest_path)
-            elif name == "golden_g3":
-                scenario_g3(run_dir, notes)
-            else:
-                scenario_g4(run_dir, notes)
-            status[name] = "PASS"
-            print(f"[golden] {name}: PASS")
-        except (GoldenCheckError, subprocess.CalledProcessError) as error:
-            status[name] = f"FAIL: {error}"
-            failures.append(f"{name}: {error}")
-            print(f"[golden] {name}: FAIL: {error}", file=sys.stderr)
-    # Restore the neutral pointer whatever happened.
-    set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
-    for stale in list((repo / "sh_test_mesh/generated").glob(
-            "llama2_7b_inference_54npus_*")) + \
-            list((repo / "sh_test_mesh/generated").glob(
-                "llama2_7b_wsc_llm_inference_54npus_*")):
-        shutil.rmtree(stale)
+    try:
+        for name, (queue_rows, sidecar_rows) in scenarios.items():
+            queue_path = traces / f"{name}_request_queue_recompute.csv"
+            sidecar_path = traces / f"{name}_canonical_sidecar.csv"
+            write_csv(queue_path, QUEUE_COLUMNS, queue_rows)
+            write_csv(sidecar_path, SIDECAR_COLUMNS, sidecar_rows)
+            rel = (f"llama2_7b_inference/traces/{queue_path.name}")
+            try:
+                run_dir = run_scenario(repo, work, name, rel)
+                if name == "golden_g1":
+                    scenario_g1(run_dir, notes)
+                elif name == "golden_g2":
+                    scenario_g2(run_dir, notes, expected_overflow=3,
+                                manifest_path=manifest_path)
+                elif name == "golden_g3":
+                    scenario_g3(run_dir, notes)
+                else:
+                    scenario_g4(run_dir, notes)
+                status[name] = "PASS"
+                print(f"[golden] {name}: PASS")
+            except (GoldenCheckError, subprocess.CalledProcessError) as error:
+                status[name] = f"FAIL: {error}"
+                failures.append(f"{name}: {error}")
+                print(f"[golden] {name}: FAIL: {error}", file=sys.stderr)
+    finally:
+        # 指针恢复必须先于任何逃逸路径：except 只捕两类已知异常，未预期
+        # 异常（OSError/KeyError/…）会穿出循环——恢复放 finally，仓内
+        # trace_config.csv 不得遗留指向 golden 队列（SerDes 改造方案阶段0
+        # golden 锚授权补齐；本仓深挖清单 §5.13 亦登记该清理逻辑冗余）。
+        set_pointer(wl / "trace_config.csv", PLACEHOLDER_REL)
+        for stale in list((repo / "sh_test_mesh/generated").glob(
+                "llama2_7b_inference_54npus_*")) + \
+                list((repo / "sh_test_mesh/generated").glob(
+                    "llama2_7b_wsc_llm_inference_54npus_*")):
+            shutil.rmtree(stale)
     report = {"status": status, "notes": notes}
     (work / "golden_report.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")

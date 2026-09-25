@@ -107,9 +107,6 @@ void Ring::run(EventType event, CallData* data) {
 }
 
 void Ring::release_packets() {
-    for (auto packet : locked_packets) {
-        packet->set_notifier(this);
-    }
     if (NPU_to_MA == true) {
         (new PacketBundle(stream->owner, stream, locked_packets, processed,
                           send_back, msg_size, transmition))
@@ -125,8 +122,6 @@ void Ring::release_packets() {
 void Ring::process_stream_count() {
     if (remained_packets_per_message > 0) {
         remained_packets_per_message--;
-    }
-    if (id == 0) {
     }
     if (remained_packets_per_message == 0 && stream_count > 0) {
         stream_count--;
@@ -167,7 +162,7 @@ bool Ring::iteratable() {
     return true;
 }
 
-void Ring::insert_packet(Callable* sender) {
+void Ring::insert_packet(Callable*) {
     if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
         zero_latency_packets = parallel_reduce * 1;
         non_zero_latency_packets =
@@ -178,7 +173,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         processed = false;
         send_back = false;
@@ -190,7 +184,6 @@ void Ring::insert_packet(Callable* sender) {
         packets.push_back(MyPacket(
             stream->current_queue_id, curr_sender,
             curr_receiver));  // vnet Must be changed for alltoall topology
-        packets.back().sender = sender;
         locked_packets.push_back(&packets.back());
         if (comType == ComType::Reduce_Scatter ||
             (comType == ComType::All_Reduce && toggle)) {

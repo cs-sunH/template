@@ -23,7 +23,6 @@ class CollectivePhase {
     Sys* sys;
     int queue_id;
     Algorithm* algorithm;
-    uint64_t initial_data_size;
     uint64_t final_data_size;
     bool enabled;
     ComType comm_type;

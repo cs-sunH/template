@@ -37,9 +37,6 @@ class BasicTopology : public Topology {
   protected:
     /// bandwidth of each link
     Bandwidth bandwidth;
-
-    /// latency of each link
-    Latency latency;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

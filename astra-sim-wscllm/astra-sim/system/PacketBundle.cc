@@ -9,13 +9,12 @@ using namespace AstraSim;
 
 PacketBundle::PacketBundle(Sys* sys,
                            BaseStream* stream,
-                           std::list<MyPacket*> locked_packets,
+                           std::list<MyPacket*> /*locked_packets*/,
                            bool needs_processing,
                            bool send_back,
                            uint64_t size,
                            MemBus::Transmition transmition) {
     this->sys = sys;
-    this->locked_packets = locked_packets;
     this->needs_processing = needs_processing;
     this->send_back = send_back;
     this->size = size;
@@ -69,10 +68,6 @@ void PacketBundle::call(EventType event, CallData* data) {
         sys->try_register_event(this, EventType::CommProcessingFinished, data,
                                 this->delay);
         return;
-    }
-    Tick current = Sys::boostedTick();
-    for (auto& packet : locked_packets) {
-        packet->ready_time = current;
     }
     stream->call(EventType::General, data);
     delete this;

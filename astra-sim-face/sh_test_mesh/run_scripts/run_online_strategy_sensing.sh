@@ -136,7 +136,7 @@ python3 -u online/online_service.py \
   --plan-dir "${ET_DIR}" \
   > "${RUN_DIR}/python.log" 2>&1 || PY_EXIT=$?
 
-wait "${CPP_PID}"; CPP_EXIT=$?
+CPP_EXIT=0; wait "${CPP_PID}" || CPP_EXIT=$?
 echo "[run_online_strategy_sensing] cpp_exit=${CPP_EXIT} python_exit=${PY_EXIT}"
 if [[ ${CPP_EXIT} -ne 0 ]]; then
   tail -5 "${RUN_DIR}/cpp.log" >&2

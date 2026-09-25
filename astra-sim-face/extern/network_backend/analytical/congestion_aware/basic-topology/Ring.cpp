@@ -15,6 +15,18 @@ Ring::Ring(const int npus_count, const Bandwidth bandwidth, const Latency latenc
     assert(bandwidth > 0);
     assert(latency >= 0);
 
+    // Degenerate sizes, aligned with the multi-dimensional ring semantics
+    // (connect_ring_dimension): a size-1 dimension builds no link; a 2-NPU
+    // ring is a single bidirectional connect, not the ring loop (which
+    // would double-build both directed links).
+    if (npus_count == 1) {
+        return;
+    }
+    if (npus_count == 2) {
+        connect(0, 1, bandwidth, latency, bidirectional);
+        return;
+    }
+
     // connect npus in a ring
     for (auto i = 0; i < npus_count - 1; i++) {
         connect(i, i + 1, bandwidth, latency, bidirectional);

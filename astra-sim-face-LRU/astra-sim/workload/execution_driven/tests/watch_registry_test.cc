@@ -96,10 +96,12 @@ void test_registration_and_noops() {
         "req-1", "decode", 1, {key(0, 3, 1)}, statuses);
     expect(decode_id == 2, "A: second identity gets id 2");
 
-    // Unknown identity (request/stage/generation) terminal: no-op.
-    reg.on_node_terminal(key(0, 1, 1),
+    // Unknown identity (a key no watch lists): no-op. The member keys of
+    // the watches above start recording at the "Member 1 completes" block
+    // below; node 42 belongs to neither watch.
+    reg.on_node_terminal(key(0, 42, 1),
                          NodeTerminalStatus::Success);
-    reg.on_node_terminal(key(0, 1, 1),
+    reg.on_node_terminal(key(0, 42, 1),
                          NodeTerminalStatus::Success);
     expect(reg.stale_count() == 2, "A: foreign terminals are no-ops");
 

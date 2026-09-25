@@ -75,14 +75,15 @@ SOURCE_MICROBENCHMARK = "simulator_microbenchmark"
 SOURCE_PLANNER_MEMORY = "planner_memory_ledger"
 
 # kv_policy label 取值集（A.5/2026-09-05：legacy 与 relevant 两个历史
-# 变体已清除；B2/2026-09 加 session_lru_tiered = 三态冷热管理：
-# 两段式 LRU 逐出 + 远端池恢复，旧值保留）。
+# 变体已清除；session_lru_tiered = session 级二态冷热管理：完整本地/
+# 完整远端、整体 LRU 逐出 + 远端池全量恢复；2026-09-25 session 级
+# Tiered-LRU 批起原 PARTIAL 半层化三态与两段式逐出已物理移除；收尾后
+# 唯一合法值 session_lru_tiered，旧别名 session_lru_recompute 已清除）。
 # 与 generate_wsc_llm_trace._parse_config_value 的 kv_cache_policy 值域同源
 # （label 与配置键同名同域）；空串 = 未标注（既有产物/合成 manifest 无
 # kv_management 节时缺省），保持向后兼容。非空且不在集合内 → fail-closed
 # （防止拼错的 label 静默分裂对比组，sec.11.4 同族防线）。
-KV_POLICY_LABELS = frozenset(
-    {"session_lru_recompute", "session_lru_tiered"})
+KV_POLICY_LABELS = frozenset({"session_lru_tiered"})
 
 RAW_COLUMNS = [
     "run_id",
@@ -992,9 +993,9 @@ def _labels(run: Run, service_manifest: dict[str, Any], run_config: dict[str, An
     kv_policy = run_config.get("kv_policy") or service_manifest.get("kv_management", {}).get("policy", "")
     if kv_policy and str(kv_policy) not in KV_POLICY_LABELS:
         # A.5/2026-09-05：kv_policy label 枚举校验；B2/2026-09 加
-        # session_lru_tiered 后合法值为 session_lru_recompute 与
-        # session_lru_tiered 两个（与上方 KV_POLICY_LABELS 同源）；
-        # 空串=未标注仍放行（既有产物兼容），非空未知值 fail-closed。
+        # session_lru_tiered，收尾后唯一合法值为 session_lru_tiered
+        # （与上方 KV_POLICY_LABELS 同源）；空串=未标注仍放行
+        # （既有产物兼容），非空未知值 fail-closed。
         raise PostprocessError(
             f"kv_policy label {kv_policy!r} not in the known set "
             f"{sorted(KV_POLICY_LABELS)} (typo would silently split "

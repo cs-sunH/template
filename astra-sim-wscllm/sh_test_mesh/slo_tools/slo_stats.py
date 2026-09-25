@@ -43,7 +43,6 @@ from slo_common import (  # noqa: E402
 )
 
 MAIN_PCTS = (50, 99)
-APPENDIX_PCTS_DEFAULT = (90, 95)
 
 
 def add_run_dir_arg(parser: argparse.ArgumentParser) -> None:

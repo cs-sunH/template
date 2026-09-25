@@ -1,6 +1,8 @@
 #include "astra-sim/common/Logging.hh"
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <iostream>
 
 namespace AstraSim {
 namespace {
@@ -15,15 +17,11 @@ std::vector<spdlog::sink_ptr> LoggerFactory::default_sinks;
 
 std::shared_ptr<spdlog::logger> LoggerFactory::get_logger(
     const std::string& logger_name) {
-    constexpr bool ENABLE_DEFAULT_SINK_FOR_OTHER_LOGGERS = true;
     auto logger = spdlog::get(logger_name);
     if (logger == nullptr) {
         logger = spdlog::create_async<spdlog::sinks::null_sink_mt>(logger_name);
         logger->set_level(spdlog::level::trace);
         logger->flush_on(spdlog::level::info);
-    }
-    if constexpr (!ENABLE_DEFAULT_SINK_FOR_OTHER_LOGGERS) {
-        return logger;
     }
     auto& logger_sinks = logger->sinks();
     for (auto sink : default_sinks) {
@@ -38,7 +36,13 @@ std::shared_ptr<spdlog::logger> LoggerFactory::get_logger(
 void LoggerFactory::init(const std::string& log_config_path,
                          const std::string& log_path) {
     if (log_config_path != "empty") {
-        spdlog_setup::from_file(log_config_path);
+        try {
+            spdlog_setup::from_file(log_config_path);
+        } catch (const std::exception& e) {
+            std::cerr << "[Error] (AstraSim) Failed to load logging config file \""
+                      << log_config_path << "\": " << e.what() << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
     }
     init_default_components(log_path);
 }
@@ -63,21 +67,27 @@ void LoggerFactory::init_default_components(const std::string& log_path) {
 
     std::filesystem::path folderPath(log_path);
 
-    if (!std::filesystem::exists(folderPath)) {
-        std::filesystem::create_directory(folderPath);
+    try {
+        if (!std::filesystem::exists(folderPath)) {
+            std::filesystem::create_directory(folderPath);
+        }
+
+        auto sink_rotate_out =
+            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                log_path + "/log.log", 1024 * 1024 * 10, 10);
+        sink_rotate_out->set_level(spdlog::level::debug);
+        default_sinks.push_back(sink_rotate_out);
+
+        auto sink_rotate_err =
+            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                log_path + "/err.log", 1024 * 1024 * 10, 10);
+        sink_rotate_err->set_level(spdlog::level::err);
+        default_sinks.push_back(sink_rotate_err);
+    } catch (const std::exception& e) {
+        std::cerr << "[Error] (AstraSim) Failed to initialize file logging under \""
+                  << log_path << "\": " << e.what() << std::endl;
+        std::exit(EXIT_FAILURE);
     }
-
-    auto sink_rotate_out =
-        std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            log_path + "/log.log", 1024 * 1024 * 10, 10);
-    sink_rotate_out->set_level(spdlog::level::debug);
-    default_sinks.push_back(sink_rotate_out);
-
-    auto sink_rotate_err =
-        std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            log_path + "/err.log", 1024 * 1024 * 10, 10);
-    sink_rotate_err->set_level(spdlog::level::err);
-    default_sinks.push_back(sink_rotate_err);
 
     spdlog::init_thread_pool(8192, 1);
     spdlog::set_pattern("[%Y-%m-%dT%T%z] [%L] <%n>: %v");

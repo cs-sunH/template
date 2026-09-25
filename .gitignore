@@ -1,0 +1,28 @@
+# ================= C++ 构建产物 =================
+build/
+
+# ================= 运行日志 =================
+log/
+*.log
+err.log
+
+# ================= Python 缓存 =================
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# ================= 生成物（由 config_resolver / 运行脚本生成） =================
+**/sh_test_mesh/generated/
+**/sh_test_mesh/results/
+.uploads/
+# wscllm-LRU llama2_7b traces 派生产物（derive_20_first_30_seconds.py 可再生；该目录 git 仅跟踪 derive 脚本）
+astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/traces/*.csv
+astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/traces/*.provenance.json
+
+# ================= 系统 / 编辑器文件 =================
+.DS_Store
+*.swp
+.claude/
+
+# ================= 阶段基线归档(大目录不入库;PROVENANCE 与 metrics CSV 入库) =================
+**/sh_test_mesh/baseline/**/generated/

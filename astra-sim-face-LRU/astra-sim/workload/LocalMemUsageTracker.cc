@@ -1,6 +1,5 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
-#include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -195,8 +194,16 @@ void LocalMemUsageTracker::recordWrites(
       this->tensorSize.insert({tensorName, tensorSize});
       this->memWrites.insert({tensorName, writeActivity});
     } else {
-      // each tensor should only be written once.
-      assert(false);
+      // Each tensor should only be written once (upstream trace contract).
+      // A violation must not be silent in Release (dropped second write,
+      // no log) nor abort Debug (bare assert): warn identically in both
+      // builds and keep the first write. This tracker is side-band
+      // diagnostics (track-local-mem), so an anomaly here is reported, not
+      // fatal.
+      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+          ->warn("tensor {} written a second time by node {} "
+                 "(start={} end={}); keeping the first write",
+                 tensorName, node->id(), start, end);
     }
   }
 }

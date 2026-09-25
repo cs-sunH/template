@@ -49,12 +49,18 @@ class ConfigResolverTests(unittest.TestCase):
             self.hardware.remote_memory_type,
             self.source["remote-memory"]["memory-type"],
         )
-        self.assertIsNone(self.hardware.remote_memory_latency_ns)
-        self.assertIsNone(self.hardware.remote_memory_npu_selection)
-        self.assertIsNone(self.hardware.remote_memory_logical_pool)
         self.assertEqual(self.hardware.peak_perf_tflops, self.source["compute"]["peak-perf-tflops"])
         self.assertEqual(self.hardware.metadata["selected-capacity-profile"], self.profile_name)
         self.assertEqual(self.hardware.metadata["selected-capacity-note"], self.profile["note"])
+
+    def test_rejects_memory_expansion_declarations(self) -> None:
+        expanded = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        expanded["remote-memory"]["memory-type"] = "PER_NPU_MEMORY_EXPANSION"
+        with tempfile.TemporaryDirectory() as temporary:
+            expanded_path = Path(temporary) / "hardware.json"
+            expanded_path.write_text(json.dumps(expanded), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "NO_MEMORY_EXPANSION"):
+                load_hardware_config(expanded_path, self.profile_name)
 
     def test_materializes_no_expansion_runtime_files_from_repo_local_sources(self) -> None:
         columns = self.hardware.mesh_cols
@@ -70,14 +76,7 @@ class ConfigResolverTests(unittest.TestCase):
             self.assertEqual(system["local-mem-bw"], self.source["local-hbm"]["bandwidth-gbps"])
             self.assertEqual(system["local-mem-latency"], self.source["local-hbm"]["latency-ns"])
             self.assertEqual(system["local-mem-capacity-bytes"], self.profile["bytes"])
-            self.assertEqual(system["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
             self.assertEqual(system["peak-perf"], self.source["compute"]["peak-perf-tflops"])
-
-            remote = json.loads(paths.remote_memory.read_text(encoding="utf-8"))
-            self.assertEqual(remote["memory-type"], self.source["remote-memory"]["memory-type"])
-            self.assertEqual(remote["remote-mem-bw"], self.source["remote-memory"]["bandwidth-gbps"])
-            self.assertNotIn("npu-selection", remote)
-            self.assertNotIn("npu-ids", remote)
 
             communicator = json.loads(paths.comm_group.read_text(encoding="utf-8"))
             self.assertEqual(communicator["1"], {"ranks": ranks, "dimensions": [2, 2]})
@@ -88,7 +87,7 @@ class ConfigResolverTests(unittest.TestCase):
                 f"{self.hardware.mesh_cols}, {self.hardware.mesh_rows} ]",
                 network,
             )
-            for path in (paths.system, paths.network, paths.remote_memory, paths.comm_group):
+            for path in (paths.system, paths.network, paths.comm_group):
                 self.assertTrue(path.read_text(encoding="utf-8").endswith("\n"))
 
     def test_rejects_duplicate_communicators_and_non_rectangular_groups(self) -> None:
@@ -119,7 +118,6 @@ class ConfigResolverTests(unittest.TestCase):
             "local-mem-latency",
             "local-mem-capacity-bytes",
             "local-mem-capacity-note",
-            "remote-mem-bw",
         }
         self.assertTrue(managed_fields.isdisjoint(system_template))
         self.assertFalse((_SH_TEST_DIR / "remote_memory").exists())

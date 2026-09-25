@@ -157,7 +157,8 @@ void ServiceCoordinator::signal_work() {
     work_cv_.notify_one();
 }
 
-const std::vector<ServiceState>& ServiceCoordinator::transition_log() const {
+std::vector<ServiceState> ServiceCoordinator::transition_log() const {
+    std::lock_guard<std::mutex> lock(mtx_);
     return transition_log_;
 }
 

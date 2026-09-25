@@ -455,7 +455,6 @@ class BoundedSorter:
             return iter(sorted(self._buffer))
         self._spill_buffer()
         spills = list(self._spills)
-        self._spills = []
         iters = [self._iter_spill(path) for path in spills]
 
         def _merged():
@@ -467,7 +466,17 @@ class BoundedSorter:
                         path.unlink()
                     except OSError:
                         pass
+                # 清账延后到删除完成后：本 sorter 的 spill 路径在迭代
+                # 存续期保持可见（spill_paths 只读访问器的数据源），
+                # 迭代结束（含异常路径）才清空。
+                self._spills.clear()
         return _merged()
+
+    @property
+    def spill_paths(self) -> tuple[Path, ...]:
+        """本 sorter 当前持有的 spill 文件路径（只读视图；迭代结束后
+        为空）。仅诊断/测试用，不影响任何排序行为。"""
+        return tuple(self._spills)
 
 
 def _nearest_rank_index(p: float, n: int) -> int:

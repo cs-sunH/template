@@ -138,13 +138,11 @@ KV_DELTA_JOURNAL_RELPATH = Path("results") / "kv_delta_journal.jsonl"
 KV_DELTA_JOURNAL_CHECKSUM_RELPATH = (
     Path("results") / "kv_delta_journal_checksum.json")
 
-# 四层可信度（判定条件见模块 docstring；输出顺序=证据强度降序）。
+# 四层可信度（判定条件见模块 docstring）。
 TRUST_TIER_UPPER_BOUND = "upper_bound_only"
 TRUST_TIER_LIFECYCLE = "lifecycle_replay_exact"
 TRUST_TIER_RESIDENT = "resident_kv_exact"
 TRUST_TIER_CERTIFIED = "per_rank_total_hbm_certified"
-JOURNAL_TIERS = (TRUST_TIER_CERTIFIED, TRUST_TIER_RESIDENT,
-                 TRUST_TIER_LIFECYCLE)
 
 # 绘图 series（P1-④：受全局行预算约束的稠密产物；旧产物名
 # slo_hbm_watermark_series.csv 退役）。
@@ -944,6 +942,7 @@ def load_bucket_ns(manifest: dict) -> tuple[int, bool]:
             file=sys.stderr)
         return PROVISIONAL_BUCKET_NS, True
     if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or (isinstance(value, float) and not math.isfinite(value)) \
             or value != int(value) or int(value) <= 0:
         fail(f"watermark_sample_period_ns 必须为正整数 ns（实得 {value!r}）")
     return int(value), False
@@ -1829,7 +1828,12 @@ def replay_journal(journal_path: Path,
             fail(f"{journal_path}: journal 行数与证书不符（journal="
                  f"{replay.rows}，checksum={expected_lines}）")
         ranks_block = checksum.get("ranks")
+        # 终态对账门是 certified 的硬前置：checksum 在场但 ranks 块缺失/为空
+        # 时对账根本没执行，凭 checks 四个 true 授 certified 即为虚判——
+        # fail-closed 降 lifecycle（sha256/line_count 必备键缺失同理）。
+        terminal_reconciled = False
         if isinstance(ranks_block, dict) and ranks_block:
+            terminal_reconciled = True
             for rank_key, entry in sorted(ranks_block.items()):
                 try:
                     rank = int(rank_key)
@@ -1864,7 +1868,12 @@ def replay_journal(journal_path: Path,
                      f"矛盾")
         checks = checksum.get("checks") if isinstance(
             checksum.get("checks"), dict) else {}
-        if checks and all(checks.get(name) is True for name in (
+        checksum_complete = (
+            checksum.get("sha256") is not None
+            and isinstance(checksum.get("line_count"), int)
+            and terminal_reconciled)
+        if checksum_complete and checks and all(checks.get(name) is True
+                for name in (
                 "manager_state_match", "physical_equals_weight",
                 "residual_reserved_zero", "residual_resident_zero")):
             tier = TRUST_TIER_CERTIFIED

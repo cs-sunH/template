@@ -18,6 +18,10 @@ from pathlib import Path
 TESTS_DIR = Path(__file__).resolve().parent
 SLO_TOOLS_DIR = TESTS_DIR.parent
 sys.path.insert(0, str(SLO_TOOLS_DIR))
+# pytest prepend 模式下本目录含 __init__.py，用例以 tests.* 包方式导入，
+# tests/ 本身不在 sys.path，`import synthetic` 需显式补上本目录
+# （unittest discover / 直跑模式本就以本目录解析 synthetic，再插一次无害）。
+sys.path.insert(0, str(TESTS_DIR))
 
 import synthetic  # noqa: E402
 import slo_common  # noqa: E402
@@ -470,11 +474,14 @@ class LoadImbalanceHandTests(unittest.TestCase):
             {"kind": "completion", "request_id": "r2", "tick": 100,
              "decision": {}},
         ]
+        # collect_intervals 的读取方向：exits 数组携带终态 request_id
+        # （li_collect_drains），drains 键不被工具消费。r0/r1 终态在
+        # instance0 列车、r2 在 instance1 列车，与 decode 实例一致。
         ledger = [
             {"train_id": "t0", "instance_index": 0, "tick": 100,
-             "drains": ["r0", "r1"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r0", "r1"], "joiners": []},
             {"train_id": "t1", "instance_index": 1, "tick": 100,
-             "drains": ["r2"], "exits": [], "joiners": []},
+             "drains": [], "exits": ["r2"], "joiners": []},
         ]
         synthetic.write_jsonl(run_dir, "online_decision_log.jsonl",
                               decisions)

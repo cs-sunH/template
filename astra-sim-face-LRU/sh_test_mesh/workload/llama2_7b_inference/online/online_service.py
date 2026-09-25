@@ -187,14 +187,13 @@ def main(argv=None) -> int:
     # 步骤 1-9:真实策略(关感知,默认);决策日志逐批写 online_decision_log.jsonl。
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
-    # face 调度器唯一(B3 2026-09-06:三态 KV 内核为唯一行为,契约 §8
-    # "行为上新管理器唯一,无档位分支")——值域 {session_lru_recompute,
-    # session_lru_tiered} 分发到同一 FaceOnlineScheduler(构造器内
-    # fail-closed 校验;分发不依赖任何代码默认值,runner 显式传
+    # face 调度器唯一(B3 2026-09-06:KV 冷热管理内核为唯一行为,契约 §8
+    # "行为上新管理器唯一,无档位分支")——2026-09-25 session 级 Tiered-LRU
+    # 命名卫生起唯一合法值 session_lru_tiered 分发到 FaceOnlineScheduler
+    # (构造器内 fail-closed 校验;分发不依赖任何代码默认值,runner 显式传
     # kv_cache_policy)。
     ledger_sink = None
-    if config.kv_cache_policy in (
-            "session_lru_recompute", "session_lru_tiered"):
+    if config.kv_cache_policy == "session_lru_tiered":
         from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
         # completed-unreconciled 行在 REQUEST_COMPLETE 边界立即写出；避免
         # 结束时由调度器聚合全量 completed ledger。
@@ -238,9 +237,8 @@ def main(argv=None) -> int:
     scheduler.verify_run_end()
     # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
     # full_scan_entries 恒为 0)——M3 起已在 build_graph_batch 逐行流式
-    # 写出,不再结束一次性写出。
-    if getattr(scheduler, "profile_sink", None) is None:
-        scheduler.dump_profile(os.path.join(args.bridge_dir, "profile.jsonl"))
+    # 写出;profile_sink 恒非 None(_JsonlSink 或 SH_PROFILE_JSONL=0 时的
+    # _NullSink),不存在结束一次性写出的回退路径。
 
     # 阶段 6 §9.1:online_stats.jsonl -- 分项计数器统一采集(Python 侧)。
     # 每已应用交付一行(合并桥接层每 request 服务时间) + 一行汇总。

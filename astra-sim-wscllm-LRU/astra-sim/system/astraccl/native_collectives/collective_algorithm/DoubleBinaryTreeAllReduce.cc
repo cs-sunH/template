@@ -161,7 +161,7 @@ void DoubleBinaryTreeAllReduce::run(EventType event, CallData* data) {
             nullptr);
         sim_request snd_req2;
         snd_req2.srcRank = stream->owner->id;
-        snd_req2.dstRank = left_child;
+        snd_req2.dstRank = right_child;
         snd_req2.tag = stream->stream_id;
         snd_req2.reqType = UINT8;
         snd_req2.vnet = this->stream->current_queue_id;

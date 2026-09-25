@@ -104,12 +104,10 @@ class LegacyOracleWindowedTraceReader {
     bool header_seen_ = false;
     bool eof_ = false;
     uint64_t data_rows_ = 0;
-    // Compatibility/audit watermark only. It is NOT used for occupancy:
-    // arrivals may fire out of CSV order, so a maximum index is not a
-    // contiguous consumed prefix.
-    int64_t consumed_idx_ = -1;
     // Exact rows read but not yet consumed. Size is the window occupancy and
     // is therefore bounded by high_water (or explicitly unbounded when 0).
+    // Deliberately NOT a contiguous consumed prefix: arrivals may fire out
+    // of CSV order, so a maximum consumed index would not be equivalent.
     std::unordered_set<int64_t> outstanding_rows_;
     size_t rows_read_ = 0;
     size_t rejected_out_of_range_ = 0;

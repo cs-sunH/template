@@ -29,6 +29,10 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_ROOT=${1:-/tmp/wscllm_same_tick_milestone}
+# 注入通道（cmd.fifo）与 bridge 目录会被 mkfifo/启动端/注入端三方按各自 cwd
+# 解析，必须先把 run root 归一为绝对路径，否则传相对 RUN_ROOT 时 C++ 端
+# （cd PROJECT 后启动）与注入端（exec 3>）指向不同文件。
+RUN_ROOT=$(realpath -m "${RUN_ROOT}")
 
 # ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_wsc_llm_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
@@ -41,7 +45,6 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_wsc_llm_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__no_memory_expansion
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
-FIXTURE_SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/same_tick_milestone_fixture_service.py
 
 # 指定世界 tick(纳秒,事件时钟从 0 起):注入在 wall ~1s,到达在事件 3.0s。
 T_NS=3000000000
@@ -61,6 +64,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# uutils date 0.8.0 treats %3N as an untruncated nanosecond field, which makes
+# elapsed-millisecond arithmetic overflow or report absurd values.  Use a
+# monotonic clock with explicit integer conversion on every supported host.
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+
 start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
   local run_dir=$1
   rm -rf "${run_dir}"
@@ -78,7 +88,6 @@ start_online() {  # $1=run_dir; sets CPP_PID / PY_PID
     --workload-configuration="${ET_PREFIX}" \
     --comm-group-configuration="${RC}/comm_group.json" \
     --system-configuration="${RC}/system.json" \
-    --remote-memory-configuration="${RC}/remote_memory.json" \
     --network-configuration="${RC}/network.yml" \
     --logging-folder=off \
     > "${run_dir}/cpp.log" 2>&1 &
@@ -139,7 +148,7 @@ if ! kill -0 "${PY_PID}" 2>/dev/null; then
 fi
 echo "[fixture] IDLE held ~1s (processes alive); injecting 1 request"
 
-inject_ms=$(date +%s%3N)
+inject_ms=$(monotonic_ms)
 exec 3>"${run_dir}/cmd.fifo"
 echo '{"kind":"Submit","session_id":"stm_s0","turn_index":0,"request_id":"stm_s0_r0","prefill_length":4096,"decode_length":128,"arrival_world_ns":'"${T_NS}"',"inter_request_interval_ns":0}' >&3
 
@@ -155,8 +164,7 @@ while ! grep -q "ACTIVE -> IDLE" "${run_dir}/cpp.log"; do
   sleep 0.3
   waited=$((waited + 1))
   if [[ ${waited} -gt 200 ]]; then
-    echo "[fixture] FAIL: timeout waiting for 'ACTIVE -> IDLE' "
-         "(milestone never delivered / deadlock?)" >&2
+    echo "[fixture] FAIL: timeout waiting for 'ACTIVE -> IDLE' (milestone never delivered / deadlock?)" >&2
     tail -12 "${run_dir}/cpp.log" >&2
     echo "--- python.log ---" >&2
     tail -12 "${run_dir}/python.log" >&2
@@ -164,7 +172,7 @@ while ! grep -q "ACTIVE -> IDLE" "${run_dir}/cpp.log"; do
     exit 1
   fi
 done
-echo "[fixture] request completed at +$(( $(date +%s%3N) - inject_ms ))ms; injecting CloseInput"
+echo "[fixture] request completed at +$(( $(monotonic_ms) - inject_ms ))ms; injecting CloseInput"
 echo '{"kind":"CloseInput"}' >&3
 exec 3>&-
 wait_for_exits "${run_dir}" scenario1

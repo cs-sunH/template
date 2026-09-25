@@ -68,15 +68,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
         )
     else ()
-        add_executable(Analytical_Congestion_Aware ${srcs_congestion_aware} ${srcs_common})
-
-        # Properties
-        set_target_properties(Analytical_Congestion_Aware
-                PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin/
-                LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/
-                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib/
-        )
+        message(FATAL_ERROR
+                "NETWORK_BACKEND_BUILD_AS_LIBRARY=OFF (standalone executable) is not supported: the backend sources define no main(). Configure with -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON.")
     endif ()
 
     # Common properties

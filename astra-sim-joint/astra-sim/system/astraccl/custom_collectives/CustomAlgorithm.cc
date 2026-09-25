@@ -39,8 +39,10 @@ CustomAlgorithm::~CustomAlgorithm() {
 }
 
 int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {
-    // In this custom algorithm implementation, we assume the algo ranks are
-    // same as real ranks. This may change in the future.
+    // When comm_group is non-null, the algorithm rank is mapped to the real
+    // NPU id by its position inside the communication group (see the contract
+    // in CustomAlgorithm.hh). When comm_group is null, algorithm ranks are
+    // the same as real ranks.
     if (comm_group == nullptr) {
         return algo_rank;
     }

@@ -150,8 +150,21 @@ int main() {
 
     {
         FILE* f = std::fopen(system_path.c_str(), "w");
+        // Official-template fixture shape (阶段5夹具避雷): scheduling-policy /
+        // preferred-dataset-splits / collective-optimization present, all four
+        // *-implementation keys = ["ring","ring"] (2 topology dims). With any
+        // *-implementation key missing, Sys's CONSTRUCTOR builds its per-ComType
+        // logical topologies (Sys.cc:266-272) from an empty native-impl list and
+        // GeneralComplexTopology throws "requires at least one collective
+        // implementation" before this test's own assertions can run.
         std::fputs("{\n"
                    "  \"scheduling-policy\": \"LIFO\",\n"
+                   "  \"preferred-dataset-splits\": 6,\n"
+                   "  \"collective-optimization\": \"localBWAware\",\n"
+                   "  \"all-reduce-implementation\": [\"ring\", \"ring\"],\n"
+                   "  \"all-gather-implementation\": [\"ring\", \"ring\"],\n"
+                   "  \"reduce-scatter-implementation\": [\"ring\", \"ring\"],\n"
+                   "  \"all-to-all-implementation\": [\"ring\", \"ring\"],\n"
                    "  \"roofline-enabled\": 1,\n"
                    "  \"peak-perf\": 1000,\n"
                    "  \"local-mem-bw\": 1000,\n"

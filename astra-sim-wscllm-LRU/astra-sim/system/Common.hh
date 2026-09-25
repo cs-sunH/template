@@ -55,19 +55,10 @@ enum class CollectiveBarrier { Blocking = 0, Non_Blocking };
 
 enum class SchedulingPolicy { LIFO = 0, FIFO, EXPLICIT, None };
 
-enum class IntraDimensionScheduling {
-    FIFO = 0,
-    RG,
-    SmallestFirst,
-    LessRemainingPhaseFirst
-};
-
 enum class InterDimensionScheduling {
     Ascending = 0,
-    OnlineGreedy,
     RoundRobin,
-    OfflineGreedy,
-    OfflineGreedyFlex
+    OfflineGreedy
 };
 
 enum class InjectionPolicy {

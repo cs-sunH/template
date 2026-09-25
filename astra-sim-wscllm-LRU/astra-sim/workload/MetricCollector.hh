@@ -368,9 +368,10 @@ class MetricCollector {
         unsigned __int128 resident_area = 0;
         unsigned __int128 committed_area = 0;
         // Same integral from the pre-existing direct delta loop, kept for
-        // the <=1% timeavg cross-check (A-class criterion).
+        // the <=1% timeavg cross-check (A-class criterion). Resident side
+        // only: the committed side keeps no direct integral, so it has no
+        // cross-check.
         unsigned __int128 direct_resident_area = 0;
-        unsigned __int128 direct_committed_area = 0;
         uint64_t capacity_violations = 0;
         uint64_t sample_count = 0;
         bool capacity_known = false;

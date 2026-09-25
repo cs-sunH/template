@@ -22,6 +22,8 @@
                     kv_noc_hops，与 shards 一一对齐；hops 全等时
                     聚合 bytes×hops[0] 与逐 shard 求和严格相等）。
                     旧产物无字段 → bytes_without_hops。
+  astra-sim-face-LRU
+                    本仓：同 face（恒附带只读 hops 列表，无旧产物回退）。
   astra-sim-sh_2.0  WP9-线5（2026-08-26）起 decision 逐传输对象序列化
                     transfer_hop_bytes[].{total_bytes, noc_hop_bytes,
                     shard_count}（KVTransfer shards 按 deterministic_xy_
@@ -381,6 +383,14 @@ REPO_HOP_SOURCES: dict[str, dict] = {
                  "（prefill=history_noc_hops，decode=kv_noc_hops，"
                  "与 shards 一一对齐）；旧产物无字段 → "
                  "bytes_without_hops（coverage 如实降低，不臆造）",
+    },
+    "astra-sim-face-LRU": {
+        # 本仓（face-LRU）：同 face——决策日志恒附带只读 noc hops 列表，
+        # 无旧产物回退（映射复制 astra-sim-face 条目）。
+        "collector": collect_face,
+        "granularity": "per-TP-shard(history_noc_hops/kv_noc_hops)",
+        "notes": "同 face（恒附带只读 hops 列表：prefill=history_noc_hops、"
+                 "decode=kv_noc_hops，与 shards 一一对齐）",
     },
     "astra-sim-sh_2.0": {
         "collector": collect_sh20,

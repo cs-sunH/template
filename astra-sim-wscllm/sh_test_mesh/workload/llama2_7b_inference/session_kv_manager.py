@@ -568,10 +568,6 @@ class SessionKVCacheManager:
             ranks = tuple(self.topology.instance(instance_index).ranks)
         return tuple(self._rank_states[rank].snapshot() for rank in ranks)
 
-    def final_session_counts(self) -> tuple[int, int]:
-        resident = sum(state.state == RESIDENT for state in self._sessions.values())
-        return resident, len(self._sessions) - resident
-
     def _remaining(self, instance_index: int) -> tuple[int, ...]:
         return tuple(
             self._rank_states[rank].remaining_bytes

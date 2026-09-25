@@ -18,10 +18,6 @@ class ETFeederNode {
   bool has_attr(const std::string& attr_name) const;
 
   const ChakraAttr get_attr_msg(const std::string& attr_name) const;
-  bool get_attr_msg(const std::string& attr_name, const ChakraAttr** attr)
-      const;
-
-  ChakraAttr::ValueCase get_attr_type(const ChakraAttr& attr) const;
 
   template <typename T>
   T get_attr(
@@ -64,22 +60,12 @@ class ETFeederNode {
 
   // old interface
   bool is_cpu_op() const;
-  uint64_t num_ops() const;
-  uint32_t tensor_loc() const;
-  uint64_t tensor_size() const;
-  ChakraProtoMsg::CollectiveCommType comm_type() const;
-  uint32_t comm_priority() const;
   uint64_t comm_size() const;
   uint32_t comm_src() const;
   uint32_t comm_dst() const;
   uint32_t comm_tag() const;
 
   std::string get_inputs_values(const std::string& default_ = "") const;
-  std::string get_inputs_shapes(const std::string& default_ = "") const;
-  std::string get_inputs_types(const std::string& default_ = "") const;
-  std::string get_outputs_values(const std::string& default_ = "") const;
-  std::string get_outputs_shapes(const std::string& default_ = "") const;
-  std::string get_outputs_types(const std::string& default_ = "") const;
 
  private:
   template <typename T>

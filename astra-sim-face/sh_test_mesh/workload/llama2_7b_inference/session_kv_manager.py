@@ -26,14 +26,6 @@ RECOMPUTE = "RECOMPUTE"
 # 删除前缀,均摊 O(1)/事件。
 _EVENTS_COMPACT_THRESHOLD = 8192
 
-# Read-only metrics observation (implementation doc sec.7).  When a recorder
-# is installed through set_metrics_observer(), every state mutation below is
-# mirrored to it *after* the mutation completes; the recorder never feeds
-# anything back into admission, eviction, or placement decisions.  When no
-# recorder is installed (the default) none of the observation bookkeeping
-# runs at all, so behavior and performance are unchanged.
-_METRICS_RECORDER: Any = None
-
 
 def _strict_kv_invariants_from_environment() -> bool:
     """Return whether every mutation must also run the complete audit."""
@@ -44,27 +36,6 @@ def _strict_kv_invariants_from_environment() -> bool:
         "yes",
         "on",
     }
-
-
-def set_metrics_observer(recorder: Any) -> None:
-    """Install the metrics recorder picked up by subsequently constructed
-    managers (``None`` disables observation)."""
-
-    global _METRICS_RECORDER
-    _METRICS_RECORDER = recorder
-
-
-def _metrics_anchor_for_phase(phase: str) -> str:
-    """Map a planner phase to the doc sec.7.8 anchor for its memory actions."""
-
-    return {
-        "history": "prefill_start",
-        "prefill": "prefill_start",
-        "admission": "prefill_start",
-        "decode": "decode_start",
-        "prefill_decode": "decode_start",
-        "completion": "completion",
-    }.get(phase, "stage_boundary")
 
 
 def _require_nonnegative_int(value: int, name: str) -> None:
@@ -441,29 +412,6 @@ class SessionKVCacheManager:
         )
         self._check_invariants()
         self._initialize_incremental_invariants()
-        # Metrics observation state (doc sec.7.4): resident KV is tracked as
-        # per-session segments so that chiplet-projection removes always walk
-        # back the exact recorded distribution of an earlier add.
-        self._metrics_recorder = _METRICS_RECORDER
-        self._metrics_segments: dict[str, dict[str, list[Any]]] = {}
-        self._metrics_segment_counters: dict[str, int] = {}
-        if self._metrics_recorder is not None:
-            for rank in sorted(self._rank_states):
-                self._metrics_recorder.initialize_rank(
-                    rank, self._rank_states[rank].capacity_bytes
-                )
-            for rank in sorted(self._rank_states):
-                state = self._rank_states[rank]
-                self._metrics_recorder.record(
-                    planner_time_ns=0,
-                    anchor_kind="tick_zero",
-                    request_id=None,
-                    session_id=None,
-                    rank=rank,
-                    allocation_key=f"weight:{rank}",
-                    weight_delta_bytes=state.model_weight_bytes,
-                    cause="model_weight_preload",
-                )
 
     @property
     def events(self) -> tuple[KVCacheEvent, ...]:
@@ -893,141 +841,6 @@ class SessionKVCacheManager:
         if self._strict_kv_invariants:
             self._check_invariants()
 
-    # ------------------------------------------------------------------
-    # Read-only metrics observation helpers (doc sec.7).  Every method here
-    # is a no-op unless a recorder was installed at construction time, and
-    # none of them feeds back into manager decisions.
-    # ------------------------------------------------------------------
-
-    def _metrics_add_segment(
-        self,
-        session_id: str,
-        instance_index: int,
-        shards: Sequence[int],
-        *,
-        now_ns: int,
-        anchor_kind: str,
-        request_id: str,
-        cause: str,
-    ) -> None:
-        recorder = self._metrics_recorder
-        if recorder is None:
-            return
-        counter = self._metrics_segment_counters.get(session_id, 0)
-        self._metrics_segment_counters[session_id] = counter + 1
-        segment_id = f"seg{counter}"
-        self._metrics_segments.setdefault(session_id, {})[segment_id] = [
-            instance_index,
-            tuple(int(value) for value in shards),
-        ]
-        instance = self.topology.instance(instance_index)
-        for rank, value in zip(instance.ranks, shards):
-            if not value:
-                continue
-            recorder.record(
-                planner_time_ns=now_ns,
-                anchor_kind=anchor_kind,
-                request_id=request_id,
-                session_id=session_id,
-                rank=rank,
-                allocation_key=f"resident:{session_id}:{segment_id}",
-                resident_kv_delta_bytes=int(value),
-                cause=cause,
-            )
-
-    def _metrics_remove_session_segments(
-        self,
-        session_id: str,
-        *,
-        now_ns: int,
-        anchor_kind: str,
-        request_id: str,
-        cause: str,
-    ) -> None:
-        recorder = self._metrics_recorder
-        if recorder is None:
-            return
-        segments = self._metrics_segments.get(session_id, {})
-        for segment_id in sorted(segments):
-            instance_index, shards = segments[segment_id]
-            instance = self.topology.instance(instance_index)
-            for rank, value in zip(instance.ranks, shards):
-                if not value:
-                    continue
-                recorder.record(
-                    planner_time_ns=now_ns,
-                    anchor_kind=anchor_kind,
-                    request_id=request_id,
-                    session_id=session_id,
-                    rank=rank,
-                    allocation_key=f"resident:{session_id}:{segment_id}",
-                    resident_kv_delta_bytes=-int(value),
-                    cause=cause,
-                )
-        segments.clear()
-
-    def _metrics_move_session_segments(
-        self,
-        session_id: str,
-        target_instance_index: int,
-        total_shards: Sequence[int],
-        *,
-        now_ns: int,
-        anchor_kind: str,
-        request_id: str,
-        cause: str,
-    ) -> None:
-        """Mirror a migration: the target add is recorded as one consolidated
-        segment (a fresh allocation key carries the full magnitude, so the
-        chiplet projection stays exactly removable), then each original
-        segment is removed from the source ranks under its own key (doc
-        sec.7.4/7.6).  Target add precedes source release, matching the
-        dynamic GraphBatch transfer dependency ordering."""
-
-        recorder = self._metrics_recorder
-        if recorder is None:
-            return
-        segments = self._metrics_segments.get(session_id, {})
-        target_ranks = self.topology.instance(target_instance_index).ranks
-        counter = self._metrics_segment_counters.get(session_id, 0)
-        self._metrics_segment_counters[session_id] = counter + 1
-        segment_id = f"seg{counter}"
-        consolidated_key = f"resident:{session_id}:{segment_id}"
-        for rank, value in zip(target_ranks, total_shards):
-            if not value:
-                continue
-            recorder.record(
-                planner_time_ns=now_ns,
-                anchor_kind=anchor_kind,
-                request_id=request_id,
-                session_id=session_id,
-                rank=rank,
-                allocation_key=consolidated_key,
-                resident_kv_delta_bytes=int(value),
-                cause=f"{cause}_target_add",
-            )
-        for old_segment_id in sorted(segments):
-            source_instance_index, shards = segments[old_segment_id]
-            source_ranks = self.topology.instance(source_instance_index).ranks
-            old_key = f"resident:{session_id}:{old_segment_id}"
-            for rank, value in zip(source_ranks, shards):
-                if not value:
-                    continue
-                recorder.record(
-                    planner_time_ns=now_ns,
-                    anchor_kind=anchor_kind,
-                    request_id=request_id,
-                    session_id=session_id,
-                    rank=rank,
-                    allocation_key=old_key,
-                    resident_kv_delta_bytes=-int(value),
-                    cause=f"{cause}_source_remove",
-                )
-        self._metrics_segments[session_id] = {
-            segment_id: [target_instance_index, tuple(int(v) for v in total_shards)]
-        }
-
-
     def _delete(
         self,
         victim: SessionKVState,
@@ -1052,13 +865,6 @@ class SessionKVCacheManager:
         victim.evicted_at_ns = now_ns
         victim.evicted_by_request_id = trigger_request_id
         self._check_invariants_after_mutation(session_ids=(victim.session_id,))
-        self._metrics_remove_session_segments(
-            victim.session_id,
-            now_ns=now_ns,
-            anchor_kind=_metrics_anchor_for_phase(phase),
-            request_id=trigger_request_id,
-            cause=f"evict_delete:{reason}",
-        )
         after = self._remaining(source_instance)
         record = EvictionRecord(
             time_ns=now_ns,
@@ -1240,22 +1046,6 @@ class SessionKVCacheManager:
             shard_bytes=required,
         )
         self._check_invariants_after_mutation(reservation_ids=(request_id,))
-        if self._metrics_recorder is not None:
-            for rank, value in zip(
-                self.topology.instance(instance_index).ranks, required
-            ):
-                if not value:
-                    continue
-                self._metrics_recorder.record(
-                    planner_time_ns=now_ns,
-                    anchor_kind=_metrics_anchor_for_phase(phase),
-                    request_id=request_id,
-                    session_id=session_id,
-                    rank=rank,
-                    allocation_key=f"reservation:{request_id}",
-                    reserved_kv_delta_bytes=int(value),
-                    cause=reason,
-                )
         return CapacityResult(evictions, True, ())
 
     def release_request_capacity(self, request_id: str) -> RequestCapacityReservation:
@@ -1269,26 +1059,6 @@ class SessionKVCacheManager:
                 raise RuntimeError("request reservation accounting underflow")
             state.reserved_request_bytes -= value
         self._check_invariants_after_mutation(reservation_ids=(request_id,))
-        if self._metrics_recorder is not None:
-            # This API carries no planner timestamp; reuse the most recent
-            # event time so the replay stream stays non-decreasing.
-            now_ns = self._events[-1].planner_time_ns if self._events else 0
-            for rank, value in zip(
-                self.topology.instance(reservation.instance_index).ranks,
-                reservation.shard_bytes,
-            ):
-                if not value:
-                    continue
-                self._metrics_recorder.record(
-                    planner_time_ns=now_ns,
-                    anchor_kind="prefill_start",
-                    request_id=request_id,
-                    session_id=reservation.session_id,
-                    rank=rank,
-                    allocation_key=f"reservation:{request_id}",
-                    reserved_kv_delta_bytes=-int(value),
-                    cause="reservation_release",
-                )
         return reservation
 
     def _history_shards(self, tokens: int) -> tuple[int, ...]:
@@ -1404,15 +1174,6 @@ class SessionKVCacheManager:
             state.evicted_at_ns = None
             state.evicted_by_request_id = None
             self._check_invariants_after_mutation(session_ids=(session_id,))
-            self._metrics_add_segment(
-                session_id,
-                target_instance_index,
-                history_shards,
-                now_ns=now_ns,
-                anchor_kind="prefill_start",
-                request_id=trigger_request_id,
-                cause="recompute_history_restore",
-            )
             after = self._remaining(target_instance_index)
             self._event(
                 now_ns=now_ns,
@@ -1488,15 +1249,6 @@ class SessionKVCacheManager:
         self._remove_shards(source_instance, history_shards)
         state.instance_index = target_instance_index
         self._check_invariants_after_mutation(session_ids=(session_id,))
-        self._metrics_move_session_segments(
-            session_id,
-            target_instance_index,
-            history_shards,
-            now_ns=now_ns,
-            anchor_kind="transfer_complete",
-            request_id=trigger_request_id,
-            cause="history_noc_migrate",
-        )
         after = self._remaining(target_instance_index)
         self._event(
             now_ns=now_ns,
@@ -1559,17 +1311,6 @@ class SessionKVCacheManager:
         state.logical_context_tokens = context_tokens
         state.last_request_id = trigger_request_id
         self._check_invariants_after_mutation(session_ids=(session_id,))
-        self._metrics_add_segment(
-            session_id,
-            instance_index,
-            delta,
-            now_ns=now_ns,
-            anchor_kind=(
-                "completion" if phase == "decode" else "prefill_start"
-            ),
-            request_id=trigger_request_id,
-            cause=reason,
-        )
         return CapacityResult(evictions, True, ())
 
     def grow_prefill(
@@ -1689,15 +1430,6 @@ class SessionKVCacheManager:
         self._remove_shards(source_instance, state.shard_bytes)
         state.instance_index = target_instance_index
         self._check_invariants_after_mutation(session_ids=(session_id,))
-        self._metrics_move_session_segments(
-            session_id,
-            target_instance_index,
-            state.shard_bytes,
-            now_ns=now_ns,
-            anchor_kind="transfer_complete",
-            request_id=trigger_request_id,
-            cause="prefill_decode_migrate",
-        )
         after = self._remaining(target_instance_index)
         self._event(
             now_ns=now_ns,
@@ -1829,20 +1561,9 @@ class SessionKVCacheManager:
                 raise RuntimeError("resident completed session has no instance")
             released_instance_index = state.instance_index
             self._remove_shards(released_instance_index, state.shard_bytes)
-            self._metrics_remove_session_segments(
-                session_id,
-                now_ns=completion_ns,
-                anchor_kind="completion",
-                request_id=terminal_request_id,
-                cause="terminal_session_retire",
-            )
         elif state.state != EVICTED:
             raise RuntimeError(f"unknown KV state: {state.state}")
 
-        # Metrics helpers intentionally no-op without an observer; retirement
-        # must nevertheless remove the per-session containers in both modes.
-        self._metrics_segments.pop(session_id, None)
-        self._metrics_segment_counters.pop(session_id, None)
         self._forget_pressure_event_keys(terminal_request_id)
         del self._sessions[session_id]
         self._check_invariants_after_mutation(session_ids=(session_id,))

@@ -321,6 +321,13 @@ class _OnlineRequestRuntime:
         "merge_transfers", "merge_outcome", "joint_prefill_work",
         "joint_span_base_context",
         "joint_input_tokens", "joint_cost_ns", "joint_working_copy",
+        # ---- 规格书§二（2026-09-25 prefill remote-read 分阶段）：前缀
+        # 读流独立账本（与 history_transfers 严格分离——后缀池恢复留在
+        # history_transfers，前缀 [0,p) 读流若混入会被误当历史工作副本
+        # 迁移，错误触发 readiness barrier、history_transfer_bytes 与
+        # merge 账本）----
+        "prefill_remote_read_transfers", "prefill_remote_read_plan",
+        "prefill_remote_read_bytes",
         # ---- R14（2026-09-14）：decode 增长停滞/唤醒 ----
         "decode_stalled", "stall_wake_key", "stall_reason", "stall_gap_records",
         # ---- remote-read credit 执行口径（唯一机制）----
@@ -381,6 +388,14 @@ class _OnlineRequestRuntime:
         self.origin_home_instance = None
         self.history_transfers = ()
         self.merge_transfers = ()
+        # 规格书§二.1（2026-09-25）：prefill remote-read 前缀读流独立
+        # 账本——准入时由 plan_prefill_remote_read_transfers 规划（纯
+        # 规划零副作用；stream_only 瞬时流，不物化 exec 容量账本），
+        # owner = rid#prefill_read、prefill drain 释放。非 remote-read
+        # （或退化无读流）恒为初始值 ()/None/0。
+        self.prefill_remote_read_transfers = ()
+        self.prefill_remote_read_plan = None
+        self.prefill_remote_read_bytes = 0
         # 合并方向 v2（2026-09-17）：merge_back 后 face_scheduler 设置的
         # last_merge_outcome 快照（direction/winner/loser/transferred_bytes/
         # home_flipped 等；stay 亦照实落账）。None = 尚无 merge 事务（F6
@@ -475,6 +490,15 @@ class _OnlineRequestRuntime:
             "joint_cost_ns": self.joint_cost_ns,
             "history_transfers": self.history_transfers,
             "merge_transfers": self.merge_transfers,
+            # 规格书§二.3（2026-09-25）：prefill remote-read 前缀读流独立
+            # 字段（图侧按同 frontier 分叉铺前缀读流/后缀池恢复两条腿；
+            # 非前缀读流请求为 ()/0——键恒在，读者前向兼容）。
+            "prefill_remote_read_bytes": self.prefill_remote_read_bytes,
+            "prefill_remote_read_layers": (
+                self.prefill_remote_read_plan["read_prefix_layers"]
+                if self.prefill_remote_read_plan is not None else 0),
+            "prefill_remote_read_transfers":
+                self.prefill_remote_read_transfers,
         }
 
 
@@ -1592,6 +1616,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # R15-1：准入主链在途流在 drain 栅栏通过后释放；独立逐出支链
         # 仍可能在飞，owner=#evict 只由其尾 watch 释放。
         self._release_transfer_flows(request_id)
+        # 规格书§二.4（2026-09-25）：prefill remote-read 前缀读流在
+        # prefill drain 释放——decode credit 读流（#readplan /
+        # rid#decode#{j}）自本边界之后才建立，同一条前缀读流不得同时
+        # 挂 prefill/decode 两个身份（release_owner 幂等空放，非前缀
+        # 读流请求零副作用）。
+        self._release_transfer_flows(request_id + "#prefill_read")
         # C11：准入主链配额流 settle；#evict 支链配额由尾 watch 释放，
         # remote-read 读流与 merge 预留生命周期到完成边界。
         if self._quota_tracker is not None:
@@ -1667,10 +1697,25 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # （不作为开关可选项保留；K >= S_j 单块切片的块 1 仍走原
         # pd_transfer 发射路径 = 逐字节等价锚）。
         if runtime.joint_action == "remote-read":
+            # 规格书§四.3（2026-09-25）：decode credit 计划建立前，断言
+            # 后缀 restore journal 已在 prefill_drain 边界（上方
+            # expand_prefill → _settle_restore_groups）全部 consumed 并
+            # 关账——decode 后缀层直接复用 exec HBM 已恢复的历史后缀
+            # [p,L)，不得再从池恢复；journal 仍开 = 恢复链破损，
+            # fail-closed 不带病建立 decode 读计划。
+            drain_session = self.kv_manager._sessions[runtime.session_id]
+            if drain_session.restore_journal is not None:
+                raise RuntimeError(
+                    "suffix restore journal for session {} is still open "
+                    "at prefill drain (request {}): decode remote-read "
+                    "credit plan requires the suffix restore to be fully "
+                    "consumed first".format(
+                        runtime.session_id, runtime.request_id))
             runtime.remote_read_credit_plan = (
                 self._joint_remote_read_credit_plan(runtime, selected))
             # C8 步骤 2（对账核销之一）：真计划冻结处——核销准入相的
-            # #readplan 估计、以真值重登记；预估/实际差值进决策日志。
+            # #readplan est 账本、以真值建立注册表登记（#prefill_read
+            # 已在本边界上方释放）；预估/实际差值进决策日志。
             self._reconcile_readplan_at_drain(runtime, tick)
         self._bump_kv_ledger_epoch()  # 改法D：KV 变更点 3/9（move_prefill_to_decode）
         self.graph.sync_pending_history_after_evictions(
@@ -3348,21 +3393,25 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                                     exec_instance: int,
                                     estimated_decode: int) -> None:
         """C8 步骤 1（§4.1 同 tick 承诺可见性）：准入事务成功且选中
-        remote-read 后，立即以 owner = ``rid#readplan`` 预登记读流代表
-        ——同 tick 串行贪婪（_admit_waiting_requests 循环）的后续决策
-        构造代价模型时读同一张注册表，第一笔已提交的读流承诺即可见
-        （闭合"各请求都看到空闲链路"缺项）。
+        remote-read 后，建立读流承诺的 est 账本（owner 语义
+        ``rid#readplan``，注册表半边延迟到 drain 对账以真值建立）。
+        2026-09-25（规格书§二.5）起准入相**零注册表登记**：prefill 期间
+        注册表上的远读流 = ``rid#prefill_read`` 前缀读流实流本身（同
+        shard 路径集，同 tick 后续决策照样可见本笔已提交足迹）——同一条
+        前缀读流不得同时被登记为 prefill 流与 decode 流（prefill/decode
+        两阶段不得算成同时并发的两条远读流）；#readplan 注册表半边自
+        drain（_reconcile_readplan_at_drain）起承接 decode credit。
 
         路径 = 冻结于 drain 的那套逐 shard XY 路由预估（与
         _joint_remote_read_credit_plan / route_paths_fn 同源
         deterministic_xy_route）；账本覆盖窗口 = 估计 decode 时域内列车
         数 × 每列车切片块数（时域来自 CausalHorizonEstimator，因果；
-        est/truth/consumed/remaining 披露不确定性）。注册表只登记一条
-        每 shard 的未来代表流；当前列车发射后由实际 owner 接管，避免
-        串行 blocks/train 被误算成同时在途流。
+        est/truth/consumed/remaining 披露不确定性）。decode 期间注册表
+        只登记一条每 shard 的代表流；当前列车发射后由实际 owner 接管，
+        避免串行 blocks/train 被误算成同时在途流。
 
         与 drain 退化分支同口径：home 缺失 / home==exec / read_prefix
-        <=0（REMOTE 基不适用 remote-read）不预登记——届时真计划亦为
+        <=0（REMOTE 基不适用 remote-read）不建账本——届时真计划亦为
         None，无承诺可登记。对账核销链见 remote_read_preplan 注释。"""
         home = session_view.home_instance
         if home is None or home == exec_instance:
@@ -3407,9 +3456,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             home_instance=home, exec_instance=exec_instance,
             read_prefix=read_prefix,
             steps_per_unit=max(1, -(-estimated_steps // units)))
-        self._register_transfer_flows(
-            unit_transfers, owner=runtime.request_id + "#readplan",
-            serial_credit_stream=True)
         runtime.remote_read_preplan = {
             "home_instance": home,
             "exec_instance": exec_instance,
@@ -3422,16 +3468,21 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             "consumed_units": 0,
             "remaining_units": units,
             "unit_transfers": unit_transfers,
-            # 账本 units 表示整个因果预测时域；注册表只表示一条物理
-            # 可并发流。当前列车接管时暂挂，Tj 后仍有 decode 工作再恢复。
-            "registry_active": True,
+            # 账本 units 表示整个因果预测时域；注册表在 decode 期间只
+            # 表示一条物理可并发流（准入相不登记——prefill 期由
+            # rid#prefill_read 实流占位）。当前列车接管时暂挂，Tj 后
+            # 仍有 decode 工作再恢复。
+            "registry_active": False,
         }
 
     def _reconcile_readplan_at_drain(self, runtime, tick: int) -> None:
         """C8 步骤 2（对账核销之一）：drain 边界真计划冻结处——核销
-        准入相 #readplan 估计、以真值重登记；预估/实际差值进决策日志。
+        准入相 #readplan est 账本、以真值建立注册表登记（2026-09-25
+        规格书§二.5 起准入相零登记，本函数 = #readplan 注册表半边的
+        建立点；release_owner 幂等空放兼容旧语义）；预估/实际差值进
+        决策日志。
 
-        真值重登记后 #readplan 的账本仍承载全时域 block 单位；注册表只
+        真值登记后 #readplan 的账本仍承载全时域 block 单位；注册表只
         放一条每 shard 的未来代表流。列车发射时按本列车真实 block 数
         核销账本、暂挂 #readplan，再由 rid#decode#{j} owner 登记当前流；
         Tj 完成后如请求仍有 decode 工作则恢复一条未来代表流。两个 owner
@@ -3594,20 +3645,23 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         return value
 
     def _assert_no_readplan_leaks(self) -> None:
-        """C8 收尾审计：#readplan 预登记必须全部经 drain 对账 → 逐列车
-        核销 → 完成清残余归零；收尾仍非空 = 预登记泄漏（drain 未核销
-        类账本破损），fail-closed。复用 C2 的 HbmPortFlowRegistry
-        .leaked_owners 审计通道（#readplan 经 noc_migrate 端点登记，
-        HBM 端口表与链路流表同通道成对注册/注销）。"""
+        """C8 收尾审计：#readplan est 账本必须全部经 drain 对账 → 逐列车
+        核销 → 完成清残余归零；#prefill_read 前缀读流必须已在 prefill
+        drain 释放（规格书§二.5）。收尾仍非空 = 对应生命周期破损泄漏，
+        fail-closed。复用 C2 的 HbmPortFlowRegistry.leaked_owners 审计
+        通道（两类 owner 均经 noc_migrate 端点登记，HBM 端口表与链路
+        流表同通道成对注册/注销）。"""
         leaks = {
             owner: ports
             for owner, ports in self._hbm_ports.leaked_owners().items()
-            if owner.endswith("#readplan")}
+            if owner.endswith("#readplan")
+            or owner.endswith("#prefill_read")}
         if leaks:
             raise RuntimeError(
-                "readplan pre-registration leaked past settlement "
-                "(drain reconciliation/consumption/settlement chain "
-                "broken): {}".format(sorted(leaks)[:5]))
+                "remote-read stream owner leaked past settlement "
+                "(#readplan drain reconciliation/consumption/settlement "
+                "chain or #prefill_read prefill-drain release broken): "
+                "{}".format(sorted(leaks)[:5]))
 
     def _assert_quota_tracker_ledgers_clean(self) -> None:
         """O10①：run 尾 tracker snapshot() 空账直审——occ/res/enroll/
@@ -4261,7 +4315,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         层区间（2026-09-17）：KVTransferShard/KVTransfer 的 layer_end 与
         resident_prefix_layers_before/after 取计划的 read_prefix_layers
         （区间惯例 = layer_start/layer_end；LOCAL 基 p==L 时与旧全层
-        硬编码逐字节相同——回归锚）。"""
+        硬编码逐字节相同——回归锚）。
+
+        stream_only=True（2026-09-25 补前序 KV 管理器卡登记的偏差项，
+        规格书§一.7）：decode credit 读流与 prefill 前缀读流同为瞬时
+        流——只产 send/recv/HBM 写服务节点与完成门，不物化入任何持久
+        账本（不 _add_local_shards / 不改 shard_bytes / 不进 merge 工
+        作副本账）。字节口径零变更（total_bytes 仍逐 shard 精确）。"""
         from face_scheduler import KVTransfer, KVTransferShard
         plan = runtime.remote_read_credit_plan
         read_prefix = plan["read_prefix_layers"]
@@ -4296,6 +4356,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 layer_end=read_prefix,
                 resident_prefix_layers_before=read_prefix,
                 resident_prefix_layers_after=read_prefix,
+                stream_only=True,
             ))
         return blocks
 
@@ -4778,6 +4839,23 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._note_action_selection(chosen.action, record.candidates,
                                     session_view)
 
+        # ---- 规格书§二.2（2026-09-25 prefill remote-read 分阶段）：前缀
+        # 读流规划。基形态会话（prepare_prefill 之前）+ 纯规划零副作用
+        # ——置于 reserve 之前，fail-closed raise 不留预约残留。LOCAL 基
+        # = 全层 [0,L) 读流（history_transfers 恒空）；PARTIAL 基 = 前缀
+        # [0,p) 读流（后缀 [p,L) 池恢复仍由 prepare_prefill 产
+        # history_transfers，两腿共享同一准入 frontier 并行分叉）。
+        prefill_read_transfers = ()
+        if chosen.action == "remote-read":
+            base_session = self.kv_manager._sessions.get(runtime.session_id)
+            if base_session is not None:
+                # 与 _preregister_readplan_flows 同守卫：无基础会话时真
+                # 计划亦为 None，无读流可规划（退化防御，正常不可达）。
+                prefill_read_transfers = (
+                    self.kv_manager.plan_prefill_remote_read_transfers(
+                        base_session, selected, session_view.history_tokens,
+                        runtime.request_id))
+
         # ---- 事务段：reserve + prepare（失败零残留，D7）。 ----
         try:
             admission_evictions = self.kv_manager.reserve_request_capacity(
@@ -4861,6 +4939,31 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 transfer.total_bytes
                 for transfer in history_transfers
                 if transfer.kind != "local_hit")
+        # 规格书§二.1/§二.2（2026-09-25）：前缀读流入 runtime 账本——
+        # 与 history_transfers 严格分离（后缀池恢复留 history_transfers；
+        # 前缀读流不进 history_transfer_bytes / readiness barrier / merge
+        # 账本），owner = rid#prefill_read、prefill drain 释放。计划摘要
+        # 锚同 remote_read_credit_plan 形态（home/exec/前缀层界/字节/逐
+        # 组层段），组区间并集恒 = [0, p)。无条件覆盖赋值——quota_link
+        # 失败回队重试改选非 remote-read 动作时，不残留上一失败事务的
+        # 前缀读流账本。
+        runtime.prefill_remote_read_transfers = prefill_read_transfers
+        runtime.prefill_remote_read_bytes = sum(
+            transfer.total_bytes
+            for transfer in prefill_read_transfers)
+        runtime.prefill_remote_read_plan = None
+        if prefill_read_transfers:
+            runtime.prefill_remote_read_plan = {
+                "home_instance": (
+                    prefill_read_transfers[0].source_instance_index),
+                "exec_instance": selected,
+                "read_prefix_layers": prefill_read_transfers[-1].layer_end,
+                "total_bytes": runtime.prefill_remote_read_bytes,
+                "groups": tuple(
+                    (transfer.layer_start, transfer.layer_end,
+                     transfer.total_bytes)
+                    for transfer in prefill_read_transfers),
+            }
 
         # R13（N7(b)，2026-09-14）：recompute 只重算**缺失区间**——
         # 驻留目标（home，LOCAL/PARTIAL 前缀复用）仅池后缀层折算 token
@@ -4901,12 +5004,25 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         self._register_transfer_flows(
             runtime.history_evictions,
             owner=runtime.request_id + "#evict")
+        # 规格书§二.4（2026-09-25）：准入时登记 prefill remote-read 前缀
+        # 读流（owner = rid#prefill_read；prefill drain 释放）。NoC 路径
+        # ＋ home HBM 读端口 + exec HBM 写端口由 _register_transfer_flows
+        # 按 noc_migrate 腿型成对登记。同 tick 后续决策经同一路径集看到
+        # 本笔已提交读流足迹（C8 承诺可见性语义由真实在途流承担）。
+        if runtime.prefill_remote_read_transfers:
+            self._register_transfer_flows(
+                runtime.prefill_remote_read_transfers,
+                owner=runtime.request_id + "#prefill_read")
         # C8（WP2-preadmit，§4.1 同 tick 承诺可见性）：选中 remote-read
-        # 即预登记读流承诺（owner = rid#readplan，事务成功路径）——同
-        # tick 串行贪婪的第二笔决策（_admit_waiting_requests 循环内后续
-        # _try_admit_request → _joint_cost_model 读同一张注册表）立即可
-        # 见第一笔已提交的读流足迹。est 时域 = CausalHorizonEstimator
-        # 现值（与本次计价同刻同源），不确定性经 drain 对账披露。
+        # 即建 est 承诺账本（事务成功路径）——同 tick 串行贪婪的第二笔
+        # 决策（_admit_waiting_requests 循环内后续 _try_admit_request →
+        # _joint_cost_model 读同一张注册表）立即可见第一笔已提交的读流
+        # 足迹。est 时域 = CausalHorizonEstimator 现值（与本次计价同刻
+        # 同源），不确定性经 drain 对账披露。2026-09-25 起准入相注册表
+        # 零登记（#readplan 半边延迟到 drain 对账以真值建立）：prefill
+        # 期间注册表上的远读流 = rid#prefill_read 实流本身——同一条前缀
+        # 读流不得同时被登记为 prefill 流与 decode 流（规格书§二.5，除数
+        # 不双计两阶段）。
         if chosen.action == "remote-read":
             self._preregister_readplan_flows(
                 runtime, session_view, selected, estimated_decode)
@@ -4987,6 +5103,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "joint_instance_index": selected,
                 "joint_cost_ns": chosen.cost_ns,
                 "origin_home_instance": runtime.origin_home_instance,
+                # 规格书§二.3（2026-09-25）：prefill remote-read 前缀读流
+                # 独立披露（bytes/layers/逐流 shard 摘要；非前缀读流请求
+                # 为 0/0/[]——键恒在，读者前向兼容）。
+                "prefill_remote_read_bytes":
+                    runtime.prefill_remote_read_bytes,
+                "prefill_remote_read_layers": (
+                    runtime.prefill_remote_read_plan["read_prefix_layers"]
+                    if runtime.prefill_remote_read_plan is not None
+                    else 0),
+                "prefill_remote_read_transfers": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.prefill_remote_read_transfers],
                 "horizon_source": horizon_source,
                 "estimated_decode_tokens": int(estimated_decode),
                 "category_mode": self.joint_config.category_mode,
@@ -5105,8 +5233,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         """A10'(b)（2026-09-22，§4.3 补遗）：配额入册失败防御分支的承诺
         回滚——``_release_transfer_flows(rid)``（历史迁移）＋
         ``_release_transfer_flows(rid#evict)``（准入逐出支链）＋
-        ``_release_transfer_flows(rid#readplan)``（C8 读流
-        预登记）＋ 清 ``runtime.remote_read_preplan``。调用点 =
+        ``_release_transfer_flows(rid#prefill_read)``（prefill 前缀读流，
+        规格书§二.5）＋ ``_release_transfer_flows(rid#readplan)``（C8
+        est 账本对齐的注册表半边，现准入相零登记、幂等空放）＋ 清
+        ``runtime.remote_read_preplan``。调用点 =
         _quota_enroll_admission 返回 False 的主流程失败防御路径（O2：
         逐出支链失败不入此路径——已按披露降级；主流程需求判据已前瞻、
         单线程内判据与入册间 tracker 零变更，到达此处 = 真异常的安全
@@ -5115,6 +5245,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （除数不被死承诺虚抬）。"""
         self._release_transfer_flows(runtime.request_id)
         self._release_transfer_flows(runtime.request_id + "#evict")
+        self._release_transfer_flows(runtime.request_id + "#prefill_read")
         self._release_transfer_flows(runtime.request_id + "#readplan")
         runtime.remote_read_preplan = None
 
@@ -5406,6 +5537,18 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "joint_action": runtime.joint_action,
                 "joint_span_base_context": runtime.joint_span_base_context,
                 "joint_prefill_work": runtime.joint_prefill_work,
+                # 规格书§二.3（2026-09-25）：prefill remote-read 前缀读流
+                # 独立披露（与 history_transfers 分列——前缀读流不进
+                # history_transfer_bytes/readiness barrier/merge 账本）。
+                "prefill_remote_read_bytes":
+                    runtime.prefill_remote_read_bytes,
+                "prefill_remote_read_layers": (
+                    runtime.prefill_remote_read_plan["read_prefix_layers"]
+                    if runtime.prefill_remote_read_plan is not None
+                    else 0),
+                "prefill_remote_read_transfers": [
+                    _transfer_summary(transfer)
+                    for transfer in runtime.prefill_remote_read_transfers],
                 "history_transfers": [
                     _transfer_summary(transfer)
                     for transfer in runtime.history_transfers],
@@ -5894,9 +6037,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             # res/bulk 间接归零（reserve_merge 恒持双向链路预留 + 双端
             # 口 bulk，预留存活 ⇒ res/bulk 非零必被捉）。
             self._assert_quota_tracker_ledgers_clean()
+        # C8/规格书§二.5 收尾审计：remote-read 读流 owner 泄漏（#readplan
+        # 预登记 est 账本未对账核销 / #prefill_read 未在 prefill drain
+        # 释放，任一环破损即在此报警——失败注入单测的断言位）。置于全
+        # owner 收口之前，使泄漏诊断携带生命周期语义（通用审计兜底）。
+        self._assert_no_readplan_leaks()
         # O10③：R15 在途流注册表（链路/池端口/HBM 端口）全 owner 清账
-        # 断言——#readplan 半边由下方 _assert_no_readplan_leaks 先行审
-        # 计，此处覆盖其余全部 owner（R15 非 #readplan 盲区的收口）。
+        # 断言——remote-read 读流半边由上方 _assert_no_readplan_leaks
+        # 先行审计，此处覆盖其余全部 owner（R15 盲区的收口）。
         self._assert_no_flow_registry_leaks()
         if self.pending_admissions:
             pending_ids = [
@@ -5963,9 +6111,6 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with stale admit attempt epochs: "
                 "{}".format(sorted(self._admit_attempt_epoch)[:5]))
-        # C8 收尾审计：#readplan 预登记泄漏（drain 未核销 / 逐列车未消
-        # 费 / 完成未清残，任一环破损即在此报警——失败注入单测的断言位）。
-        self._assert_no_readplan_leaks()
         self.kv_manager.assert_final_state()
 
 

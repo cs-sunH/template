@@ -1048,7 +1048,7 @@ int main(int argc, char* argv[]) {
     // contexts (post-commit issue pass). A start_flow flush scheduled at
     // current_time via schedule_event would insert a current_time EventList
     // into the main queue and trip the strict-increase assert on the next
-    // proceed() (EventQueue.cpp:33). Deferred mode routes the flush through
+    // proceed() (EventQueue.cpp:48). Deferred mode routes the flush through
     // schedule_event_deferred (same-tick drain). The static main never
     // enables it -- pre-extension behavior is byte-for-byte preserved.
     fluid_scheduler->set_deferred_flush_mode(true);
@@ -1088,7 +1088,10 @@ int main(int argc, char* argv[]) {
     // Create ASTRA-sim related resources
     auto network_apis =
         std::vector<std::unique_ptr<CongestionAwareNetworkApi>>();
-    const auto memory_api =
+    // 方案 §3.4：收尾必须在删除 Sys 前销毁/重置 remote API（后端取消全局
+    // 事件时 host Sys 仍存活），因此这里不能是 const —— 正常结束路径在
+    // delete systems 之前执行 memory_api.reset()。
+    auto memory_api =
         std::make_unique<AnalyticalRemoteMemory>(remote_memory_configuration);
     auto systems = std::vector<Sys*>();
 
@@ -1233,6 +1236,57 @@ int main(int argc, char* argv[]) {
     // even when the run delivers nothing (IDLE fixture / zero-request runs),
     // so a zero-delivery run still terminates Python via EOF at exit.
     FileDecisionBridge::ensure_bridge_dir(online_cli.bridge_dir);
+    // SerDes port-concurrency rework (方案 §5.1/阶段 3): the --sensing-enabled
+    // token reaches the backend transaction-detail switch HERE and only
+    // here (the former chain stopped at the injected-unfinished summary in
+    // driver_ctx -- the backend detail stream did not exist yet). The
+    // stream writes <bridge_dir>/remote_memory_transactions.jsonl and the
+    // backend creates the file lazily at the first settled row, so a
+    // sensing-off run (or a sensing run with zero remote transactions)
+    // leaves zero residue. run_id priority per 方案 §5.1: the metrics
+    // manifest's non-empty run_id first, else the fully normalized
+    // RUN_DIR (the bridge dir's parent, resolved via realpath(3) now that
+    // ensure_bridge_dir created it -- no std::filesystem dependency, same
+    // convention as DecisionBridge.cc).
+    if (online_cli.sensing_enabled) {
+        std::string transaction_run_id =
+            MetricCollector::instance().metric_run_id();
+        if (transaction_run_id.empty()) {
+            std::string bridge_dir_normalized = online_cli.bridge_dir;
+            while (bridge_dir_normalized.size() > 1 &&
+                   bridge_dir_normalized.back() == '/') {
+                bridge_dir_normalized.pop_back();
+            }
+            char* resolved = ::realpath(bridge_dir_normalized.c_str(),
+                                        nullptr);
+            if (resolved != nullptr) {
+                const std::string resolved_bridge(resolved);
+                ::free(resolved);
+                const auto last_slash =
+                    resolved_bridge.find_last_of('/');
+                if (last_slash != std::string::npos &&
+                    last_slash > 0) {
+                    transaction_run_id =
+                        resolved_bridge.substr(0, last_slash);
+                }
+            }
+        }
+        if (transaction_run_id.empty()) {
+            std::cerr << "[Error] (execution_driven/online) sensing run "
+                         "cannot resolve a transaction run_id (metrics "
+                         "manifest run_id empty and RUN_DIR not "
+                         "resolvable)"
+                      << std::endl;
+            return EXIT_FAILURE;
+        }
+        memory_api->configure_transaction_detail(
+            true,
+            online_cli.bridge_dir + "/remote_memory_transactions.jsonl",
+            transaction_run_id);
+        std::cout << "[online] remote-memory transaction detail: enabled "
+                  << "(--sensing-enabled; run_id=" << transaction_run_id
+                  << ")" << std::endl;
+    }
     // C1 (2026-08-29): pass the NPU count so parse_graph_batch can enforce
     // the rank domains (node/edge/watch-member/touched-rank ranges) at the
     // single structural parse, before any consumer sees the batch.
@@ -1540,7 +1594,7 @@ int main(int argc, char* argv[]) {
             // parking-point diagnostics for the fail-loud guard below
             // (wall-clock idle watchdog). Every counter the 形态判据
             // reasons over is printed: tick, service counters
-            // (active/pending alarm/fence), reader window state
+            // (active/pending alarm), reader window state
             // (occupancy/rows_read/data_rows/EOF), the input-close knob,
             // and the four emptiness witnesses (mailbox/deferred/commands
             // + the event queue itself, which finished() already proved).
@@ -1660,20 +1714,31 @@ int main(int argc, char* argv[]) {
                     const auto& store = graph_sources[r]->store();
                     const auto free = store.resolve_free_nodes();
                     const auto* slots = systems[r]->workload->hw_resource;
+                    // 并发化改造方案 §4/阶段2：remote MEM 节点在途计数也是
+                    // 等待证据——新计数下远端 MEM 不再占 comm 槽，漏掉它会把
+                    // remote-MEM 环等误判成空槽。
                     if (store.pending_count() == 0 && free.empty()
                         && slots->gpu_comms_node.empty()
                         && slots->gpu_ops_node.empty()
-                        && slots->hbm_dma_ops_node.empty()) {
+                        && slots->hbm_dma_ops_node.empty()
+                        && slots->num_in_flight_remote_mem_ops == 0) {
                         continue;
                     }
                     std::cerr << "[livelock] rank=" << r
                               << " pending=" << store.pending_count()
-                              << " free=" << free.size() << " slot_comm=[";
+                              << " free=" << free.size()
+                              << " remote_mem_in_flight="
+                              << slots->num_in_flight_remote_mem_ops
+                              << " slot_comm=[";
                     for (const auto id : slots->gpu_comms_node) {
                         std::cerr << id << " ";
                     }
                     std::cerr << "] slot_comp=[";
                     for (const auto id : slots->gpu_ops_node) {
+                        std::cerr << id << " ";
+                    }
+                    std::cerr << "] slot_remote_mem=[";
+                    for (const auto id : slots->remote_mem_ops_node) {
                         std::cerr << id << " ";
                     }
                     std::cerr << "] free_head=[";
@@ -2038,14 +2103,92 @@ int main(int argc, char* argv[]) {
                   << std::endl;
         gate_ok = false;
     }
+    // 方案 §3.4/阶段2（并发化改造）normal-end fail-closed 审计：正常结束
+    // 不允许任何未决 HBM join、在途远端事务或未终结节点占用存活到收尾——
+    // 必须报错（gate 失败），严禁静默清理伪造正常完成。远端事务的前端证据
+    // 是 HardwareResource 的节点在途计数（occupy 在 issue、release 在
+    // Workload::call 节点终结，含 hbm-access-mode 节点的端口+HBM 两腿
+    // join）；backend 自有作业的空集检查由后端自身负责（reset/析构时的
+    // fail-closed）。
+    for (size_t r = 0; r < systems.size(); ++r) {
+        const auto* const rank_workload = systems[r]->workload;
+        const auto* const slots = rank_workload->hw_resource;
+        if (rank_workload->has_unfinished_hbm_endpoint_joins()) {
+            std::cerr << "[Error] (execution_driven/online) normal-end "
+                         "audit: rank="
+                      << r << " still has unfinished HBM endpoint joins"
+                      << std::endl;
+            gate_ok = false;
+        }
+        if (slots->num_in_flight_cpu_ops != 0 ||
+            slots->num_in_flight_gpu_comp_ops != 0 ||
+            slots->num_in_flight_gpu_comm_ops != 0 ||
+            slots->num_in_flight_hbm_dma_ops != 0 ||
+            slots->num_in_flight_remote_mem_ops != 0) {
+            std::cerr << "[Error] (execution_driven/online) normal-end "
+                         "audit: rank="
+                      << r << " still has in-flight nodes (cpu="
+                      << slots->num_in_flight_cpu_ops
+                      << " comp=" << slots->num_in_flight_gpu_comp_ops
+                      << " comm=" << slots->num_in_flight_gpu_comm_ops
+                      << " hbm_dma=" << slots->num_in_flight_hbm_dma_ops
+                      << " remote_mem="
+                      << slots->num_in_flight_remote_mem_ops << ")"
+                      << std::endl;
+            gate_ok = false;
+        }
+    }
+    // Backend-side mirror of the audit above (方案 §3.4/§5.1): is_drained()
+    // is unconditional (independent of sensing) and covers backend-owned
+    // jobs, dual-zero timers, awaiting deliveries, armed event handles and
+    // the per-port count/bytes conservation pairs.
+    if (!memory_api->is_drained()) {
+        std::cerr << "[Error] (execution_driven/online) normal-end audit: "
+                     "remote memory backend is not drained (in-flight port "
+                     "jobs, dual-zero timers or undelivered completions "
+                     "remain)"
+                  << std::endl;
+        gate_ok = false;
+    }
     if (!gate_ok) {
         print_total_wall_time();
+        // 方案 §3.4 early-shutdown contract: release ONLY backend-owned
+        // state (cancel the global transition event, delete undelivered
+        // wlhds and jobs, reset counters) -- never a fake normal completion.
+        // Doing it explicitly here also keeps the backend destructor's
+        // verify_drained() from panicking after LoggerFactory::shutdown().
+        // The Workload-side join latch may share the deleted wlhd with the
+        // still-alive LocalHbmBandwidthModel; on this path nothing ever
+        // dereferences it again (no proceed(), systems not deleted).
+        memory_api->shutdown();
         // The "main" logger is async: shutdown drains its queue so the
         // wall-time line lands before this failure exit terminates the
         // process (the normal path relies on the shutdown below).
         AstraSim::LoggerFactory::shutdown();
         return EXIT_FAILURE;
     }
+
+    // SerDes rework (方案 §5.1，2026-09-24 修订): finalize the detail
+    // artifact on the NORMAL end only -- it appends the terminal summary
+    // row (per-port PortStats aggregates) so every sensing run leaves a
+    // non-empty, parseable, recomputable
+    // results/remote_memory_transactions.jsonl even with zero remote
+    // transactions. Failure paths above exit without finalize: their
+    // retained partial bridge file (rows, no summary) stays honest
+    // debugging evidence.
+    if (online_cli.sensing_enabled) {
+        memory_api->finalize_transaction_detail();
+        std::cout << "[online] remote-memory transactions: "
+                  << memory_api->transaction_rows_written()
+                  << " rows -> " << online_cli.bridge_dir
+                  << "/remote_memory_transactions.jsonl "
+                  << "(summary row appended)" << std::endl;
+    }
+    // 方案 §3.4：先销毁/重置 remote API，再删除 Sys —— 后端析构/取消全局
+    // 事件时 host Sys（及其 event queue）仍存活。上方 normal-end 审计已证明
+    // 无未决 HBM join、无在途节点占用、后端已 drained；reset 触发的后端
+    // 析构自带 verify_drained() fail-closed 兜底。
+    memory_api.reset();
 
     for (auto it : systems) {
         delete it;

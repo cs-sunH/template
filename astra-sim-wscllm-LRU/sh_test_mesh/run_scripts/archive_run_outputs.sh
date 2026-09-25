@@ -23,6 +23,10 @@
 #   results/profile.jsonl(存在时) results/train_ledger.jsonl
 #   results/ledger.jsonl results/sensing_query_log.jsonl(仅 sensing 跑产生,
 #     对账/差异报告输入;strategy 跑无此二件,保留集不受影响)
+#   results/remote_memory_transactions.jsonl(SerDes 片外链路并发化改造
+#     2026-09-24 新增:仅 --sensing-enabled 开启时 C++ 向 bridge_dir 流式
+#     写出的逐事务明细,runner 成功后移入 results/;sensing 关跑无此文件,
+#     保留集不受影响。shared_busy_ns 复算/完成分布对账输入,常驻不压缩)
 #   results/kv_delta_journal.jsonl + results/kv_delta_journal_checksum.json
 #     (P1 2026-08-30 权威 HBM delta journal 与 run 末 checksum 门产物,
 #     journal 开关 off 时不存在;审计/重放输入,常驻不压缩)
@@ -96,6 +100,7 @@ if [ -d "${RUN_DIR}/results" ]; then
     ! -name 'train_ledger.jsonl' \
     ! -name 'ledger.jsonl' \
     ! -name 'sensing_query_log.jsonl' \
+    ! -name 'remote_memory_transactions.jsonl' \
     ! -name 'campaign_provenance.json' \
     ! -name 'kv_delta_journal.jsonl' \
     ! -name 'kv_delta_journal_checksum.json' \

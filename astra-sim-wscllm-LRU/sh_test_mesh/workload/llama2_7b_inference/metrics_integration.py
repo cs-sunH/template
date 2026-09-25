@@ -52,9 +52,11 @@ class MemoryActionRecorder:
     - ``journal_path`` given (P1 authoritative HBM delta journal): every
       :meth:`record` appends exactly one JSON line to the journal file and
       flushes it (line-atomic crash consistency; a torn tail line is rejected
-      with its line number on replay).  Nothing is retained in memory — the
-      manifest ``memory_actions`` stream is rebuilt by streaming the file back
-      (:meth:`iter_journal_deltas`).  The journal is the authoritative
+      with its line number on replay).  Nothing is retained in memory.
+      :meth:`iter_journal_deltas` streams the journal back solely for the
+      read-back test (sh_test_mesh/workload/llama2_7b_inference/
+      test_kv_delta_journal.py:274); no manifest ``memory_actions`` rebuild
+      chain exists in this repo.  The journal is the authoritative
       physical ledger replayed by the run-end checksum gate
       (``SessionKVCacheManager.verify_journal_checksum``).
     - ``journal_path`` omitted (legacy in-memory mode): deltas accumulate in
@@ -79,12 +81,12 @@ class MemoryActionRecorder:
     - Each row carries the rank's ``before_bytes`` / ``after_bytes`` /
       ``capacity_bytes`` snapshots, so the file alone reconstructs the
       per-rank (weight, resident, reserved) ledger.
-    - B2 (2026-09, three-state KV): rows additionally carry
+    - B2 (2026-09, two-state KV): rows additionally carry
       ``remote_delta_bytes`` and the per-rank ledger becomes
       ``(weight, resident, reserved, remote)``; the remote column accounts
       the bytes that rank stored into / restored from the shared remote
-      memory pool (suffix/full eviction, restore, terminal write-off).  The
-      frozen manifest ``MemoryDelta`` stream is untouched — remote is a
+      memory pool (whole-session eviction, restore, terminal write-off).
+      The frozen manifest ``MemoryDelta`` stream is untouched — remote is a
       journal-only column.
     """
 
@@ -345,7 +347,14 @@ class MemoryActionRecorder:
         return row
 
     def iter_journal_deltas(self):
-        """Stream the journal back as ``MemoryDelta`` rows (manifest source)."""
+        """Stream the journal back as ``MemoryDelta`` rows.
+
+        Read-back use only: the sole caller is the journal round-trip test
+        (sh_test_mesh/workload/llama2_7b_inference/test_kv_delta_journal.py:274).
+        No manifest ``memory_actions`` rebuild chain exists in this repo
+        (the former "(manifest source)" claim was stale; corrected
+        2026-09-25).
+        """
 
         if not self.journal_enabled:
             raise RuntimeError("iter_journal_deltas requires journal mode")

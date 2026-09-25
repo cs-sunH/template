@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """wsc_llm_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9)。
 
-以 _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py)为蓝本
-迁移,保持决策顺序逐行对应(每处迁移用 `# offline: wsc_llm_scheduler.py:XXXX`
+自离线事件循环蓝本迁移(该离线蓝本已随 2026-09-24 只在线化从
+wsc_llm_scheduler.py 删除,该文件现仅保留拓扑/静态路由/排队语义),
+保持决策顺序逐行对应(每处迁移用 `# offline: wsc_llm_scheduler.py:XXXX`
 注释标注)。离线事件循环与在线边界的一一对应:
 
   离线事件循环                                    在线边界
@@ -102,7 +103,6 @@ from online.online_scheduler_base import (  # noqa: E402
 )
 from session_kv_manager import (  # noqa: E402
     LOCAL_HBM,
-    PARTIAL_HBM_REMOTE,
     SessionKVCacheManager,
     kv_cache_shard_bytes_for_tokens,
 )
@@ -213,8 +213,8 @@ class _OnlineRequestRuntime:
         self.history_transfer_bytes = None
         # B2 三态:history 恢复/迁移的 KVTransfer 留存(holder 模式镜像
         # decode_target_evictions——准入时赋值、prefill 决策序列化、M4
-        # 核销置空;LOCAL_HIT/NO_HISTORY 恒空元组,PARTIAL 跨实例两段链
-        # 含 prefix noc_migrate + suffix remote_load 两段)。
+        # 核销置空;LOCAL_HIT/NO_HISTORY 恒空元组,REMOTE_RESTORE 全量
+        # 恢复为单段)。
         self.history_transfers = ()
         # RECOMPUTE 删除(B2):恒 0,字段保留供冻结 schema 序列化。
         self.history_recompute_tokens = 0
@@ -276,7 +276,7 @@ def _kv_transfer_rows(transfers) -> list:
     source_instance_index/target_instance_index/layer_start/layer_end)。
 
     逐出(remote_store)与恢复(remote_load/noc_migrate)共用同一行结构;
-    history_transfers 列表承载 PARTIAL 两段式恢复的逐段对象(一条 prefill
+    history_transfers 列表承载恢复/迁移的逐对象记录(一条 prefill
     决策记录,不拆两条)。纯输出字段,进 ON/OFF 对拍剥离清单。"""
     rows = []
     for transfer in transfers or ():
@@ -347,12 +347,11 @@ def _eviction_source_instances(evictions) -> tuple:
 class WscLlmOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:真实策略(关感知)在在线骨架中运行。
 
-    蓝本: _plan_wsc_llm_session_lru_recompute(wsc_llm_scheduler.py)。
-    kv_cache_policy 值域:"session_lru_recompute"(旧值,兼容读取)或
-    "session_lru_tiered"(B2 三态冷热管理:两段式 LRU 逐出 + 远端池
-    恢复;行为上新 KV 管理器唯一,无档位分支)。拓扑 / 静态路由 /
-    KV 账本在 __init__ 一次性构建,运行期策略输入全部来自这些 Python
-    账本(关感知)。
+    离线事件循环蓝本已随 2026-09-24 只在线化删除,本类是在线策略的
+    唯一实现。kv_cache_policy 值域:"session_lru_tiered"(session 级
+    二态冷热管理:整体 LRU 逐出 + 远端池全量恢复;行为上新 KV 管理器
+    唯一,无档位分支)。拓扑 / 静态路由 / KV 账本在 __init__ 一次性构建,
+    运行期策略输入全部来自这些 Python 账本(关感知)。
     """
 
     def __init__(self, *, manifest, config, graph, digest_sink=None,
@@ -378,12 +377,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         )
         if mode != "strategy":
             raise ValueError("WscLlmOnlineScheduler requires mode == 'strategy'")
-        if config.kv_cache_policy not in ("session_lru_recompute",
-                                          "session_lru_tiered"):
+        if config.kv_cache_policy != "session_lru_tiered":
             raise ValueError(
                 "strategy scheduler supports kv_cache_policy "
-                "'session_lru_recompute' or 'session_lru_tiered', got "
-                "{!r}".format(config.kv_cache_policy))
+                "'session_lru_tiered', got {!r}".format(
+                    config.kv_cache_policy))
         self.graph = graph  # GraphBatchBuilder(与 replay 路径共用)
 
         # 蓝图 :1682-1683:拓扑 + 静态 PD 路由(离线同参;alpha 调参旋钮与
@@ -493,10 +491,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # (prefill_chunks>0;§3.6 P 侧逐 chunk 不拼,退化列车);两类字段
         # 互斥(无混合列车)。
         # M3 流式落盘(2026-08-23,批次B 移植自 sh_3.0 母本):提供
-        # train_ledger_sink 时行即写即弃,不驻留本列表;缺省 None = 兼容
-        # 旧路径(行仍缓冲)。
+        # train_ledger_sink 时行即写即弃;缺省 None(嵌入/测试)行即弃,
+        # 无驻留缓冲。
         self.train_ledger_sink = train_ledger_sink
-        self.train_ledger_rows = []
         # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
         # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代;0 = 不设限。
         # 交付默认 = 8(sh_1.0 母本 2026-08-22 §7.4 A2 对拍裁决:无上限
@@ -1006,11 +1003,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         }
         if first_step:
             ledger_row["first_step"] = True
-        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省缓冲。
+        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省行即弃。
         if self.train_ledger_sink is not None:
             self.train_ledger_sink(ledger_row)
-        else:
-            self.train_ledger_rows.append(ledger_row)
 
     def _emit_train_first_step(self, state, plan, train_plan,
                                tick: int) -> None:
@@ -1390,14 +1385,14 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         if not reservation.admitted:  # :1776-1782
             # 准入预占净额修正(2026-09-06):全量预约把"本会话尚未迁走的
             # 旧 KV"与"终态全量"重复计入 decode 实例(super-linear 记账,
-            # 超长会话在队列尾部永久 deep-gap)。仅当旧 KV 确实驻留
-            # (B2 三态:LOCAL 或 PARTIAL)于 decode 目标(它稍后被本流程
-            # 的 prepare_history 迁走)时,改按净额 max(0, 终态−旧本地
-            # 驻留)重试;否则维持现状全量语义。credit 取本地账面
-            # local_shard_bytes(PARTIAL 只占前缀,远端部分不占 decode HBM)。
+            # 超长会话在队列尾部永久 deep-gap)。仅当旧 KV 确实完整驻留
+            # (LOCAL)于 decode 目标(它稍后被本流程的 prepare_history
+            # 迁走)时,改按净额 max(0, 终态−旧本地驻留)重试;否则维持
+            # 现状全量语义。credit 取本地账面 local_shard_bytes(LOCAL
+            # 单态下即全量向量)。
             snap = self.kv_manager.session_snapshot(runtime.session_id)
             if (snap is not None
-                    and snap.location in (LOCAL_HBM, PARTIAL_HBM_REMOTE)
+                    and snap.location == LOCAL_HBM
                     and snap.instance_index == decode_instance):
                 credit = tuple(snap.local_shard_bytes)
                 net_shards = tuple(
@@ -1422,8 +1417,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 if not reservation.admitted:
                     # 净额仍失败:两次尝试的逐出都是真实 mutation,epoch
                     # 唤醒必须合并覆盖(丢第一次会楔死等待重试的准入)。
-                    # B2 三态:逐出为 remote_store KVTransfer,受害实例取
-                    # source_instance_index(suffix/full 两段式同款)。
+                    # 逐出为 remote_store KVTransfer,受害实例取
+                    # source_instance_index(整会话逐出同款)。
                     if full_attempt_evictions or reservation.evictions:
                         self._note_capacity_change(
                             decode_instance,
@@ -1505,9 +1500,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         runtime.history_action = decision.action  # :1809
         runtime.history_source_instance_index = decision.source_instance_index  # :1810
         runtime.history_transfer_bytes = decision.transfer_bytes  # :1811
-        # B2 三态:留存恢复/迁移 KVTransfer 逐段对象(PARTIAL 跨实例两段
-        # 链 = prefix noc_migrate + suffix remote_load;local_hit/ABSENT
-        # 恒空元组),供 prefill 决策 history_transfers 序列化。
+        # 留存恢复/迁移 KVTransfer 对象(REMOTE_RESTORE 全量恢复为单段;
+        # local_hit/ABSENT 恒空元组),供 prefill 决策 history_transfers
+        # 序列化。
         runtime.history_transfers = decision.transfers
         runtime.history_recompute_tokens = 0  # RECOMPUTE 删除(B2)
         growth = self.kv_manager.grow_prefill(  # :1826-1831
@@ -1671,15 +1666,16 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                 "history_transfer_bytes": runtime.history_transfer_bytes,
                 "history_recompute_tokens": 0,
                 # ---- B2 三态决策日志契约(契约 §3;纯输出字段) ----
-                # 准入时点会话历史位置(三态映射)与驻留前缀层数。
+                # 准入时点会话历史位置(二态 local_hbm|remote_memory)与
+                # 驻留层数(model_layers|0)。
                 "history_location_before": runtime.history_location_before,
                 "history_location_before_instance_index": (
                     None if runtime.history_location_before is None
                     else runtime.history_source_instance_index),
                 "history_resident_prefix_layers":
                     runtime.history_resident_prefix_layers,
-                # 恢复/迁移逐段对象:PARTIAL 两段式恢复(prefix noc_migrate +
-                # suffix remote_load)在同一条 prefill 记录内逐段承载。
+                # 恢复/迁移对象:REMOTE_RESTORE 全量恢复(单段)在同一条
+                # prefill 记录内承载。
                 "history_transfers": _kv_transfer_rows(
                     runtime.history_transfers),
                 "transfer_hop_bytes": [
@@ -1746,12 +1742,10 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             "prefill_chunks": prefill_chunks,
             "pass_spans": prefill_chunks,
         }
-        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省缓冲
+        # M3 流式落盘:提供 train_ledger_sink 时行即写即弃;缺省行即弃
         #(P 侧退化列车行,字段与改前一致)。
         if self.train_ledger_sink is not None:
             self.train_ledger_sink(ledger_row)
-        else:
-            self.train_ledger_rows.append(ledger_row)
 
     # ------------------------------------------------------------- 助手 --
 
@@ -1760,10 +1754,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         与 replay 路径同构;history_action 等 KV 决策字段在准入时已落账本。
 
         B3 三态发射(2026-09-06):补 builder 消费的发射面字段——
-        history_transfers(恢复/迁移 KVTransfer 逐段对象,PARTIAL 两段链
-        同批承载)、history_evictions/prefill_evictions(分账逐出段,
+        history_transfers(恢复/迁移 KVTransfer 对象,REMOTE_RESTORE 单段
+        承载)、history_evictions/prefill_evictions(分账逐出段,
         触发门口径不同)、history_location_before/history_resident_
-        prefix_layers(pending 门位置对账 + PARTIAL 层段拆分界)。
+        prefix_layers(pending 门位置对账;二态取值 local_hbm|remote_memory
+        与 model_layers|0)。
         """
         return {
             "request_id": runtime.request_id,
@@ -1886,9 +1881,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             raise RuntimeError(
                 "strategy run ended with unretired completion gates: {!r}"
                 .format(sorted(self.graph.completion_gates)))
-        # B3 发射账本结束审计:跨请求 history 门/延迟位置/partial 流水
-        # 信息/prefill 段块末全部清空(每个会话终态 retire、每个请求
-        # 完成核销后不应有残留)。
+        # B3 发射账本结束审计:跨请求 history 门/延迟位置/prefill 段块末
+        # 全部清空(每个会话终态 retire、每个请求完成核销后不应有残留)。
         if (self.graph.pending_history
                 or self.graph.deferred_session_locations
                 or self.graph.pending_request_by_session):
@@ -1898,13 +1892,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                     sorted(self.graph.pending_history),
                     sorted(self.graph.deferred_session_locations),
                     sorted(self.graph.pending_request_by_session)))
-        if (self.graph._partial_first_chunk
-                or self.graph._prefill_segment_ends
+        if (self.graph._prefill_segment_ends
                 or self.graph._action_sequence):
             raise RuntimeError(
                 "strategy run ended with per-request emission ledgers: "
-                "partial={!r} segments={!r} actions={!r}".format(
-                    sorted(self.graph._partial_first_chunk),
+                "segments={!r} actions={!r}".format(
                     sorted(self.graph._prefill_segment_ends),
                     sorted(self.graph._action_sequence)))
         self.kv_manager.assert_final_state()

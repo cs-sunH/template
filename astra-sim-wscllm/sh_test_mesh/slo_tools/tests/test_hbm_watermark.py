@@ -992,6 +992,31 @@ class TrustTierJournalTests(unittest.TestCase):
         self.assertEqual(summary["trust_tier"], "lifecycle_replay_exact")
         self.assertEqual(summary["violation_events"], 0)
 
+    def test_lifecycle_when_checksum_ranks_block_missing(self):
+        """checksum 在场但 ranks 块缺失 → 降 lifecycle，不得授 certified。
+
+        终态对账门（重放终态==证书终态 + 逐 rank 容量认证）以 ranks 块
+        非空为前提；块缺失时对账未执行，即使 checks 四项全 true 也属
+        fail-closed 降级，不出正式判决层。
+        """
+        rows = [
+            journal_row(0, 0, 0, 0, 1000, d_weight=300),
+            journal_row(1, 10, 0, 0, 1000, weight=300, d_resident=100),
+            journal_row(2, 20, 0, 0, 1000, weight=300, resident=100,
+                        d_resident=-100),
+        ]
+        ranks_final = {
+            "0": {"capacity_bytes": 1000, "weight": 300, "resident": 0,
+                  "reserved": 0, "physical": 300},
+        }
+        checksum = default_checksum(rows, ranks_final)
+        del checksum["ranks"]
+        run_dir = self._fixture_with_journal("noranks", rows, checksum)
+        proc = run_tool(run_dir)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        summary = json.loads((run_dir / "summary.json").read_text())
+        self.assertEqual(summary["trust_tier"], "lifecycle_replay_exact")
+
     def test_journal_sha_mismatch_fails_closed(self):
         rows = [journal_row(0, 0, 0, 0, 1000, d_weight=300)]
         checksum = default_checksum(

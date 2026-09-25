@@ -379,17 +379,6 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     return ordered[index]
 
 
-def percentile_from_sorted(sorted_values: Sequence[int], p: float) -> int:
-    n = len(sorted_values)
-    if n == 0:
-        fail("分位数计算：样本为空")
-    if not 0.0 < p <= 1.0:
-        fail(f"分位数 p 非法：{p}")
-    rank = math.ceil(p * n)
-    index = min(max(rank - 1, 0), n - 1)
-    return sorted_values[index]
-
-
 # ---------------------------------------------------------------------------
 # 有界内存排序（A4，2026-08-29）
 # ---------------------------------------------------------------------------
