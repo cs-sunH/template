@@ -40,8 +40,11 @@ online entry must parse its own family explicitly:
                         The producer only writes the thread-safe bounded
                         ingress command queue (合同②); the decision bridge
                         stays the decision channel only.
-  --bridge-dir          reserved for the step-1-7 decision bridge; parsed and
-                        stored but unused in step 1-2.
+  --bridge-dir          required in online mode (missing = hard error at the
+                        entry, main_online.cc): directory of the step-1-7
+                        decision bridge; ensure_bridge_dir prepares it before
+                        the Python side starts and FileDecisionBridge is
+                        constructed on it for the run lifetime.
   --bridge-timeout-ms   optional decision-bridge response-wait poll timeout
                         in milliseconds (0 = wait forever, the frozen
                         default). When > 0, a Python decision side stalled

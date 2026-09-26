@@ -9,8 +9,10 @@
   * trace_config：layers=1、hidden_size=50、bytes_per_elem=1 →
     COEF = 2·1·50·1 = 100 B/token（实例合计）；
   * hardware 容量档 test-64b = 1000 B/NPU × prefill_ranks 6 = 6000 B/实例；
-  * slo_params_manifest：watermark_sample_period_ns = 10 ns（B4 未推导的
-    生产 manifest 保持 null → 5,000,000 ns 临时锚点，另有专测）；
+  * slo_params_manifest：watermark_sample_period_ns = 10 ns（生产 manifest
+    已填推导值 5,000,000 ns 且不得回退 null——test_slo_contract.
+    test_repo_manifest_params_filled_b4_frozen 钉住；null→5,000,000 ns
+    临时锚点语义仅存于合成 fixture 路径，另有专测）；
     watermark_series_row_budget = 5,000,000（P1-④ 绘图行预算，另有小预算
     专测）。
 
@@ -830,10 +832,12 @@ class UnitHelperTests(unittest.TestCase):
             "evict_bytes,violation_events,upper_bound_peak_occupancy_bytes")
 
     def test_repo_variants_registered(self):
+        # 2026-09-25 注册批：astra-sim-face-LRU 入表（映射复制 face 条目，
+        # 见 hbm_watermark.REPO_VARIANTS 与 plan_materializer.REPO_VARIANT）。
         self.assertEqual(
             sorted(hw.REPO_VARIANTS),
-            ["astra-sim-face", "astra-sim-sh_1.0", "astra-sim-sh_2.0",
-             "astra-sim-sh_3.0", "astra-sim-wscllm"])
+            ["astra-sim-face", "astra-sim-face-LRU", "astra-sim-sh_1.0",
+             "astra-sim-sh_2.0", "astra-sim-sh_3.0", "astra-sim-wscllm"])
 
     def test_load_bucket_ns_null_anchor(self):
         manifest = {"params": {"watermark_sample_period_ns": {"value": None}}}
@@ -1045,7 +1049,7 @@ class TrustTierJournalTests(unittest.TestCase):
         run_dir = self._fixture_with_journal(
             "hard", rows, default_checksum(rows, ranks_final),
             npu_bytes=10000)
-        # num_heads=3（基础 fixture 为 2）：三 KV rank 权重不均。
+        # num_heads=5（基础 fixture 为 2）：前五 KV rank 各持 1 头、权重不均。
         (run_dir / "trace_config.csv").write_text(
             "kind,key,value,group_name,pg_name,ranks,description\n"
             "config,layers,1,,,,synthetic\n"
@@ -1619,7 +1623,9 @@ class FaceTieredUpgradeTests(unittest.TestCase):
 class AdmissionProbeSkipTests(unittest.TestCase):
     """P0-1/P1 probe 观测行适配（收尾批 2026-09-01）：
     decode_admission_probe / prefill_admission_probe 行跳过且计数审计
-    （stdout 打印"跳过 N 条"，不静默）；其余未知 kind 依旧 fail-closed。
+    （stderr 打印"跳过 N 条"，不静默；stdout 保持 CSV 流纯净——`-o -`
+    时 series 直接写 stdout，审计行混入会破坏下游解析）；其余未知 kind
+    依旧 fail-closed。
     """
 
     @staticmethod
@@ -1652,7 +1658,8 @@ class AdmissionProbeSkipTests(unittest.TestCase):
                       records=records, token_requests=tokens)
         proc = run_tool(run_dir)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("跳过 2 条 admission_probe 观测行", proc.stdout)
+        self.assertIn("跳过 2 条 admission_probe 观测行", proc.stderr)
+        self.assertNotIn("admission_probe 观测行", proc.stdout)
         # 无 probe 行时不打印审计行(噪声零增量)——基线场景自证。
         records2, tokens2 = base_handcalc_records()
         run_dir2 = make_run_dir("probe2")
@@ -1660,6 +1667,7 @@ class AdmissionProbeSkipTests(unittest.TestCase):
                       records=records2, token_requests=tokens2)
         proc2 = run_tool(run_dir2)
         self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        self.assertNotIn("admission_probe 观测行", proc2.stderr)
         self.assertNotIn("admission_probe 观测行", proc2.stdout)
 
     def test_unknown_kind_still_fail_closed(self):

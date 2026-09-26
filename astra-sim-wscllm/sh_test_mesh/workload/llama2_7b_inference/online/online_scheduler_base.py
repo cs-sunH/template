@@ -87,9 +87,6 @@ class PropagatingTailTracker:
         """显式覆盖某来源上限(测试/运维;必须为正整数)。"""
         self._require(name)["limit"] = int(limit)
 
-    def limit(self, name) -> int:
-        return self._require(name)["limit"]
-
     def _require(self, name) -> dict:
         source = self._sources.get(name)
         if source is None:
@@ -508,11 +505,6 @@ class OnlineSchedulerBase:
         """记录本决策批经索引/队列直接访问的条目数(到期事件 + 受影响
         条目;非全量扫描)。验收:每批计数与总 request 数无关。"""
         self._profile_batch["scanned_entries"] += count
-
-    def _profile_full_scan(self, count: int = 1) -> None:
-        """记录本决策批的 O(总规模) 全量扫描条目数。§7.3 之后应恒为 0;
-        任何 > 0 都意味着索引队列被绕过(profile 审计 fail-closed)。"""
-        self._profile_batch["full_scan_entries"] += count
 
     def _validate_schema(self, delta: dict) -> None:
         """schema v1 校验器(阶段 4 §7.1;原契约 §6 各条强制,契约文档已

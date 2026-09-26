@@ -441,15 +441,15 @@ void LocalMemUsageTracker::buildMemoryTimeline() {
                            current_bytes);
     peak_bytes = std::max(peak_bytes, current_bytes);
 
-    // Convert bytes to megabytes (1 MB = 1024*1024 bytes)
+    // Convert bytes to mebibytes (1 MiB = 1024*1024 bytes)
     double totalSizeMB = static_cast<double>(current_bytes) / (1024.0 * 1024.0);
     json memoryTimelineEvent = {
-        {"name", "GPU Memory Usage (MB)"},
+        {"name", "GPU Memory Usage (MiB)"},
         {"cat", "GPU Memory"},
         {"ph", "C"},
         {"ts", 1e-3 * tick},
         {"pid", this->sysId + 2000000ul},
-        {"args", json{{"Memory_MB", totalSizeMB}}}};
+        {"args", json{{"Memory_MiB", totalSizeMB}}}};
     this->append_trace_event(memoryTimelineEvent);
   }
   this->peak_memory_usage_ = peak_bytes;
@@ -577,7 +577,7 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
     if (displayName.length() > 20) {
       displayName = displayName.substr(0, 17) + "...";
     }
-    displayName += " (" + std::to_string(sizeMB).substr(0, 5) + " MB)";
+    displayName += " (" + std::to_string(sizeMB).substr(0, 5) + " MiB)";
 
     json heatmapEvent = {
       {"name", displayName},
@@ -591,7 +591,7 @@ void LocalMemUsageTracker::buildTensorLifetimeHeatmap() {
       {"args", json{
         {"tensor_name", tensorName},
         {"size_bytes", size},
-        {"size_mb", sizeMB},
+        {"size_mib", sizeMB},
         {"lifetime_ns", duration},
         {"position", heapPos}
       }}
@@ -631,16 +631,16 @@ std::tuple<float, std::string> LocalMemUsageTracker::getPeakMemUsageFormatted() 
       unit = "B";
   } else if (peakMemUsage < 1024ull * 1024) {
       value = static_cast<float>(peakMemUsage) / 1024.0f;
-      unit = "KB";
+      unit = "KiB";
   } else if (peakMemUsage < 1024ull * 1024 * 1024) {
       value = static_cast<float>(peakMemUsage) / (1024.0f * 1024);
-      unit = "MB";
+      unit = "MiB";
   } else if (peakMemUsage < 1024ull * 1024 * 1024 * 1024) {
       value = static_cast<float>(peakMemUsage) / (1024.0f * 1024 * 1024);
-      unit = "GB";
+      unit = "GiB";
   } else {
       value = static_cast<float>(peakMemUsage) / (1024.0f * 1024 * 1024 * 1024);
-      unit = "TB";
+      unit = "TiB";
   }
 
   return std::make_tuple(value, unit);

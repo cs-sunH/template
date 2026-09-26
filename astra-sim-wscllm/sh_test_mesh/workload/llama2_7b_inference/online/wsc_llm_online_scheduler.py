@@ -436,8 +436,15 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 交付默认 = 8(sh_1.0 母本 2026-08-22 §7.4 A2 对拍裁决:无上限
         # TTFT -67.3%,16 仍 -19.1%,8 全指标 ≤1.3%——"固定 T_max 为使
         # 位移 ≤5% 的最大值";原则 1 优先于节点数)。
-        self._train_max_iter = int(
-            os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        train_max_iter_env = os.environ.get("SH_TRAIN_MAX_ITER", "8")
+        # low 修复(2026-09-26):空串此前经 `or 0` 静默解释为 0=不设限——
+        # 即上文 A2 裁决否决的无上限形态;对空串与其余非法词法同通道
+        # 构造期 fail-fast(全空白串 int() 本就会抛,此处一并覆盖)。
+        if not train_max_iter_env.strip():
+            raise ValueError(
+                "SH_TRAIN_MAX_ITER must be a non-negative integer "
+                "(0 = unlimited), got {!r}".format(train_max_iter_env))
+        self._train_max_iter = int(train_max_iter_env)
         # low 修复(2026-09-24):负值此前无构造期校验,进入 _plan_train 后
         # `iterations > 负数` 恒真、iterations 被截为负值,要到发射期才以
         # 难懂错误暴露——改 fail-fast。非整数字面值在 int() 已抛

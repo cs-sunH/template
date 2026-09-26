@@ -140,14 +140,6 @@ struct Recorder {
         auto it = count_of.find({rank, node});
         return it == count_of.end() ? 0 : it->second;
     }
-    bool rank_touched(int rank) const {
-        for (const auto& rec : order) {
-            if (std::get<0>(rec) == rank) {
-                return true;
-            }
-        }
-        return false;
-    }
 } g_recorder;
 
 void terminal_hook(void* ctx, int rank, uint64_t node_id, const char*,

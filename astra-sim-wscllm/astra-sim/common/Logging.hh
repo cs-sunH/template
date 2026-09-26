@@ -6,7 +6,6 @@
 #include "spdlog_setup/conf.h"
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace AstraSim {

@@ -843,9 +843,12 @@ pytest 或直跑）。
 - `astra-sim/workload/execution_driven/`：在线机制层（C++）
 - `sh_test_mesh/workload/llama2_7b_inference/online/`：在线调度器/构图器/服务层（Python）
 - `.../online/verify/`：对账与验证工具
-- `sh_test_mesh/run_scripts/`：全部 runner 脚本
+- `sh_test_mesh/run_scripts/`：全部 runner 脚本 + Python 单测统一批量入口
+  `run_python_unit_tests.sh`（逐测试根 pytest 汇总退出码，任一根非 0 即整体非 0）
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
-- `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
+- `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值；2026-09-25 起
+每条目为「值+证据+理由+consumers 读者登记」四要素、参数 value 未动——本仓
+审计注记暂领先姊妹仓冻结基线）+ tests；纯离线只读，详见目录内 README.md）
 - `sh_test_mesh/tests/` + workload 根：pytest（2026-09-24 修复后基线：workload
   `llama2_7b_inference/`（含 online/）= 126 passed（另 7 subtests passed）；
   `sh_test_mesh/tests/` =

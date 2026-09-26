@@ -55,14 +55,6 @@ class Topology {
     [[nodiscard]] int get_npus_count() const noexcept;
 
     /**
-     * Get the number of devices in the topology.
-     * Device includes non-NPU devices such as switches.
-     *
-     * @return number of devices in the topology
-     */
-    [[nodiscard]] int get_devices_count() const noexcept;
-
-    /**
      * Get the number of network dimensions.
      *
      * @return number of network dimensions

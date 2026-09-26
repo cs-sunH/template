@@ -133,7 +133,7 @@ def load_checked_in_config() -> object:
     return load_face_trace_config(config_csv)
 
 
-def _load_edited_config(tag, edit, *, source_name="trace_config.csv"):
+def _load_edited_config(tag, edit):
     """加载经逐行编辑的 trace 配置副本(D1 loader 三态/坏值用例)。
 
     edit(line) 返回替换行,返回 None 表示删除该行;request_queue_csv 行
@@ -143,7 +143,7 @@ def _load_edited_config(tag, edit, *, source_name="trace_config.csv"):
     queue_path = Path(_FIXTURE_DIR.name) / "synthetic_request_queue.csv"
     _write_synthetic_queue(queue_path)
     config_csv = Path(_FIXTURE_DIR.name) / f"synthetic_trace_config_{tag}.csv"
-    lines = (Path(__file__).parent / source_name).read_text(
+    lines = (Path(__file__).parent / "trace_config.csv").read_text(
         encoding="utf-8").splitlines(keepends=True)
     out = []
     for line in lines:
@@ -257,7 +257,8 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(config.trace_granularity, "request_aggregated")
         self.assertEqual(config.prefill_chunk_size, 512)
         # B3(2026-09-06):trace_config.csv 实际换值 session_lru_tiered
-        # (契约 §8 交付物;值域内旧值仍可读,见
+        # (契约 §8 交付物;2026-09-25 值域单值化——旧值别名与未知值一律
+        # fail-closed 拒绝,见
         # test_kv_cache_policy_accepts_session_lru_tiered)。
         self.assertEqual(config.kv_cache_policy, "session_lru_tiered")
         self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)

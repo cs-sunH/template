@@ -35,7 +35,6 @@ class ResolvedHardware:
     capacity_profile: str
     slug: str
     label: str
-    paper_case: str
     mesh_rows: int
     mesh_cols: int
     topology_by_network_dimension: tuple[str, ...]
@@ -52,10 +51,6 @@ class ResolvedHardware:
     @property
     def npus_count(self) -> int:
         return self.mesh_rows * self.mesh_cols
-
-    @property
-    def mesh_label(self) -> str:
-        return f"{self.mesh_rows}x{self.mesh_cols}"
 
     @property
     def remote_memory_runtime_label(self) -> str:
@@ -165,7 +160,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         raise ValueError("Hardware configuration.schema-version must be 1")
     slug = _require_string(data, "slug", "Hardware configuration")
     label = _require_string(data, "label", "Hardware configuration")
-    paper_case = _require_string(data, "paper-case", "Hardware configuration")
 
     mesh = _require_object(data, "mesh", "Hardware configuration")
     _require_exact_keys(mesh, {"rows", "columns", "topology-by-network-dimension"}, "Hardware configuration.mesh")
@@ -255,7 +249,6 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
         capacity_profile=capacity_profile,
         slug=slug,
         label=f"{label} / {profile_label}",
-        paper_case=paper_case,
         mesh_rows=rows,
         mesh_cols=columns,
         topology_by_network_dimension=tuple(topology),

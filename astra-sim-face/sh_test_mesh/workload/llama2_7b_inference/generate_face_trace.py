@@ -94,10 +94,6 @@ PATH_CONFIG_KEYS = {
     "hardware_config",
     "system_template",
 }
-OPERATOR_GRANULARITY = (
-    "rmsnorm,qkv,qk,scale_mask,softmax,av,out_proj,residual,"
-    "mlp_gate_up,swiglu,mlp_down,logits"
-)
 
 
 @dataclass(frozen=True)

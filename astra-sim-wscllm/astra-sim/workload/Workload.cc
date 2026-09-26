@@ -7,7 +7,6 @@ LICENSE file in the root directory of this source tree.
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/IntData.hh"
-#include "astra-sim/system/MemEventHandlerData.hh"
 #include "astra-sim/system/RecvPacketEventHandlerData.hh"
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
@@ -87,17 +86,10 @@ Workload::Workload(Sys* sys, string et_filename, string comm_group_filename,
         }
         this->et_feeder = new ETFeeder(workload_filename);
     }
-    // Step 1-4: the GraphSource is the sole dependency-state owner. Static
-    // mode wraps the ETFeeder + DependancyResolver in the adapter
-    // (ETFeederGraphSource) -- byte-for-byte the pre-phase-1 resolver calls;
-    // online mode received an injected NodeStore-backed source at Sys
-    // creation and must never fall back to an ETFeeder.
-    if (this->graph_source_ == nullptr &&
-        execution_mode == ExecutionDriven::ExecutionMode::Static) {
-        this->graph_source_ =
-            std::make_shared<ExecutionDriven::ETFeederGraphSource>(
-                this->et_feeder, sys->id);
-    }
+    // Step 1-4: the GraphSource is the sole dependency-state owner and is
+    // injected at Sys creation (NodeStore-backed source, online mode only);
+    // the static ETFeeder adapter (ETFeederGraphSource) was retired with the
+    // offline static path, so graph_source_ stays null in the static arm.
     this->comm_groups.clear();
     // TODO: parametrize the number of available hardware resources
     this->hw_resource = new HardwareResource(sys->id, execution_mode);
@@ -327,8 +319,8 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
     // R2 (2026-08-29) anchor fast path: online mode consults the sparse
     // NodeView flag set by the B-1.5 registration hook; unanchored nodes
     // (the overwhelming majority) skip the two-level hash lookup entirely.
-    // Static/ET mode keeps the unconditional call -- ETFeederGraphSource
-    // views leave the flags false, and the static manifest anchor
+    // The non-online arm keeps the unconditional call -- the retired static
+    // path had no anchor registration, and the static manifest anchor
     // semantics are a red line.
     if (MetricCollector::instance().enabled() &&
         (execution_mode_ != ExecutionDriven::ExecutionMode::Online ||
@@ -340,43 +332,42 @@ void Workload::issue(const ExecutionDriven::NodeView& node) {
         this->local_mem_usage_tracker->recordStart(et_node,
                                                    Sys::boostedTick());
     }
-    if (sys->replay_only) {
-        issue_replay(node);
-    } else {
-        if ((node.node_type == ChakraNodeType::MEM_LOAD_NODE) ||
-            (node.node_type == ChakraNodeType::MEM_STORE_NODE)) {
-            // 2026-09-24 (face A.2 alignment): the remote memory backend was
-            // removed; MEM nodes have no issue path and must fail loudly
-            // like the old NO_MEMORY_EXPANSION exit(1) did.
-            throw std::runtime_error(
-                "MEM_LOAD/MEM_STORE nodes require the remote memory "
-                "backend, which this repository removes (2026-09-24)");
-        } else if (node.node_type == ChakraNodeType::COMP_NODE) {
-            if (!this->sys->roofline_enabled) {
+    // Path-2 removal follow-up (2026-09-26): the sys->replay_only dispatch
+    // branch was deleted with the replay route; the node-type switch below
+    // is the sole dispatch.
+    if ((node.node_type == ChakraNodeType::MEM_LOAD_NODE) ||
+        (node.node_type == ChakraNodeType::MEM_STORE_NODE)) {
+        // 2026-09-24 (face A.2 alignment): the remote memory backend was
+        // removed; MEM nodes have no issue path and must fail loudly
+        // like the old NO_MEMORY_EXPANSION exit(1) did.
+        throw std::runtime_error(
+            "MEM_LOAD/MEM_STORE nodes require the remote memory "
+            "backend, which this repository removes (2026-09-24)");
+    } else if (node.node_type == ChakraNodeType::COMP_NODE) {
+        if (!this->sys->roofline_enabled) {
+            issue_replay(node);
+        } else {
+            if (node.is_cpu_op) {
+                // comp node on cpu
+                // should only appears in real system trace and should run
+                // with replay.
                 issue_replay(node);
             } else {
-                if (node.is_cpu_op) {
-                    // comp node on cpu
-                    // should only appears in real system trace and should run
-                    // with replay.
-                    issue_replay(node);
-                } else {
-                    // comp node on gpu
-                    issue_comp(node);
-                }
+                // comp node on gpu
+                issue_comp(node);
             }
-        } else if (node.node_type == ChakraNodeType::COMM_COLL_NODE ||
-                   node.node_type == ChakraNodeType::COMM_SEND_NODE ||
-                   node.node_type == ChakraNodeType::COMM_RECV_NODE) {
-            issue_comm(node);
-        } else if (node.node_type == ChakraNodeType::INVALID_NODE) {
-            skip_invalid(node);
-        } else if (node.node_type == ChakraNodeType::METADATA_NODE) {
-            issue_metadata(node);
-        } else {
-            logger->critical("Unknown node type");
-            exit(EXIT_FAILURE);
         }
+    } else if (node.node_type == ChakraNodeType::COMM_COLL_NODE ||
+               node.node_type == ChakraNodeType::COMM_SEND_NODE ||
+               node.node_type == ChakraNodeType::COMM_RECV_NODE) {
+        issue_comm(node);
+    } else if (node.node_type == ChakraNodeType::INVALID_NODE) {
+        skip_invalid(node);
+    } else if (node.node_type == ChakraNodeType::METADATA_NODE) {
+        issue_metadata(node);
+    } else {
+        logger->critical("Unknown node type");
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -638,10 +629,7 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
-        sys->register_event(fp, EventType::General, nullptr,
-                            // chakra runtimes are in microseconds and we
-                            // should convert it into nanoseconds
-                            runtime);
+        sys->register_event(fp, EventType::General, nullptr, runtime);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else {
         throw std::runtime_error("Unsupported collective comm type");

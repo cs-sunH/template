@@ -519,6 +519,19 @@ void Workload::issue_local_hbm_kv_restore(
         MetricCollector::instance().on_local_hbm_restore_issue(sys->id,
                                                                tensor_size);
     }
+    // Zero-byte restore guard: a tensor_size==0 restore never creates an HBM
+    // job (the same "bytes == 0 不建作业" tolerance the comm/pool endpoints
+    // have, and the same behavior the closed-form fallback below already
+    // gives). Both configurations complete it as a pure-latency General
+    // event, so the N-way model's fail-closed zero-byte rejection stays a
+    // wiring bug, never a data property.
+    if (tensor_size == 0) {
+        sys->register_event(
+            this, EventType::General, wlhd,
+            std::max<uint64_t>(
+                1, static_cast<uint64_t>(sys->local_mem_latency)));
+        return;
+    }
     // Path-2 removal (2026-08-18): the replay-only instant (1ns) HBM restore
     // completion branch was deleted with the replay route; strategy/static
     // keep the real LocalHbmBandwidthModel DMA physics.
@@ -649,7 +662,11 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
             std::max(remaining_transfer_time, compute_elapsed_time);
     }
 
-    uint64_t runtime = static_cast<uint64_t>(elapsed_time * 1e9);  // sec -> ns
+    // sec -> ns, rounded up with a 1ns floor -- the same conversion
+    // convention as the restore closed-form fallback above and the HBM
+    // model's fluid transition scheduler (never a 0ns event).
+    uint64_t runtime = std::max<uint64_t>(
+        1, static_cast<uint64_t>(std::ceil(elapsed_time * 1e9)));
     // Step 1-8: online execution-driven calibration. The online GraphBatch
     // (graph_batch_builder.py) carries planner-LUT-aligned durations so the
     // engine timeline is order-isomorphic to the Python decision sequence
@@ -817,8 +834,9 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
         collective_comm_node_id_map[fp->my_id] = node.global_id;
         collective_comm_wrapper_map[fp->my_id] = fp;
         sys->register_event(fp, EventType::General, nullptr,
-                            // chakra runtimes are in microseconds and we
-                            // should convert it into nanoseconds
+                            // chakra runtimes are in microseconds and the
+                            // GraphSource adapter already converted them into
+                            // nanoseconds
                             runtime);
         fp->set_notifier(this, EventType::CollectiveCommunicationFinished);
     } else {

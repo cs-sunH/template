@@ -43,7 +43,6 @@ class PacketBundle : public Callable {
     BaseStream* stream;
     MemBus::Transmition transmition;
     Tick delay;
-    Tick creation_time;
 };
 
 }  // namespace AstraSim

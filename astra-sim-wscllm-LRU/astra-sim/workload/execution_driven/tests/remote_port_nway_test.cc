@@ -82,7 +82,17 @@ Sys::register_event 在确切 Tick 交付（deferred flush 打开：物理上下
   锚 3  1B、6B/ns：fluid finish = 100 + 1/6 ns（约 100.167，内部服务可小于
         1ns），callback 在下一整数 Tick +101——两种时间不得混用。
 
-已知分歧（编写时对当前工作树后端的代码走读结论；本测试按纪律不自跑）：
+已知分歧处置（2026-09-25 更新）：下述 join-at-boundary 分歧已在后端按方案
+§3.1 修复——advance_port_continuous 先快照“进入本子步前已活跃”的流集合
+served_streams（AnalyticalRemoteMemory.cc:586-597，其中 :589-590 注释点名
+“RemotePortNwayTest S2/S4 的规格即此语义”），份额仅在 streams_before>0 且
+elapsed>0 时产生（:604），流耗尽循环只对 served_streams 快照扣减
+（:647-652）；恰在边界 latency-ready 的流不再被扣本子步份额。因此 S2/S4
+现为有效回归门：后端若回退为“先翻活跃流、再对全活跃集合扣份”，两场景即
+应 FAIL，不得再以“已知分歧”叙事吸收回归。
+
+分歧原始记录（编写时 2026-09-24 对当时后端的代码走读结论；本测试按纪律不
+自跑；所引行号与语句在当时工作树成立，现已不存在）：
 方案 §3.1 要求 latency 到期才进传输流集合。wscllm-LRU 后端 advance_port_
 continuous 先在子步边界把 latency-ready 事务翻成活跃流
 （AnalyticalRemoteMemory.cc:589-608），随后同一子步的流耗尽循环对"所有"
@@ -123,16 +133,10 @@ AstraSim_Analytical_Congestion_Aware_RemotePortNwayTest）。ctest 不作为执�
 #include <astra-network-analytical/common/NetworkParser.h>
 #include <astra-network-analytical/congestion_aware/Helper.h>
 
-// ---- Private-access seam（与 remote_port_online_gate_test.cc 同一口径与
-//      说明：joint/face-LRU 已 public 的只读访问器在本仓仍 private）。本文件
-//      额外用它覆盖方案 §7 的白盒正反例：TransitionEventData（陈旧
-//      generation 注入）、transition_generation_/transition_event_pending_
-//      （generation 与变迁事件状态）。宏只作用于后端
-//      头自身的声明；其依赖（含 WorkloadLayerHandlerData.hh）已在上方按
-//      正常访问性编译，include guard 跳过。
-#define private public
+// S13/S15 白盒观测走后端公共接口：transition_generation()/
+// transition_event_pending() 只读访问器 + public TransitionEventData 注入
+// （2026-09-25 处置承诺兑现：旧 private 访问 seam 已整段删除）。
 #include <remote_memory_backend/analytical/AnalyticalRemoteMemory.hh>
-#undef private
 
 #include <unistd.h>
 
@@ -400,7 +404,6 @@ const char* kSystemJson = R"({
   "reduce-scatter-implementation": ["ring", "ring"],
   "all-to-all-implementation": ["ring", "ring"],
   "collective-optimization": "localBWAware",
-  "boost-mode": 0,
   "roofline-enabled": 1,
   "replay-only": 0,
   "track-local-mem": 0,
@@ -990,14 +993,14 @@ void scenario_s13() {
     const Tick t0 = Sys::boostedTick();
     const std::vector<Tick> ref = ref_port(6.0, 100.0, {{t0, 500}});
     issue_bytes(mem.get(), 0, 500, 13001, ref[0], "S13 500B");
-    const uint64_t gen = mem->transition_generation_;
+    const uint64_t gen = mem->transition_generation();
     expect(gen >= 1, "S13: issue registered a transition generation");
     // 反例：陈旧 generation 注入（任何 != 当前值均走无操作分支）。
     mem->call(EventType::General,
               new AnalyticalRemoteMemory::TransitionEventData(gen + 1));
-    expect(mem->transition_generation_ == gen,
+    expect(mem->transition_generation() == gen,
            "S13 stale generation: counter unchanged (no-op)");
-    expect(!mem->transition_event_pending_,
+    expect(!mem->transition_event_pending(),
            "S13 stale generation: call() consumed the payload tracking per "
            "contract");
     expect(RecorderWorkload::g_deliver_count.empty(),
@@ -1071,7 +1074,7 @@ void scenario_s15() {
                "S15 mid-flight baseline: two transactions issued (got " +
                    std::to_string(s.issued_count) + ")");
     }
-    expect(mem->transition_event_pending_,
+    expect(mem->transition_event_pending(),
            "S15 mid-flight: transition event pending");
     expect(!mem->is_drained(), "S15 mid-flight: not drained");
 
@@ -1085,7 +1088,7 @@ void scenario_s15() {
                    std::to_string(s.issued_count) + " completed=" +
                    std::to_string(s.completed_count) + ")");
     }
-    expect(!mem->transition_event_pending_,
+    expect(!mem->transition_event_pending(),
            "S15 pending transition event cancelled by shutdown");
     drain_queue();
     expect(RecorderWorkload::g_deliver_count.empty(),

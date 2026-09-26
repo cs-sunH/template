@@ -53,17 +53,18 @@ strategy 感知运行目录):
   R4 排队账本对平:运行结束 admitted/committed 层已清空(ledger.jsonl 无
      admitted/committed 条目);最后一决策边界 admitted_count == 0。
   R5 injected-unfinished 对平(sensing_query_log):末决策边界残差 = 终请求
-     decode end-barrier 控制节点(1 字节 all_reduce,无 compute、无时长;
-     最终 watch 命中时仍在途,运行结束前完成——C++ 干净退出 active=0
-     即证),断言残差非空且全部为 barrier 签名;注入峰值(节点数,跨
+     decode end-barrier 控制节点(列车迭代数字节的 all_reduce——拼 batch
+     改造后 barrier 由每请求 1 字节改为每列车 iterations 字节;无 compute、
+     无时长;最终 watch 命中时仍在途,运行结束前完成——C++ 干净退出
+     active=0 即证),断言残差非空且全部为 barrier 签名;注入峰值(节点数,跨
      rank/代求和)≤ committed 节点数(提交后逐批流入,完成时归零)。
   R6 ready 层对平(§10.1):每边界 ready(就绪可服务排队成员,策略 override
      视图)⊆ admitted(键集)且 ready ∩ issued == ∅;末决策边界 ready==0。
   R7 issued 层对平(§10.1,核心):每边界 Python issued 键集(已发射未完成;
      emit 登记、completion 核销于策略完成处理前)⊆ C++ injected-unfinished
      per_request 键集(同 delivery 同 tick 摘要);only-C++ 残差全部为
-     end-barrier 控制尾节点签名(watch 命中即报阶段完成、1 字节 all_reduce
-     尾节点仍在途的已知窗口,与 R5 同源);末决策边界 issued==0。
+     end-barrier 控制尾节点签名(watch 命中即报阶段完成、列车迭代数字节
+     all_reduce 尾节点仍在途的已知窗口,与 R5 同源);末决策边界 issued==0。
   R8 network pending/active 计数对账(§10.1):C++ 摘要内部一致(每 rank
      node_count >= in_flight_node_count + free_node_count,剩余 = 依赖未
      满足的未发射中间节点);在飞节点数(跨 rank)>= issued request 数(每
@@ -71,7 +72,9 @@ strategy 感知运行目录):
 
 八层账本口径(§10.1):admitted / committed / ready / issued / network
 pending/active 参与对平;remote FIFO 与 local HBM 为"不适用"显式占位
-(face 无远端内存、无 LocalHbmBandwidthModel),报告中列示不参与对平。
+(本仓远端内存后端与 LocalHbmBandwidthModel 均已启用——README §D/§G;
+端口为并发流体计时、无 FIFO 等待账本,对账八层亦无 HBM 作业账本条目),
+报告中列示不参与对平。
 
 退出码:0 = 对平;1 = 存在失配(报告逐项列出差异与证据)。"""
 
@@ -649,10 +652,13 @@ def main(argv=None) -> int:
         residuals = [
             entry for entry in last_row.get("injected_unfinished", [])
             if entry.get("node_count", 0) != 0]
-        # 末决策边界残差 = 最后请求 decode 的 end barrier 控制节点(1 字节
-        # all_reduce,无 compute、无时长模型;在最终 watch 命中时仍在途,
+        # 末决策边界残差 = 最后请求 decode 的 end barrier 控制节点(列车
+        # 迭代数字节的 all_reduce——拼 batch 改造后 barrier 携带 iterations
+        # 字节,C++ CommCollective 的 coll.bytes 计入 per_request.comm_bytes,
+        # 不再恒 1 字节;无 compute、无时长模型;在最终 watch 命中时仍在途,
         # 于运行结束前完成——C++ 干净退出 active=0 即证)。因此 R5a 断言:
-        # 残差非空(终请求 barrier 必然在途)且全部为 barrier 签名。
+        # 残差非空(终请求 barrier 必然在途)且全部为 barrier 签名——
+        # 签名不钉 comm_bytes(末列车迭代数 ≥1 即合法,与 R7a2 同三项口径)。
         residual_bad = []
         residual_groups = []
         for entry in residuals:
@@ -663,8 +669,7 @@ def main(argv=None) -> int:
                 group.get("stage") == "decode"
                 and group.get("node_count") == 1
                 and group.get("compute_ops") == 0
-                and group.get("estimated_remaining_ns") == 0
-                and group.get("comm_bytes") == 1)
+                and group.get("estimated_remaining_ns") == 0)
             if not signature_ok:
                 residual_bad.append(group)
         if not residual_groups:
@@ -741,8 +746,9 @@ def main(argv=None) -> int:
     # 处理前(基类 _settle_completions);C++ 摘要拍于同 delivery 的 tick-end
     # (watch 命中时已 finish 阶段节点、本批节点尚未 commit),两侧时刻对齐。
     # 反向残差 only_cpp 允许为"end-barrier 控制尾节点"已知窗口:watch 命中
-    # 即报告阶段完成(Python 已核销 issued),但每 rank 的 1 字节 all_reduce
-    # 控制节点仍在途(阶段 3 R5 同源语义)——断言残差全部为 barrier 签名
+    # 即报告阶段完成(Python 已核销 issued),但每 rank 的列车迭代数字节
+    # all_reduce 控制节点仍在途(阶段 3 R5 同源语义)——断言残差全部为
+    # barrier 签名
     # (单节点、无 compute、无时长);末边界 issued 清空。
     issued_only_python = []
     issued_residual_bad = []
@@ -969,10 +975,9 @@ def _render_report(balanced, failures, manifest_count, expected_requests,
     lines.append("| committed(GraphBatch 已提交) | Python 常驻 | 对平 R2 |")
     lines.append("| ready(就绪可服务) | Python 边界视图 | 对平 R6 |")
     lines.append("| issued(已发射未完成) | Python 常驻 | 对平 R7 |")
-    lines.append("| remote-memory FIFO | 不适用(face 无远端内存后端 FIFO) | 显式占位,无账本 |")
+    lines.append("| remote-memory FIFO | 不适用(池端口为并发流体计时,无 FIFO 等待账本;远端内存后端已启用,README §D) | 显式占位,无账本 |")
     lines.append("| network pending/active | C++ 执行事实(injected-unfinished 摘要) | 对平 R8(计数/审计) |")
-    lines.append("| local HBM job | 不适用(face 无 LocalHbmBandwidthModel,"
-                 "全仓 grep 零命中) | 显式占位,无账本 |")
+    lines.append("| local HBM job | 不适用(对账八层无 HBM 作业账本;LocalHbmBandwidthModel 已随底座启用,README §G) | 显式占位,无账本 |")
     lines.append("| completed-unreconciled | Python 常驻 | 对平 R0 |")
     lines.append("")
     if failures:

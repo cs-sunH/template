@@ -61,8 +61,11 @@ Protocol v1 (frozen rules, written into contract ②/④; phase 4 §7.1):
     the LIFETIME resp_notify read end, or EPIPE on the req_notify write,
     means the Python process is gone -> C++ aborts with a clear message.
     Because both resp ends are long-lived, "no writer yet" states no longer
-    exist mid-run and cannot be mistaken for death. A poll timeout
-    (timeout_ms > 0) aborts identically.
+    exist mid-run and cannot be mistaken for death. The one residual
+    no-writer window is startup (before Python's write-end open lands and
+    before the first byte ever crossed): EOF there is retried for a bounded
+    startup grace before the fatal verdict (wait_response_byte). A poll
+    timeout (timeout_ms > 0) aborts identically.
   - Duplicate seq idempotency: Python tracks processed request seqs and
     ack seqs separately and ignores duplicates (files are atomic, so a
     duplicate can only come from a retry).
@@ -134,7 +137,7 @@ class DecisionBridge {
                                  bool success) = 0;
 };
 
-/// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
+/// File-implementation of the v1 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
 /// waits forever (the phase-1 default).
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks
@@ -214,8 +217,12 @@ class FileDecisionBridge : public DecisionBridge {
                            const nlohmann::json& payload) const;
     /// Defect-B fix: poll + read exactly ONE byte off the long-lived
     /// resp_notify read end. read()==0 => Python's lifetime write end
-    /// closed => genuine peer death. EAGAIN (spurious wake before the
-    /// byte) re-enters the poll. Returns false only via bridge_fatal.
+    /// closed => genuine peer death -- EXCEPT before the first byte ever
+    /// crossed, where the peer's write end may simply not exist yet
+    /// (startup window); there the EOF is retried for a bounded startup
+    /// grace (kRespWriterStartupGraceMs) before the same fatal verdict.
+    /// EAGAIN (spurious wake before the byte) re-enters the poll. Returns
+    /// only via bridge_fatal or with the byte consumed.
     void wait_response_byte(uint64_t seq);
 
     std::string bridge_dir_;
@@ -225,6 +232,11 @@ class FileDecisionBridge : public DecisionBridge {
     // Defect-B fix (2026-08-16): resp_notify read end, held open for the
     // run lifetime (see open_notify). -1 until open_notify/lazy open.
     int resp_notify_fd_ = -1;
+    // Whether ANY response byte ever crossed this bridge. Writer-history
+    // proxy: once true, a writer existed, so a later EOF is unambiguous
+    // peer death; before the first byte, EOF may still be the startup
+    // no-writer window (see wait_response_byte).
+    bool resp_notify_byte_seen_ = false;
     // Mutable: write_file_atomic() is const (the phase-1 contract) but the
     // phase-6 channel accounting is a per-run observation, not bridge state.
     mutable Stats stats_;

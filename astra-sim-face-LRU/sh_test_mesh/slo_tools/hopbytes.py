@@ -212,6 +212,16 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
                         slot = _slot()
                         slot["bytes_without"] += nbytes
                         acc["bytes_without_hops"] += nbytes
+            else:
+                # 旧产物（kv_noc_hops 缺席或 shards/hops 错位）的 dict 型
+                # prefill_decode_transfer：与 prefill 分支同款兜底——bytes
+                # 计入无覆盖侧（docstring 向后兼容口径，不得静默漏计）。
+                nbytes = (transfer or {}).get("total_bytes") if isinstance(
+                    transfer, dict) else None
+                if isinstance(nbytes, int) and nbytes > 0:
+                    slot = _slot()
+                    slot["bytes_without"] += nbytes
+                    acc["bytes_without_hops"] += nbytes
 
 
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:
@@ -373,8 +383,9 @@ REPO_HOP_SOURCES: dict[str, dict] = {
     "astra-sim-wscllm": {
         "collector": collect_wscllm,
         "granularity": "instance(static_route.hop_count)",
-        "notes": "static_route 仅随 decode 决策落盘（实例级粒度）；"
-                 "历史迁移无路由计入 bytes_without_hops",
+        "notes": "decode=static_route.hop_count（实例级粒度）；B2wp9py 起 "
+                 "prefill 决策附 noc_hops（实例图最短路），history 迁移"
+                 "纳入覆盖；字段缺席 → bytes_without_hops",
     },
     "astra-sim-face": {
         "collector": collect_face,

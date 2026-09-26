@@ -95,11 +95,6 @@ class CommonNetworkApi : public AstraNetworkAPI {
                  void (*msg_handler)(void* fun_arg),
                  void* fun_arg) override;
 
-    /**
-     * Implement get_BW_at_dimension of AstraNetworkAPI.
-     */
-    double get_BW_at_dimension(int dim) override;
-
   protected:
     /// event queue
     static std::shared_ptr<EventQueue> event_queue;

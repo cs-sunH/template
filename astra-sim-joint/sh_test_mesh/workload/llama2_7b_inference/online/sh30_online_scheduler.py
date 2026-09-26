@@ -2672,12 +2672,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         完成事件驱动（drain/completion/逐切片/merge-watch），决策时刻
         快照因果可见。
 
-        ``serial_credit_stream`` 仅用于 remote-read 的 ``#readplan`` 与
-        ``#decode#j`` owner：一个 owner 可携带多个未来切片或当前列车的
-        多个真实 credit block，但图侧对每 rank 的 recv block 建顺序链，
-        同请求同 shard 路径同刻最多一条 credit stream。注册表只计该
-        owner 中每个物理 shard 路径一次；完整 block 列表仍保留给图发射、
-        字节统计和计价。不同 TP shard 即使共享链路仍分别登记。"""
+        ``serial_credit_stream`` 仅用于 remote-read 的 ``#prefill_read``、
+        ``#readplan`` 与 ``#decode#j`` owner：一个 owner 可携带多个层组/
+        未来切片或当前列车的多个真实 credit block，但图侧对每 rank 的
+        recv 块/层组建顺序链（stop-and-wait），同请求同 shard 路径同刻
+        最多一条流在途。注册表只计该 owner 中每个物理 shard 路径一次；
+        完整层组/块列表仍保留给图发射、字节统计和计价。不同 TP shard
+        即使共享链路仍分别登记。"""
         seen_credit_shards = set()
         for transfer in transfers or ():
             if transfer.kind == "local_hit":
@@ -5009,10 +5010,16 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # ＋ home HBM 读端口 + exec HBM 写端口由 _register_transfer_flows
         # 按 noc_migrate 腿型成对登记。同 tick 后续决策经同一路径集看到
         # 本笔已提交读流足迹（C8 承诺可见性语义由真实在途流承担）。
+        # serial_credit_stream 折叠（评审复核 2026-09-25）：图发射侧层组
+        # 是 stop-and-wait 串行链（组 g+1 的 home send/exec recv 链序后
+        # 随组 g 的 ack——GB emit_prefill_read_stream ②），同 shard 路径
+        # 同刻至多一组在途——按单代表流登记，争用除数不随组数（p/8）虚
+        # 涨（与 #readplan/#decode#j 同纪律）。
         if runtime.prefill_remote_read_transfers:
             self._register_transfer_flows(
                 runtime.prefill_remote_read_transfers,
-                owner=runtime.request_id + "#prefill_read")
+                owner=runtime.request_id + "#prefill_read",
+                serial_credit_stream=True)
         # C8（WP2-preadmit，§4.1 同 tick 承诺可见性）：选中 remote-read
         # 即建 est 承诺账本（事务成功路径）——同 tick 串行贪婪的第二笔
         # 决策（_admit_waiting_requests 循环内后续 _try_admit_request →

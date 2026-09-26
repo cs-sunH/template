@@ -28,8 +28,12 @@ Output (sec.11.2/11.3):
   detail level only) joined fail-closed to the run's
   ``metrics_manifest.json``/``manifest.json`` request entries by
   ``queue_index``/``request_id``; ordering/decomposition invariants
-  (arrival <= completion, e2e == completion - arrival, stage sum == e2e)
-  are re-verified and any violation aborts.
+  (arrival <= completion, e2e == completion - arrival, stage sum == e2e;
+  once the ``first_token`` column is filled -- exact or the WP9
+  train-interpolated proxy -- also arrival <= first_token <= completion)
+  are re-verified and any violation aborts.  The proxy value additionally
+  follows the WP9 clamp/pin rules (clamped/pinned to completion; see
+  ``_first_token_proxy_value``).
 Failure conditions (sec.11.4, all abort with a non-zero exit):
 
 1. two conflicting summary records for the same run;
@@ -754,10 +758,13 @@ def _request_metric_rows(
 ) -> list[dict[str, Any]]:
     """request_metrics.csv rows (frozen column set; B1/WP1 fill level).
 
-    Timing/stage columns come from the C++ ``type=request`` records;
-    ``request_type``/length columns come from the joined manifest entries
-    (WP2 passthrough) and degrade to ``unknown``/``NA`` with a per-row
-    ``instructions`` note -- never a guess.
+    Timing/stage columns come from the C++ ``type=request`` records; length
+    columns come from the joined manifest entries (WP2 passthrough) and
+    degrade to ``NA`` with a per-row ``instructions`` note -- never a
+    guess.  ``request_type`` degrades to ``unknown`` with a note only when
+    the manifest field is absent; a present but unexpected passthrough
+    value (anything other than human/tool) is replaced by ``unknown``
+    without a note.
     """
     rows: list[dict[str, Any]] = []
     # WP9 fallback (B4): train-interpolated proxy index over the run's

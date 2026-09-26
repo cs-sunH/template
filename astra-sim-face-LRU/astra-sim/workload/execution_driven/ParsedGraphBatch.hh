@@ -49,7 +49,9 @@ other bridge protocol violation):
   T7 a present array must be of array type;
   T8 touched_ranks optional; when present it must be an array of integers
      in [0, num_ranks) (sorted-unique and set-equality stay in validate).
-  N1..N15 node rules: exact 13-key set, rank/id/type/name/flag/string/
+  N1..N15 node rules: exact required 13-key set plus the single optional
+     sh_2.0-specific node key is_local_hbm_kv_restore (rule N2),
+     rank/id/type/name/flag/string/
      request/stage/generation typing and domains, compute/comm/coll
      sub-object key sets (required + allowed), integer-overflow rejection
      (a JSON integer literal > UINT64_MAX parses as a double and fails

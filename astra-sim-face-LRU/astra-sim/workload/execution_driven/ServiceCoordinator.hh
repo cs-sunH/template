@@ -98,8 +98,10 @@ class ServiceCoordinator {
     /// two separate checks). Frozen order:
     ///   1. reject non-finite or <= 0 seconds (the CLI layer already
     ///      accepted 0 = off and never calls the helper for it);
-    ///   2. reject seconds above steady_clock::duration::max() in the tick
-    ///      domain (checked on the double BEFORE any float->int conversion);
+    ///   2. reject seconds at or above steady_clock::duration::max()
+    ///      converted to the seconds domain (raw tick count scaled by the
+    ///      tick period; checked on the double BEFORE any float->int
+    ///      conversion);
     ///   3. convert; reject a sub-tick zero duration;
     ///   4. reject when now > time_point::max() - timeout (pre-addition
     ///      bound; the subtraction is safe because timeout is proved

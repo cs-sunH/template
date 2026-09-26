@@ -243,6 +243,15 @@ def shard_extent(value: int, shards: int, shard_index: int) -> int:
 
 
 class TraceBuilder:
+    """离线 Chakra ET 每-rank 构图器。
+
+    2026-09-25 审计登记:本仓生产链已无本类实例化点(在线侧用
+    OnlineTraceBuilder,离线物化经 materializer 合成);现存消费者仅
+    generate_wsc_llm_trace 发射函数的 ``builders: dict[int, TraceBuilder]``
+    类型注解与单测实例化(test_wsc_llm_scheduler)。保留本类以维持该注解
+    契约与单测替身,不另立口径。
+    """
+
     def __init__(
         self,
         *,

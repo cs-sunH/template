@@ -33,10 +33,6 @@ class BasicTopology : public Topology {
      * Destructor.
      */
     virtual ~BasicTopology() noexcept;
-
-  protected:
-    /// bandwidth of each link
-    Bandwidth bandwidth;
 };
 
 }  // namespace NetworkAnalyticalCongestionAware

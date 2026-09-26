@@ -208,10 +208,12 @@ class RequestIngress {
     /// Phase 7 §10.7: overflow audit -- how many enqueue attempts were
     /// rejected because the bounded command queue was full (capacity_).
     /// Thread-safe (matching enqueue_command's lock). 0 on every official
-    /// run (the windowed reader tops up at most high_water=128 un-consumed
-    /// rows << capacity 4096); the counter exists so a producer that grows
-    /// without bound is caught by the run-end audit instead of silently
-    /// backpressuring forever.
+    /// run (since the 2026-08-30 turn-0 calendar rewrite the reader submits
+    /// along the whole turn-0 calendar and parks its cursor whenever the
+    /// queue is full -- backpressure, never an overflow -- so the only bound
+    /// is capacity_ itself, 4096); the counter exists so a producer that
+    /// grows without bound is caught by the run-end audit instead of
+    /// silently backpressuring forever.
     size_t overflow_count() const;
     /// Phase 7 §10.7: peak command-queue occupancy (un-consumed commands)
     /// observed since construction. Thread-safe.

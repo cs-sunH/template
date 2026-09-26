@@ -133,12 +133,16 @@ class Workload : public Callable {
     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
     // completion is the JOIN of two independent async completions -- the
     // network/port side (fluid scheduler packet event for comm send/recv,
-    // AnalyticalRemoteMemory FIFO event for pool MEM nodes) AND the local
-    // HBM job in LocalHbmBandwidthModel. Both sides deliver
-    // Workload::call(General|PacketSent|PacketReceived, wlhd) with the SAME
-    // wlhd; the latch counts down (2 -> 1 -> 0, idempotent per arrival) and
-    // only the arrival that reaches 0 runs the terminal handling (exactly
-    // once). Keyed by node id (unique per rank workload).
+    // AnalyticalRemoteMemory fluid-port transition event for pool MEM
+    // nodes) AND the local HBM job in LocalHbmBandwidthModel. Cookie
+    // ownership differs by join kind (方案 §3.4): a p2p comm join shares
+    // ONE wlhd across both legs and the latch-opening arrival deletes it,
+    // while a pool MEM join gives each leg its OWN cookie -- each arrival
+    // delivers Workload::call(General, wlhd) with its own leg's cookie and
+    // deletes it on that own arrival. Either way the latch counts down
+    // (2 -> 1 -> 0, idempotent per arrival) and only the arrival that
+    // reaches 0 runs the terminal handling (exactly once). Keyed by node
+    // id (unique per rank workload).
     struct HbmEndpointJoinState {
         unsigned int pending_completions = 2;
         // 网络侧完成事件（face hbm_comm_join_.completion_event 同款）：

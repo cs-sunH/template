@@ -20,7 +20,6 @@ PacketBundle::PacketBundle(Sys* sys,
     this->size = size;
     this->stream = stream;
     this->transmition = transmition;
-    creation_time = Sys::boostedTick();
 }
 
 PacketBundle::PacketBundle(Sys* sys,
@@ -35,7 +34,6 @@ PacketBundle::PacketBundle(Sys* sys,
     this->size = size;
     this->stream = stream;
     this->transmition = transmition;
-    creation_time = Sys::boostedTick();
 }
 
 void PacketBundle::send_to_MA() {

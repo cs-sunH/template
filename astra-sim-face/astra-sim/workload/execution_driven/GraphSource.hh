@@ -109,14 +109,14 @@ struct OnlineStatisticsState {
     bool completed = false;
     bool is_gpu = false;
 
-    // Short-lived per-node roofline/comm statistics state, filled by the
-    // online Workload while the node executes and kept until terminal
-    // completion.  Only compute/memory utilization is compacted globally.
+    // Short-lived per-node utilization state, filled by the online Workload
+    // while the node executes and kept until terminal completion, where the
+    // two utilizations are compacted globally.  (The former write-only
+    // operation_intensity / is_memory_bound / comm_size fields -- no
+    // terminal consumer ever read them -- were removed as dead state, the
+    // same rule that already removed network_bandwidth.)
     std::optional<double> memory_utilization;
     std::optional<double> compute_utilization;
-    std::optional<double> operation_intensity;
-    std::optional<bool> is_memory_bound;
-    std::optional<uint64_t> comm_size;
 };
 
 /// The node record / read view. In static mode the ETFeederGraphSource

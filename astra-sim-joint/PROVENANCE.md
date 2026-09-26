@@ -4356,3 +4356,82 @@ C20 决定性实验集未启动（需单独授权，本轮明确禁止）；C13 
 - canonical 全量 pytest 与 10s 压力档由终门禁统一执行，本同步轮未重跑（门禁结果以任务单为准，未复核门禁日志本体）。
 - 端到端 PARTIAL copy/恢复组时序未入 2s 冒烟窗（窗内零 copy 命中），由终门禁压力档与 T2/T3 结构断言、C++ 夹具分层承担——压力档逐请求数字本节未复核。
 - §44 已落地的 AnalyticalRemoteMemory 并发端口与 RemotePort* 绿灯未回退（本批零改动其后端；RemotePort* 三目标本同步轮未重跑，开发批整链复跑在案）。
+
+## 46. prefill remote-read 分阶段评审修复（#prefill_read 串行折叠 + 偏差注销 + 同日共存登记，2026-09-25，仅本仓）
+
+> 本节由修复工程师落字；四处评审结论逐条处置（①medium/②③④low），全部改动亲改亲跑（46.2），未做的检查不冒认。
+
+### 46.1 改动与裁定
+
+- **评审①（medium，#prefill_read 除数随组数虚涨）**：`sh30_online_scheduler.py` 准入登记 `#prefill_read` 改传 `serial_credit_stream=True`——图发射侧前缀层组是 stop-and-wait 串行链（组 g+1 的 home send/exec recv 经 builder 链序后随组 g 的 ack，GB `_emit_prefill_remote_read_branch` ②注释在案），同 shard 路径同刻至多一组在途；此前逐组按并发流登记使同 tick 后续决策看到的争用除数随组数（⌈p/8⌉）虚涨。与 `#readplan`/`#decode#j` 同纪律；`_register_transfer_flows` docstring 的适用面注释同步扩展。释放/回滚/泄漏审计均按 owner 注销（`_release_transfer_flows`/`_rollback_admission_registrations`/`_assert_no_flow_registry_leaks`），在册流条数变化零影响。`test_joint_preadmit_visibility.py` 的 `_register_prefill_read` 夹具为单笔 transfer（2 shard 异键不折叠），断言不受影响、未改。
+- **评审②（low，偏差清单过时）**：`face_scheduler.py` `KVTransfer.stream_only` 注释原载「decode credit 读流同口径应置 True……本仓任务面未动，见 ImplHandoff 偏差」已过时——规格书§一.7 已在调度器 `_joint_remote_read_slice` 补齐（`stream_only=True`，其 docstring 亦载「2026-09-25 补前序 KV 管理器卡登记的偏差项」），并被 test_prefill_remote_read_scheduler / test_prefill_remote_read_lifecycle 的 `block.stream_only` 断言钉死。注释订正为闭环口径，ImplHandoff 偏差注销；以代码为准。
+- **测试钉死值随①更新**：`test_prefill_remote_read_lifecycle.py` 准入 `#prefill_read` HBM 条目 8→4（`(0,2,1,3,0,2,1,3)`→`(0,2,1,3)`，单代表流口径，与 drain 点 `#readplan` 同形）；另两处注释（「不做 serial 折叠」「8=2 组并行层段流」）同步订正。断言强度不减（仍精确 tuple 相等）。
+- **评审④（low，无需改码）**：`test_prefill_remote_read_graph.py::test_branches_overlap_not_serial_under_asymmetric_bytes` docstring 已载时延等价性说明（图侧时延由字节×拓扑经 C++ 代价模型派生、无独立时延参数；双向 `_ancestors` 不可达偏序 = 任意时延指派下两支重叠），维持原样。
+
+### 46.2 验证（本轮亲跑，均带 `-p no:cacheprovider`）
+
+- 窄集（①直接触及面）：`python3 -m pytest template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/test_prefill_remote_read_lifecycle.py template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/test_prefill_remote_read_scheduler.py template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/test_joint_preadmit_visibility.py -q` → **37 passed**。
+- 全量自查：`python3 -m pytest template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online -q` → **441 passed + 11 subtests**；`python3 -m pytest template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint -q` → **419 passed**（与修复前基线逐数一致，零回归）。
+
+### 46.3 与 §45（PARTIAL 跨实例 copy 流水化，同日另一股工作）共存的文件级清单
+
+全仓零 commit，两股未提交改动在同一批文件中交织，git 无法分离归属——提交时建议按本节/规格书批次与 §45 分拆 commit。文件级触及面：
+
+| 文件 | prefill remote-read 分阶段（规格书批次 + 本节） | §45 copy 流水化 |
+|---|---|---|
+| `online/graph_batch_builder.py` | `_prefill_remote_read_arms/_layers` 双账本、`_emit_prefill_remote_read_branch`、`emit_layer_segmented` 前缀组段、首步消费/列车尾与完成残留 fail-closed | P1 `_emit_copy_handoff_tail` 尾块并行支链、P2-R2 `_arm_pending_store_edges` 三助手分解＋恢复组组间并行、P4 `_emit_credit_stream_tail` 并行、`_restore_group_involved_ranks` |
+| `online/sh30_online_scheduler.py` | runtime 三字段、准入规划/两腿分离/`#prefill_read` 登记（含本节 serial 折叠）、`#readplan` 对账链、`_joint_remote_read_slice` stream_only | 按 §45.1 自述零改动（P2-R2 特意保持 sh30 零改动） |
+| `face_scheduler.py` | `plan_prefill_remote_read_transfers`、`KVTransfer.stream_only` 字段（含本节注释订正） | 零改动 |
+| `joint/joint_cost_model.py` | remote-read 分阶段关键路径 + notes 四键披露 | copy_streaming 关键路径、`_final_footprint` 逐 rank 校验 |
+| 测试（新增/增量） | 新增 `online/test_prefill_remote_read_{manager,graph,lifecycle,scheduler}.py`、`joint/test_joint_remote_read_staged_path.py` | 增量 `test_joint_copy_handoff.py`（+5）、`test_joint_layer_restore.py`（+3）、`test_store_restore_ordering.py`（+4） |
+
+其中 P2-R2 恢复组组间并行顺带改变了 remote-read 后缀恢复腿的组间拓扑（组间串行→并行，`graph_batch_builder.py` C15 发射点注释在案）——超出本规格书字面但经独立评审核与本任务语义无冲突（定向测试全过、`_arm_pending_store_edges` 公开行为不变），归属切分由仓库所有者在提交时确认。
+
+### 46.4 限制与未验证项（如实登记）
+
+- canonical 全量 pytest 与 10s 压力档不在本轮任务面（任务约束为两套自查命令），未执行。
+- `PROVENANCE_hashes.txt` 仅重算本轮实际改动且在钉清单内的三行（PROVENANCE.md / sh30_online_scheduler.py / face_scheduler.py）；graph_batch_builder.py 等行的既存陈旧（§45 与规格书批次遗留）未代更。
+- joint_cost_model.py 未在本轮改动；其工作区状态系规格书批次与 §45 交织的原样。
+
+## 47. prefill remote-read 分阶段改造（前缀读流 prefill/decode 两段接力 + 分阶段关键路径计价，2026-09-25 规格书批次主体；2026-09-26 文档同步收尾登记，仅本仓，零新增开关）
+
+> 本节由收尾文档同步员落字；机制断言全部亲读工作树代码锚定（行号为 2026-09-26 收尾时点），验证仅覆盖亲跑命令与 /home/sunhao/joint_smoke_evidence/ 在案证据的亲核项，未做的检查不冒认（见 47.4）。评审修复轮已由 §46 登记，本节登记规格书批次主体与文档同步面，两节互补。
+
+### 47.1 落点与范围（规格书批次 = §一 规划 / §二 准入与流生命周期 / §三 图发射 / §5 计价）
+
+- **KV 管理器** `face_scheduler.py`：`plan_layer_groups(start, end, group_layers)` 公共规划器抽取（:1255 起；C15 后缀组 / C13 交接块 / prefill 前缀组三特化同源，确定性、无运行期状态输入）；`KVTransfer.stream_only` 瞬时流标记（:1582，True = 只产 send/recv/HBM 写服务节点与完成门、不物化入任何持久账本；prefill 前缀组与 decode credit 切片同置 True——§一.7 偏差闭环已由 §46.1 登记注释订正）；`plan_prefill_remote_read_transfers()`（:4525-4596）纯规划零副作用：home 驻留前缀 [0,p) 按 RESTORE_GROUP_LAYERS 组切分为逐组 noc_migrate 读流（phase="prefill"、reason="remote_read_prefill_prefix"、stream_only=True、驻留指针 before/after 恒 p），后缀 [p,L) 仍由 prepare_prefill 规划池恢复、两腿并行分叉；适用性合同 = LOCAL/PARTIAL 基 ∧ exec≠驻留实例 ∧ history_tokens 相符，REMOTE 基 fail-closed raise。
+- **在线调度器** `online/sh30_online_scheduler.py`：runtime 三字段 `prefill_remote_read_{transfers,plan,bytes}`（:396-398；plan_dict 披露键 :329-330）与 history_transfers 严格分离（history_transfer_bytes 不含前缀读流）；准入序 = 规划置于 reserve 之前（:4843-4858，fail-closed raise 不留预约残留）、事务成功后落账（:4943-4967，无条件覆盖赋值防 quota 回队重试残留）；流生命周期 = 准入登记 owner ``rid#prefill_read``（:5008-5022，serial_credit_stream 单代表流折叠——同 shard 路径同刻至多一组在途、争用除数不随组数虚涨，§46.1）、prefill drain 释放（:1624）、`_assert_no_flow_registry_leaks` 覆盖（:3650-3665）；**#readplan 准入相注册表零登记**（:3393-3416/:5023-5035，规格书§二.5）——prefill 期间注册表上的远读流 = rid#prefill_read 实流本身，同一条前缀读流不得同时登记为 prefill 流与 decode 流，#readplan 注册表半边自 `_reconcile_readplan_at_drain`（:3479 起）承接 decode credit；decode 侧 credit 计划层界 = 前缀 [0,p)。
+- **构图器** `online/graph_batch_builder.py`：`_prefill_remote_read_arms/_layers` 双账本（:448-454，成对登记/成对消费、单边在场即 raise）；准入发射摘出前缀读流独立旁挂分支（:2497-2633）——remote-read 无 history_transfers 时旧"gate 从未被消费＋前缀层计算无数据门"pass 分支废除、缺前缀读流即 fail-closed；`_emit_prefill_remote_read_branch`（:2936-3129）：组区间复检 [0,p) 自 0 连续铺满（缺口/重叠/基形态/相对位 rank 对齐即 raise）、`TransferTriggerGate(control=exec)`（:3054）经 `_emit_transfer_trigger` 同款 1B relay 触发链恰消费一次 interval/arrival gate（:3060-3081）、组间 home send 链/exec recv 链序连接不逐组重复消费 gate、逐组 recv 完成门＋层区间入双账本（:3123-3127）；列车体首块恰一次消费双账本（:938-966）按层段门控（[0,p) 前缀段等前缀 recv 门、[p,L) 后缀段等恢复写门），首步批恰一次/余量批不重复，列车尾（:1638-1663）与准入发射残留（:1845-1847）fail-closed。
+- **代价模型** `joint/joint_cost_model.py`：remote-read 候选合成改**分阶段关键路径**（模块注释 :100-115、:1517-1522）——prefill 腿 = 前缀 [0,p) 读流（prefill_scans 遍）、decode 腿 = 前缀 credit 读（decode_steps 遍；后缀 exec HBM 就地复用不再恢复），两腿同 K 源（remote_credit_block_size 单一裁决点）各自拆首 credit/余量流（:1785-1849）；合成 `prefill_stage = 前缀首credit + max(前缀余量流, 后缀池恢复, prefill计算)`、`decode_stage = decode首credit + max(decode余量流, decode计算)`、`cost = target_wait + eviction_wait + prefill_stage + decode_stage + merge`（:2008-2050）；旧 `max(history_prep, eviction_wait) + first_credit + max(remaining_stream, compute)`（后缀恢复全量串在 prefill 计算之前）**废除、无开关可选项**；C5 冻结 breakdown 字段口径不动——`remote_read_first_credit_ns`/`remote_read_stream_ns` 转合并流日志兼容披露（:2097-2103），阶段量经 notes 四键 `remote_read_prefill_ns`/`remote_read_decode_ns`/`suffix_restore_ns`/`prefill_pipeline_overlap_ns`（:2044-2048）。
+- **规格书符号对接（任务规则 6 项）**：本批规格书符号 `_emit_transfer_trigger()` / `TransferTriggerGate` 与本仓代码实名一致（graph_batch_builder.py:86/:3054/:3072 亲读在案），无新增命名偏差；任务提示中"_emit_store_relays_once/_arm_pending_store_edges 对应"一例属 §45 P2-R2 分解的命名对接、已在 §45 登记，与本批无涉。
+
+### 47.2 验证（命令与证据均本轮亲跑/亲核，2026-09-26）
+
+- **自查命令（任务指定两套，均带 `-p no:cacheprovider`，全绿、零 --ignore）**：`python3 -m pytest template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online -q -p no:cacheprovider` → **441 passed + 11 subtests**；`python3 -m pytest template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/joint -q -p no:cacheprovider` → **419 passed**（与 §46.2 逐数一致、零回归；两套合计 860 = 任务单基线 793 + 新五文件 66 + preadmit 净 1，精确闭合）。
+- **补充计数（本轮亲跑）**：新五文件逐一单跑 = manager 16 / graph 25 / lifecycle 9 / scheduler 7 / staged_path 9（合计 66）；窄命令 `workload/llama2_7b_inference` 916 passed + 13 subtests（§45 批 846+13 → +70 = 66+1 + 3 未逐文件归因，与 47.4 差额条目同源，如实登记不强解）；canonical 全量（sh_test_mesh 下 `pytest tests/ slo_tools/tests/ workload/llama2_7b_inference --ignore=slo_tools/tests/test_{driver_parity,golden_g1g4,slo_contract}.py -q`）**1054 passed + 1 skipped + 33 subtests**。
+- **冒烟证据（/home/sunhao/joint_smoke_evidence/，文件时戳 2026-09-26 00:05–00:57 +0800 亲核；任务指定的 10 个指针文件全部在场）**：
+  - `pin_overlay/sitecustomize.py`（v2 迭代 3）：仓外 action-pin overlay——生产配置 remote-read 自然选中恒 0（README §6 L 批勘误"矩阵全 13 臂 remote-read 选中数恒 0"、§41.6/§42.5 在案；定价涌现结果），overlay 强制策略 (a) PARTIAL 基有适用 remote-read 候选即强制选中 / (b) 自然 copy ∧ 同实例有适用候选改选 remote-read；决策管线其余（quota 过滤/reserve/prepare/两腿规划/图发射）零改动全走生产路径；逐决策审计行落 `JOINT_PIN_LOG`。
+  - `pin_stress64_150s/`（迭代 2，**exit 1**）：python.log 在案 fail-closed RuntimeError"train carries both remote-credit body blocks and copy handoff arms"（graph_batch_builder.py:616 emit_iteration_train 混编列车守卫；强制 remote-read 后才可达的构图组合，自然选中下不可达）——守卫发现如实上报，overlay 策略 (b) 即为绕开该组合取得全绿 run 的 overlay 层处置。
+  - `pin_stress64_150s_r3/`（迭代 3，**exit 0**，16:42:24–16:56:46 UTC）：`results/online_decision_log.jsonl`（89.7 MB）亲扫 = joint_action remote-read 5384 行 / stay 2288 行；`decision.prefill_remote_read_bytes` 披露行 3836 行（非零 2692 / 零 1144；首个非零样本 session_1_request_1 = 5,812,781,056 B、32 层全前缀）——prefill 前缀读流分阶段路径端到端真实走通；`slo_restore_decomposition.rerun.csv`（155,231 B）在场。
+  - `pin_overlay/pin_log_64gib150s.jsonl`（734 行）/ `pin_log_64gib150s_r3.jsonl`（1991 行）：决策侧 pin 审计行。
+  - `pin_stress96_150s/invocation.json`（**exit 0**，16:26:52–16:29:46 UTC，combo=TJE，binary sha256 e05ac5a2…）。
+  - `combo_TJE_2s/`（**exit 0**，16:05:06–16:05:10 UTC）：2s 标准冒烟臂无回归。
+  - `stress_10s_28gib/TJE_stress-28gib/judge_summary.json`：partial_copy_hits=80、copy_prefill_rows=80、deep_gap_events=[]、merge_degrade 恒空——容量压力夹具判据 PASS 形态。
+- **混编列车守卫（本轮冒烟暴露的新面，如实上报）**：同列车同时携带 remote-credit 体块与 copy 交接 arm 的构图组合（remote-read decode 续读成员 × copy 头列车）触发 fail-closed abort；本轮以 overlay 层避免该组合，机制级处置（守卫语义细化或列车隔离强化）未立项，留待后续轮。
+
+### 47.3 文档同步（本轮交付面）
+
+- `README.md`：§2"动作语义"remote-read 条（前缀读流分两段接力、LOCAL 基全层读流、瞬时 staging 不入容量账本）；§2"链路遥测"条（#readplan 准入相注册表零登记 + rid#prefill_read 实流占位 + drain 承接）；§3 状态表 remote-read 行（标题口径、分阶段执行口径、分阶段关键路径计价与 notes 四键、触发链/双账本/层段门/生命周期、五测试文件指针）；§5 完成路径第 9 条；§6 测试台账新批行（66 用例、窄命令 916+13、两套自查全绿、canonical 1054+1 skipped+33）。
+- `experiment/仿真各功能开关清单.md`（仓外、.gitignore:49 忽略不入 git）：§7.0 `JOINT_REMOTE_ACTIONS`（两段接力）/`JOINT_REMOTE_CREDIT_ITERS`（分阶段计价 + 单测补 staged_path）/`JOINT_REMOTE_READ_PARTIAL`（池恢复改 prefill_stage 并行 max 项）三行 + §7.0.1 状态表 remote-read 执行流行；**零新增开关、零键值变更（旧直接改新）**。该文件本轮存在并行会话同步写入，本节四处改动均经写入后回读逐一验证在场。
+- `PROVENANCE_hashes.txt`：README.md / PROVENANCE.md 两行随本节重算；sh30/face 两行 §46 已按当批重算；graph_batch_builder/joint_cost_model 等行维持 §46.4"既存陈旧、未代更"口径（本批零改码，不代前批钉清单行越权重算）。
+- 本节（§47）。
+
+### 47.4 限制与未验证项（如实登记）
+
+- **冒烟 = 强制选中下的端到端通路，非自然选中**：pin 证据仅证明"选中后全链（规划→图发射→层段门控→decode 复用→生命周期恰一 owner）无 raise 无泄漏"；r3 决策日志 1144 行 `prefill_remote_read_bytes=0`（强制到无异地历史/零前缀场景）未逐行归因。
+- **性能/收益未评估**：本轮不主张分阶段改造的时延或吞吐收益——无 A/B 对照；judge_summary 等数字仅作夹具判据 PASS 形态证据。
+- 压力 run 的 SLO 全产物（slo_* csv 族）未逐件复核；150s 窗 cpp.log 未亲读。
+- canonical 全量与窄命令为本轮文档同步员亲跑的补充证据；10s/150s 压力判据脚本未重跑（judge_summary 为在案文件读取）。
+- 窄命令 +70 与可归因 +67 的差 3（见 47.2）：属 §45 批 846 记数与今日实收之间的历史口径差，未强行调和。
+- `experiment/仿真各功能开关清单.md` 与本 PROVENANCE 同期存在并行会话写入；本节落字前对其余小节内容未做一致性复核（不在本批职责面）。
+- **PROVENANCE_hashes.txt 全表复核（本轮亲跑 `sha256sum -c`）**：29 行中 13 行 OK（含本节重算的 README.md/PROVENANCE.md 两行与 §46 重算的 sh30/face 两行）、16 行 FAILED——均为 R17 定版后历批（§44/§45/规格书批次）改码遗留陈旧，维持 §46.4"不代更"口径，由仓库所有者在提交前决定是否整表重算。

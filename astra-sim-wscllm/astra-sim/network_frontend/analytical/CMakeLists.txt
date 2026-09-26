@@ -48,9 +48,11 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main.cc
             ${CMAKE_CURRENT_SOURCE_DIR}/congestion_aware/main_online.cc)
 
-    # Execution-driven mechanism sources (online target only). The root CMake
-    # glob over astra-sim/workload/*.cc is non-recursive, so execution_driven/
-    # is listed explicitly here; the static target must not contain any of them.
+    # Execution-driven mechanism sources. The root CMake glob over
+    # astra-sim/workload/*.cc is non-recursive, so execution_driven/ is
+    # listed explicitly here for the online target and the fixtures below
+    # (the root CMakeLists.txt also globs the same sources into the AstraSim
+    # static library).
     file(GLOB srcs_execution_driven
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/*.cc)
 
@@ -68,8 +70,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
             ${srcs_execution_driven})
 
     # Step-1-4 NodeStore / GraphSource fixture (test-only): standalone
-    # NodeStore + NodeStoreGraphSource + ETFeederGraphSource adapter tests;
-    # never part of the baseline gates.
+    # NodeStore + NodeStoreGraphSource tests; never part of the baseline
+    # gates.
     add_executable(AstraSim_Analytical_Congestion_Aware_NodeStoreTest
             ${srcs_congestion_aware_shared}
             ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/node_store_test.cc
@@ -525,6 +527,8 @@ if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/)
     target_include_directories(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/helper)
+    # edtests-F1 (2026-09-25): keep asserts live in Release (see CliOnlineTest).
+    target_compile_options(AstraSim_Analytical_Congestion_Aware_IngressIdleTest PRIVATE $<$<CONFIG:Release>:-UNDEBUG>)
     set_target_properties(AstraSim_Analytical_Congestion_Aware_IngressIdleTest
             PROPERTIES
             COMPILE_WARNING_AS_ERROR OFF

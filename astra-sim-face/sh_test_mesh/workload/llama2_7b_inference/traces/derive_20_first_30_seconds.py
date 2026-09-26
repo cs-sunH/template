@@ -37,7 +37,12 @@ Usage: derive_20_first_30_seconds.py [source] [recompute_queue]
 (window_ns defaults to 30e9; the canonical sidecar is written next to the
 recompute queue.  arrival_scale defaults to 1.0 and must be a positive
 finite float: it divides ONLY the turn-0 session_arrival_time_ns column
-(t0 / arrival_scale, i.e. load x arrival_scale); inter_request_interval_ns
+(t0 / arrival_scale, i.e. load x arrival_scale).  The exact quotient is
+then rounded to the nearest 1000 ns grid point, because the official
+loader (generate_trace.load_request_queue) fail-closes on any timing not
+divisible by 1000 ns; the deviation vs the exact quotient is < 500 ns,
+and the step is a no-op for scale=1.0 on the microsecond-grid source.
+Quantized turn-0 rows are counted on stdout.  inter_request_interval_ns
 -- the human/tool exogenous waits -- is never scaled, and the window gate
 plus all statistics stay on unscaled source times, so scale=1.0
 reproduces the frozen 8-column queue byte-for-byte and a scaled run
@@ -222,6 +227,7 @@ def main() -> None:
     min_decode = None
     max_arrival = 0
     non_1000 = 0
+    turn0_scaled_quantized = 0
     request_type_counts = {"human": 0, "tool": 0, "unknown": 0}
 
     with open(source, newline="") as fin, \
@@ -289,7 +295,17 @@ def main() -> None:
             if turn_index == 0:
                 # arrival_scale applies ONLY here (t0 / arrival_scale);
                 # window gating above stays on the unscaled source time.
-                session_arrival = int(round(prev_arrival / arrival_scale))
+                # The exact quotient is rounded to the nearest 1000 ns grid
+                # point: the official loader (generate_trace.load_request_
+                # queue) fail-closes on timing % 1000 != 0, and an arbitrary
+                # scale (e.g. 1.3 over float division) almost never keeps
+                # the quotient on the grid.  Deviation vs the exact quotient
+                # is < 500 ns; a no-op for scale=1.0 on microsecond-grid
+                # source times.
+                scaled_arrival = prev_arrival / arrival_scale
+                session_arrival = int(round(scaled_arrival / 1000)) * 1000
+                if session_arrival != int(round(scaled_arrival)):
+                    turn0_scaled_quantized += 1
                 interval = ""
             else:
                 session_arrival = ""
@@ -346,6 +362,8 @@ def main() -> None:
     print(f"rows with timing not multiple of 1000 ns: {non_1000}")
     print(f"arrival_scale: {arrival_scale} (only turn-0 "
           "session_arrival_time_ns divided; intervals untouched)")
+    print(f"turn-0 scaled arrivals rounded to the 1000 ns grid "
+          f"(loader timing%1000 gate): {turn0_scaled_quantized}")
     print("request_type counts: human={human} tool={tool} "
           "unknown={unknown}".format(**request_type_counts))
     print(f"recompute queue: {output}")

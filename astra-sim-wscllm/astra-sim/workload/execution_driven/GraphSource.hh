@@ -5,22 +5,21 @@ LICENSE file in the root directory of this source tree.
 GraphSource -- execution-driven mechanism layer (wscllm phase 1).
 
 Dynamic graph source abstraction (方案 §4 步骤 1-2 操作 4 / 步骤 1-4 操作 4;
-动态图边界 contract ①). In online mode the source is injected at Sys
-creation time so the ETFeeder is never constructed and no .et file is
-required; in static mode Workload constructs the ETFeederGraphSource
-wrapping the ETFeeder + DependancyResolver.
+动态图边界 contract ①). The online-mode source (NodeStoreGraphSource) is
+injected at Sys creation time so the ETFeeder is never constructed and no
+.et file is required.
 
 **依赖状态唯一所有者 = GraphSource**: Workload calls GraphSource::finish_node
 exactly once per node; CompletionObserver/watch only record facts and never
 release dependencies a second time (步骤 1-5 操作 3).
 
-**在线模式不得自动发射后继**: dep_free_nodes() in online mode yields nodes
+**在线模式不得自动发射后继**: for_each_dep_free() in online mode yields nodes
 only when the post-commit deferred path drains them into the source; the
 static auto-advance (issue_dep_free_nodes after every completion) must not
 leak into the online mode -- the online mode gate lives in Workload::call.
 
-NodeView / OnlineNode share one POD: add_node stores it, dep_free_nodes()
-/ lookup() return it as the read view. Fields are the full transitive
+NodeView / OnlineNode share one POD: add_node stores it, for_each_dep_free()
+/ lookup_ptr() hand it out as the read view. Fields are the full transitive
 consumer inventory of a node from issue to terminal (step-1-4 operation 1):
 HardwareResource (is_timer_op / is_cpu_op / kind), Statistics (id / type /
 is_cpu_op), MetricCollector (rank + node_id only), local_mem tracker
@@ -117,10 +116,9 @@ struct OnlineStatisticsState {
     std::optional<uint64_t> comm_size;
 };
 
-/// The node record / read view. In static mode the ETFeederGraphSource
-/// fills every field from the ETFeederNode; in online mode the NodeStore
-/// fills them from GraphBatch data, including the reverse index
-/// request_id / stage / generation.
+/// The node record / read view. The NodeStore fills every field from
+/// GraphBatch data, including the reverse index request_id / stage /
+/// generation.
 struct OnlineNode {
     uint64_t global_id = 0;
     int rank = 0;
@@ -137,8 +135,7 @@ struct OnlineNode {
     // lookup entirely. Placed right after is_timer_op to reuse the 6-byte
     // tail padding of the bool group (is_timer_op ends at offset 57, the
     // next member is 8-byte aligned), keeping sizeof(OnlineNode) unchanged
-    // (locked by the R2 regression's static_asserts). Static-mode views
-    // built by ETFeederGraphSource leave both flags false.
+    // (locked by the R2 regression's static_asserts).
     bool metric_issue_anchor = false;
     bool metric_complete_anchor = false;
     std::string inputs_values;  // metadata pg info (issue_pytorch_pg_metadata)
@@ -153,29 +150,20 @@ struct OnlineNode {
     OnlineStatisticsState online_statistics;
 };
 
-/// Read-side view; same POD as OnlineNode (add_node stores it, dep_free_nodes
-/// / lookup return it).
+/// Read-side view; same POD as OnlineNode (add_node stores it, for_each_
+/// dep_free / lookup_ptr hand it out).
 using NodeView = OnlineNode;
 
 class GraphSource {
   public:
     virtual ~GraphSource() = default;
 
-    /// Currently free (dependency-satisfied, not yet issued) nodes, sorted by
-    /// global_id for deterministic issue order. NOT consuming: take_node
-    /// marks a node as issued.
-    virtual std::vector<NodeView> dep_free_nodes() = 0;
-
     /// The ONLY dependency-release entry. Releasing a node frees its
     /// children. Idempotent.
     virtual void finish_node(uint64_t node_id) = 0;
 
-    /// Stable async-callback handle; the NodeView must stay valid for the
-    /// consumers until the terminal record is done.
-    virtual std::optional<NodeView> lookup(uint64_t node_id) = 0;
-
-    /// Consume a node from the free set at issue time (static resolver
-    /// semantic preserved; required so dep_free_nodes cannot re-issue).
+    /// Consume a node from the free set at issue time (required so a later
+    /// issue pass cannot re-issue it).
     virtual void take_node(uint64_t node_id) = 0;
 
     /// Static-compatibility handle for the ETFeederNode-bound consumers
@@ -190,21 +178,18 @@ class GraphSource {
     /// ServiceCoordinator).
     virtual bool static_all_done() = 0;
 
-    /// Zero-copy fast path for hot loops; the default keeps the by-value
-    /// semantics so static/empty sources are unchanged. The NodeStore-backed
-    /// source overrides it to iterate its stable storage (online nodes are
+    /// Zero-copy issue pass over the currently free (dependency-satisfied,
+    /// not yet issued) nodes, ascending global_id for deterministic issue
+    /// order. Non-consuming: take_node marks a node as issued. The
+    /// NodeStore-backed source iterates its stable storage (online nodes are
     /// collected only at quiescent commit boundaries -- never inside a
     /// callback -- so the references outlive the consume callback).
     virtual void for_each_dep_free(
-        const std::function<void(const NodeView&)>& consume) {
-        for (const auto& nv : dep_free_nodes()) {
-            consume(nv);
-        }
-    }
+        const std::function<void(const NodeView&)>& consume) = 0;
 
-    /// Zero-copy lookup for the online terminal paths. Returns nullptr when
-    /// unsupported (static sources) -- online callers treat that as unknown
-    /// node. Default returns nullptr; the NodeStore-backed source overrides.
+    /// Zero-copy lookup for the online terminal paths. Returns nullptr for
+    /// an unknown node. Default returns nullptr; the NodeStore-backed
+    /// source overrides.
     virtual const NodeView* lookup_ptr(uint64_t /*node_id*/) { return nullptr; }
 
     // Online-only mutable short-lived statistics state and terminal
@@ -215,21 +200,6 @@ class GraphSource {
         return nullptr;
     }
     virtual bool mark_terminal_observed(uint64_t /*node_id*/) { return false; }
-};
-
-/// Empty source: yields no nodes, finishes nothing. Used as the step-1-2
-/// placeholder before the NodeStore-backed source landed (step 1-4).
-class EmptyGraphSource : public GraphSource {
-  public:
-    std::vector<NodeView> dep_free_nodes() override { return {}; }
-    void finish_node(uint64_t) override {}
-    std::optional<NodeView> lookup(uint64_t) override { return std::nullopt; }
-    void take_node(uint64_t) override {}
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t) override {
-        return nullptr;
-    }
-    bool static_all_done() override { return false; }
 };
 
 }  // namespace ExecutionDriven

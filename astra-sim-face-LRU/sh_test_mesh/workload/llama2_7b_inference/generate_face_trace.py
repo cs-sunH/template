@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -120,7 +119,6 @@ class FaceTraceConfig:
     hardware_config: Path
     hardware_capacity_profile: str
     hardware: FaceHardware
-    hardware_metadata: dict[str, object]
     system_template: Path
     system_config: Path
     network_config: Path
@@ -136,7 +134,6 @@ class FaceTraceConfig:
     kv_cache_policy: str
     kv_reserve_context_tokens: int
     record_planning_iterations: bool
-    configuration_digest: str
 
     @property
     def model(self) -> FaceModel:
@@ -209,14 +206,6 @@ def _parse_config_value(key: str, value: str) -> object:
     if not value:
         raise ValueError(f"config key {key} must not be empty")
     return value
-
-
-def _configuration_digest(paths: Sequence[Path]) -> str:
-    digest = hashlib.sha1()
-    for path in paths:
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()[:8]
 
 
 def _to_face_hardware(hardware: ResolvedHardware) -> FaceHardware:
@@ -347,7 +336,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         hardware_capacity_profile,
     )
     hardware = _to_face_hardware(resolved_hardware)
-    hardware_metadata = resolved_hardware.metadata
     npus_count = resolved_hardware.npus_count
     system_template = _resolve_from_sh_test(parsed["system_template"])
     runtime_config_dir = (
@@ -365,13 +353,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         inference_groups=tuple((group.pg_name, group.ranks) for group in groups),
         output_dir=runtime_config_dir,
     )
-    digest_paths = [
-            config_csv.resolve(),
-            request_queue_csv,
-            hardware_path,
-            system_template,
-    ]
-    configuration_digest = _configuration_digest(tuple(digest_paths))
 
     return FaceTraceConfig(
         config_csv=config_csv.resolve(),
@@ -391,7 +372,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         hardware_config=hardware_path,
         hardware_capacity_profile=hardware_capacity_profile,
         hardware=hardware,
-        hardware_metadata=hardware_metadata,
         system_template=system_template,
         system_config=runtime_configs.system,
         network_config=runtime_configs.network,
@@ -407,7 +387,6 @@ def load_face_trace_config(config_csv: Path = CONFIG_CSV_PATH) -> FaceTraceConfi
         kv_cache_policy=str(parsed["kv_cache_policy"]),
         kv_reserve_context_tokens=int(parsed["kv_reserve_context_tokens"]),
         record_planning_iterations=bool(parsed["record_planning_iterations"]),
-        configuration_digest=configuration_digest,
     )
 
 
@@ -801,13 +780,17 @@ def _emit_kv_transfer(
 ) -> dict[str, object]:
     """sh_2.0 :599-902 抽取适配(KVTransfer/kind 载体来自本仓 B2 内核)。
 
-    HBM 计费地图(契约 §12.5/§9,照抄 sh,禁止"优化"):
+    HBM 计费地图(契约 §12.5/§9,照抄 sh,禁止"优化";端口计时按 README
+    §D 2026-09-24 并发化口径:池端口为并发在途+流体均分,端口内无 FIFO
+    等待队列):
       - remote_store 链 A(source≠edge):源 comm_send = 源端 COMM_READ 唯一
         数据计费;edge comm_recv 过路 hbm_charge=False;edge mem_store 池写
-        本地零计费;1B ack 双端各 1B(源端收 ack 后才物理释放);
+        本地零计费(仅池端口流体计时);1B ack 双端各 1B(源端收 ack 后才
+        物理释放);
       - remote_store 链 B(source==edge 直连):mem_store(hbm_access_mode=1)
-        = POOL_READ 唯一计费 + 池端口 FIFO 双异步 join;
-      - remote_load:edge mem_load 仅池 FIFO;edge comm_send / target
+        = POOL_READ 唯一计费 + 池端口事务双异步 join(端口腿为并发流体
+        计时);
+      - remote_load:edge mem_load 仅池端口流体计时;edge comm_send / target
         comm_recv 均 hbm_charge=False(目标写由 restore 承担);target
         local_hbm_kv_restore = RESTORE 唯一数据计费;
       - noc_migrate:send/recv 正常计费 + 1B ack 双端。

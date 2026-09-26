@@ -1572,8 +1572,11 @@ class KVTransfer:
     # 与完成门，**不物化入任何持久账本**：不 _add_local_shards、不改
     # session.shard_bytes / resident_prefix_layers、不进 merge 工作副本
     # 账（prefill remote-read 前缀流 [0,p) 置 True；decode remote-read
-    # credit 读流同口径应置 True——其构造点在 online 调度器
-    # _joint_remote_read_slice，本仓任务面未动，见 ImplHandoff 偏差）。
+    # credit 读流已同口径置 True——构造点在 online 调度器
+    # _joint_remote_read_slice，规格书§一.7 偏差项已于 2026-09-25 在调度
+    # 器侧补齐闭环并由 test_prefill_remote_read_scheduler/
+    # test_prefill_remote_read_lifecycle 的 block.stream_only 断言钉死，
+    # 原 ImplHandoff 偏差注销，2026-09-25 评审复核确认）。
     # False = 既有持久/账本口径传输（remote_load 后缀恢复、noc_migrate
     # 工作副本/逐出写回等）。
     stream_only: bool = False

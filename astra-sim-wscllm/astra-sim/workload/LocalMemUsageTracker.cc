@@ -1,17 +1,15 @@
 #include "astra-sim/workload/LocalMemUsageTracker.hh"
 
-#include <cassert>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <sstream>
 #include <stdexcept>
 #include <memory>
 #include <unordered_set>
 #include <vector>
 #include <tuple>
 #include <string>
-#include <set>
 #include <map>
 #include <fstream>
 #include <algorithm>
@@ -195,8 +193,16 @@ void LocalMemUsageTracker::recordWrites(
       this->tensorSize.insert({tensorName, tensorSize});
       this->memWrites.insert({tensorName, writeActivity});
     } else {
-      // each tensor should only be written once.
-      assert(false);
+      // each tensor should only be written once.  Fail closed instead of
+      // relying on assert(false): NDEBUG (default Release) builds compile
+      // the assert out and the second write used to be silently dropped,
+      // leaving the memory trace/peak built from the first-write window
+      // and size.
+      AstraSim::LoggerFactory::get_logger("workload::LocalMemUsageTracker")
+          ->critical("duplicate tensor write: node.id={} tensor.name={} "
+                     "start={} end={}",
+                     nodeId, tensorName, start, end);
+      std::exit(EXIT_FAILURE);
     }
   }
 }

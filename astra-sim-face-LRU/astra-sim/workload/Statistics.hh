@@ -21,13 +21,15 @@ typedef uint64_t NodeId;
 
 namespace AstraSim {
 class Workload;
-class LocalMemoryTracker;
 class Statistics {
   public:
     class OperatorStatistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
-        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, REPLAY, INVALID };
+        // No REPLAY member: the upstream replay-route enum value had no
+        // producer in this repo (both get_operator_type overloads map every
+        // node to CPU/GPU/COMM/REMOTE_MEM/INVALID only) and was removed.
+        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
         static OperatorType get_operator_type(
             const std::shared_ptr<Chakra::ETFeederNode> node);
         // Step 1-8: online-mode overload dispatching on the NodeView fields
@@ -69,10 +71,6 @@ class Statistics {
         // communication node: no comm_size field -- the achieved-bandwidth
         // chain that consumed it had no production reader and was removed
         // (Workload.cc note at the former record_network_bandwidth site).
-
-        // remote memory node
-
-        // replay node
     };
 
   public:

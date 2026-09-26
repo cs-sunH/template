@@ -316,10 +316,10 @@ void round_trip(const std::string& echo_script) {
 
         const GraphBatch batch2 = bridge.deliver_and_receive(delta2);
         expect(batch2.source_delivery_sequence == 1 && batch2.batch_id == 1,
-               "B: batch echoes seq 1");
+               "A: batch echoes seq 1");
         // Phase-7 §10.3: response consumed and deleted (see part A).
         expect(!file_exists(bridge_dir + "/response_1.json"),
-               "B: response_1.json consumed and deleted (phase-7 §10.3)");
+               "A: response_1.json consumed and deleted (phase-7 §10.3)");
 
         // --- commit acks: seq 0, seq 1, then a DUPLICATE seq 0 ---
         bridge.send_commit_ack(/*batch_id=*/0, /*delivery_seq=*/0, true);

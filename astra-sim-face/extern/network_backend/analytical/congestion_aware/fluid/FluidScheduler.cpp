@@ -587,10 +587,6 @@ uint64_t FluidScheduler::get_active_flow_count() const noexcept {
     return active_flow_count;
 }
 
-size_t FluidScheduler::link_count() const noexcept {
-    return link_states.size();
-}
-
 uint64_t FluidScheduler::get_active_route_memberships() const noexcept {
     return active_route_memberships;
 }
@@ -651,10 +647,6 @@ void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcep
             observer.active_links.push_back(static_cast<LinkId>(link));
         }
     }
-}
-
-bool FluidScheduler::link_observer_enabled() const noexcept {
-    return link_observer_.enabled;
 }
 
 uint64_t FluidScheduler::link_observer_bucket_ns() const noexcept {
@@ -993,8 +985,4 @@ uint64_t FluidScheduler::get_total_started_flows() const noexcept {
 
 uint64_t FluidScheduler::get_total_completed_flows() const noexcept {
     return total_completed_flows;
-}
-
-size_t FluidScheduler::get_completion_heap_size() const noexcept {
-    return completion_heap.size();
 }

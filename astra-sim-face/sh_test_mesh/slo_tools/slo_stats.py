@@ -43,7 +43,6 @@ from slo_common import (  # noqa: E402
 )
 
 MAIN_PCTS = (50, 99)
-APPENDIX_PCTS_DEFAULT = (90, 95)
 
 
 def add_run_dir_arg(parser: argparse.ArgumentParser) -> None:
@@ -195,7 +194,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
     numerator = 0
     no_e2e = 0
     per_status: dict[str, dict[str, int]] = {}
-    deadlines: list[int] = []
     for row in rows:
         status = row["terminal_status"]
         if status not in TERMINAL_STATUSES:
@@ -207,7 +205,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
         e2e = row.get("e2e_ns")
         deadline = request_deadline(row, alpha, prefill_edges,
                                     decode_edges, t_isolated)
-        deadlines.append(deadline)
         if e2e is None:
             no_e2e += 1
             continue  # 非完成终态：计入分母；E2E 不可得，不进分子
@@ -469,13 +466,26 @@ def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
         bucket = int(bucket)
         if bucket <= 0:
             fail("--bucket-ns 必须为正整数")
+        # 桶内取 max 的完整语义：在途数是事件间的阶梯常数——桶内 max 必须
+        # 包含桶起点携入值（如桶内只发生完成事件，真实峰值=携入值，只对
+        # 事件后的值取 max 会低估）；无事件的桶整桶恒为携入值，携入值>0
+        # 时同样产行（分桶时序不得静默丢桶），携入值=0 的空桶不产行（与
+        # 逐事件口径的零段省略一致）。末事件之后的桶无自然终点，不补行。
         bucketed: list[tuple[int, int]] = []
+        carried = 0  # 上一变点后的在途值（下一桶起点携入）
+        last_slot: Optional[int] = None
         for time, inflight in series:
             slot = (time // bucket) * bucket
-            if bucketed and bucketed[-1][0] == slot:
+            if last_slot is not None:
+                for fill in range(last_slot + bucket, slot, bucket):
+                    if carried > 0:
+                        bucketed.append((fill, carried))
+            if last_slot == slot:
                 bucketed[-1] = (slot, max(bucketed[-1][1], inflight))
             else:
-                bucketed.append((slot, inflight))
+                bucketed.append((slot, max(carried, inflight)))
+            carried = inflight
+            last_slot = slot
         series = bucketed
     stream, close = open_output(args.output, "slo_backlog.csv", args.run_dir)
     try:

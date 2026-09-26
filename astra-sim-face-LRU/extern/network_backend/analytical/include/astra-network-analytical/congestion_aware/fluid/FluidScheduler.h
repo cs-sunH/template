@@ -47,7 +47,8 @@ class FluidScheduler {
      * same-time merge keeps it inside the same invoke_events pass). A comm
      * node emitted from a tick-end callback or the deferred drain would insert
      * a current_time EventList into the main queue and trip the EventQueue
-     * strict-increase assert on the next proceed(). Online drivers must enable
+     * strict-increase fail-closed guard on the next proceed(). Online drivers
+     * must enable
      * deferred mode; the static path stays in the legacy mode (default), which
      * is byte-for-byte the pre-extension behavior.
      */
@@ -98,8 +99,6 @@ class FluidScheduler {
     };
 
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
-
-    [[nodiscard]] bool link_observer_enabled() const noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).
     [[nodiscard]] uint64_t link_observer_bucket_ns() const noexcept;

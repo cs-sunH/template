@@ -275,10 +275,3 @@ int CommonNetworkApi::sim_recv(void* const buffer,
     // return
     return 0;
 }
-
-double CommonNetworkApi::get_BW_at_dimension(const int dim) {
-    assert(0 <= dim && dim < dims_count);
-
-    // return bandwidth of the requested dimension
-    return bandwidth_per_dim[dim];
-}

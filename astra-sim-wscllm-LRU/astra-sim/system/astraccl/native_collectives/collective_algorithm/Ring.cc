@@ -27,7 +27,6 @@ Ring::Ring(ComType type,
     this->curr_sender = ring_topology->get_sender(id, direction);
     this->parallel_reduce = 1;
     this->injection_policy = injection_policy;
-    this->total_packets_sent = 0;
     this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
@@ -150,7 +149,6 @@ void Ring::reduce() {
     process_stream_count();
     packets.pop_front();
     free_packets--;
-    total_packets_sent++;
 }
 
 bool Ring::iteratable() {

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import functools
-import hashlib
 import json
 import os
 from typing import Any, Iterable, Optional, Sequence
@@ -1537,15 +1536,13 @@ class SessionKVCacheManager:
         if state is not None and state.active:
             raise RuntimeError(f"session {session_id} received an overlapping request")
 
-        desired = self._history_shards(required_context_tokens)
-        existing_target = (
-            state.shard_bytes
-            if state is not None
-            and state.state == RESIDENT
-            and state.instance_index == target_instance_index
-            else tuple(0 for _ in desired)
-        )
-        needed = tuple(want - current for want, current in zip(desired, existing_target))
+        # 同实例(existing_target 取旧驻留)臂已删(2026-09-26):本仓拓扑下
+        # 不可达——inactive 会话 KV 只驻留 decode 实例(mark_complete 仅发生
+        # 在 move_prefill_to_decode 之后的 decode 完成,逐出候选要求
+        # not active),而本方法目标恒为 PREFILL_ROLE 实例,
+        # build_instances 强制每实例单一 phase_role 且 P/D 集合不相交,
+        # state.instance_index == target_instance_index 恒假。
+        needed = self._history_shards(required_context_tokens)
         if any(value < 0 for value in needed):
             raise RuntimeError("session KV would shrink during history preparation")
         protected = (session_id,) if state is not None else ()
@@ -1659,35 +1656,8 @@ class SessionKVCacheManager:
         source_instance = state.instance_index
         state.active = True
         state.last_request_id = trigger_request_id
-        if source_instance == target_instance_index:
-            self._check_invariants_after_mutation(session_ids=(session_id,))
-            before = self._remaining(target_instance_index)
-            self._event(
-                now_ns=now_ns,
-                phase=phase,
-                event_type="local_hit",
-                reason="history_local_reuse",
-                trigger_request_id=trigger_request_id,
-                session_id=session_id,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                context_tokens=history_tokens,
-                total_bytes=sum(history_shards),
-                shard_bytes=history_shards,
-                last_completion_ns=state.last_completion_ns,
-                before=before,
-                after=before,
-            )
-            return HistoryDecision(
-                action=LOCAL_HIT,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                history_tokens=history_tokens,
-                transfer_shards=(),
-                recompute_tokens=0,
-                evictions=evictions,
-            )
-
+        # 同实例(LOCAL_HIT)臂已删(2026-09-26):不可达理由同上方
+        # existing_target 注释,source != target 恒成立,只余 NOC 迁移路径。
         source_ranks = self.topology.instance(source_instance).ranks
         target_ranks = self.topology.instance(target_instance_index).ranks
         transfer_shards = tuple(
@@ -1822,13 +1792,14 @@ class SessionKVCacheManager:
         if state.state != RESIDENT or state.instance_index is None or not state.active:
             raise RuntimeError("Prefill KV must be active and resident before Decode")
         source_instance = state.instance_index
-        desired_final = self._history_shards(
+        # 同实例(existing_target 取旧驻留)臂已删(2026-09-26):唯一调用点
+        # _try_admit_waiting_decodes 在本轮 prepare_history+grow_prefill 成功
+        # 后调用,届时 KV 恒在本轮 PREFILL_ROLE 实例上,而本方法目标恒为
+        # DECODE_ROLE 实例(build_instances 强制每实例单一 phase_role 且
+        # P/D 集合不相交),source == target 恒假。
+        required = self._history_shards(
             state.logical_context_tokens if final_context_tokens is None else final_context_tokens
         )
-        existing_target = (
-            state.shard_bytes if source_instance == target_instance_index else tuple(0 for _ in desired_final)
-        )
-        required = tuple(want - current for want, current in zip(desired_final, existing_target))
         fit = self.ensure_physical_fit(
             target_instance_index,
             required,
@@ -1853,7 +1824,7 @@ class SessionKVCacheManager:
         )
         if not fit.admitted:
             return MoveDecision(
-                action=LOCAL_HIT if source_instance == target_instance_index else NOC_MIGRATE,
+                action=NOC_MIGRATE,
                 source_instance_index=source_instance,
                 target_instance_index=target_instance_index,
                 transfer=empty_transfer,
@@ -1861,26 +1832,8 @@ class SessionKVCacheManager:
                 admission_blocked=True,
                 insufficient_ranks=fit.insufficient_ranks,
             )
-        if source_instance == target_instance_index:
-            before = self._remaining(target_instance_index)
-            self._event(
-                now_ns=now_ns,
-                phase="prefill_decode",
-                event_type="local_hit",
-                reason="prefill_decode_local_reuse",
-                trigger_request_id=trigger_request_id,
-                session_id=session_id,
-                source_instance_index=source_instance,
-                target_instance_index=target_instance_index,
-                context_tokens=state.logical_context_tokens,
-                total_bytes=sum(state.shard_bytes),
-                shard_bytes=state.shard_bytes,
-                last_completion_ns=state.last_completion_ns,
-                before=before,
-                after=before,
-            )
-            return MoveDecision(LOCAL_HIT, source_instance, target_instance_index, empty_transfer, evictions)
-
+        # 同实例(LOCAL_HIT)臂已删(2026-09-26):不可达理由同上方
+        # existing_target 注释,source != target 恒成立,只余 NOC 迁移路径。
         source_ranks = self.topology.instance(source_instance).ranks
         target_ranks = self.topology.instance(target_instance_index).ranks
         shards = tuple(

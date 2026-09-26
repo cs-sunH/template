@@ -4,7 +4,7 @@
 在线③④需要三类输入，本脚本以**不跑规划器、不写任何 .et** 的方式产出：
 
   1. runtime_config 三件（system/comm_group/network.yml）
-     —— 由 load_load_wsc_llm_trace_config() 装载配置时经 config_resolver.materialize_runtime_configs
+     —— 由 load_wsc_llm_trace_config() 装载配置时经 config_resolver.materialize_runtime_configs
      副产（路径不变，零改动）；
   2. manifest.json —— 含在线侧实际消费的**队列派生 9 字段**
      （request_id/session_id/turn_index/queue_index/prefill_length/

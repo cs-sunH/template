@@ -367,6 +367,24 @@ void MetricCollector::load_manifest(const std::string& manifest_path) {
                             manifest_path + ": " + e.what());
     }
 
+    // Fail-closed uniformity: every field/domain read below runs under this
+    // one net. A malformed manifest (a wrong-typed schema_version /
+    // repo_variant, a non-number node-event triple or slo_sampling value, a
+    // scalar where an array is expected, ...) must converge onto the same
+    // [METRIC][ERROR] diagnostic exit the request/memory-action loops
+    // already use -- never escape initialize() as an unhandled nlohmann
+    // type_error/invalid_iterator (the online main loop has no catch around
+    // initialize, and a std::exception escaping it would std::terminate).
+    try {
+        load_manifest_fields(manifest, manifest_path);
+    } catch (const std::exception& e) {
+        fatal_metrics_error("malformed metrics manifest " + manifest_path +
+                            ": " + e.what());
+    }
+}
+
+void MetricCollector::load_manifest_fields(const json& manifest,
+                                           const std::string& manifest_path) {
     this->schema_version_ = manifest.value("schema_version", 0);
     if (this->schema_version_ != 1) {
         // Doc sec.12.1: unsupported schema versions must be rejected.

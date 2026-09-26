@@ -60,8 +60,11 @@ public 段（AnalyticalRemoteMemory.hh:155-229），测试经公共接口直读�
 （更正：本文件早版注释误判该访问器为 private 并引入了 include 前访问宏
 seam——该 seam 已删除，公共接口即够。）
 
-已知边界：本套件场景不触碰 5.1 套件记录的 join-at-boundary 偏差（双 MEM
-同刻就绪、端口此前空闲，streams_before==0 的 join 不被扣份）；发射均经
+已知边界：本套件场景不触碰 5.1 套件覆盖的 join-at-boundary 场景（双 MEM
+同刻就绪、端口此前空闲，streams_before==0 的 join 不被扣份——该行为已按
+方案 §3.1 在后端定为规格：served_streams 快照，
+AnalyticalRemoteMemory.cc:586-597/:647-652，旧“偏差”记录见
+remote_port_nway_test.cc 头注的历史注记）；发射均经
 Workload 生产路径（issue_dep_free_nodes / issue_remote_mem / issue_send_comm
 / issue_recv_comm），完成回调落 Workload::call 真实终态处理。
 

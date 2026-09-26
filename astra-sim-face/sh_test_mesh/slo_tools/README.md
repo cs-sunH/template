@@ -222,8 +222,12 @@ prefill_context_tokens/final_context_tokens/history_tokens_before），以及
   件/缺列/结构错/重放不一致/journal 损坏）；3 容量违规——**仅
   per_rank_total_hbm_certified 层**的逐 rank physical > capacity_bytes。
 * **逐仓覆盖度**（decision-log 重放路径的口径；B0 基线 60s_summary 实测）：
-  * FACE/S1：`full`——逐出条目全量落盘（bytes+victim+实例），重放闭合，
-    0 异常 0 违规（FACE 另有 9 例 decode 准入静默逐出经 RECOMPUTE 断言对账）。
+  * FACE/S1：`full`——逐出条目全量落盘（bytes+victim+实例），重放闭合。
+    FACE 自 2026-09-05（生产者问题 2A 顺带修复）起真实 decode 准入逐出
+    序列化在 decode 决策行的 decode_target_evictions（prefill 行该字段
+    在发射时点恒空），重放按 (kind=decode) 行消费——早期工具只读
+    prefill 行时这批逐出漏计（B0 基线实测 9 例经 RECOMPUTE 断言对账
+    兜底、占用在窗口内为虚高上界），修复后为发射时点显式逐出计账。
   * W：`full_reconciled`——账本缺口：decode 准入期逐出
     （decode_target_evictions 在 prefill 记录落盘后才累积，decode 记录不含
     逐出列表）不落盘，full_tracelab 本 run 实测 7,923 例

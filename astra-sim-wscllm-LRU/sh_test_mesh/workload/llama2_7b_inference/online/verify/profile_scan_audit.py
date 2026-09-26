@@ -7,6 +7,13 @@
 full-scan 无仪表化:调度器不存在 full-scan 计数字段/计数器,本审计仅覆盖
 scanned_entries 上界(无 O(总规模) 全量扫描检测)。
 
+scanned_entries 计数点枚举当前全部候选访问入口:基类 completed_groups/
+arrivals 逐条(online_scheduler_base.py :864/:896)+ 变体 arrival 堆弹出
+逐条(wsc_llm_online_scheduler.py :1300);准入 pass 仅触增量维护的 ready
+frontier(索引/集合访问,无候选池遍历)。在此前提下本审计等价覆盖全量
+扫描检测;维护约定:调度器新增遍历入口必须同步接 _profile_scan 计数,
+否则本审计对该入口失效(2026-09-25 审计收口注记)。
+
 断言(fail-closed,任一不满足即非 0 退出):
   1. 每批 scanned_entries <= total_requests —— 单批复杂度与总 request 数
      无关(20.csv 前 30s 全量 = 1177 请求;到期事件 + 受影响条目 + 就绪

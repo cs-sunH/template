@@ -21,7 +21,6 @@ typedef uint64_t NodeId;
 
 namespace AstraSim {
 class Workload;
-class LocalMemoryTracker;
 class Statistics {
   public:
     class OperatorStatistics {

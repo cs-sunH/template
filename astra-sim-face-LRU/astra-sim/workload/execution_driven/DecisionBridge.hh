@@ -134,7 +134,7 @@ class DecisionBridge {
                                  bool success) = 0;
 };
 
-/// File-implementation of the v0 protocol (blocking FIFOs, atomic JSON
+/// File-implementation of the v1 protocol (blocking FIFOs, atomic JSON
 /// files, fail-closed error/crash/timeout semantics). timeout_ms == 0
 /// waits forever (the phase-1 default).
 /// C1 (2026-08-29): num_ranks feeds parse_graph_batch's rank-domain checks

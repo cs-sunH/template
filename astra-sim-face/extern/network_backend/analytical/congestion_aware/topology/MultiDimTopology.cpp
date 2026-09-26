@@ -183,6 +183,14 @@ void MultiDimTopology::connect_mesh_dimension(const int dim) noexcept {
 void MultiDimTopology::connect_ring_dimension(const int dim) noexcept {
     assert(0 <= dim && dim < dims_count);
 
+    // Degenerate sizes, aligned with the 1D Ring constructor: a size-1
+    // dimension builds no link (the ring loop would degenerate into a
+    // src->src self-connect); a 2-NPU ring is a single bidirectional
+    // connect, not the ring loop (which would double-build both directed
+    // links).
+    if (npus_count_per_dim[dim] == 1) {
+        return;
+    }
     if (npus_count_per_dim[dim] == 2) {
         connect_mesh_dimension(dim);
         return;

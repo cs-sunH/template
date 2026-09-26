@@ -127,9 +127,10 @@ RunResult run_loop(const std::string& csv, const bool fixed_order) {
     });
     if (!fixed_order) {
         // Historical behavior: the service could be closed while producers
-        // still queued work. Do not use mark_input_closed() here: its new
-        // linearized producer gate is precisely what this regression fixture
-        // must bypass in order to model the old defect.
+        // still queued work. Do not use ingress.mark_input_closed() here:
+        // its new linearized producer gate is precisely what this regression
+        // fixture must bypass in order to model the old defect; the direct
+        // svc.mark_input_closed() call below closes the coordinator alone.
         svc.mark_input_closed();
     }
     reader.pump();  // initial pump before the loop (main_online.cc): the

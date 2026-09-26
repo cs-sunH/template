@@ -1986,9 +1986,9 @@ def watermark_prepare(args: argparse.Namespace, repo_variant: str,
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
             if reserve_tokens < 0:
                 reserve_tokens = DEFAULT_KV_RESERVE_CONTEXT_TOKENS
-            npus_for_calibers = load_npus_per_instance(
-                args.run_dir, args.request_manifest, request_manifest_loader) \
-                if not npus else npus
+            # 抵达此处 capacity 非 None，而 capacity 仅在 if npus: 内赋值
+            # ——npus 恒已装载且非 0，无需重载。
+            npus_for_calibers = npus
             try:
                 calibers = compute_capacity_calibers(
                     model, npus_for_calibers, hardware["bytes"],

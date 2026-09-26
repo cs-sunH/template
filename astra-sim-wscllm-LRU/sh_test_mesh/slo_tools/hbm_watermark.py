@@ -479,9 +479,9 @@ REPO_VARIANTS: dict[str, dict] = {
 # 以下八个函数逐字拷贝自仓内 workload/llama2_7b_inference/
 # session_kv_manager.py（_require_nonnegative_int / partition_values_exact /
 # attention_heads_by_tp_rank / estimate_model_weight_bytes /
-# model_weight_shard_bytes_by_tp_rank(:217) / kv_cache_bytes_for_tokens(:252)
-# / kv_cache_shard_bytes_for_tokens(:259) / kv_cache_shard_bytes_for_layer_
-# range(:275)）——manager 是逐 rank HBM 记账的权威实现，本工具不得另立
+# model_weight_shard_bytes_by_tp_rank(:228) / kv_cache_bytes_for_tokens(:263)
+# / kv_cache_shard_bytes_for_tokens(:270) / kv_cache_shard_bytes_for_layer_
+# range(:286)）——manager 是逐 rank HBM 记账的权威实现，本工具不得另立
 # 口径。**同步义务**：session_kv_manager.py 上述函数任何改动必须同步拷贝
 # 到本节（五仓同改，md5 对齐）；函数是五仓共性，模型参数由 run_dir 自带
 # 的 trace_config/hardware 配置实例化（五仓 hardware 配置可不同）。
@@ -608,7 +608,7 @@ def kv_cache_shard_bytes_for_layer_range(
     """Return exact whole-head KV bytes for ``[layer_start, layer_end)``.
 
     Layer ranges are derived from ``model.layers``; bytes scale linearly with
-    the number of layers so a suffix/prefix split is byte-conservative by
+    the number of layers so any layer-range split is byte-conservative by
     construction (blueprint sh_2.0 ``face_scheduler.py:400-443``)."""
 
     if tokens < 0:

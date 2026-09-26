@@ -9,7 +9,8 @@ strategy 感知开 vs 关感知 对比,逐决策归类:
   排队状态差异       -- 决策内容不同且不由完成事件时序解释(决策输入——
                        排队深度/KV 状态——不同)
 
-每类差异必须给出解释;无法归类的差异 = 缺陷,报告并退出 1。
+每类差异必须给出解释;任何真实差异(含行数不一致)都判验证失败,
+报告并退出 1。
 
 输入(两个 strategy 运行目录):
   --baseline-run <dir>   关感知运行(默认策略运行)
@@ -40,8 +41,8 @@ fail-closed 契约(空数据源禁止比较,禁止空==空真空通过):任一�
 jsonl 缺失或 0 行、决策行缺 decision 载荷、bridge 无 request_*.json、
 cpp.log 缺失或未解析出任何门计数器——立即报错退出 2,不产出报告。
 
-退出码:0 = 全部差异已归类并解释(预期:全部无差异);1 = 存在无法归类
-的差异或行数对不上;2 = 数据源缺失/为空(fail-closed)。"""
+退出码:0 = 全部无差异(决策序列逐字节一致且各载体全部对平);1 = 存在
+任何决策差异或载体差异(含行数不一致);2 = 数据源缺失/为空(fail-closed)。"""
 
 import argparse
 import gzip
@@ -325,7 +326,7 @@ def main(argv=None) -> int:
     baseline = _load_run(args.baseline_run)
     sensing = _load_run(args.sensing_run)
 
-    findings = []  # (级别, 条目, 证据);级别: PASS / INFO / DIFF / DEFECT
+    findings = []  # (级别, 条目, 证据);级别: PASS / DIFF
 
     # ---- 1. 决策行逐行对平 ----
     categories, differences = classify_differences(baseline, sensing)
@@ -430,17 +431,18 @@ def main(argv=None) -> int:
                                                      sensing["counters"])))
 
     # ---- 判定 ----
-    defects = [finding for finding in findings if finding[0] == "DEFECT"]
+    # 退出码契约(docstring 与 README PASS 判据"③④ 决策日志逐字节一致"):
+    # 任何决策差异(含行数不一致)或任一 DIFF 级载体差异都不允许以 exit 0
+    # 通过。旧版按恒为空表的 DEFECT 级判 ok,任何真实差异都 fail-open 地
+    # 以 exit 0 通过(2026-09-26 修复:改按"无任何差异"判 ok)。
     diffs = [finding for finding in findings if finding[0] == "DIFF"]
     if not differences and not diffs:
         verdict = "全部无差异:感知开/关决策序列逐字节一致,差异已全部归类并解释"
         ok = True
-    elif not defects:
-        verdict = ("差异均已归类并解释(无缺陷差异):决策差异 {} 条,其余载体"
-                   "差异均为设计内/事件时序类".format(len(differences)))
-        ok = True
     else:
-        verdict = "存在无法归类的缺陷差异:{} 条".format(len(defects))
+        verdict = ("存在未对平差异:DIFF 级载体差异 {} 条,逐决策差异 {} 条"
+                   "(含行数不一致)——任一真实差异都判验证失败,见逐项比较"
+                   "与差异清单").format(len(diffs), len(differences))
         ok = False
 
     _render(args.report, baseline, sensing, findings, categories,
@@ -508,7 +510,8 @@ def _render(report_path, baseline, sensing, findings, categories,
     lines.append("")
     lines.append("`python3 online/verify/diff_explainability.py "
                  "--baseline-run <off_run> --sensing-run <on_run> "
-                 "--report <out>.md`;退出 0 = 全部差异已归类并解释;"
+                 "--report <out>.md`;退出 0 = 全部无差异(决策序列逐字节一致);"
+                 "退出 1 = 存在差异(含行数不一致);"
                  "退出 2 = 数据源缺失/为空(fail-closed)。")
     lines.append("")
     report_text = "\n".join(lines)

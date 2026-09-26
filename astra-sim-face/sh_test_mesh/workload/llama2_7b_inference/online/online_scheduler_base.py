@@ -87,9 +87,6 @@ class PropagatingTailTracker:
         """显式覆盖某来源上限(测试/运维;必须为正整数)。"""
         self._require(name)["limit"] = int(limit)
 
-    def limit(self, name) -> int:
-        return self._require(name)["limit"]
-
     def _require(self, name) -> dict:
         source = self._sources.get(name)
         if source is None:

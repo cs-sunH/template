@@ -1770,8 +1770,10 @@ int main(int argc, char* argv[]) {
     // terminal command / error); the CSV window EOF is reported separately
     // because it is NOT a close (the input stays open for external
     // injection -- the IDLE fixture contract). The ingress overflow audit
-    // counts bounded-queue rejections (0 on every official run: high_water
-    // 128 << capacity 4096; a growing producer would surface here).
+    // counts bounded-queue rejections (0 on every official run: the calendar
+    // reader parks its cursor whenever the queue is full instead of
+    // overflowing the 4096-command capacity; a growing producer would
+    // surface here).
     const char* close_source = "not_closed";
     if (svc.input_closed()) {
         switch (svc.input_close_reason()) {

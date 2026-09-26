@@ -49,10 +49,32 @@ FluidScheduler::FluidScheduler(std::shared_ptr<EventQueue> event_queue,
       max_dirty_flows(0),
       peak_completion_heap_size(0),
       wall_start_time(std::chrono::steady_clock::now()) {
-    assert(this->event_queue != nullptr);
-    assert(max_active_flows > 0);
-    assert(max_route_memberships > 0);
-    assert(progress_report_event_interval > 0);
+    // Constructor resource limits fail closed in every build type (the
+    // former asserts were compiled out of Release builds).
+    if (this->event_queue == nullptr) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "FluidScheduler requires a non-null EventQueue"
+                  << std::endl;
+        std::exit(-1);
+    }
+    if (max_active_flows == 0) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "FluidScheduler requires max_active_flows > 0"
+                  << std::endl;
+        std::exit(-1);
+    }
+    if (max_route_memberships == 0) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "FluidScheduler requires max_route_memberships > 0"
+                  << std::endl;
+        std::exit(-1);
+    }
+    if (progress_report_event_interval == 0) {
+        std::cerr << "[Error] (network/analytical/congestion_aware) "
+                  << "FluidScheduler requires progress_report_event_interval"
+                  << " > 0" << std::endl;
+        std::exit(-1);
+    }
 
     link_states.reserve(directed_links.size());
     for (size_t index = 0; index < directed_links.size(); ++index) {
@@ -90,9 +112,10 @@ void FluidScheduler::start_flow(const ChunkSize bytes,
         flush_scheduled = true;
         if (deferred_flush_mode) {
             // Online/deferred mode: never insert a current_time event into the
-            // main queue from a tick-end/deferred context (EventQueue.cpp :48
-            // strict-increase assert). Post-commit comm emission lands here and
-            // is executed by the same-tick deferred drain.
+            // main queue from a tick-end/deferred context (EventQueue.cpp
+            // proceed() strict-increase fail-closed guard). Post-commit comm
+            // emission lands here and is executed by the same-tick deferred
+            // drain.
             event_queue->schedule_event_deferred(flush_callback, this);
         } else {
             // Static mode (pre-extension behavior, byte-for-byte preserved):
@@ -641,10 +664,6 @@ void FluidScheduler::enable_link_observer(const uint64_t link_bucket_ns) noexcep
             observer.active_links.push_back(static_cast<LinkId>(link));
         }
     }
-}
-
-bool FluidScheduler::link_observer_enabled() const noexcept {
-    return link_observer_.enabled;
 }
 
 uint64_t FluidScheduler::link_observer_bucket_ns() const noexcept {

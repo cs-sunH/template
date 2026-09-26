@@ -41,7 +41,6 @@ void HardwareResource::occupy(
         if (node->type() == ChakraNodeType::COMP_NODE) {
             assert(num_in_flight_gpu_comp_ops == 0);
             ++num_in_flight_gpu_comp_ops;
-            // gpu_ops_node = node;
             gpu_ops_node.emplace(node->id());
         } else {
             if (node->type() == ChakraNodeType::COMM_RECV_NODE) {
@@ -49,7 +48,6 @@ void HardwareResource::occupy(
             }
             assert(num_in_flight_gpu_comm_ops == 0);
             ++num_in_flight_gpu_comm_ops;
-            // gpu_comms_node = node;
             gpu_comms_node.emplace(node->id());
         }
     }

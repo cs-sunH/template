@@ -48,8 +48,6 @@ class HalvingDoubling : public Algorithm {
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
-    long total_packets_sent;
-    long total_packets_received;
     uint64_t msg_size;
     std::list<MyPacket*> locked_packets;
     bool processed;

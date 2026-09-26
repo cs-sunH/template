@@ -389,7 +389,9 @@ class RemoteRestoreEmissionTest(unittest.TestCase):
             [_shard(source_rank=5, target_rank=1, edge_rank=1, bytes=900,
                     noc_path=(5, 1)),
              _shard(source_rank=6, target_rank=0, edge_rank=0, bytes=900,
-                    noc_path=(6, 5, 0))],
+                    # noc_path 按 _xy_route(先列后行)合成:6(1,2)→5(1,1)
+                    # →4(1,0)→0(0,0);不含对角跳变(与生产 XY 路由口径一致)。
+                    noc_path=(6, 5, 4, 0))],
             source_instance_index=1,
             resident_prefix_layers_before=LAYERS,
             resident_prefix_layers_after=0)

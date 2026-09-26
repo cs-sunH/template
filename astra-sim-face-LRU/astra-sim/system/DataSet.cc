@@ -22,7 +22,6 @@ DataSet::DataSet(int total_streams, Tick creation_tick) {
     this->my_id = id_auto_increment++;
     this->total_streams = total_streams;
     this->finished_streams = 0;
-    this->finished = false;
     this->finish_tick = 0;
     this->active = true;
     this->creation_tick = creation_tick;
@@ -50,7 +49,6 @@ void DataSet::notify_stream_finished(StreamStat* data) {
         update_stream_stats(data);
     }
     if (finished_streams == total_streams) {
-        finished = true;
         finish_tick = Sys::boostedTick();
         if (notifier != nullptr) {
             take_stream_stats_average();
@@ -59,7 +57,6 @@ void DataSet::notify_stream_finished(StreamStat* data) {
             delete notifier;
             notifier = nullptr;
             IntData* int_data = new IntData(my_id);
-            int_data->execution_time = finish_tick - creation_tick;
             c->call(ev, int_data);
             delete int_data;
         }

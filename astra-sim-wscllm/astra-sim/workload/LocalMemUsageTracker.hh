@@ -2,7 +2,6 @@
 #define __LOCAL_MEM_USAGE_TRACKER__
 
 #include <cstdio>
-#include <iosfwd>
 #include <json/json.hpp>
 #include <map>
 #include <string>

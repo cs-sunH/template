@@ -19,7 +19,6 @@ UsageTracker keeps its precise level without retaining transition history.
 #include <cstring>
 #include <list>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -29,6 +28,7 @@ UsageTracker keeps its precise level without retaining transition history.
 #include "astra-sim/system/StreamBaseline.hh"
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/system/UsageTracker.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 namespace {
 
@@ -118,7 +118,10 @@ std::unique_ptr<AstraSim::Sys> make_online_system(
         id, "unused", "empty", system_config, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
-        std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
+        // Empty-store NodeStoreGraphSource: the offline static GraphSource
+        // adapters were removed with the static path (2026-09-26); an empty
+        // store never yields nodes, matching the retired EmptyGraphSource.
+        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
 }
 
 struct ReadyStream {
@@ -294,33 +297,10 @@ void test_usage_tracker_contract(const std::array<AstraSim::Sys*, 4>& ranks) {
            "default UsageTracker record contents remain unchanged");
 
     auto& online = ranks[0]->scheduler_unit->usage.at(0);
-    online.set_usage(1);
+    online.increase_usage();
     expect(online.current_level == 1 && online.usage.empty(),
            "online scheduler changes level without retaining history");
-    online.set_usage(0);
-
-    const int level_before_report = online.current_level;
-    const AstraSim::Tick tick_before_report = online.last_tick;
-    bool report_failed_closed = false;
-    try {
-        online.report(nullptr, 0);
-    } catch (const std::logic_error&) {
-        report_failed_closed = true;
-    }
-    expect(report_failed_closed,
-           "online UsageTracker::report rejects unavailable history");
-
-    bool percentage_failed_closed = false;
-    try {
-        (void)online.report_percentage(100);
-    } catch (const std::logic_error&) {
-        percentage_failed_closed = true;
-    }
-    expect(percentage_failed_closed,
-           "online UsageTracker::report_percentage rejects unavailable history");
-    expect(online.current_level == level_before_report &&
-               online.last_tick == tick_before_report && online.usage.empty(),
-           "rejected online history reports do not mutate live state");
+    online.decrease_usage();
 
     constexpr uint64_t kIterations = 1000000;
     for (uint64_t index = 0; index < kIterations; ++index) {

@@ -531,7 +531,6 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
     if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
         !stats->online_history_preserved()) {
         auto& online_stat = online_statistics_state_or_fail(node.global_id);
-        online_stat.operation_intensity = operational_intensity;
         online_stat.compute_utilization = perf / sys->peak_perf;
         // Zero-intensity nodes have no memory utilization; leave the field
         // unset instead of dividing by 0 (a non-finite value fails closed in
@@ -540,7 +539,6 @@ void Workload::issue_comp(const ExecutionDriven::NodeView& node) {
             online_stat.memory_utilization =
                 (perf / operational_intensity) / sys->local_mem_bw;
         }
-        online_stat.is_memory_bound = perf < sys->peak_perf;
         if (sys->trace_enabled) {
             workload_logger_
                 ->debug("operation_intensity={}, perf={}, elapsed_time={} "
@@ -610,13 +608,6 @@ void Workload::issue_coll_comm(const ExecutionDriven::NodeView& node) {
     const auto comm_type =
         static_cast<ChakraCollectiveCommType>(node.coll.comm_type);
     const auto comm_size = node.coll.bytes;
-    // Keep comm_size on the live NodeStore record in compact service mode:
-    // terminal bandwidth accounting still consumes it, but no global
-    // Statistics per-node hash-table entry is needed.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = comm_size;
-    }
     // TODO: comm_tag? which is used to distinguish two different collective in
     // same pg
     const auto comm_priority = node.coll.priority;  // default 0u
@@ -679,11 +670,6 @@ void Workload::issue_send_comm(const ExecutionDriven::NodeView& node) {
     }
     const auto dst = node.comm.dst;
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     if (local_hbm_bandwidth_model != nullptr && size > 0 &&
@@ -724,11 +710,6 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
         throw std::runtime_error("Recv node should be issued by the receiver");
     }
     const auto size = node.comm.bytes;
-    // Record communication size for bandwidth calculation.
-    if (execution_mode_ == ExecutionDriven::ExecutionMode::Online &&
-        !stats->online_history_preserved()) {
-        online_statistics_state_or_fail(node.global_id).comm_size = size;
-    }
     const auto tag = node.comm.tag;
 
     if (local_hbm_bandwidth_model != nullptr && size > 0 &&

@@ -9,9 +9,9 @@ main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
   - parses the online CLI family explicitly (OnlineCli; defaults/mutex/missing
     rules unit-tested in tests/cli_online_test.cc). Step 1-8/1-9: --online-mode
-    takes the mode token replay|strategy; replay serves the offline decision
-    log (LUT clock, step 1-8), strategy runs the real policy scheduler with
-    real physics (step 1-9);
+    takes the only legal mode token strategy, which runs the real policy
+    scheduler with real physics (the replay token/route was deleted by the
+    path-2 removal on 2026-08-18);
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;
   - runs the request-neutral main loop, draining ingress commands before
@@ -44,8 +44,8 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
          (rank, json member id) -> store id translation and the explicit
          satisfying status set;
       4. future_alarms -> RequestIngress::schedule_future_arrival (the
-         next-turn arrival alarm; replay authority = the offline prefill
-         record tick);
+         next-turn arrival alarm; the alarm tick is the envelope's
+         strategy-computed arrival_world_ns);
       then the per-rank issue pass (workload->issue_dep_free_nodes()),
       the REQUEST_COMPLETE ServiceCoordinator accounting (after the alarms:
       the last alarm of the batch keeps the service ACTIVE until the next
@@ -63,7 +63,7 @@ Step 1-8: the decision loop is fully wired (决策边界驱动的 Execution-Driv
   - run end: svc.finished() marks logical completion; process exit additionally
     requires the EventQueue, deferred issue pass, and DecisionMailbox to be
     drained.  Assertions completed == CSV data rows and
-    no_decision_python_callback_count == 0 (acceptance: 1177/1177 replay).
+    no_decision_python_callback_count == 0 (acceptance: 1177/1177).
 
 Step 1-10 (runners + IDLE fixture):
   - --request-queue-csv is optional (合同② request-neutral default): absent
@@ -121,11 +121,9 @@ Step 1-10 (runners + IDLE fixture):
 #include <map>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <thread>
 #include <string>
 #include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1249,7 +1247,7 @@ int main(int argc, char* argv[]) {
     // queue -- the pipeline advances continuously between decisions without
     // Workload auto-advancing (方案 §4 步骤 1-4 操作 4 / 仿真加速分析.md
     // §3.3; the E2E proved commit-only issue stalls: prefill chains only
-    // advanced at arrival epochs and the replay desynced).
+    // advanced at arrival epochs).
     std::vector<Workload*> workloads;
     for (auto* system : systems) {
         workloads.push_back(system->workload);
@@ -1543,7 +1541,7 @@ int main(int argc, char* argv[]) {
             // calendar reader's machine states make that shape unreachable
             // (cursor 停驻形态/泵送-二次 drain 次序/Error 终止与 calendar
             // 不变量互相闭合; 重构打破不变量必须重做可达性分析). The
-            // 12-field report itself is kept for the A3 watchdog so any
+            // 11-field report itself is kept for the A3 watchdog so any
             // silent-stall family stays attributable. window_occupancy in
             // the calendar reader counts committed-but-untriggered turn-0
             // entries.
@@ -1726,10 +1724,9 @@ int main(int argc, char* argv[]) {
 
     // Step-1-6/1-8 gate counters and run-end assertions. Phase-1 acceptance:
     // completed_request_count == CSV data rows (1177 for the 20.csv
-    // first-30-seconds input; the offline replay equivalent of
-    // replay_poll_query_count == 0 is the never-incremented
+    // first-30-seconds input) and the never-incremented
     // no_decision_python_callback_count -- no delivery epoch was ever
-    // dropped). tick_end_without_decision_count is a normal
+    // dropped. tick_end_without_decision_count is a normal
     // allowed-nonzero counter, reported separately.
     std::cout << "[online] gate counters: event_count=" << mailbox.event_count()
               << " delivery_count=" << mailbox.delivery_count()

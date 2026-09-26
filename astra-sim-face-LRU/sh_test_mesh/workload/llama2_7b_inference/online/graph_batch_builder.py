@@ -106,7 +106,7 @@ class OnlineTraceBuilder:
     """与共享 TraceBuilder API 同构的在线侧每-rank builder。
 
     同一接口面:timer_gate / arm_timer_gate / comp / all_reduce / comm_send /
-    comm_recv / next_id / previous_id / node_count——共享助手函数可直接驱动。
+    comm_recv / next_id / previous_id——共享助手函数可直接驱动。
     与 TraceBuilder 的差异:节点发射为 GraphBatch nodes[] dict(而非 ChakraNode
     对象),依赖记录为 parent_edges[](而非节点内联 data_deps);timer_gate
     忽略 duration(runtime_ns=0,alarm 替代等待)。
@@ -126,7 +126,6 @@ class OnlineTraceBuilder:
         # next_id 计数器,与位置无关)。
         self.nodes = []   # 本 rank 尚未交付的节点 dict(发射序)
         self.edges = []   # 本 rank 尚未交付的 parent edges
-        self.node_count = 0
         # 当前 request-stage 反向索引上下文(每次 per-request 发射前设置)。
         self.request_id = ""
         self.stage = ""
@@ -202,7 +201,6 @@ class OnlineTraceBuilder:
         self.previous_id = self.next_id
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node
 
     @staticmethod
@@ -280,7 +278,6 @@ class OnlineTraceBuilder:
             })
         self.next_id += 1
         self.nodes.append(node)
-        self.node_count += 1
         return node["id"]
 
     def mem_store(self, name: str, tensor_size: int,
@@ -350,12 +347,6 @@ class OnlineTraceBuilder:
         node["comm"]["tag"] = int(comm_tag)
         if not hbm_charge:
             node["comm"]["hbm_charge"] = False
-
-    # ------------------------------------------------------------- 只读属性 --
-
-    @property
-    def node_count_total(self) -> int:
-        return self.node_count
 
 
 class _HistorySnapshot:
@@ -433,7 +424,7 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 整段,并维护 completion_gates 账本。"""
 
-    def __init__(self, config, *, digest_sink=None):
+    def __init__(self, config):
         self.config = config
         # strategy 模式保持物理跨 request 链。
         self.builders = {
@@ -446,7 +437,9 @@ class GraphBatchBuilder:
         # completion_gates 只保存下一同 session turn 尚未消费的 interval
         # gate 来源；turn>0 admission 或 terminal completion 后即释放。
         self.completion_gates = {}
-        # ---- B3(2026-09-06,sh :439-461):三态 KV 发射账本 ----
+        # ---- B3(2026-09-06,sh :439-461):两态 KV 发射账本(session 级
+        # Tiered-LRU 后 location 值域收敛 {local_hbm, remote_memory},
+        # note_request_complete 值域校验同口径)----
         # 跨请求 history location 链(face 适配:face 的 interval gates 在
         # 下一 turn 准入时发射,history 门不跨批驻留,location 链经
         # deferred_session_locations 承载,见 note_request_complete)。

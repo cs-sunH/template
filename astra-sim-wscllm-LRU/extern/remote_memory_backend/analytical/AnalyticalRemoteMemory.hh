@@ -139,19 +139,6 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
     double port_time_ns = 0.0;
   };
 
-  // §3.3：全局变迁事件 payload。只带注册时的全局 generation 序号；
-  // 不保存 PortJob*、迭代器或任何端口数据。正常派发在 call() 入口释放
-  // payload 并清空已出队句柄；取消与析构经 register_event_cancellable 的
-  // deleter（release_transition_payload）释放；陈旧 generation 路径同样
-  // 先释放 payload 再按无操作处理。
-  class TransitionEventData : public AstraSim::CallData {
-   public:
-    explicit TransitionEventData(uint64_t generation_value)
-        : generation(generation_value) {}
-
-    uint64_t generation;
-  };
-
  public:
   // ---- PortStats：只读端口统计快照（§5.1，阶段 3 后端观测） ----
   // 由 [H1]-[H4] 钩子无条件下低开销累计——sensing 只门控逐事务明细，统计
@@ -227,6 +214,32 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   // 不在 callback 后从 wlhd 指针补观测键。
   void enable_transaction_log(const std::string& bridge_dir,
                               const std::string& run_id);
+
+  // §3.3：全局变迁事件 payload。只带注册时的全局 generation 序号；
+  // 不保存 PortJob*、迭代器或任何端口数据。正常派发在 call() 入口释放
+  // payload 并清空已出队句柄；取消与析构经 register_event_cancellable 的
+  // deleter（release_transition_payload）释放；陈旧 generation 路径同样
+  // 先释放 payload 再按无操作处理。
+  // 访问性注记（2026-09-25）：payload 类型 public 化，供 nway 测试 S13 经
+  // call() 注入陈旧 generation（取代旧 #define private public seam）；
+  // 两个状态成员保持 private，只读经下方访问器。
+  class TransitionEventData : public AstraSim::CallData {
+   public:
+    explicit TransitionEventData(uint64_t generation_value)
+        : generation(generation_value) {}
+
+    uint64_t generation;
+  };
+
+  // ---- 全局变迁事件状态只读访问器（§7 白盒测试观测面；本仓新增公共
+  // API，非对齐姊妹仓——joint 仓该成员 private 无访问器、face-LRU 无此
+  // 成员）。与 port_stats 同口径：不推进、不结算、不改变任何后端状态。
+  [[nodiscard]] uint64_t transition_generation() const {
+    return transition_generation_;
+  }
+  [[nodiscard]] bool transition_event_pending() const {
+    return transition_event_pending_;
+  }
 
  private:
   // ---- 入口与端口映射 ----

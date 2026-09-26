@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # archive_run_outputs.sh —— D1 成功运行产物瘦身归档(2026-08-28)。
 #
-# Usage: bash archive_run_outputs.sh <run_dir>
+# Usage: bash archive_run_outputs.sh <run_dir> [metrics_detail(off|summary|full)]
 #
 # 前提:仅由 run_online_strategy*.sh 在整条链路(C++/Python/postprocess)
 # 全部成功后调用;失败 run 不归档、全量保留供排查(调用方保证)。
+# 参数 2 = 调用方 runner 解析出的指标档位(可省;省略时零 [METRIC] 行按异常
+# 拒绝归档):off 档 C++ 侧指标收集器整体禁用、不发任何 [METRIC] 行
+# (MetricCollector.cc initialize 对 "off" 提前 return),零行属正常设计——
+# 与 run_slo_postprocess.sh 对同一条件的 by-design 跳过语义一致,①③跳过
+# 并留痕;summary/full 档零行仍是收集器异常,维持 fail-closed。
 #
 # 动作(各步骤独立、可幂等重跑):
 #   ① 抽取 cpp.log 的 [METRIC] 行 → <run_dir>/metrics.log(常驻,唯一指标
-#      数据源,不压缩以便 grep);
+#      数据源,不压缩以便 grep;detail=off 时无行可抽,随③一并跳过);
 #   ② 兼容旧运行:若仍有 bridge/request_*.json,归入
 #      <run_dir>/bridge_requests.tar.gz 后删散装;新运行使用单一
 #      results/request_journal.jsonl,不再执行百万 inode 归档；
-#   ③ cpp.log → cpp.log.gz(pigz 优先,缺省 gzip;-c 走 tmp+mv 原子替换);
+#   ③ cpp.log → cpp.log.gz(pigz 优先,缺省 gzip;-c 走 tmp+mv 原子替换;
+#      detail=off 时跳过,cpp.log 保持原文常驻);
 #   ④ results/ 非必需 jsonl → <run_dir>/results_extra.tar.gz 后删散装。
 #
 # 常驻保留集(指标必需,不压缩):
@@ -25,13 +31,14 @@
 #   对账/差异报告输入;strategy 跑无此二件,保留集不受影响)
 #   campaign_provenance.json(存在时)
 #   SLO 自动提取产物(P3,2026-08-28,由 run_slo_postprocess.sh 写在 run_dir
-#   根,本脚本不触碰 run_dir 根级文件,此处显式登记为常驻):slo_*.csv、
+#   根,本脚本不触碰这些 SLO 产物文件,此处显式登记为常驻):slo_*.csv、
 #   slo_*.json、cache_events.csv、kv_hit_states.csv、slo_postprocess.log、
 #   slo_postprocess.FAIL(若有)、metrics_manifest.json/manifest.json(P2
 #   拷入的 per-request manifest,run_dir 自包含的关键件)
 set -uo pipefail
 
-RUN_DIR=${1:?"usage: archive_run_outputs.sh <run_dir>"}
+RUN_DIR=${1:?"usage: archive_run_outputs.sh <run_dir> [metrics_detail]"}
+ARCHIVE_DETAIL=${2:-}
 if [ ! -d "${RUN_DIR}" ]; then
   echo "[archive] FAIL: run dir not found: ${RUN_DIR}" >&2
   exit 1
@@ -43,16 +50,22 @@ else
   COMPRESS=(gzip)
 fi
 
-# ① [METRIC] 行抽取(cpp.log 尚在时;已归档重跑则跳过)。
+# ① [METRIC] 行抽取(cpp.log 尚在时;已归档重跑则跳过)。detail=off 档零
+# [METRIC] 行属正常设计(收集器禁用),跳过①③并留痕;其余档位零行仍拒绝
+# 归档(与 run_slo_postprocess.sh 的档位语义对齐,见头注)。
 if [ -f "${RUN_DIR}/cpp.log" ]; then
-  grep '^\[METRIC\] ' "${RUN_DIR}/cpp.log" > "${RUN_DIR}/metrics.log" || true
-  METRIC_LINES=$(wc -l < "${RUN_DIR}/metrics.log")
-  if [ "${METRIC_LINES}" -eq 0 ]; then
-    echo "[archive] FAIL: no [METRIC] lines in cpp.log (refusing to archive)" >&2
-    rm -f "${RUN_DIR}/metrics.log"
-    exit 1
+  if [ "${ARCHIVE_DETAIL}" = "off" ]; then
+    echo "[archive] SKIP: metrics detail=off — collector disabled, no [METRIC] lines (by design, cf. run_slo_postprocess.sh); steps ①/③ skipped"
+  else
+    grep '^\[METRIC\] ' "${RUN_DIR}/cpp.log" > "${RUN_DIR}/metrics.log" || true
+    METRIC_LINES=$(wc -l < "${RUN_DIR}/metrics.log")
+    if [ "${METRIC_LINES}" -eq 0 ]; then
+      echo "[archive] FAIL: no [METRIC] lines in cpp.log (refusing to archive)" >&2
+      rm -f "${RUN_DIR}/metrics.log"
+      exit 1
+    fi
+    echo "[archive] metrics.log: ${METRIC_LINES} [METRIC] lines retained"
   fi
-  echo "[archive] metrics.log: ${METRIC_LINES} [METRIC] lines retained"
 fi
 
 # ② bridge/request_*.json 散装 → 单 tar.gz。
@@ -72,8 +85,8 @@ if compgen -G "${RUN_DIR}/bridge/request_*.json" > /dev/null; then
 $(tar -tf "${RUN_DIR}/bridge_requests.tar.gz" | wc -l) request files"
 fi
 
-# ③ cpp.log → cpp.log.gz(-c 走 tmp+mv,成功才删原文件)。
-if [ -f "${RUN_DIR}/cpp.log" ]; then
+# ③ cpp.log → cpp.log.gz(-c 走 tmp+mv,成功才删原文件;detail=off 随①跳过)。
+if [ -f "${RUN_DIR}/cpp.log" ] && [ "${ARCHIVE_DETAIL}" != "off" ]; then
   "${COMPRESS[@]}" -c "${RUN_DIR}/cpp.log" > "${RUN_DIR}/cpp.log.gz.tmp" \
     && mv "${RUN_DIR}/cpp.log.gz.tmp" "${RUN_DIR}/cpp.log.gz" \
     && rm -f "${RUN_DIR}/cpp.log" \

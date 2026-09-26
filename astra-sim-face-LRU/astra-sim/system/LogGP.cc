@@ -63,7 +63,6 @@ void LogGP::process_next_read() {
         offset = o;
     }
     MemMovRequest tmp = sends.front();
-    tmp.total_transfer_queue_time += Sys::boostedTick() - tmp.start_time;
     partner->switch_to_receiver(tmp, offset);
     sends.pop_front();
     curState = State::Sending;
@@ -115,8 +114,6 @@ void LogGP::call(EventType event, CallData* data) {
         subsequent_reads++;
     } else if (event == EventType::Rec_Finished) {
         assert(receives.size() > 0);
-        receives.front().total_transfer_time +=
-            Sys::boostedTick() - receives.front().start_time;
         receives.front().start_time = Sys::boostedTick();
         last_trans = Sys::boostedTick();
         prevState = curState;
@@ -140,8 +137,6 @@ void LogGP::call(EventType event, CallData* data) {
                 receives.pop_front();
             }
             if (processing_state == ProcState::Free && processing.size() > 0) {
-                processing.front().total_processing_queue_time +=
-                    Sys::boostedTick() - processing.front().start_time;
                 processing.front().start_time = Sys::boostedTick();
                 sys->register_event(
                     this, EventType::Processing_Finished, nullptr,
@@ -183,8 +178,6 @@ void LogGP::call(EventType event, CallData* data) {
         }
     } else if (event == EventType::Processing_Finished) {
         assert(processing.size() > 0);
-        processing.front().total_processing_time +=
-            Sys::boostedTick() - processing.front().start_time;
         processing.front().start_time = Sys::boostedTick();
         processing_state = ProcState::Free;
         if (processing.front().send_back == true) {
@@ -220,8 +213,6 @@ void LogGP::call(EventType event, CallData* data) {
             }
         }
         if (processing.size() > 0) {
-            processing.front().total_processing_queue_time +=
-                Sys::boostedTick() - processing.front().start_time;
             processing.front().start_time = Sys::boostedTick();
             processing_state = ProcState::Processing;
             sys->register_event(
@@ -239,8 +230,6 @@ void LogGP::call(EventType event, CallData* data) {
         processing.push_back(movRequest);
         pre_process.erase(talking_it);
         if (processing_state == ProcState::Free && processing.size() > 0) {
-            processing.front().total_processing_queue_time +=
-                Sys::boostedTick() - processing.front().start_time;
             processing.front().start_time = Sys::boostedTick();
             sys->register_event(
                 this, EventType::Processing_Finished, nullptr,

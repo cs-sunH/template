@@ -800,9 +800,6 @@ void Statistics::report(std::shared_ptr<spdlog::logger> logger) const {
         case OperatorStatistics::OperatorType::REMOTE_MEM:
             logger->info("sys[{}], Remote mem time: {}", sys_id, time);
             break;
-        case OperatorStatistics::OperatorType::REPLAY:
-            logger->info("sys[{}], Replay time: {}", sys_id, time);
-            break;
         case OperatorStatistics::OperatorType::INVALID:
             logger->info("sys[{}], Invalid time: {}", sys_id, time);
             break;

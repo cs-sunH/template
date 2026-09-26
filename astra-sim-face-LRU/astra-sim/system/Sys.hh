@@ -47,7 +47,7 @@ class Sys : public Callable {
                       int queue_threshold);
         void notify_stream_added(int vnet);
         void notify_stream_added_into_ready_list();
-        void notify_stream_removed(int vnet, Tick running_time);
+        void notify_stream_removed(int vnet);
 
         Sys* sys;
         int max_running_streams;
@@ -278,8 +278,6 @@ class Sys : public Callable {
     ExecutionDriven::ExecutionMode execution_mode_ =
         ExecutionDriven::ExecutionMode::Static;
     std::shared_ptr<ExecutionDriven::GraphSource> graph_source_ = nullptr;
-    // step-1-8 replay-clock scope (main ruling 2026-08-15): true only for
-    // --online-mode replay; strategy mode keeps real physics (false).
     // roofline model
     bool roofline_enabled;
     double peak_perf;

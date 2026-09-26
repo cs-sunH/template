@@ -25,8 +25,6 @@ HalvingDoubling::HalvingDoubling(ComType type,
     this->data_size = data_size;
     this->nodes_in_ring = ring_topology->get_nodes_in_ring();
     this->parallel_reduce = 1;
-    this->total_packets_sent = 0;
-    this->total_packets_received = 0;
     this->free_packets = 0;
     this->zero_latency_packets = 0;
     this->non_zero_latency_packets = 0;
@@ -108,7 +106,6 @@ void HalvingDoubling::run(EventType event, CallData* data) {
         ready();
         iteratable();
     } else if (event == EventType::PacketReceived) {
-        total_packets_received++;
         insert_packet(nullptr);
     } else if (event == EventType::StreamInit) {
         for (int i = 0; i < parallel_reduce; i++) {
@@ -175,7 +172,6 @@ void HalvingDoubling::reduce() {
     process_stream_count();
     packets.pop_front();
     free_packets--;
-    total_packets_sent++;
 }
 
 bool HalvingDoubling::iteratable() {

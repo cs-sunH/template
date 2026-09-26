@@ -351,10 +351,10 @@ void test_node_rules() {
         expect_parse_error(resp, "N4: negative id", "negative");
         // uint64 max is a legal PARSE value (the committer treats it as the
         // missing/invalid sentinel downstream -- unchanged semantics).
-        resp["nodes"][0]["id"] = 18446744073709551515ULL;
+        resp["nodes"][0]["id"] = 18446744073709551615ULL;
         const ParsedGraphBatch parsed =
             parse_ok(resp, "N4: uint64 max id parses");
-        expect(parsed.nodes[0].json_id == 18446744073709551515ULL,
+        expect(parsed.nodes[0].json_id == 18446744073709551615ULL,
                "N4: uint64 max id round-trips");
     }
     {  // N5: type domain

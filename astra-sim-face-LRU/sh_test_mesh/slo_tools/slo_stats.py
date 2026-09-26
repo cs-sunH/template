@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WP3 SLO 统计后处理（纯离线脚本，五仓逐字节相同，标准库实现）。
+"""WP3 SLO 统计后处理（纯离线脚本，标准库实现）。
 
 输入 = run_dir（含 request_metrics.csv / cpp.log / metrics_manifest.json）。
 所有数值参数（α、ε、分桶边界、warm-up 窗口等）一律从
@@ -43,7 +43,6 @@ from slo_common import (  # noqa: E402
 )
 
 MAIN_PCTS = (50, 99)
-APPENDIX_PCTS_DEFAULT = (90, 95)
 
 
 def add_run_dir_arg(parser: argparse.ArgumentParser) -> None:
@@ -468,12 +467,16 @@ def cmd_backlog(args: argparse.Namespace, ctx=None) -> int:
         if bucket <= 0:
             fail("--bucket-ns 必须为正整数")
         bucketed: list[tuple[int, int]] = []
+        carry = 0  # 上一锚点行值延续到本桶起点的携带在途值（跨桶区段）
         for time, inflight in series:
             slot = (time // bucket) * bucket
             if bucketed and bucketed[-1][0] == slot:
                 bucketed[-1] = (slot, max(bucketed[-1][1], inflight))
             else:
-                bucketed.append((slot, inflight))
+                # 桶内真实峰值含「上一桶末事件值延续到本桶的区段」：
+                # 携带值大于桶内事件值时只对桶内事件取 max 会系统性低估。
+                bucketed.append((slot, max(carry, inflight)))
+            carry = inflight
         series = bucketed
     stream, close = open_output(args.output, "slo_backlog.csv", args.run_dir)
     try:
@@ -664,7 +667,11 @@ def cmd_scan_export(args: argparse.Namespace) -> int:
                 if e2e is not None and e2e > deadline:
                     num += 1
             rate = num / den
-            goodput = ((n_completed / den) * (1 - rate)) if den else None
+            # 语义权威（slo_tools/README.md）：goodput = tput ×
+            # (1 − violation_rate)；tput 不可得（span≤0）时如实 NA，
+            # 不得以 drain 断言下的无量纲分数 (1−rate) 冒充 rps 量纲。
+            goodput = (tput * (1 - rate)) \
+                if (tput is not None and rate is not None) else None
         out_rows.append((
             str(run_dir), variant, fmt_ratio(lam), n_input, n_completed,
             "true" if drain_ok else "false",

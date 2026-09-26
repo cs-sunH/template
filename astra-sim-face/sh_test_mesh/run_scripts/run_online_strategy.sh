@@ -13,6 +13,13 @@ PROJECT=$(realpath "${SCRIPT_DIR}/../..")
 RUN_DIR=$1
 REQUEST_CSV=${2:?"request_csv 必填(request-neutral:请按 traces/derive_20_first_30_seconds.py 物化输入后显式传入;其 stdout 即权威 provenance 记录)"}
 
+# 相对入参锚定调用者 cwd 预先解析为绝对路径：下方 rm/mkdir 在
+# cd "${PROJECT}" 之前执行，而 cp/bridge-dir/cpp.log/queue-csv 等引用全部
+# 在其之后——放任相对形式会让 rm/mkdir 以调用者 cwd 为基准、其余引用改以
+# 仓根为基准，cp 因目标父目录不存在而失败退出，并在调用者 cwd 留下空目录。
+case "${RUN_DIR}" in /*) ;; *) RUN_DIR="$(pwd -P)/${RUN_DIR}" ;; esac
+case "${REQUEST_CSV}" in /*) ;; *) REQUEST_CSV="$(pwd -P)/${REQUEST_CSV}" ;; esac
+
 # ET 基线目录 = GEN_MATCH 动态解析(四仓统一口径)——恰好一个 llama2_7b_inference_54npus_* 目录(plan_materializer 产出,
 # 输入由 traces/derive_20_first_30_seconds.py 物化,其 stdout 即权威 provenance 记录)。
 GEN_MATCH=("${PROJECT}"/sh_test_mesh/generated/llama2_7b_inference_54npus_*)
@@ -203,7 +210,9 @@ if [[ "${SLO_MODE}" != "0" ]]; then
 fi
 # D1(2026-08-28):成功后产物瘦身归档(失败路径早已 exit 1 全量保留)。
 # SH_ARCHIVE_RUN=0 关闭(调试/对拍需要散装 bridge 文件时)。
+# 指标档位透传(参数 2):off 档归档步跳过①③(by design,与 SLO 步语义一致,
+# 见 archive_run_outputs.sh 头注)。
 if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
-  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" || exit 1
+  bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" "${DETAIL}" || exit 1
 fi
 echo "[run_online_strategy] PASS: ${RUN_DIR}"

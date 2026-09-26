@@ -35,7 +35,6 @@ class DataSet : public Callable, public StreamStat {
     int my_id;
     int total_streams;
     int finished_streams;
-    bool finished;
     bool active;
     Tick finish_tick;
     Tick creation_tick;

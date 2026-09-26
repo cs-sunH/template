@@ -20,7 +20,6 @@ PacketBundle::PacketBundle(Sys* sys,
     this->size = size;
     this->stream = stream;
     this->transmition = transmition;
-    creation_time = Sys::boostedTick();
 }
 
 PacketBundle::PacketBundle(Sys* sys,
@@ -35,7 +34,6 @@ PacketBundle::PacketBundle(Sys* sys,
     this->size = size;
     this->stream = stream;
     this->transmition = transmition;
-    creation_time = Sys::boostedTick();
 }
 
 void PacketBundle::send_to_MA() {
@@ -60,15 +58,18 @@ void PacketBundle::call(EventType event, CallData* data) {
                 "PacketBundle collective processing requires a positive "
                 "local-mem-bw in the system config");
         }
-        // this->delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
+        // delay[ns], size[bytes], local_mem_bw[bytes/s]. Each local
         // HBM write/read pays the configured fixed access latency.
+        // delay stays a local: try_register_event consumes it through a
+        // non-const Tick& and zeroes it, so storing it on the object
+        // would be dead state.
         const auto local_mem_access_delay =
             sys->local_mem_latency +
             static_cast<uint64_t>(static_cast<double>(size) /
                                   sys->local_mem_bw * 1e9);
-        this->delay = 3 * local_mem_access_delay;  // write + read + read
+        Tick delay = 3 * local_mem_access_delay;  // write + read + read
         sys->try_register_event(this, EventType::CommProcessingFinished, data,
-                                this->delay);
+                                delay);
         return;
     }
     stream->call(EventType::General, data);

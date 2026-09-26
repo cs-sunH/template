@@ -33,7 +33,6 @@ class BaseStream : public Callable, public StreamStat {
 
     int stream_id;
     int total_packets_sent;
-    SchedulingPolicy preferred_scheduling;
     std::list<CollectivePhase> phases_to_go;
     int current_queue_id;
     CollectivePhase my_current_phase;

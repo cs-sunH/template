@@ -257,8 +257,8 @@ struct Fixture {
         node.global_id = 0;  // store assigns a fresh id
         const uint64_t id =
             this->source->store().add_node(std::move(node));
-        const auto view = this->source->lookup(id);
-        this->workload()->issue(view.value());
+        const auto* view = this->source->lookup_ptr(id);
+        this->workload()->issue(*view);
         return id;
     }
 

@@ -45,7 +45,8 @@ class CustomAlgorithm : public Algorithm {
     // When running a e.g. 4 rank algorithm on a comm group of ranks 1, 3, 5, 7,
     // The et file for the algorithm will have ranks 0~3.
     // This function converts 0,1,2,3 to 1,3,5,7, respectively.
-    int convert_algo_rank_to_real_rank(int algo_rank);
+    // An algo_rank outside [0, group size) is fail-closed (sys_panic).
+    int convert_algo_rank_to_real_rank(int algo_rank, uint64_t node_id);
 
   private:
     /*
@@ -63,6 +64,9 @@ class CustomAlgorithm : public Algorithm {
     // This is separate from the ET Feeder in the Workload layer, which is used
     // to traverse the whole workload Chakra ET.
     Chakra::ETFeeder* et_feeder;
+    // The composed ET file name (see the ctor), kept for fail-closed
+    // diagnostics.
+    std::string et_filename;
     CommunicatorGroup* comm_group;
 };
 

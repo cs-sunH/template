@@ -24,11 +24,14 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
 ### B. NoC（片上网络）
 
 晶圆内部芯粒间的互连：非环绕二维 mesh 上相邻芯粒间的有向链路（die-to-die），
-链路带宽与每跳时延取硬件配置 `d2d` 的值（多跳逐跳累计），XY（维序）确定性路由，逐跳
-store-and-forward，共用同一链路的多条数据流进同一 FIFO 排队（拥塞感知）。C++ 侧由
-分析型网络后端实现（`extern/network_backend/analytical/congestion_aware/`），Python
-规划层有同一语义的确定性 XY 路由函数。注意：这是分析级模型，不建模路由器微架构
-（crossbar / VC / credit），也不做 cycle-accurate 仿真。
+链路带宽与每跳时延取硬件配置 `d2d` 的值（时延沿多跳逐跳累计），XY（维序）确定性路由，
+传输计时为流体模型（FluidScheduler，transmission-mode 仅接受 `fluid-pipelined`）：
+共用同一链路的多条数据流按活跃流数严格均分链路带宽（拥塞感知），完成时刻 =
+数据量 ÷ 路由瓶颈处的均分速率 + 全路由逐跳时延之和（Σ 每跳时延一次性累计）。
+C++ 侧由分析型网络后端实现（`extern/network_backend/analytical/congestion_aware/`），
+Python 规划层有同一语义的确定性 XY 路由函数。注意：这是分析级模型，不建模路由器
+微架构（crossbar / VC / credit），也不建模逐跳 store-and-forward / FIFO 排队等
+排队微结构，也不做 cycle-accurate 仿真。
 
 ### C. 芯粒（die / NPU / rank）＝挂在 NoC 上的每一个单元
 
@@ -100,13 +103,13 @@ prefill 与 decode 不分池。
 | astra-sim-sh_3.0 | 统一实例 | 三段式 prefill（首请求避边缘 / HBM 命中 sticky / 远端命中负载均衡）；decode 本地化固定同实例 | 三态；两阶段逐出；流水化部分恢复（机制同 sh_2.0） | 启用（全部边缘芯粒挂端口） |
 
 **删除型逐出的执行口径（2026-09-13 补记，逐出/推理并行化方案 §4.5 基线仓定位）**：本仓逐出为
-**删除型**——容量压力下 `SessionKVCacheManager._delete()`（`session_kv_manager.py:1031-1089`）
+**删除型**——容量压力下 `SessionKVCacheManager._delete()`（`session_kv_manager.py:844`）
 只做即时台账扣减（shard 字节出账 + 会话置 EVICTED）与决策日志 `evict_delete` 事件记录，**无 ET
 图节点表示、无 DMA 传输、无 HBM 带宽消耗**（类 docstring 明示 `evict_delete` "intentionally
 has no ET representation"），因此逐出与同 rank 在跑的推理计算**不存在物理资源争用，天然并行**。
 被逐会话的后续到达按**全量重算**处理：`history_recompute_tokens` 直接折进 prefill 计算（决策行
 `effective_prefill_tokens = prefill_length + history_recompute_tokens`，
-`face_online_scheduler.py:1536-1538`；recompute 段与当前 prefill 段共用同一 chunk 机制进入
+`face_online_scheduler.py:1540-1542`；recompute 段与当前 prefill 段共用同一 chunk 机制进入
 迭代列车），重算段是普通 COMP 节点，照常参与本地 HBM 带宽多用户均分模型（§G）。本仓唯一的
 物理 KV 流量是活会话跨实例迁移 NOC_MIGRATE（history 驻留迁移与 prefill→decode 迁移，恢复类
 语义：迁移节点物理先于使用它的计算）。与 -LRU 改造仓（astra-sim-face-LRU）的物理逐出/回迁
@@ -200,7 +203,9 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    并把 trace_config.csv 第 12 行 request_queue_csv 指向它
 #    物化器 CLI：[source] [queue] [sidecar] [window_ns] [arrival_scale]；
 #    arrival_scale>0 仅缩放 turn-0 session_arrival_time_ns（t0/scale，即
-#    负载 ×scale），inter_request_interval_ns（human/tool 外生等待）不动，
+#    负载 ×scale；缩放结果四舍五入到最近 1000 ns 网格点以满足队列
+#    timing%1000 闸门，偏差 <500 ns，scale=1 为 no-op），
+#    inter_request_interval_ns（human/tool 外生等待）不动，
 #    窗口判定与统计始终用未缩放源时间——scale=1 时 8 列队列与冻结基线
 #    逐字节一致；缩放与 request_type 等新信息只进 canonical sidecar 与
 #    stdout provenance，不进队列。
@@ -355,7 +360,7 @@ watermark 5,000,000 ns / link_bucket 20,000,000 ns），null/缺失时回退文�
   - **换算权威**：W_bytes/KV_bytes 用本仓
     `face_scheduler.estimate_model_weight_bytes` /
     `kv_cache_bytes_for_tokens`（trace_config.csv 参数：swiglu →
-    13476831232 / 524288 B/token，test_face_scheduler.py:301 冻结），
+    13476831232 / 524288 B/token，test_face_scheduler.py:332-334 冻结），
     不另行编造。
   - **运行内 CSV 保持 NA**（ledger 归档前不可得，instructions 记
     `proxy_unavailable:no_train_ledger(results/)`）；对归档 run 离线
@@ -412,8 +417,9 @@ OnlineCli 在线家族解析）：
   旋钮（2026-08-30 P0 turn-0 fix 后 calendar reader 按 arrival 序提交，窗口
   值不约束读取与提交，不改变任何行为）已从本仓彻底移除——OnlineCli 解析/
   选项成员、main_online 调用实参、runner 的 `SH_REQUEST_WINDOW_ROWS` 透传
-  一并删除；WindowedTraceReader 的 high_water 缺省 128 仅留作 reader 内部
-  advisory 记录，无 CLI 暴露口。**本仓不设 C++ 启动 span 预检/拒绝门**。
+  一并删除；WindowedTraceReader 的 high_water 成员亦随 A.4 整体删除（当前
+  reader 沿整个 turn-0 日历提交，无任何行数充填窗，仅受 ingress 容量
+  4096 + 背压停驻光标约束）。**本仓不设 C++ 启动 span 预检/拒绝门**。
   plan_materializer 的
   manifest.json 仍持久化 `max_same_session_span`/`span_session_id`/
   `span_row_range`/`span_row_range_convention`，仅作 provenance 审计
@@ -462,7 +468,10 @@ OnlineCli 在线家族解析）：
 ### 3.1.1 运行开销与日志瘦身开关（2026-08-28，A/B/C/D 系列改造）
 
 - **env `SH_ARCHIVE_RUN`**（默认 `1` 开）：成功 run 结束后 runner 自动调
-  `sh_test_mesh/run_scripts/archive_run_outputs.sh <run_dir>` 做产物瘦身归档：
+  `sh_test_mesh/run_scripts/archive_run_outputs.sh <run_dir> <指标档>` 做产物瘦身归档
+  （runner 把解析出的 `--metrics-detail` 档位作参数 2 透传；off 档 C++ 指标收集器
+  整体禁用、cpp.log 零 `[METRIC]` 行属正常设计——归档跳过抽行与 gzip 两步并打
+  `[archive] SKIP` 留痕，summary/full 档零 `[METRIC]` 行仍拒绝归档）：
   抽 `[METRIC]` 行 → `metrics.log`（常驻）；新运行的桥请求只追加到
   `results/request_journal.jsonl`，不再生成海量 `request_*.json` inode；仅为
   兼容旧运行，若发现旧散装请求才归入 `bridge_requests.tar.gz`。`cpp.log` →
@@ -537,9 +546,11 @@ OnlineCli 在线家族解析）：
 从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退 stale guard）、
 `..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket 擦除 + OnlineNode
 anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期锁定——锚值随
-OnlineStatisticsState 死字段清除 re-prove，2026-09-25 二轮起为 424）。2026-09-24
-工作树补录三项接入构建的既存单测（`CMakeLists.txt:402-408` 注释记录接入配方、"never
-part of the baseline gates"，target 见 `:412`/`:433`/`:455`）：`..._CliOnlineTest`
+OnlineStatisticsState 死字段清除 re-prove：2026-09-25 二轮为 424，2026-09-26 随
+只写三字段 operation_intensity/is_memory_bound/comm_size 清除再 re-prove 为
+384）。2026-09-24
+工作树补录三项接入构建的既存单测（`CMakeLists.txt:405-411` 注释记录接入配方、"never
+part of the baseline gates"，target 见 `:415`/`:436`/`:458`）：`..._CliOnlineTest`
 （在线 CLI 契约测试，R1-R14 含 FP1 加固无符号词法与 watchdog 边界）、
 `..._EventQueueDeferredTest`（EventQueue tick 末收口 + 同 tick deferred 通道，含
 FluidScheduler deferred-flush 集成）、`..._IngressIdleTest`（IDLE 生命周期 fixture：
@@ -656,14 +667,14 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
 - 折入 recompute 输入口径 + 运行时 KV 账本：请求队列为唯一仿真输入，
   turn-0 源前缀折入该行 prefill_length（整段重算口径，
   `traces/derive_20_first_30_seconds.py:14-16`）；manifest 仅携带队列派生的
-  history_tokens_before 推导值（`plan_materializer.py:61-88`）；会话 KV 的
+  history_tokens_before 推导值（`plan_materializer.py:204-246`）；会话 KV 的
   规模与位置由运行时 `SessionKVCacheManager` 账本动态维护
-  （`face_online_scheduler.py:273`；`session_kv_manager.py:363`）：驻留命中
+  （`face_online_scheduler.py:329`；`session_kv_manager.py:343`）：驻留命中
   直接复用、跨实例历史先经 NoC 迁移段、被逐出则窗口内重算。
 - long double 时间精度适配：大 ns 级首达偏移超出 IEEE-754 double 精确整数
   范围（2^53）时，分析网络适配层返回 ASTRA-sim 时间以 `long double` 保持
   64 位事件时间精确，避免完成回调与事件映射键错位 1 ns
-  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:71-81`）。
+  （`astra-sim/network_frontend/analytical/common/CommonNetworkApi.cc:100-110`）。
 - WP9 首 token 首步批拆分（2026-08-26，`SH_FIRST_TOKEN_SPLIT`，B4 起
   缺省 "0" 关——60s 决策等价门-2 失败退回 proxy，见 §3.3；显式 "1"
   开启，关闭后构图/决策/账本产物与上线前逐字节一致）：含 debut 成员

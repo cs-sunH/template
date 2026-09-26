@@ -213,8 +213,10 @@ def main(argv=None) -> int:
     # 阶段 3:--sensing 开启感知(分层账本 + 两层剩余负载查询;查询/审计
     # 输入,不进策略判据,决策序列与关感知逐字节一致)。
     # 阶段 7 §10.6:strategy 模式按 config.kv_cache_policy 分发——
-    # B2(2026-09):唯一取值 session_lru_tiered(三态冷热管理:两段式
-    # LRU 逐出 + 远端池恢复),-> WscLlmOnlineScheduler(行为上新 KV
+    # B2(2026-09):唯一取值 session_lru_tiered(session 级二态冷热管理:
+    # 完整本地/完整远端、整体 LRU 逐出 + 远端池全量恢复;原 PARTIAL
+    # 半层化三态与两段式逐出已随 2026-09-25 批物理移除),
+    # -> WscLlmOnlineScheduler(行为上新 KV
     # 管理器唯一,无档位分支);旧值别名与其同调度器,已随 2026-09-25
     # 命名卫生直接清除;其余取值 fail-closed 报错(legacy 与 relevant
     # 两个历史变体已于 2026-09-05 随 A.5 方案清除)。
@@ -274,8 +276,10 @@ def main(argv=None) -> int:
 
     # 运行结束校验(fail-closed):
     scheduler.verify_run_end()
-    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关,
-    # full_scan_entries 恒为 0)——主变体 M3 起已在 build_graph_batch 逐行
+    # 阶段 4 §7.3:每决策批扫描条目数 profile(验收:与总 request 数无关;
+    # 行字段 = {delivery_sequence, tick, scanned_entries},full-scan 计数
+    # 字段已随 2026-09-25 批删除,审计仅覆盖 scanned_entries 上界)——
+    # 主变体 M3 起已在 build_graph_batch 逐行
     # 流式写出(profile_sink 为 _JsonlSink/_NullSink,永不走结束一次性写出)。
     # 阶段 6 §9.1:online_stats.jsonl -- 分项计数器统一采集(Python 侧)。
     # 每已应用交付一行(合并桥接层每 request 服务时间) + 一行汇总。

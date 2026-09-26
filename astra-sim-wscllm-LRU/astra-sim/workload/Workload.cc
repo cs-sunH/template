@@ -1223,11 +1223,16 @@ void Workload::finish_generic_node(uint64_t node_id, EventType event) {
             MetricCollector::instance().on_node_complete(
                 sys->id, node_id, Sys::boostedTick());
         }
-        // R3 (方案 §3.6 / 阶段 E, 2026-08-29): the remote-FIFO ledger
-        // completion record moved INTO the backend --
-        // AnalyticalRemoteMemory::call counts from its own completion
-        // payload (this transaction's port AND bytes). Accounting here
-        // had two defects: the key was sys_id (a shared port's queue was
+        // R3 (方案 §3.6 / 阶段 E, 2026-08-29), as carried by the SerDes
+        // concurrent-port backend (方案 §3.1-3.4, 2026-09-24): per-
+        // transaction remote-memory accounting lives entirely in the
+        // backend -- the [H4] stats hook
+        // AnalyticalRemoteMemory::on_stats_batch_delivery settles each
+        // delivered batch before any Workload callback, and the
+        // per-transaction detail rows (keyed by the issue-time
+        // detail_sys_id/detail_node_id copies) land in
+        // remote_memory_transactions.jsonl. Accounting here would repeat
+        // the two old defects: the key was sys_id (a shared port's queue
         // split into per-rank virtual ledgers) and the record moment was
         // the node terminal, which an HBM join can hold past the real
         // port-transaction completion.

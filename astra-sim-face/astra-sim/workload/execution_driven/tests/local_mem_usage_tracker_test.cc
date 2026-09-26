@@ -266,12 +266,12 @@ LegacyResult legacy_reference(const LocalMemUsageTracker& tracker) {
         const double total_size_mb =
             static_cast<double>(total_size_bytes) / (1024.0 * 1024.0);
         serialized.push_back({
-            {"name", "GPU Memory Usage (MB)"},
+            {"name", "GPU Memory Usage (MiB)"},
             {"cat", "GPU Memory"},
             {"ph", "C"},
             {"ts", 1e-3 * (*it)},
             {"pid", tracker.sysId + 2000000ul},
-            {"args", json{{"Memory_MB", total_size_mb}}},
+            {"args", json{{"Memory_MiB", total_size_mb}}},
         });
         memory_usage.emplace(*it, total_size_bytes);
     }
@@ -363,7 +363,7 @@ LegacyResult legacy_reference(const LocalMemUsageTracker& tracker) {
         if (display_name.length() > 20) {
             display_name = display_name.substr(0, 17) + "...";
         }
-        display_name += " (" + std::to_string(size_mb).substr(0, 5) + " MB)";
+        display_name += " (" + std::to_string(size_mb).substr(0, 5) + " MiB)";
         serialized.push_back({
             {"name", display_name},
             {"cat", "tensorHeatmap"},
@@ -375,7 +375,7 @@ LegacyResult legacy_reference(const LocalMemUsageTracker& tracker) {
             {"cname", color},
             {"args", json{{"tensor_name", tensor_name},
                           {"size_bytes", size},
-                          {"size_mb", size_mb},
+                          {"size_mib", size_mb},
                           {"lifetime_ns", duration},
                           {"position", heap_position}}},
         });

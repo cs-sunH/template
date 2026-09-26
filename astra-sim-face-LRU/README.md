@@ -372,7 +372,9 @@ cmake --build build/astra_analytical/build_congestion_aware -j
 #    交付态值且为唯一合法值，无需改动）
 #    物化器 CLI：[source] [queue] [sidecar] [window_ns] [arrival_scale]；
 #    arrival_scale>0 仅缩放 turn-0 session_arrival_time_ns（t0/scale，即
-#    负载 ×scale），inter_request_interval_ns（human/tool 外生等待）不动，
+#    负载 ×scale；缩放商须落在 1000 ns 网格上，否则物化器 exit 2 拒绝
+#    物化——选保持整除的 scale），inter_request_interval_ns（human/tool
+#    外生等待）不动，
 #    窗口判定与统计始终用未缩放源时间——scale=1 时 8 列队列与冻结基线
 #    逐字节一致；缩放与 request_type 等新信息只进 canonical sidecar 与
 #    stdout provenance，不进队列。
@@ -427,8 +429,9 @@ bash sh_test_mesh/run_scripts/clean_build_artifacts.sh   # 清编译产物（bui
 | ③ strategy 关感知 | run_online_strategy.sh | 真实物理 | 决策日志/metrics（digests 默认关，见 §3.1.1；成功后自动瘦身归档） |
 | ④ strategy 开感知 | run_online_strategy_sensing.sh | 真实物理 | ③产物 + ledger.jsonl/感知日志 + remote_memory_transactions.jsonl（对账用；事务流仅 sensing 跑产生，零事务也落 per-port PortStats 汇总终行，两 runner 归档清单已含） |
 
-PASS 判据：completed == 物化请求数、no_decision=0、single_node=0、
-delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据）。
+PASS 判据：completed == 物化请求数、single_node=0、
+delivery == graph_batch 数、③④ 决策日志逐字节一致（感知只开仪表不改判据；
+判据由 C++ run-end gate_ok 审计承载，任一不满足即非零退出）。
 
 指标档位（B1/WP0 起）：runner 的 `--metrics-detail` 不再硬编码
 summary——优先级 env `SH_METRICS_DETAIL` > 本仓

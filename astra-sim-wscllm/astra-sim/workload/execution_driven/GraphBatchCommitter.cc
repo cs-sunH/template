@@ -176,7 +176,16 @@ void GraphBatchCommitter::apply_delta_facts(
                 in_flight.insert(ev.request_id);
                 break;
             case DecisionReason::PREFILL_DRAIN:
-                prefill_drained.insert(ev.request_id);
+                // 拼 batch 列车适配 (2026-08-22): a truncated train's
+                // sentinel fires PREFILL_DRAIN under its "batch_train_..."
+                // namespace id, which never yields a REQUEST_COMPLETE --
+                // booking it would grow this set by one entry per train for
+                // the rest of the run. No consumer ever reads the fact for
+                // that namespace (both watch-eligibility checks bypass the
+                // batch_train_ prefix), so keep the set request-scoped.
+                if (ev.request_id.rfind("batch_train_", 0) != 0) {
+                    prefill_drained.insert(ev.request_id);
+                }
                 break;
             case DecisionReason::REQUEST_COMPLETE:
                 in_flight.erase(ev.request_id);
@@ -349,7 +358,11 @@ std::optional<std::string> GraphBatchCommitter::mandatory_liveness_preflight(
                     facts_it->second.in_flight = true;
                     break;
                 case DecisionReason::PREFILL_DRAIN:
-                    facts_it->second.prefill_drained = true;
+                    // The overlay must mirror apply_delta_facts exactly,
+                    // batch_train_ namespace exclusion included.
+                    if (event.request_id.rfind("batch_train_", 0) != 0) {
+                        facts_it->second.prefill_drained = true;
+                    }
                     break;
                 case DecisionReason::REQUEST_COMPLETE:
                     facts_it->second.in_flight = false;

@@ -21,12 +21,12 @@ online entry must parse its own family explicitly:
                         baseline config, trace_config.csv:12, stays separate
                         from the online defaults).
   --request-max-arrival-ns
-                        frozen simulation input window upper bound (ns) for
-                        turn-0 arrivals; rows beyond it are rejected (never
-                        submitted, counted and reported). Frozen default is
-                        30,000,000,000 (the 20.csv first-30-seconds input
-                        boundary; the input's own max arrival is 25.96s, so
-                        the rejection counter reads 0 on the allowed input).
+                        simulation turn-0 arrival window upper bound (ns);
+                        rows beyond it are rejected (never submitted,
+                        counted and reported). Default 0 = UNBOUNDED
+                        (2026-08-16 backport fix: the former frozen
+                        30,000,000,000 default was removed; the window
+                        survives only as an explicit experiment knob).
   --command-fifo        optional FIFO path read by an external producer
                         thread (step 1-10 IDLE fixture). JSON lines:
                         {"kind":"Submit", session_id, turn_index, request_id,
@@ -39,8 +39,10 @@ online entry must parse its own family explicitly:
                         The producer only writes the thread-safe bounded
                         ingress command queue (合同②); the decision bridge
                         stays the decision channel only.
-  --bridge-dir          reserved for the step-1-7 decision bridge; parsed and
-                        stored but unused in step 1-2.
+  --bridge-dir          required in online mode: the step-1-7 decision
+                        bridge's directory (ensure_bridge_dir and the
+                        FileDecisionBridge are built from it; missing =
+                        hard error at startup).
   --bridge-timeout-ms   optional decision-bridge response-wait poll timeout
                         in milliseconds (0 = wait forever, the frozen
                         default). When > 0, a Python decision side stalled

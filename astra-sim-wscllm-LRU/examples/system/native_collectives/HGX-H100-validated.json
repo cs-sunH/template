@@ -16,6 +16,5 @@
         "ring"
     ],
     "collective-optimization": "localBWAware",
-    "local-mem-bw": 3350,
-    "boost-mode": 0
+    "local-mem-bw": 3350
 }

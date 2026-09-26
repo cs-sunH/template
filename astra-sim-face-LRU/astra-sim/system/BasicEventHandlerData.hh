@@ -17,7 +17,11 @@ class BasicEventHandlerData : public CallData {
     BasicEventHandlerData(int sys_id, EventType event);
 
     int sys_id;
-    EventType event;
+    // Default member initializer: Sys::handleEvent dispatches on `event`
+    // straight from the object, so a default-constructed handler must never
+    // carry an indeterminate enum (any new call site that forgets to set it
+    // would otherwise dispatch on UB).
+    EventType event = EventType::General;
 };
 
 }  // namespace AstraSim

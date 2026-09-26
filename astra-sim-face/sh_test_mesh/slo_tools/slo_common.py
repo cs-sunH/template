@@ -361,9 +361,6 @@ def validated_request_rows(records: Iterable[dict[str, str]],
 # 统计原语（整数纳秒、先分位后转单位）
 # ---------------------------------------------------------------------------
 
-PERCENTILE_METHOD = "nearest_rank"
-
-
 def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     """nearest-rank 分位：index = ceil(p*N) - 1（与 C++ MetricCollector
     ``nearest_rank_percentile`` 同法，doc sec.3.5）；整数纳秒上直接取值，
@@ -513,13 +510,6 @@ def fmt_ratio(value: Optional[float], digits: int = 6) -> str:
     if value is None:
         return NA
     return f"{value:.{digits}f}"
-
-
-def ns_to_ms(value: Optional[int]) -> str:
-    """单位转换只发生在展示层（先分位后转单位）。"""
-    if value is None:
-        return NA
-    return f"{value / 1e6:.3f}"
 
 
 # ---------------------------------------------------------------------------

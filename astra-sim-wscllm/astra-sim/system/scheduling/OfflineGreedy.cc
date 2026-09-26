@@ -250,7 +250,6 @@ std::vector<int> OfflineGreedy::get_chunk_scheduling(
                          myDim++) {
                         if (!dimensions_involved[myDim] ||
                             dim_size[myDim] == 1) {
-                            // result.push_back(myDim);
                             continue;
                         }
                         if (comm_type == ComType::Reduce_Scatter) {

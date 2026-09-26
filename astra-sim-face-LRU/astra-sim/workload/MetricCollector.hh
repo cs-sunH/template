@@ -389,6 +389,13 @@ class MetricCollector {
     };
 
     void load_manifest(const std::string& manifest_path);
+    // Field/domain readers split out of load_manifest so the whole manifest
+    // body is uniformly covered by one fail-closed try/catch: any
+    // type_error/invalid_iterator from a malformed manifest must converge
+    // onto the [METRIC][ERROR] diagnostic exit, never escape initialize()
+    // as an unhandled exception.
+    void load_manifest_fields(const nlohmann::json& manifest,
+                              const std::string& manifest_path);
     void reset_for_initialize();
     void ensure_online_memory_anchor_spool();
     void close_memory_anchor_spool_or_die();

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""WP4 canonical cache 事件适配器（逐仓适配；五仓文件逐字节相同，语义差异
-全部收在 REPO_VARIANTS 表；标准库实现）。
+"""WP4 canonical cache 事件适配器（逐仓适配；语义差异全部收在
+REPO_VARIANTS 表；标准库实现）。
 
 输入 = run_dir/results/*.jsonl（online_decision_log.jsonl 为主；per-request
 manifest 提供 turn_index 等上下文）。只做输出层映射，native 日志保持原样，

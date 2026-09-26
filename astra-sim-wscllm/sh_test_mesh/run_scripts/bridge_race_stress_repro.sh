@@ -82,13 +82,19 @@ EOF
 gcc -O2 -o "${WORK}/old_cpp" "${WORK}/old_cpp.c" || { echo "gcc failed" >&2; exit 2; }
 mkfifo "${WORK}/resp.fifo"
 
-# 读端就绪后再启动写端(第一个交换的配对);写端按预算秒数运行。
+# 写端先起(阻塞在首个 open(O_WRONLY) 上),读端晚 0.2s 启动完成首个
+# 交换的配对;写端按预算秒数运行。
+# 读端窗口取 BUDGET-1,严格落在写端存活窗内:若两端同预算,写端被预算
+# 杀掉后其写侧 fd 全关,读端下一轮 open+poll 必得 POLLHUP+read==0,
+# 被 old_cpp 误判为 F1 签名(return 3),使 PASS 恒真、NOTE 分支不可达。
+READER_BUDGET=$(awk -v b="${BUDGET}" 'BEGIN { r = b - 1; if (r <= 0) exit 1; printf "%.3f\n", r }') \
+  || { echo "[bridge_race_stress_repro] 预算需 > 1 秒(读端窗口 = 预算-1)" >&2; exit 2; }
 timeout "${BUDGET}" python3 "${WORK}/old_py.py" "${WORK}/resp.fifo" "${BUDGET}" \
     > "${WORK}/py.out" 2>&1 &
 PY_PID=$!
 sleep 0.2
 
-timeout "${BUDGET}" "${WORK}/old_cpp" "${WORK}/resp.fifo" 100000000 \
+timeout "${READER_BUDGET}" "${WORK}/old_cpp" "${WORK}/resp.fifo" 100000000 \
     > "${WORK}/cpp.out" 2>&1
 CPP_RC=$?
 wait "${PY_PID}" 2>/dev/null

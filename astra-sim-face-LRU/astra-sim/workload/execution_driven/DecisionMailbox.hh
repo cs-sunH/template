@@ -145,7 +145,6 @@ class CompletedFactAccumulator {
     /// Transfer this delivery's wire records and reset the accumulator.
     std::vector<CompletedNodeFact> drain();
     [[nodiscard]] size_t size() const;
-    [[nodiscard]] bool exact_mode() const { return exact_mode_; }
     [[nodiscard]] const CompletedFactCounters& counters() const {
         return counters_;
     }

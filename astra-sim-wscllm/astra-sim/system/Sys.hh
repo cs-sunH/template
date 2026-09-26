@@ -6,8 +6,6 @@ LICENSE file in the root directory of this source tree.
 #ifndef __SYSTEM_HH__
 #define __SYSTEM_HH__
 
-#include <chrono>
-
 #include "astra-sim/common/AstraNetworkAPI.hh"
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/CollectivePhase.hh"
@@ -370,9 +368,6 @@ class Sys : public Callable {
 
     // statistics
     bool trace_enabled;
-
-    // skip simulation for all nodes and use current duration
-    bool replay_only;
 };
 
 }  // namespace AstraSim

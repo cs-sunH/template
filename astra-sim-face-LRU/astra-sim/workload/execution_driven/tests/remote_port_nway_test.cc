@@ -91,10 +91,12 @@ variant and this in-repo variant are now ONE file):
   Tiny-residue clamp -- a 10B stream whose final share overshoots by ~2e-15
   completes inside the clamp tolerance: no panic, no postponement, no lost
   service.
-  Runtime fail-closed probes (on top of the constructor probes): latency
-  1e308 (finite but Tick-overflowing), bandwidth 1e-20 (completion instant
-  overflows Tick), and PER_NPU issue from an unconfigured rank -- all must
-  exit(1).
+  Runtime fail-closed probes (on top of the constructor probes): bandwidth
+  1e-20 (completion instant overflows Tick at the runtime re-arm) and
+  PER_NPU issue from an unconfigured rank must exit(1) at runtime; latency
+  1e308 (finite but Tick-overflowing) is forked the same way but fails
+  closed earlier, at the constructor's kMaxTimeNs range guard during
+  bootstrap_phase -- its issue() call is never reached.
 
 Review-round additions (2026-09-24, plan sec.7 checklist closure):
   Synchronous callback re-entry (sec.3.3) -- phase reentry: the terminal
@@ -873,11 +875,15 @@ void run_fail_closed_probes(const std::string& dir) {
     reject_runtime(dir + "/pf_nomem.json", 1,
                    "NO_MEMORY_EXPANSION runtime rejected");
 
-    // Runtime Tick-overflow probes (merged from the passing standalone
+    // Tick-overflow / fail-closed probes (merged from the passing standalone
     // variant): finite-but-overflowing latency / bandwidth and an
     // unconfigured PER_NPU rank. Each builds its own minimal 1-rank stack
     // inside the forked child (the parent has built no Sys yet at probe
     // time; the child's atexit->_exit guard skips the teardown pass).
+    // Exit sites differ: the 1e308 latency child already exits(1) inside
+    // bootstrap_phase at the constructor's kMaxTimeNs range guard
+    // (AnalyticalRemoteMemory.cc), while the 1e-20 bandwidth and bad-rank
+    // children pass construction and fail at runtime.
     expect_child_rejected(
         [&dir]() {
             PhaseStack stack;
@@ -894,9 +900,12 @@ void run_fail_closed_probes(const std::string& dir) {
             wlhd.sys_id = 0;
             wlhd.workload = stack.systems[0]->workload;
             wlhd.node_id = 9901;
-            stack.memory->issue(0, &wlhd  // zero bytes: the 1e308 latency
-                                         // deadline projection must overflow
-                                         // the Tick representation -> exit(1)
+            stack.memory->issue(0, &wlhd  // zero bytes: normally unreachable;
+                                         // the 1e308 latency exits(1) at the
+                                         // constructor kMaxTimeNs guard inside
+                                         // bootstrap_phase (a call that got
+                                         // here would still fail closed on
+                                         // the ready_ns projection)
                                 );
             std::printf("C6 DID NOT fail closed\n");
         },

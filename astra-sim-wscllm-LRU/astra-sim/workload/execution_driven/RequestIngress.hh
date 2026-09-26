@@ -208,10 +208,15 @@ class RequestIngress {
     /// Phase 7 §10.7: overflow audit -- how many enqueue attempts were
     /// rejected because the bounded command queue was full (capacity_).
     /// Thread-safe (matching enqueue_command's lock). 0 on every official
-    /// run (the windowed reader tops up at most high_water=128 un-consumed
-    /// rows << capacity 4096); the counter exists so a producer that grows
-    /// without bound is caught by the run-end audit instead of silently
-    /// backpressuring forever.
+    /// run: the windowed reader has no top-up ceiling -- it submits its
+    /// turn-0 calendar at full speed and PARKS on ingress backpressure
+    /// (submit_from_calendar leaves the cursor on the head entry and the
+    /// next pump() retries; a bounded-queue rejection is never its path),
+    /// and official runs' turn-0 scales sit far below capacity 4096. The
+    /// counter exists so a producer that grows without bound is caught by
+    /// the run-end audit instead of silently backpressuring forever
+    /// (wording corrected 2026-09-25: the "high_water=128 top-up cap" the
+    /// old text cited no longer exists in WindowedTraceReader).
     size_t overflow_count() const;
     /// Phase 7 §10.7: peak command-queue occupancy (un-consumed commands)
     /// observed since construction. Thread-safe.

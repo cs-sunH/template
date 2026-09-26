@@ -146,7 +146,7 @@ def _bare_scheduler():
     s._ready_frontier = set()
     s.waiting_decode_admissions = {}
     s.decode_admission_dirty = set()
-    s._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+    s._profile_batch = {"scanned_entries": 0}
     return s
 
 

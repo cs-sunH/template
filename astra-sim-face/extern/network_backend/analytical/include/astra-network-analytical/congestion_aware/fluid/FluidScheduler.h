@@ -61,10 +61,6 @@ class FluidScheduler {
     [[nodiscard]] uint64_t get_active_route_memberships() const noexcept;
     [[nodiscard]] uint64_t get_total_started_flows() const noexcept;
     [[nodiscard]] uint64_t get_total_completed_flows() const noexcept;
-    [[nodiscard]] size_t get_completion_heap_size() const noexcept;
-
-    /// Phase-7 §10.2: number of directed links tracked by the scheduler.
-    [[nodiscard]] size_t link_count() const noexcept;
 
     /// -------------------------------------------------------------------
     /// WP6 NoC link observer (SLO pipeline B2, /tmp/slo_wps/plans/
@@ -102,8 +98,6 @@ class FluidScheduler {
     };
 
     void enable_link_observer(uint64_t link_bucket_ns) noexcept;
-
-    [[nodiscard]] bool link_observer_enabled() const noexcept;
 
     /// Bucket length actually in effect (echoed into every link record).
     [[nodiscard]] uint64_t link_observer_bucket_ns() const noexcept;

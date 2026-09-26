@@ -92,7 +92,28 @@ uint64_t LocalMemUsageTracker::parseIOInfos(
   for (int i = 0; i < values.size(); i += 2) {
     const TensorId& tensorName = values.Get(i);
     const std::string& sizeStr = values.Get(i + 1);
-    uint64_t size = std::stoull(sizeStr);
+    // Strict fail-closed parse of the size field: a bare std::stoull would
+    // silently accept a leading '-' (wraparound) and a trailing suffix
+    // ("123abc" -> 123), and its invalid_argument/out_of_range throws are
+    // swallowed by the Sys::call_events catch handler (see the
+    // panic_trace_spool_error comment above). Validate the shape here so
+    // strtoull can only fail on overflow, matching the Sys::sys_panic
+    // style of this file's other parse points.
+    if (sizeStr.empty() ||
+        sizeStr.find_first_not_of("0123456789") != std::string::npos) {
+      Sys::sys_panic("Tensor '" + tensorName + "' has malformed size '" +
+        sizeStr +
+        "' (expected a non-negative decimal integer, "
+        "LocalMemUsageTracker::parseIOInfos)");
+    }
+    errno = 0;
+    const unsigned long long size_ull =
+      std::strtoull(sizeStr.c_str(), nullptr, 10);
+    if (errno == ERANGE) {
+      Sys::sys_panic("Tensor '" + tensorName + "' size '" + sizeStr +
+        "' overflows 64 bits (LocalMemUsageTracker::parseIOInfos)");
+    }
+    const uint64_t size = static_cast<uint64_t>(size_ull);
     IOinfos.emplace_back(tensorName, size);
     ++parsedCnt;
   }

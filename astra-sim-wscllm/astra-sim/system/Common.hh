@@ -45,8 +45,7 @@ enum class ComType {
     Reduce_Scatter,
     All_Gather,
     All_Reduce,
-    All_to_All,
-    All_Reduce_All_to_All
+    All_to_All
 };
 
 enum class CollectiveOptimization { Baseline = 0, LocalBWAware };
@@ -68,13 +67,10 @@ enum class InterDimensionScheduling {
 
 enum class InjectionPolicy { Normal = 0 };
 
-enum class PacketRouting { Hardware = 0, Software };
-
 enum class BusType { Both = 0, Shared, Mem };
 
 enum class StreamState {
     Created = 0,
-    Transferring,
     Ready,
     Executing,
     Zombie,

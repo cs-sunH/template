@@ -12,7 +12,6 @@ LICENSE file in the root directory of this source tree.
 namespace NetworkAnalyticalCongestionAware {
 
 /// Forward declarations of network components
-class Chunk;
 class Link;
 class Device;
 

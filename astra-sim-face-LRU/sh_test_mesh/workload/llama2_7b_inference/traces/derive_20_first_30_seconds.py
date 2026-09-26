@@ -241,6 +241,21 @@ def main() -> None:
         prev_gap = 0  # wait before the current turn, recorded on the previous row
         active = False
         for line_number, row in enumerate(reader, start=2):
+            if not row["arrival_time"] and row["session_id"] != current_sid:
+                # fail-closed: the derivation groups source rows by session
+                # blocks -- an empty-arrival row is a continuation turn of the
+                # CURRENT session (turn_index keeps incrementing under it).  A
+                # session-id switch on such a row would silently mis-attribute
+                # the turn, so abort HERE (authoritative materializer) instead
+                # of writing a wrong queue.
+                print(
+                    f"source {source} line {line_number}: empty arrival_time "
+                    f"with session_id {row['session_id']!r} after session "
+                    f"{current_sid!r}: source rows are not grouped by "
+                    "session; queue NOT materialized",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
             if row["arrival_time"]:
                 # First row of a session: absolute arrival in ns.
                 current_sid = row["session_id"]

@@ -152,6 +152,13 @@ Sys::Sys(int id,
          bool rendezvous_enabled,
          ExecutionDriven::ExecutionMode execution_mode,
          std::shared_ptr<ExecutionDriven::GraphSource> graph_source) {
+    // "comm-scale" has no production consumer (its write-only member was
+    // retired), so any non-default value is rejected here instead of being
+    // silently ignored.
+    if (comm_scale != 1.0) {
+        sys_panic("unsupported comm-scale value " + std::to_string(comm_scale) +
+                  ": only the default 1 is accepted");
+    }
     this->execution_mode_ = execution_mode;
     this->graph_source_ = std::move(graph_source);
 
@@ -190,7 +197,6 @@ Sys::Sys(int id,
     this->local_reduction_delay = 0;
 
     this->comm_NI = comm_NI;
-    this->comm_scale = comm_scale;
     this->rendezvous_enabled = rendezvous_enabled;
 
     this->scheduler_unit = nullptr;

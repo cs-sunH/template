@@ -143,8 +143,6 @@ TRUST_TIER_UPPER_BOUND = "upper_bound_only"
 TRUST_TIER_LIFECYCLE = "lifecycle_replay_exact"
 TRUST_TIER_RESIDENT = "resident_kv_exact"
 TRUST_TIER_CERTIFIED = "per_rank_total_hbm_certified"
-JOURNAL_TIERS = (TRUST_TIER_CERTIFIED, TRUST_TIER_RESIDENT,
-                 TRUST_TIER_LIFECYCLE)
 
 # 绘图 series（P1-④：受全局行预算约束的稠密产物；旧产物名
 # slo_hbm_watermark_series.csv 退役）。
@@ -355,12 +353,18 @@ def _decode_move_actions(record: dict, mapping: dict, where: str) -> list:
 REPO_VARIANTS: dict[str, dict] = {
     # FACE：prefill 携带 history_action/history_transfer_bytes/history_
     # source_instance_index + admission_evictions/decode_target_evictions
-    # （shard_bytes 列表）；decode 携带 prefill_decode_transfer 对象；
-    # completion 携带 completion_evictions。逐出全量落盘，重放闭合。
+    # （shard_bytes 列表）；decode 携带 prefill_decode_transfer 对象 +
+    # decode_target_evictions——2026-09-05（问题 2A 顺带修复）起真实
+    # decode 准入逐出（move_prefill_to_decode/grow_decode 的 evictions）
+    # 序列化在 decode 决策行（发射后 runtime 置空核销，快照即全集），
+    # 必须按 decode 行消费；prefill 行该字段在本发射时点恒为初始 ()，
+    # 仅作准入链变化时的前向兼容保留。completion 携带
+    # completion_evictions。逐出全量落盘，重放闭合。
     "astra-sim-face": {
         "eviction_lists": (
             ("prefill", "admission_evictions", _sum_shard_bytes),
             ("prefill", "decode_target_evictions", _sum_shard_bytes),
+            ("decode", "decode_target_evictions", _sum_shard_bytes),
             ("completion", "completion_evictions", _sum_shard_bytes),
         ),
         "restore": {"bytes_path": ["history_transfer_bytes"],
@@ -1471,10 +1475,11 @@ class WatermarkReplay:
 class WatermarkScan:
     """A4 driver 复用面：单条决策记录一次 consume，扫完 finish。
 
-    与独立 CLI 的 replay_decision_log 循环体逐语句等价（含 fail 消息与
-    记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
-    consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
-    watermark 必须最后（kv/load/hop 不读该键，注入对其不可见）。
+    独立 CLI（cmd_hbm_watermark）与 driver 共用同一 consume 循环（含
+    fail 消息与记录内「逐出→恢复/迁移→增长」固定次序、session_hint
+    回写）。注意 consume 会向 record 注入 session_hint 键——driver 的
+    sink 次序中 watermark 必须最后（kv/load/hop 不读该键，注入对其
+    不可见）。
     """
 
     def __init__(self, run_dir: Path, repo_variant: str, mapping: dict,
@@ -1599,16 +1604,6 @@ class WatermarkScan:
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
         return self.replay
-
-
-def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
-                        tokens: dict, coef: int,
-                        capacity: Optional[int]) -> WatermarkReplay:
-    scan = WatermarkScan(run_dir, repo_variant, mapping, tokens, coef,
-                         capacity)
-    for record in iter_jsonl(scan.log_path):
-        scan.consume(record)
-    return scan.finish()
 
 
 # ---------------------------------------------------------------------------

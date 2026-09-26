@@ -1042,13 +1042,13 @@ void test_hbm_charge_key_parsing(Fixture& f) {
     }
     f.committer.commit(delta, b);
 
-    const auto comp_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 13));
-    expect(comp_view.has_value() && comp_view->comm.hbm_charge,
+    const NodeView* comp_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 13));
+    expect(comp_view != nullptr && comp_view->comm.hbm_charge,
            "H: absent comm.hbm_charge defaults to true");
-    const auto send_view =
-        f.sources[0]->lookup(resolved_store_id(f.committer, 0, 14));
-    expect(send_view.has_value() && !send_view->comm.hbm_charge,
+    const NodeView* send_view =
+        f.sources[0]->lookup_ptr(resolved_store_id(f.committer, 0, 14));
+    expect(send_view != nullptr && !send_view->comm.hbm_charge,
            "H: comm.hbm_charge=false parsed into the NodeView");
 
     // The legacy kebab spelling is a parse-layer unknown key now: the

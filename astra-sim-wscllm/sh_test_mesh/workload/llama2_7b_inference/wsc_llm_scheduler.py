@@ -118,10 +118,6 @@ class WscLlmInstance:
     def size(self) -> int:
         return len(self.ranks)
 
-    @property
-    def shape(self) -> tuple[int, int]:
-        return (self.row_max - self.row_min + 1, self.col_max - self.col_min + 1)
-
 
 @dataclass(frozen=True)
 class WscLlmTopology:

@@ -521,6 +521,9 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
                         state.shard_sum_violations += 1
         for field in ("completion_evictions", "history_evictions",
                       "prefill_evictions", "decode_evictions"):
+            # face/wscllm 逐出条目只带 shard_bytes（无 total_bytes/shards，
+            # 键缺席自动跳过）；本循环实际核对的是 S1 形态逐出条目
+            # （transfer 形，带 total_bytes/shards，见 extract_events_sh10）。
             for holder in decision.get(field) or []:
                 if isinstance(holder, dict):
                     total = holder.get("total_bytes")

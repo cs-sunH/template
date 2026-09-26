@@ -118,7 +118,6 @@ from session_kv_manager import (  # noqa: E402
     kv_cache_shard_bytes_for_tokens,
 )
 from face_scheduler import (  # noqa: E402
-    NOC_MIGRATE,
     DecodeTieCounter,
     FaceInstanceSpec,
     PrefillQueueSnapshot,
@@ -180,7 +179,8 @@ class _OnlineRequestRuntime:
         "history_transfer_bytes", "history_recompute_tokens",
         "history_transfers",
         "history_location_before",
-        "history_evictions", "prefill_evictions", "decode_evictions",
+        "history_evictions", "history_evictions_pending",
+        "prefill_evictions", "decode_evictions", "decode_evictions_pending",
         "drain_block_ends", "kv_pending_location",
         "admission_evictions", "decode_target_evictions",
         "waiting_decode_admission", "prefill_decode_transfer",
@@ -224,9 +224,17 @@ class _OnlineRequestRuntime:
         # 核销)+ drain 列车块末(joiner decode_evictions 触发门来源)+
         # 上一 turn 完成时预置的 pending location 链初值。
         self.history_location_before = None
+        # 双账本(B4 双发射修复):*_evictions = 决策日志账本(跨阻塞
+        # attempt 累积的全集,log_decision 序列化消费);
+        # *_evictions_pending = 待发射账本(仅未物理发射过的子集,
+        # _plan_dict/joiner 计划快照消费)。阻塞 attempt 经
+        # emit_eviction_actions 即时发射后从 pending 剥离——admission
+        # 批/列车头只发射未发射过的逐出,物理 remote_store 不双发。
         self.history_evictions = ()
+        self.history_evictions_pending = ()
         self.prefill_evictions = ()
         self.decode_evictions = ()
+        self.decode_evictions_pending = ()
         self.drain_block_ends = None
         self.kv_pending_location = None
         self.admission_evictions = ()
@@ -468,12 +476,18 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self.prefill_admission_dirty = set()
         # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
         # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代(截断列车无自然
-        # drain/exit 标记时发射哨兵标记);缺省/0 = 不设限(交付默认)。
-        # 交付默认 = 8(2026-08-22 §7.4 A2 对拍裁决,与 sh_1.0 母本统一:
-        # 无上限 TTFT -67.3%,16 仍 -19.1%,8 全指标 ≤1.3%;原则 1 优先
-        # 于节点数)。0 = 不设限(oracle/灵敏度复跑用)。
-        self._train_max_iter = int(
-            os.environ.get("SH_TRAIN_MAX_ITER", "8") or 0)
+        # drain/exit 标记时发射哨兵标记)。交付默认 = 8(2026-08-22 §7.4
+        # A2 对拍裁决,与 sh_1.0 母本统一:无上限 TTFT -67.3%,16 仍
+        # -19.1%,8 全指标 ≤1.3%;原则 1 优先于节点数)。0 = 不设限
+        # (oracle/灵敏度复跑用);负值 fail-closed(对齐
+        # _PROPAGATING_TAIL_LIMIT 的解析先例——负上限会经 _plan_train
+        # 产出负迭代数/负 participation 的非法列车计划)。
+        _train_max_iter_raw = os.environ.get("SH_TRAIN_MAX_ITER", "8")
+        self._train_max_iter = int(_train_max_iter_raw or 0)
+        if self._train_max_iter < 0:
+            raise ValueError(
+                "SH_TRAIN_MAX_ITER must be a positive integer or 0 "
+                "(0 = no limit), got {!r}".format(_train_max_iter_raw))
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
@@ -909,7 +923,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             # 与 drain_block_ends 同点清空——每个 joiner 恰消费一次)。
             joiner_plan["prefill_drain_block_ends"] = dict(
                 runtime.drain_block_ends or {})
-            joiner_plan["decode_evictions"] = runtime.decode_evictions
+            # 待发射账本(阻塞 attempt 已发射过的逐出已剥离);决策日志
+            # 的 decode 行走 log_decision 的 runtime.decode_evictions 全集。
+            joiner_plan["decode_evictions"] = runtime.decode_evictions_pending
             joiner_plans.append(joiner_plan)
         stage = "decode" if (plan["members"] or joiners) else "prefill"
         prefill_start_member = None
@@ -962,6 +978,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # B3:joiner 的 decode 逐出账本已随列车头消费,核销防重发。
         for runtime in joiners:
             runtime.decode_evictions = ()
+            runtime.decode_evictions_pending = ()
             runtime.drain_block_ends = None
         for request_id, members in result["exit_members"].items():
             self._batch["watches"].append({
@@ -1106,6 +1123,7 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         for request_id in train_plan["joiner_ids_of_record"]:
             joiner_runtime = self.runtime_by_request_id[request_id]
             joiner_runtime.decode_evictions = ()
+            joiner_runtime.decode_evictions_pending = ()
             joiner_runtime.drain_block_ends = None
         self._emit_train_ledger_row(
             state, plan, train_plan["joiner_ids_of_record"],
@@ -1476,6 +1494,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             if record.transfer is not None)
         runtime.history_evictions = tuple(
             (*runtime.history_evictions, *prepare_transfers))
+        runtime.history_evictions_pending = tuple(
+            (*runtime.history_evictions_pending, *prepare_transfers))
         self.graph.sync_pending_history_after_evictions(prepare_transfers)
         runtime.admission_evictions = tuple(
             (*runtime.admission_evictions, *decision.evictions))  # :1405
@@ -1493,6 +1513,15 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             if prepare_transfers:
                 self.graph.emit_eviction_actions(
                     self._plan_dict(runtime), prepare_transfers)
+                # B4 双发射修复:已发射的逐出从待发射账本剥离(决策日志
+                # 账本 history_evictions 保留全集),最终准入批不再把同
+                # 一批 remote_store 整体重发一遍(池事务/HBM 字节双计、
+                # pending_store_tails 每会话双登记)。
+                emitted_ids = {id(transfer) for transfer in prepare_transfers}
+                runtime.history_evictions_pending = tuple(
+                    transfer
+                    for transfer in runtime.history_evictions_pending
+                    if id(transfer) not in emitted_ids)
             # Liveness fix (P0-1, 2026-08-31): 与 decode 侧同源——"无逐出
             # 的阻塞"不推进 capacity_epoch,纪元门对本实例永久关闭;隔离
             # 时间线没有邻居完成事件重开它(prefill 卡死形态,总文档 §4
@@ -1594,6 +1623,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     if record.transfer is not None)
                 runtime.decode_evictions = tuple(
                     (*runtime.decode_evictions, *move_transfers))
+                runtime.decode_evictions_pending = tuple(
+                    (*runtime.decode_evictions_pending, *move_transfers))
                 self.graph.sync_pending_history_after_evictions(move_transfers)
                 if move.admission_blocked:  # :1488-1495
                     if move.evictions:
@@ -1603,11 +1634,21 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                               for record in move.evictions),
                         )
                     # B3:阻塞 attempt 的逐出是真实 mutation——物理链随
-                    # 当前批发射(上下文 = 本请求 (decode, 1);本请求
-                    # prefill 已 drain,prefill_drained 资格门放行)。
+                    # 当前批发射(两条阻塞路径统一 stamping (prefill, 0)
+                    # ——emit_eviction_actions 固定节点上下文;C++ in-flight
+                    # 资格门不受影响)。
                     if move_transfers:
                         self.graph.emit_eviction_actions(
                             self._plan_dict(runtime), move_transfers)
+                        # B4 双发射修复:已发射逐出从待发射账本剥离
+                        # (决策日志账本 decode_evictions 保留全集),joiner
+                        # 列车头不再把同一批 remote_store 重发一遍。
+                        emitted_ids = {
+                            id(transfer) for transfer in move_transfers}
+                        runtime.decode_evictions_pending = tuple(
+                            transfer
+                            for transfer in runtime.decode_evictions_pending
+                            if id(transfer) not in emitted_ids)
                     # Liveness fix (P0-1, 2026-08-31): 阻塞即重开本实例重试门。
                     # 原语义下"无逐出的阻塞"不推进 capacity_epoch,重试门
                     # (上方 ready_targets 的 dirty/epoch 条件)在本轮关闭;
@@ -1640,6 +1681,8 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     if record.transfer is not None)
                 runtime.decode_evictions = tuple(
                     (*runtime.decode_evictions, *growth_transfers))
+                runtime.decode_evictions_pending = tuple(
+                    (*runtime.decode_evictions_pending, *growth_transfers))
                 self.graph.sync_pending_history_after_evictions(
                     growth_transfers)
                 # 拼 batch 改造(§3.2 KV 就绪栅栏):decode 准入(KV 迁移
@@ -1860,7 +1903,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             # ---- B3 两态 KV 发射面 ----
             "history_location_before": runtime.history_location_before,
             "history_transfers": runtime.history_transfers,
-            "history_evictions": runtime.history_evictions,
+            # 待发射账本(阻塞 attempt 已发射过的逐出已剥离;决策日志
+            # 走 log_decision 的 runtime.history_evictions 全集,不经此)。
+            "history_evictions": runtime.history_evictions_pending,
             "prefill_evictions": runtime.prefill_evictions,
             "kv_location_after_completion": runtime.kv_pending_location,
         }

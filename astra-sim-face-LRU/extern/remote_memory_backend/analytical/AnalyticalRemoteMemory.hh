@@ -305,7 +305,6 @@ class AnalyticalRemoteMemory : public AstraSim::AstraRemoteMemoryAPI,
   int num_npus_per_node = 0;
 
   std::vector<PortState> ports;
-  bool per_npu_ids_configured = false;
   std::unordered_map<int, std::size_t> per_npu_port_indices;
 
   AstraSim::Sys* host_sys = nullptr;  // Sys of the FIRST set_sys call; owns

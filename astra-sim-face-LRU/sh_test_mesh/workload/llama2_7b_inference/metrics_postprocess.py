@@ -49,7 +49,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -239,7 +238,16 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                 elif record_type == "consistency":
                     current.consistency.append(record)
                 # memory_anchor and unknown types are tolerated but unused.
+    # Cross-log run_id collision handling (sec.11.4): conflicting summaries
+    # abort.  Identical-summary duplicates (archived run dirs carry cpp.log
+    # AND the metrics.log extracted from that same cpp.log -- identical
+    # [METRIC] lines by construction) are tolerated at parse level, so only
+    # ONE copy is kept: downstream consumers (raw rows, auto groups,
+    # ratio_to_baseline baseline matching) iterate the returned list and a
+    # retained duplicate would double-count rows / spuriously fail "baseline
+    # is not unique".
     seen: dict[str, Run] = {}
+    deduped: list[Run] = []
     for run in runs:
         previous = seen.get(run.run_id)
         if previous is not None:
@@ -248,15 +256,17 @@ def _parse_logs(log_paths: Sequence[Path]) -> list[Run]:
                     f"run_id {run.run_id!r} appears in multiple logs with "
                     "conflicting summaries (sec.11.4)"
                 )
+            continue
         seen[run.run_id] = run
-    for run in runs:
+        deduped.append(run)
+    for run in deduped:
         if run.schema_versions != {SUPPORTED_SCHEMA}:
             raise PostprocessError(
                 f"run {run.run_id}: unsupported or mixed metric schema "
                 f"versions {sorted(run.schema_versions)} (sec.11.4); this "
                 f"postprocessor supports schema {SUPPORTED_SCHEMA} only"
             )
-    return runs
+    return deduped
 
 
 def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
@@ -271,13 +281,29 @@ def _load_manifest_sidecars(run: Run) -> tuple[dict[str, Any], dict[str, Any], l
     path = Path(manifest_path)
     try:
         metrics_manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as error:
+        # Diagnose the REAL cause (missing/unreadable/corrupt sidecar) instead
+        # of letting the downstream count check misreport it as "declares 0
+        # requests" (never-a-guess rule); the run still fails closed below.
+        print(
+            f"warning: run {run.run_id}: metrics_manifest.json sidecar "
+            f"{path} unreadable ({error}); proceeding without it -- the "
+            "request-join count check will fail closed",
+            file=sys.stderr,
+        )
         metrics_manifest = {}
     try:
         service_manifest = json.loads(
             (path.parent / "manifest.json").read_text(encoding="utf-8")
         )
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as error:
+        print(
+            f"warning: run {run.run_id}: manifest.json sidecar "
+            f"{path.parent / 'manifest.json'} unreadable ({error}); "
+            "proceeding without it -- the request-join count check will "
+            "fail closed",
+            file=sys.stderr,
+        )
         service_manifest = {}
     if not run.planner_roofline:
         try:
@@ -600,6 +626,11 @@ class _TrainProxyIndex:
     def __init__(self, run: Run):
         self._run = run
         self._loaded = False
+        # Why `available()` is False (display-only note; the two causes are
+        # kept distinct -- never-a-guess diagnosis): 'no_train_ledger
+        # (results/)' = no archived ledger file; 'train_ledger_corrupt' = the
+        # file exists but is unreadable/truncated (crashed run residue).
+        self.unavailable_reason = "no_train_ledger(results/)"
         # request_id -> (ledger_row_position, row) of its first (non
         # first_step) train carrying it in joiners.
         self.first_train_by_request: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -634,6 +665,10 @@ class _TrainProxyIndex:
                     if isinstance(record, dict):
                         rows.append(record)
         except (OSError, json.JSONDecodeError):
+            # Corrupt/truncated ledger (crashed-run residue): say so instead
+            # of misreporting "no ledger".  Parsed rows stay discarded (proxy
+            # degrades to NA; nothing is fabricated from a partial stream).
+            self.unavailable_reason = "train_ledger_corrupt"
             return
         for position, row in enumerate(rows):
             if row.get("first_step"):
@@ -810,7 +845,7 @@ def _request_metric_rows(
                 first_token_source = FIRST_TOKEN_SOURCE_TRAIN_INTERPOLATED
             notes.append(proxy_note)
         elif first_token_ns is None:
-            notes.append("proxy_unavailable:no_train_ledger(results/)")
+            notes.append(f"proxy_unavailable:{proxy_index.unavailable_reason}")
         if first_token_ns is not None:
             # Ordering invariant is re-checked fail-closed on the FILLED
             # value (exact or proxy): arrival <= first_token <= completion.
@@ -861,7 +896,10 @@ def _request_metric_rows(
                 ),
                 "decode_ns": _int_or_na(record.get("decode_ns")),
                 "e2e_ns": _int_or_na(record.get("e2e_ns")),
-                # WP4/WP5 fill the KV-hit and restore columns; frozen NA here.
+                # README §1.1（KV 指标观测决议）：kv_hit_state/restore 列
+                # 恒为冻结 NA 终态（非 WP4/WP5 待填充占位）——kv_hit_state
+                # 真值在 kv_hit_states.csv，恢复分解真值在 slo_tools 独立
+                # 产物，不回填本表。
                 "kv_hit_state": NA,
                 "restore_start_ns": NA,
                 "restore_complete_ns": NA,
@@ -1053,8 +1091,13 @@ def _microbench_rows(
             and local_bw
         ):
             window_s = iteration_time_ns / 1e9
-            # doc sec.8.7 (derived from rank_compute + iteration records; the
-            # C++ iteration record itself does not carry utilization fields).
+            # doc sec.8.7 -- same formula the C++ iteration record itself
+            # carries (MetricCollector.cc assigns compute_util/hbm_bw_util
+            # with peak_flops_per_second/local_hbm_bw_bytes_per_second
+            # attached); this Python path only runs when those fields are
+            # absent (older logs).  Difference: Python takes the LAST active
+            # rank's peak here, C++ the first -- equivalent on homogeneous
+            # hardware.
             compute_util = total_ops / (tp_degree * peak_flops * window_s)
             hbm_bw_util = total_bytes / (tp_degree * local_bw * window_s)
         row.update(

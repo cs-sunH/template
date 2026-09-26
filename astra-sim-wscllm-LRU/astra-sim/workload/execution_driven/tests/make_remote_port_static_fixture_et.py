@@ -124,7 +124,6 @@ def write_configs(out_dir: pathlib.Path) -> list:
   "reduce-scatter-implementation": ["ring", "ring"],
   "all-to-all-implementation": ["ring", "ring"],
   "collective-optimization": "localBWAware",
-  "boost-mode": 0,
   "roofline-enabled": 1,
   "replay-only": 0,
   "track-local-mem": 0,

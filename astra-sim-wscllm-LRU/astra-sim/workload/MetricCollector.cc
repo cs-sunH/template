@@ -2278,6 +2278,7 @@ MetricCollector::MemoryReplayTotals MetricCollector::emit_memory_records(
                 seg_start = seg_end;
             }
             series.direct_resident_area = resident_area;
+            series.direct_committed_area = committed_area;
             watermark_series_by_rank[rank] = std::move(series);
         }
 
@@ -2616,10 +2617,11 @@ void MetricCollector::emit_watermark_records(
             record["committed_capacity_timeavg_util"] = nullptr;
         }
 
-        // A-class cross-check (resident side only): the watermark-walk
-        // resident integral must agree with the direct delta-loop resident
-        // integral of the same replay to <=1%. No committed-side cross-check
-        // exists (the committed direct integral is not kept).
+        // A-class cross-check: the watermark-walk integrals must agree with
+        // the direct delta-loop integrals of the same replay to <=1%, on
+        // both the resident and the committed side (the two walks clamp the
+        // same step function at zero; splitting segments at watermark
+        // bucket boundaries does not change the integral).
         if (series.replayed && sim_end_tick > 0) {
             const long double watermark =
                 i128_to_long_double(series.resident_area);
@@ -2641,8 +2643,32 @@ void MetricCollector::emit_watermark_records(
                     "capacity_timeavg replay integral by >1% (watermark=" +
                     i128_to_string(series.resident_area) + " direct=" +
                     i128_to_string(series.direct_resident_area) + ")");
+            const long double committed_watermark =
+                i128_to_long_double(series.committed_area);
+            const long double committed_direct =
+                i128_to_long_double(series.direct_committed_area);
+            const long double committed_scale =
+                committed_direct > 0.0L ? committed_direct : 1.0L;
+            long double committed_relative =
+                (committed_watermark - committed_direct) / committed_scale;
+            if (committed_relative < 0.0L) {
+                committed_relative = -committed_relative;
+            }
+            record["committed_timeavg_crosscheck_abs_relative_diff"] =
+                static_cast<double>(committed_relative);
+            record["committed_timeavg_crosscheck"] =
+                committed_relative > 0.01L ? "mismatch>1%" : "ok<=1%";
+            check_consistency(
+                committed_relative <= 0.01L,
+                "rank " + std::to_string(rank) +
+                    ": WP8 watermark committed timeavg differs from the "
+                    "capacity_timeavg replay integral by >1% (watermark=" +
+                    i128_to_string(series.committed_area) + " direct=" +
+                    i128_to_string(series.direct_committed_area) + ")");
         } else {
             record["timeavg_crosscheck"] =
+                "skipped: no planner ledger replay for this rank";
+            record["committed_timeavg_crosscheck"] =
                 "skipped: no planner ledger replay for this rank";
         }
 

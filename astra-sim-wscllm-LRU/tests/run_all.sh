@@ -49,4 +49,31 @@ echo "[$0] Running SLO tools unit tests..."
 (cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_hbm_watermark.py") || (echo "Failed." ; exit 1)
 (cd "${PROJECT_DIR}" && python3 -m unittest discover -s sh_test_mesh/slo_tools/tests -p "test_slo_contract.py") || (echo "Failed." ; exit 1)
 
+echo "[$0] Running analytical fluid backend regression tests..."
+# 两个 fluid 回归夹具（链路观测器 / 过期事件取消）挂在默认 OFF 的
+# ANALYTICAL_BUILD_*_TEST option 上，且只有 NETWORK_BACKEND_BUILD_AS_LIBRARY=ON
+# 的 canonical 装配树（README §2 步骤①）才能链接。此处仅在该树在场且
+# 配置匹配时打开两个 option 重配置、只构建两个测试目标并 ctest 运行，
+# 随后把 option 还原为 OFF（测试目标不留在普通 all 构建图里）；
+# 树缺席/配置不符时打印显式 SKIP（不静默），缺什么写进消息。
+ANALYTICAL_BUILD_DIR="${PROJECT_DIR}/build/astra_analytical/build_congestion_aware"
+ANALYTICAL_CACHE="${ANALYTICAL_BUILD_DIR}/CMakeCache.txt"
+if [ ! -f "${ANALYTICAL_CACHE}" ]; then
+    echo "[$0] SKIP: analytical fluid regression tests -- canonical build tree not found at ${ANALYTICAL_BUILD_DIR} (README §2 step (1))"
+elif ! grep -q "^NETWORK_BACKEND_BUILD_AS_LIBRARY:BOOL=ON$" "${ANALYTICAL_CACHE}" || \
+     ! grep -Eq "^BUILDTARGET:STRING=(congestion_aware|all)$" "${ANALYTICAL_CACHE}"; then
+    echo "[$0] SKIP: analytical fluid regression tests -- ${ANALYTICAL_CACHE} lacks NETWORK_BACKEND_BUILD_AS_LIBRARY=ON or BUILDTARGET=congestion_aware|all"
+else
+    (cd "${PROJECT_DIR}/build/astra_analytical" && cmake -S . -B build_congestion_aware \
+        -DANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST=ON \
+        -DANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST=ON) || (echo "Failed." ; exit 1)
+    (cd "${ANALYTICAL_BUILD_DIR}" && cmake --build . --target \
+        Analytical_FluidSchedulerLinkObserverTest \
+        Analytical_StaleEventCancellationTest -j) || (echo "Failed." ; exit 1)
+    (cd "${ANALYTICAL_BUILD_DIR}" && ctest -R "Analytical_" --output-on-failure) || (echo "Failed." ; exit 1)
+    (cd "${PROJECT_DIR}/build/astra_analytical" && cmake -S . -B build_congestion_aware \
+        -DANALYTICAL_BUILD_FLUID_SCHEDULER_LINK_OBSERVER_TEST=OFF \
+        -DANALYTICAL_BUILD_STALE_EVENT_CANCELLATION_TEST=OFF) || (echo "Failed." ; exit 1)
+fi
+
 echo "[$0] Finished all regression tests."

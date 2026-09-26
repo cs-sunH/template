@@ -78,15 +78,17 @@ static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) ==
                   sizeof(OnlineNodePreR2Mirror),
               "R2 metric anchor flags must reuse the OnlineNode bool tail "
               "padding; sizeof(OnlineNode) is unchanged");
-static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 424,
+static_assert(sizeof(AstraSim::ExecutionDriven::OnlineNode) == 384,
               "OnlineNode layout anchor for this toolchain (see the mirror "
-              "assert above for the ABI-agnostic bound; 424 in this repo: "
-              "440 minus the removed write-only OnlineStatisticsState::"
-              "network_bandwidth optional (-16), on top of the blueprint "
-              "ComputeAttrs carrying no sh_1.0 hbm_access_mode int (8 bytes "
-              "smaller than sh_1.0's 448) -- number re-proved per the R2 "
-              "report's update-the-number rule, matching the LRU repo's 408 "
-              "re-proof in the same cleanup)");
+              "assert above for the ABI-agnostic bound; 384 in this repo: "
+              "424 minus the removed write-only OnlineStatisticsState "
+              "optionals operation_intensity (-16) / is_memory_bound (-2, "
+              "including its 6-byte align pad) / comm_size (-16), the OSS "
+              "tail shrinking 96 -> 56 = -40 total; 424 itself was 440 minus "
+              "the earlier write-only network_bandwidth optional (-16), on "
+              "top of the blueprint ComputeAttrs carrying no sh_1.0 "
+              "hbm_access_mode int (8 bytes smaller than sh_1.0's 448) -- "
+              "number re-proved per the R2 report's update-the-number rule)");
 
 namespace AstraSim {
 

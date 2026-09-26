@@ -5,6 +5,8 @@ LICENSE file in the root directory of this source tree.
 
 #include "common/EventQueue.h"
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 
 using namespace NetworkAnalytical;
 
@@ -44,8 +46,18 @@ void EventQueue::proceed() noexcept {
     auto current_event_list_it = event_queue.begin();
     auto& current_event_list = current_event_list_it->second;
 
-    // check the validity and update current time
-    assert(current_event_list.get_event_time() > current_time);
+    // check the validity and update current time. Fail closed in every
+    // build type (the former assert is compiled out of Release): a
+    // non-increasing event time here means a same-tick schedule_event()
+    // escaped an invoke/tick-end/deferred context -- see the tick-end
+    // comment below -- and would silently rewind simulation time.
+    if (current_event_list.get_event_time() <= current_time) {
+        std::cerr << "[Error] (network/analytical) event queue time must "
+                  << "strictly increase: "
+                  << current_event_list.get_event_time()
+                  << " <= current_time " << current_time << std::endl;
+        std::exit(-1);
+    }
     current_time = current_event_list.get_event_time();
 
     // invoke events. in_invoke_ marks the only context in which a same-tick
@@ -66,9 +78,10 @@ void EventQueue::proceed() noexcept {
     // schedule_event(current_time, ...) issued from inside the callback (or
     // from the deferred drain below) would try_emplace a NEW EventList at
     // current_time, and the next proceed() would immediately trip the
-    // strict-increase assert at the top of this function (:48). Same-tick
-    // events MUST use schedule_event_deferred(); only future events may use
-    // schedule_event. (If the callback were invoked before the erase, such an
+    // strict-increase fail-closed guard at the top of this function.
+    // Same-tick events MUST use schedule_event_deferred(); only future
+    // events may use schedule_event. (If the callback were invoked before
+    // the erase, such an
     // event would instead be merged into the already-invoked current list by
     // schedule_event's same-time try_emplace and silently dropped with the
     // erase -- that ordering is forbidden.)
@@ -111,8 +124,14 @@ void EventQueue::schedule_event_deferred(const Callback callback, const Callback
 void EventQueue::schedule_event(const EventTime event_time,
                                 const Callback callback,
                                 const CallbackArg callback_arg) noexcept {
-    // time should be at least larger than current time
-    assert(event_time >= current_time);
+    // time should be at least larger than current time. Fail closed in
+    // every build type (the former assert is compiled out of Release).
+    if (event_time < current_time) {
+        std::cerr << "[Error] (network/analytical) schedule_event time "
+                  << event_time << " is earlier than current_time "
+                  << current_time << std::endl;
+        std::exit(-1);
+    }
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;
     event_list_it->second.add_event(callback, callback_arg);
@@ -123,7 +142,15 @@ EventHandle EventQueue::schedule_event_cancellable(
     const Callback callback,
     const CallbackArg callback_arg,
     const EventCancellationCallback cancellation_callback) noexcept {
-    assert(event_time >= current_time);
+    // Fail closed in every build type (the former assert is compiled out
+    // of Release).
+    if (event_time < current_time) {
+        std::cerr << "[Error] (network/analytical) "
+                  << "schedule_event_cancellable time " << event_time
+                  << " is earlier than current_time " << current_time
+                  << std::endl;
+        std::exit(-1);
+    }
     assert(callback != nullptr);
 
     auto event_list_it = event_queue.try_emplace(event_time, event_time).first;

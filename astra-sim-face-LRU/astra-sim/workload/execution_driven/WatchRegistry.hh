@@ -36,9 +36,12 @@ Semantics (all explicit, none implied):
     expected member has a satisfying terminal; the fire is queued for
     fired_and_drain() and reported to the fire notifier (step 1-6 wires the
     notifier to the DecisionMailbox push).
-  - Lifecycle: register once, fire once, remove_watch on request end / batch
-    abort, remove_all on run finish; the run-end audit is
-    stale_count() == 0 (every registered watch either fired or was removed).
+  - Lifecycle: register once, fire once, remove_watches_for_request on
+    request end / batch abort (plus drain_fired_sentinels for the train
+    sentinel watches); the run-end audit only asserts empty() &&
+    stale_count() == 0 (every registered watch either fired or was
+    removed). remove_all() exists for the tests; the production run end
+    never calls it.
 
 The online CompletionObserver hook (online_completion_hook below) does
 EXACTLY two things (步骤 1-5 操作 3): (1) record the completion fact via

@@ -11,13 +11,9 @@ No general dynamic-graph platform is built (仿真加速分析.md §5.5).
 
 Interfaces implemented here:
   - NodeStore: the store itself (add_node / add_dependency / resolve_free_nodes
-    / finish_node / meta_for / pending_count / empty, plus mark_issued and
-    node() as GraphSource::take_node / lookup backing -- documented additions
-    to the plan's skeleton).
+    / finish_node / meta_for / pending_count / empty, plus mark_issued --
+    documented additions to the plan's skeleton).
   - NodeStoreGraphSource: online-mode GraphSource over a NodeStore.
-  - ETFeederGraphSource: static-mode GraphSource over ETFeeder +
-    DependancyResolver; the ONLY place Workload.cc still sees
-    getDependancyResolver (step-1-4 acceptance grep).
 
 Dependency semantics: add_dependency(parent, child, kind) records a
 precedence edge; a child becomes free when every recorded parent has
@@ -38,12 +34,6 @@ finish_node is idempotent -- the sole dependency-release owner.
 #include <vector>
 
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
-
-namespace Chakra {
-namespace FeederV3 {
-class ETFeeder;
-}  // namespace FeederV3
-}  // namespace Chakra
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -130,7 +120,7 @@ class NodeStore {
     /// frees every child whose parents are all finished.
     void finish_node(uint64_t node_id);
 
-    /// Full record (GraphSource::lookup backing).
+    /// Full record copy (by-value read accessor).
     std::optional<OnlineNode> node(uint64_t node_id) const;
 
     /// Zero-copy full record (GraphSource::lookup_ptr / for_each_dep_free
@@ -259,11 +249,9 @@ class NodeStoreGraphSource : public GraphSource {
     NodeStore& store() { return store_; }
     const NodeStore& store() const { return store_; }
 
-    std::vector<NodeView> dep_free_nodes() override;
     void for_each_dep_free(
         const std::function<void(const NodeView&)>& consume) override;
     void finish_node(uint64_t node_id) override;
-    std::optional<NodeView> lookup(uint64_t node_id) override;
     const NodeView* lookup_ptr(uint64_t node_id) override;
     OnlineStatisticsState* mutable_online_statistics(
         uint64_t node_id) override;
@@ -281,29 +269,6 @@ class NodeStoreGraphSource : public GraphSource {
     // callback can finish a node and release further children. Those children
     // become visible on the next issue pass, never the current one.
     std::vector<uint64_t> dep_free_scratch_ids_;
-};
-
-/// Static-mode GraphSource over the ETFeeder + DependancyResolver. NodeViews
-/// are built in place from the ETFeederNodes, keeping the static path
-/// byte-for-byte equivalent. Non-owning ETFeeder pointer (Workload owns and
-/// destroys it).
-class ETFeederGraphSource : public GraphSource {
-  public:
-    ETFeederGraphSource(Chakra::FeederV3::ETFeeder* et_feeder, int rank);
-
-    std::vector<NodeView> dep_free_nodes() override;
-    void finish_node(uint64_t node_id) override;
-    std::optional<NodeView> lookup(uint64_t node_id) override;
-    void take_node(uint64_t node_id) override;
-    std::shared_ptr<Chakra::FeederV3::ETFeederNode> et_node(
-        uint64_t node_id) override;
-    bool static_all_done() override;
-
-  private:
-    NodeView view_of(uint64_t node_id) const;
-
-    Chakra::FeederV3::ETFeeder* et_feeder_;
-    int rank_;
 };
 
 }  // namespace ExecutionDriven

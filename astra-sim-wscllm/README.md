@@ -40,8 +40,9 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
 - **本地 HBM**（KV 热层）：带宽 / 时延 / 容量取硬件配置 `local-hbm` 的值（容量按
   profile 档位选择）；多用户带宽竞争模型见 G 节；
 - **网络接口（路由端口）**：mesh 上的一个 Device，经有向链路连接其在 mesh 中的物理邻居；
-- **远端内存端口**（仅边缘芯粒拥有，且仅在启用远端内存扩展的配置中生效，见 D）：
-  与片外统一内存池直连的中转通道，对应物理系统中的 SerDes 等片外互连。
+- **远端内存端口**（仅边缘芯粒拥有；远端内存扩展已随 2026-09-24 移除批退役，
+  现无生效配置，见 D）：与片外统一内存池直连的中转通道，对应物理系统中的
+  SerDes 等片外互连。
 
 > 术语辨析：本说明中"芯粒"＝mesh 上的完整单元（die＝NPU＝rank）。指标层另有一个
 > 仅用于观测展示的"chiplet 投影"（把每 NPU 的本地 HBM 均分为若干份，份数取
@@ -62,13 +63,14 @@ HBM。NPU 数量禁止单独配置，恒等于行 × 列；芯粒按 row-major �
   `logical_pool_shared_across_edges: true`），因此称为统一内存池。
 - **端口代价模型**：每个边缘端口为严格 FIFO 事务队列，单次访问
   `耗时 = 端口时延 + 字节数 / 端口带宽`（取硬件配置 `remote-memory` 的值）；
-  端口之间完全并行，远端池总容量不设限
-  （`extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.cc`）。
-- **本仓配置**：`NO_MEMORY_EXPANSION`（远端池未启用，WSC-LLM 策略场景强制如此）：
-  建模能力完整保留（`generate_trace.py` 的 `RemoteMemoryConfig` / `edge_npus` 解析、
-  `AnalyticalRemoteMemory` 后端与 mesh 边界端口派生均在，切换到
-  `PER_NPU_MEMORY_EXPANSION` 即可启用）。本仓 KV 全部驻留片上本地 HBM：LRU 逐出＝
-  零代价删除、恢复靠重算，跨实例历史 KV 仅走 NoC 迁移。
+  端口之间完全并行，远端池总容量不设限。
+- **本仓配置**：`NO_MEMORY_EXPANSION`（远端池未启用，WSC-LLM 策略场景强制如此）。
+  远端内存建模已随 2026-09-24 远端内存清除批退役：`AnalyticalRemoteMemory` /
+  `RemoteFifoLedger` 后端与 `extern/remote_memory_backend/` 整目录已物理删除，
+  `config_resolver.py` 对任何非 `NO_MEMORY_EXPANSION` 的 `memory-type` 解析期
+  fail-closed 报错，仅保留 `NO_MEMORY_EXPANSION` 路径；上文远端池 / 边缘端口
+  模型仅余设计记录。本仓 KV 全部驻留片上本地 HBM：LRU 逐出＝零代价删除、
+  恢复靠重算，跨实例历史 KV 仅走 NoC 迁移。
 
 ### E. 实例（instance）＝NoC 上紧密相邻芯粒组成的矩形区域，共同承担一个请求的推理
 
@@ -428,7 +430,7 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   预排为队列事件、健康运行不停车不受影响。显式 `0`=关恢复 `wait_for_work()`
   原无界契约——IDLE fixture 等刻意长停车场景必须显式传 `0`）；开时停泊点
   墙钟超时即带停泊点诊断
-  （tick/active/pending_alarm/window_occupancy/mailbox 等 12 字段）
+  （tick/active/pending_alarm/window_occupancy/mailbox 等 11 字段）
   `online_fatal` abort（`--idle-` 前缀同受家族未知旗标硬错保护）。
   **FP1（2026-09-01，sync-A16 批次P）**：数值合同冻结——token 不得含任何
   空白或符号字符（拒 `" +1"`/`" -1"`）；判界唯一顺序为 `==0` 接受（=关）
@@ -449,7 +451,7 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
   不可同时为空）；③Error 终止路径（fail-closed）先于停泊发生。**未来重构
   若打破 pump 后置 drain 次序或 calendar 完整性不变量，必须重做可达性
   分析**，在此之前不引入该分支。停泊兜底统一交 `--idle-watchdog-s`
-  （含任何未来未知停滞形态）；12 字段 `parking_diagnostics` 报文已随 A3
+  （含任何未来未知停滞形态）；11 字段 `parking_diagnostics` 报文已随 A3
   移植（`window_occupancy` 在本仓语义=已提交未触发 turn-0 计数）。
 - **window advisory 旋钮已删除（2026-09-05 A.3 清除；原 2026-08-30 P0 fix
   延续裁决）**：`--request-window-rows` 死旋钮已从四仓物理删除——calendar
@@ -571,7 +573,7 @@ cpp.log 启动行 `[online] node gc: ...` / `[online] graph validate: ...`、
 
 另有 C++ 单测 fixtures（`build/astra_analytical/build_congestion_aware/bin/`，无参数直跑）。
 构建约束：检查以裸 `assert()` 表达的测试目标（CliOnlineTest / EventQueueDeferredTest /
-AlarmCancellationTest）在 CMake 里已加 `$<$<CONFIG:Release>:-UNDEBUG>` 使断言在
+AlarmCancellationTest / IngressIdleTest）在 CMake 里已加 `$<$<CONFIG:Release>:-UNDEBUG>` 使断言在
 缺省 Release 构建下常开，否则 -DNDEBUG 会把断言整体编译掉、二进制恒绿：
 `..._WindowedReaderTest`（P0 turn-0 修复后的日历 reader 单测：索引遍+日历提交/
 advisory 窗口/乱序 turn-0/首块超窗/arrival=0 t0 边界/同 tick 按 queue_index 排序/
@@ -586,9 +588,7 @@ late_static_submit=0），
 outer alarm 从 backend 物理移除、共享 bucket 级联、重复取消幂等、legacy 后端回退
 stale guard）、`..._MetricOneShotEraseTest`（MetricCollector one-shot node bucket
 擦除 + OnlineNode anchor 快路径标志，双运行 [METRIC] 输出逐字节对拍、sizeof 编译期
-锁定）、`..._RemoteFifoLedgerTest`（RemoteFifoLedger 按 backend 真实端口记账；自带
-PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记账接线，账本
-不启用）等（后三项 2026-08-29 新增，五仓同构）。
+锁定）等（后两项 2026-08-29 新增）。
 2026-09-24 修复批接入：`..._CliOnlineTest`（R1–R14 在线 CLI 契约，含 FP1 加固
 词法与看门狗判界回归）、`..._EventQueueDeferredTest`（EventQueue tick 末收口 +
 同 tick deferred 通道 + FluidScheduler deferred-flush 集成回归）、
@@ -596,13 +596,10 @@ PER_NPU/PER_NODE/MEMORY_POOL 三架构 fixture 自证——本仓无 sensing 记
 g++ 手工可达（孤儿测试），现均为前端 CMake 正式目标、随主构建落 bin/ 直跑
 （未注册 ctest，不进默认用例集）；同批 6 个既有单测目标的输出目录统一归位
 bin/（改前落在前端默认目录，按本文档 bin/ 路径执行找不到文件）。
-例外：`..._NodeStoreTest` **不在无参数直跑之列**——part C（ETFeederGraphSource
-适配器）需要 `--fixture-et=` 指向合成 trace，先跑
-`python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py`
-生成（缺省输出 `sh_test_mesh/generated/completion_fixture/fixture.0.et`，该目录
-gitignored、裸仓不存在），再以
-`--fixture-et=sh_test_mesh/generated/completion_fixture/fixture.0.et` 运行；
-缺参时打印 `FAIL: --fixture-et is required` 并以退出码 1 结束。Python 侧
+2026-09-26（tests 同步批）起 `..._NodeStoreTest` 亦无参数直跑：原 part C
+（ETFeederGraphSource .et 适配器用例，需 `--fixture-et=` 指向合成 trace）已随
+离线静态路径退役删除（合成 trace 生成器 `make_completion_fixture_et.py`
+现仅余 CompletionFixture 头注 fixture 使用）。Python 侧
 `online/test_propagating_tail.py`（`online_scheduler_base.py` 的在途尾部观测器
 PropagatingTailTracker：对到达未完成请求、未 ack 交付、未确认 provisional KV 动作
 三类在途工作记 current/peak/按来源计数，超限 fail-closed 报错、绝不截断；8 用例，

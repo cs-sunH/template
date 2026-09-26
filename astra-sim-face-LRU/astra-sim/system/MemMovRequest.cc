@@ -22,10 +22,6 @@ MemMovRequest::MemMovRequest(int request_num,
     this->processed = processed;
     this->send_back = send_back;
     this->loggp = loggp;
-    this->total_transfer_queue_time = 0;
-    this->total_transfer_time = 0;
-    this->total_processing_queue_time = 0;
-    this->total_processing_time = 0;
     this->request_num = request_num;
     this->start_time = Sys::boostedTick();
 }

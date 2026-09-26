@@ -48,6 +48,23 @@ void cancel_call_events_alarm(void* const arg) {
     delete static_cast<BasicEventHandlerData*>(arg);
 }
 
+// Fail-closed boolean config-flag parsing, shared by the roofline-enabled /
+// trace-enabled / replay-only / track-local-mem keys (same discipline as the
+// hbm-kv-restore-bandwidth-sharing / hbm-bandwidth-contention keys below).
+// The legacy `j[key] != 0` idiom compared across JSON types, so a JSON
+// `false` (a different type from any number) read as "enabled" -- the
+// opposite of the written intent.
+bool parse_bool_flag(const json& value, const string& key) {
+    if (value.is_boolean()) {
+        return value.get<bool>();
+    }
+    if (value.is_number_integer() || value.is_number_unsigned()) {
+        return value.get<int64_t>() != 0;
+    }
+    Sys::sys_panic(key + " must be boolean or integer");
+    return false;  // unreachable: sys_panic exits
+}
+
 }  // namespace
 
 // SchedulerUnit --------------------------------------------------------------
@@ -106,7 +123,7 @@ void Sys::SchedulerUnit::notify_stream_added_into_ready_list() {
     return;
 }
 
-void Sys::SchedulerUnit::notify_stream_removed(int vnet, Tick running_time) {
+void Sys::SchedulerUnit::notify_stream_removed(int vnet) {
     if (sys->id == 0 &&
         --total_active_chunks_per_dimension[queue_id_to_dimension[vnet]] == 0) {
         usage[queue_id_to_dimension[vnet]].decrease_usage();
@@ -441,34 +458,24 @@ void Sys::initialize_sys(string name) {
         hbm_kv_restore_bandwidth_sharing = false;
     }
     if (j.contains("roofline-enabled")) {
-        if (j["roofline-enabled"] != 0) {
+        if (parse_bool_flag(j["roofline-enabled"], "roofline-enabled")) {
             roofline_enabled = true;
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {
-        if (j["trace-enabled"] != 0) {
-            this->trace_enabled = true;
-        } else {
-            this->trace_enabled = false;
-        }
+        this->trace_enabled = parse_bool_flag(j["trace-enabled"],
+                                              "trace-enabled");
     }
     this->replay_only = false;
     if (j.contains("replay-only")) {
-        if (j["replay-only"] != 0) {
-            this->replay_only = true;
-        } else {
-            this->replay_only = false;
-        }
+        this->replay_only = parse_bool_flag(j["replay-only"], "replay-only");
     }
     this->track_local_mem = false;
     if (j.contains("track-local-mem")) {
-        if (j["track-local-mem"] != 0) {
-        this->track_local_mem = true;
-        } else {
-        this->track_local_mem = false;
-        }
+        this->track_local_mem = parse_bool_flag(j["track-local-mem"],
+                                                "track-local-mem");
     }
 
     this->local_mem_trace_filename = "local_mem_trace";
@@ -536,8 +543,25 @@ void Sys::call_events() {
             callable.callable->call(callable.event, callable.call_data);
         } catch (const std::exception& e) {
             auto logger = LoggerFactory::get_logger("system");
-            logger->critical("warning! a callable is removed before call {}",
-                             e.what());
+            if (execution_mode_ == ExecutionDriven::ExecutionMode::Online) {
+                // Online mode fails closed (README sec.6 "missing inputs fail
+                // closed" discipline): an exception here leaves the stream /
+                // DataSet / metric state at an arbitrary midpoint of the
+                // callback, and consuming the event as if it had succeeded
+                // would let the simulation run on silently corrupt. Paths
+                // that must never throw fail with critical + exit at the
+                // source; a throw reaching this catch is a bug and stops the
+                // run with a diagnosis.
+                logger->critical("online event callback raised std::exception "
+                                 "at tick {}: {}; failing closed",
+                                 now, e.what());
+                std::exit(EXIT_FAILURE);
+            }
+            // Static/legacy compatibility path keeps the upstream
+            // swallow-and-continue behavior.
+            logger->critical("event callback raised std::exception at tick "
+                             "{}: {} (static path continues)",
+                             now, e.what());
         }
     }
     dispatching_events = false;
@@ -1170,8 +1194,7 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     if (stream->phases_to_go.size() == 0) {
         total_running_streams--;
         if (previous_vnet >= 0) {
-            scheduler_unit->notify_stream_removed(
-                previous_vnet, Sys::boostedTick() - stream->last_init);
+            scheduler_unit->notify_stream_removed(previous_vnet);
         }
         delete stream;
         return;
@@ -1200,8 +1223,7 @@ void Sys::proceed_to_next_vnet_baseline(StreamBaseline* stream) {
     stream->state = StreamState::Ready;
 
     if (previous_vnet >= 0) {
-        scheduler_unit->notify_stream_removed(
-            previous_vnet, Sys::boostedTick() - stream->last_init);
+        scheduler_unit->notify_stream_removed(previous_vnet);
     }
     scheduler_unit->notify_stream_added(stream->current_queue_id);
 }

@@ -89,9 +89,16 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
            << "PER_NODE_MEMORY_EXPANSION" << endl;
       exit(1);
     }
-  } else if (mem_type == PER_NPU_MEMORY_EXPANSION &&
-             j.contains("npu-ids")) {
-    per_npu_ids_configured = true;
+  } else if (mem_type == PER_NPU_MEMORY_EXPANSION) {
+    // npu-ids is mandatory for PER_NPU_MEMORY_EXPANSION: only the listed
+    // ranks own a remote-memory port (README §D edge-NPU discipline, and
+    // the repo-wide "missing input fails closed" rule). A missing key must
+    // exit like the PER_NODE keys above, never silently degrade into one
+    // auto-created port per calling rank.
+    if (!j.contains("npu-ids")) {
+      cerr << "npu-ids is required for PER_NPU_MEMORY_EXPANSION" << endl;
+      exit(1);
+    }
     const json& npu_ids = j["npu-ids"];
     if (!npu_ids.is_array() || npu_ids.empty()) {
       cerr << "npu-ids must be a non-empty array for "
@@ -203,7 +210,7 @@ AnalyticalRemoteMemory::~AnalyticalRemoteMemory() {
   verify_drained();
 }
 
-void AnalyticalRemoteMemory::set_sys(const int id, Sys* sys) {
+void AnalyticalRemoteMemory::set_sys(const int /*id*/, Sys* sys) {
   if (sys == nullptr) {
     Sys::sys_panic("AnalyticalRemoteMemory: set_sys received a null Sys");
   }
@@ -213,12 +220,9 @@ void AnalyticalRemoteMemory::set_sys(const int id, Sys* sys) {
     // earlier.
     host_sys = sys;
   }
-  if (mem_type == PER_NPU_MEMORY_EXPANSION &&
-      !per_npu_ids_configured &&
-      per_npu_port_indices.find(id) == per_npu_port_indices.end()) {
-    per_npu_port_indices[id] = ports.size();
-    ports.emplace_back();
-  }
+  // PER_NPU port membership is fixed at construction from the mandatory
+  // npu-ids key; set_sys never opens ports (README §D: non-edge ranks have
+  // no remote-memory port, and issue() rejects them fail-closed).
 }
 
 void AnalyticalRemoteMemory::issue(
@@ -252,10 +256,10 @@ void AnalyticalRemoteMemory::issue(
     }
 
     port_index = port_it->second;
-  } else if (mem_type == MEMORY_POOL) {
-    port_index = 0;
   } else {
-    return;
+    // MEMORY_POOL: the fourth and final MemoryArchitectureType value; the
+    // dispatch is total, so port_index is definitely assigned here.
+    port_index = 0;
   }
 
   if (host_sys == nullptr) {

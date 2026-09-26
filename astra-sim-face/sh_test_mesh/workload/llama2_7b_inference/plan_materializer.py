@@ -17,8 +17,12 @@
      + WP2 透传字段（human_time_ns/tool_time_ns（非空者）/
      request_type/prefix_len，源自队列旁 canonical sidecar 的
      human_time_ns/tool_time_ns/request_type/raw_prefix_tokens 列；
-     sidecar 缺失/行缺失时对应字段不写，消费方回退 unknown/NA 并注明，
-     不猜测填充）；
+         sidecar 缺失/行缺失时对应字段不写，消费方回退 unknown/NA 并注明，
+         不猜测填充）
+         + 跨 run 归因标签（model.name/hardware.label/
+         kv_management.policy/request_queue_csv；metrics_postprocess
+         的 _labels 据此填 raw_metrics.csv 的 model/dataset/hardware/
+         kv_policy 列）；
   3. metrics_manifest.json —— 主 agent 裁决 (i) 的合成口径：
        - schema_version=1 + requests[]（arrival：turn0=absolute session
          arrival；turn>0=after_request(同 session 上一 queue_index, interval)
@@ -198,16 +202,34 @@ def _load_sidecar_rows(queue_csv: Path) -> dict:
 
 
 def _derive_manifest_requests(config, sidecar_rows):
-    """manifest.json 的 requests[]（队列派生 9 字段）。"""
+    """manifest.json 的 requests[]（队列派生 9 字段）。
+
+    fail-closed：turn>0 行之前必须已按文件序处理过同 session 的
+    turn-1 行（正式队列口径：session 块连续、块内 turn 严格 +1），
+    否则「turn>0 history=上一请求 final」无法推导——显式 RuntimeError，
+    与 _derive_metrics_requests 的 parent 缺失处理一致；绝不静默回退
+    history=0（那会把整条 prefill/final 链推到错误基线上）。
+    """
     requests = []
-    last_final_by_session = {}
+    final_by_session_turn = {}
     for index, spec in enumerate(config.request_queue):
         if spec.turn_index == 0:
             history = 0
             # recompute 单口径:turn-0 队列 prefill 已折入 prefix
             context = int(spec.prefill_length)
         else:
-            history = last_final_by_session.get(spec.session_id, 0)
+            parent_final = final_by_session_turn.get(
+                (spec.session_id, spec.turn_index - 1))
+            if parent_final is None:
+                raise RuntimeError(
+                    f"request {spec.request_id} (turn-{spec.turn_index}) "
+                    "has no preceding turn-"
+                    f"{spec.turn_index - 1} row of session "
+                    f"{spec.session_id!r} before it in queue file order; "
+                    "history_tokens_before cannot be derived (fail-closed; "
+                    "the queue must keep each session in one contiguous "
+                    "block with strictly increasing turn indices)")
+            history = parent_final
             # recompute 单口径后续 turn:context = 驻留 history + 新 prefill
             context = history + int(spec.prefill_length)
         final = context + int(spec.decode_length)
@@ -240,7 +262,7 @@ def _derive_manifest_requests(config, sidecar_rows):
             if prefix_text:
                 entry["prefix_len"] = int(prefix_text)
         requests.append(entry)
-        last_final_by_session[spec.session_id] = final
+        final_by_session_turn[(spec.session_id, spec.turn_index)] = final
     return requests
 
 
@@ -316,6 +338,17 @@ def main() -> int:
             spec.session_id for spec in config.request_queue}),
         "manifest_source": "synthetic-prerun",
         "repo_variant": REPO_VARIANT,
+        # 跨 run 归因标签：metrics_postprocess._labels 从本 manifest.json
+        # 读 model.name / hardware.label / kv_management.policy /
+        # request_queue_csv，填 raw_metrics.csv 的 model/dataset/hardware/
+        # kv_policy 列（此前不写这些键，四列恒空串）。
+        "model": {"name": config.model_name},
+        "hardware": {
+            "label": config.hardware.label,
+            "capacity_profile": config.hardware_capacity_profile,
+        },
+        "kv_management": {"policy": config.kv_cache_policy},
+        "request_queue_csv": str(config.request_queue_csv),
         "kv_reserve_context_tokens": config.kv_reserve_context_tokens,
         # P0-2 provenance: 同 session 连续段审计字段（本仓无 C++ 拒绝门，
         # window advisory——字段仅供 campaign 复核，见函数 docstring 裁决）。

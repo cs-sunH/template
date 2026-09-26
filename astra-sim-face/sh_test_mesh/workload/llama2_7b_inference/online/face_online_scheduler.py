@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """face_online_scheduler.py -- 关感知策略调度器(strategy 模式,步骤 1-9,face 版)。
 
-以 _plan_face_session_lru_recompute(face_scheduler.py)为蓝本迁移,
-保持决策顺序逐行对应(每处迁移用 `# offline: face_scheduler.py:XXXX` 注释标注)。
-离线事件循环与在线边界的一一对应:
+蓝本锚点声明(2026-09-26 更正):本文件迁移自离线管线
+_plan_face_session_lru_recompute(face_scheduler.py),但该离线管线已于
+2026-08-18 整体删除(generate_face_trace.py main() 的 fail-closed 桩可证),
+当前 face_scheduler.py 仅剩策略原语(643 行,无事件循环/规划函数)。因此
+全文 `# offline: face_scheduler.py:XXXX`、`离线 :XXXX` 与 session_kv_manager.py
+行号锚点均为迁移时代的历史引用——蓝本函数已不存在,行号与现文件错位,
+不能据此复核在线迁移等价性;下文映射表仅保留作迁移来源的结构性存档。
+历史迁移映射(行号已失效,仅存档):
 
   离线事件循环                                    在线边界
   ----------------                                ----------------

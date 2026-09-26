@@ -10,12 +10,8 @@ Implementation (方案 §4 步骤 1-4).
 
 #include <algorithm>
 #include <cassert>
-#include <cstdlib>
-#include <iostream>
 #include <map>
-#include <stdexcept>
-
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
+#include <utility>
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -341,17 +337,6 @@ RankInjectedSummary NodeStore::injected_unfinished_summary(int rank) const {
 // NodeStoreGraphSource
 // ---------------------------------------------------------------------------
 
-std::vector<NodeView> NodeStoreGraphSource::dep_free_nodes() {
-    std::vector<NodeView> views;
-    for (const auto node_id : store_.resolve_free_nodes()) {
-        const auto node = store_.node(node_id);
-        if (node.has_value()) {
-            views.push_back(*node);
-        }
-    }
-    return views;
-}
-
 void NodeStoreGraphSource::for_each_dep_free(
     const std::function<void(const NodeView&)>& consume) {
     // The reusable vector is still a snapshot, so consume() may safely mutate
@@ -370,10 +355,6 @@ void NodeStoreGraphSource::finish_node(uint64_t node_id) {
     store_.finish_node(node_id);
 }
 
-std::optional<NodeView> NodeStoreGraphSource::lookup(uint64_t node_id) {
-    return store_.node(node_id);
-}
-
 const NodeView* NodeStoreGraphSource::lookup_ptr(uint64_t node_id) {
     return store_.node_ptr(node_id);
 }
@@ -389,170 +370,6 @@ bool NodeStoreGraphSource::mark_terminal_observed(uint64_t node_id) {
 
 void NodeStoreGraphSource::take_node(uint64_t node_id) {
     store_.mark_issued(node_id);
-}
-
-// ---------------------------------------------------------------------------
-// ETFeederGraphSource
-// ---------------------------------------------------------------------------
-
-ETFeederGraphSource::ETFeederGraphSource(
-    Chakra::FeederV3::ETFeeder* const et_feeder, const int rank)
-    : et_feeder_(et_feeder), rank_(rank) {
-    assert(et_feeder_ != nullptr);
-}
-
-NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
-    const auto node = et_feeder_->lookupNode(node_id);
-    assert(node != nullptr);
-    NodeView nv;
-    nv.global_id = node->id();
-    nv.rank = rank_;
-    nv.node_type = static_cast<uint64_t>(node->type());
-    nv.kind = static_cast<NodeKind>(nv.node_type);
-    nv.name = node->name();
-    nv.is_cpu_op = node->is_cpu_op();
-    nv.is_timer_op = node->get_attr<bool>("is_timer_op", false);
-    nv.inputs_values = node->get_inputs_values();
-    switch (nv.kind) {
-        case NodeKind::Compute:
-            // Strict attrs are read eagerly for every free node, but the
-            // baseline read them lazily only on the dispatch path that
-            // consumes them (e.g. CPU comp nodes replay and never carry
-            // num_ops). has_attr guards make the eager read byte-exact with
-            // the lazy strict read: whenever the baseline would have read
-            // the attr, it exists and the same value is produced.
-            if (node->has_attr("num_ops")) {
-                nv.compute.num_ops = node->num_ops<uint64_t>();
-            }
-            if (node->has_attr("tensor_size")) {
-                nv.compute.tensor_size = node->tensor_size<uint64_t>();
-            }
-            nv.compute.runtime_ns = node->runtime() * 1000;  // micros -> ns
-            if (node->has_attr("remote_weight_bytes")) {
-                nv.compute.has_remote_weight_bytes = true;
-                nv.compute.remote_weight_bytes =
-                    node->remote_weight_bytes<uint64_t>();
-            }
-            break;
-        case NodeKind::MemLoad:
-        case NodeKind::MemStore:
-            // tensor_size is consumed by the (removed) remote-memory issue
-            // path; the attribute stays parsed so dispatch can fail closed.
-            if (node->has_attr("tensor_size")) {
-                nv.compute.tensor_size = node->tensor_size<uint64_t>();
-            }
-            break;
-        case NodeKind::CommSend:
-        case NodeKind::CommRecv:
-            // Baseline defaults preserved: comm_src/dst default to the local
-            // rank (this rank == adapter rank_), tag defaults 0; size was
-            // strict at consumption time, guard keeps eager reads identical.
-            if (node->has_attr("comm_size")) {
-                nv.comm.bytes = node->comm_size<uint64_t>();
-            }
-            if (node->has_attr("comm_src")) {
-                nv.comm.src = static_cast<int>(node->comm_src<uint32_t>(rank_));
-            } else {
-                nv.comm.src = rank_;
-            }
-            if (node->has_attr("comm_dst")) {
-                nv.comm.dst = static_cast<int>(node->comm_dst<uint32_t>(rank_));
-            } else {
-                nv.comm.dst = rank_;
-            }
-            if (node->has_attr("comm_tag")) {
-                nv.comm.tag = node->comm_tag<uint32_t>();
-            }
-            // hbm-charge (bool, default true): explicit opt-out of the
-            // local-HBM endpoint charge under hbm-bandwidth-contention
-            // (same get_attr<bool> pattern as is_timer_op above).
-            nv.comm.hbm_charge = node->get_attr<bool>("hbm-charge", true);
-            break;
-        case NodeKind::CommCollective:
-            if (node->has_attr("comm_type")) {
-                nv.coll.comm_type = node->comm_type<uint64_t>();
-            }
-            if (node->has_attr("comm_size")) {
-                nv.coll.bytes = node->comm_size<uint64_t>();
-            }
-            nv.coll.priority = node->comm_priority<uint32_t>();  // default 0u
-            nv.coll.pg_name = node->pg_name<std::string>("");    // default ""
-            // BROADCAST replay runtime (issue_coll_comm), micros -> ns
-            nv.compute.runtime_ns = node->runtime() * 1000;
-            if (node->has_attr("involved_dim")) {
-                const auto& attr = node->get_attr_msg("involved_dim");
-                if (attr.has_bool_list()) {
-                    const auto& bool_list = attr.bool_list();
-                    for (int i = 0; i < bool_list.values_size(); ++i) {
-                        nv.coll.involved_dim.push_back(bool_list.values(i));
-                    }
-                } else {
-                    // byte-exact legacy behavior (issue_coll_comm)
-                    std::cerr << "Expected bool_list in involved_dim but found"
-                                 " another type."
-                              << std::endl;
-                    std::exit(EXIT_FAILURE);
-                }
-            } else {
-                // legacy default: simulate 4 involved dimensions
-                for (int i = 0; i < 4; ++i) {
-                    nv.coll.involved_dim.push_back(true);
-                }
-            }
-            break;
-        default:
-            break;  // Invalid / Metadata / MemLoad / MemStore: no attrs read
-    }
-    return nv;
-}
-
-std::vector<NodeView> ETFeederGraphSource::dep_free_nodes() {
-    auto& resolver = et_feeder_->getDependancyResolver();
-    // Copy into a std::set (dedup + ascending order) -- byte-exact issue
-    // order of the pre-phase-1 issue_dep_free_nodes.
-    std::set<uint64_t> node_ids;
-    for (const auto node_id : resolver.get_dependancy_free_nodes()) {
-        node_ids.insert(node_id);
-    }
-    std::vector<NodeView> views;
-    views.reserve(node_ids.size());
-    for (const auto node_id : node_ids) {
-        views.push_back(view_of(node_id));
-    }
-    return views;
-}
-
-void ETFeederGraphSource::finish_node(uint64_t node_id) {
-    et_feeder_->getDependancyResolver().finish_node(node_id);
-}
-
-std::optional<NodeView> ETFeederGraphSource::lookup(uint64_t node_id) {
-    try {
-        return view_of(node_id);
-    } catch (const std::runtime_error&) {
-        // Legacy lookupNode semantics: a node id outside the index throws
-        // "not found in index" on first read; the optional contract turns
-        // that into a miss (byte-exact for every successful baseline, where
-        // lookups only ever hit).
-        return std::nullopt;
-    }
-}
-
-void ETFeederGraphSource::take_node(uint64_t node_id) {
-    et_feeder_->getDependancyResolver().take_node(node_id);
-}
-
-std::shared_ptr<Chakra::FeederV3::ETFeederNode> ETFeederGraphSource::et_node(
-    uint64_t node_id) {
-    // Same shape as the legacy et_feeder->lookupNode: never nullptr, throws
-    // only when the wrapper is dereferenced for an unknown id.
-    return et_feeder_->lookupNode(node_id);
-}
-
-bool ETFeederGraphSource::static_all_done() {
-    auto& resolver = et_feeder_->getDependancyResolver();
-    return resolver.get_dependancy_free_nodes().empty() &&
-           resolver.get_ongoing_nodes().empty();
 }
 
 }  // namespace ExecutionDriven

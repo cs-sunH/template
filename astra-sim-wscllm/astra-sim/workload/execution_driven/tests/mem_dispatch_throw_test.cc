@@ -128,12 +128,12 @@ std::string issue_and_catch(Workload& workload,
                             uint64_t node_id,
                             bool* threw) {
     *threw = false;
-    const auto view = source.lookup(node_id);
-    if (!view.has_value()) {
+    const auto* view = source.lookup_ptr(node_id);
+    if (view == nullptr) {
         return "<node lookup failed>";
     }
     try {
-        workload.issue(view.value());
+        workload.issue(*view);
     } catch (const std::runtime_error& e) {
         *threw = true;
         return e.what();

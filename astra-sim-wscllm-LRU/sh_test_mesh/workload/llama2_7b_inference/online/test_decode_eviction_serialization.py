@@ -160,7 +160,6 @@ def _scheduler(hardware):
     scheduler._batch = {"delivery_sequence": 1, "watches": []}
     scheduler.ledger_issued = {}
     scheduler.train_ledger_sink = None
-    scheduler.train_ledger_rows = []
     scheduler.online_log_rows = []
     scheduler.online_log_count = 0
     scheduler.decision_log_sink = None

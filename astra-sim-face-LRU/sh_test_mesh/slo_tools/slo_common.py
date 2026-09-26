@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SLO 离线后处理工具集——共享框架（五仓逐字节相同）。
+"""SLO 离线后处理工具集——共享框架。
 
 本模块集中存放 slo_tools 各脚本共用的框架代码：
 
@@ -32,7 +32,6 @@ from typing import Any, Iterable, Iterator, Optional, Sequence
 # 退出码与错误
 # ---------------------------------------------------------------------------
 
-EXIT_OK = 0
 EXIT_FAIL_CLOSED = 2  # 输入缺失/格式错/参数未推导 → 明确报错后非零退出
 
 
@@ -361,9 +360,6 @@ def validated_request_rows(records: Iterable[dict[str, str]],
 # 统计原语（整数纳秒、先分位后转单位）
 # ---------------------------------------------------------------------------
 
-PERCENTILE_METHOD = "nearest_rank"
-
-
 def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     """nearest-rank 分位：index = ceil(p*N) - 1（与 C++ MetricCollector
     ``nearest_rank_percentile`` 同法，doc sec.3.5）；整数纳秒上直接取值，
@@ -377,17 +373,6 @@ def nearest_rank_percentile(values: Sequence[int], p: float) -> int:
     index = min(max(rank - 1, 0), n - 1)
     ordered = sorted(values)
     return ordered[index]
-
-
-def percentile_from_sorted(sorted_values: Sequence[int], p: float) -> int:
-    n = len(sorted_values)
-    if n == 0:
-        fail("分位数计算：样本为空")
-    if not 0.0 < p <= 1.0:
-        fail(f"分位数 p 非法：{p}")
-    rank = math.ceil(p * n)
-    index = min(max(rank - 1, 0), n - 1)
-    return sorted_values[index]
 
 
 # ---------------------------------------------------------------------------
@@ -524,13 +509,6 @@ def fmt_ratio(value: Optional[float], digits: int = 6) -> str:
     if value is None:
         return NA
     return f"{value:.{digits}f}"
-
-
-def ns_to_ms(value: Optional[int]) -> str:
-    """单位转换只发生在展示层（先分位后转单位）。"""
-    if value is None:
-        return NA
-    return f"{value / 1e6:.3f}"
 
 
 # ---------------------------------------------------------------------------

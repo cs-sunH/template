@@ -34,10 +34,6 @@ class MemMovRequest : public Callable, public SharedBusStat {
     LogGP* loggp;
     std::list<MemMovRequest>::iterator pointer;
 
-    Tick total_transfer_queue_time;
-    Tick total_transfer_time;
-    Tick total_processing_queue_time;
-    Tick total_processing_time;
     Tick start_time;
     int request_num;
 };

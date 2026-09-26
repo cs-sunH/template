@@ -241,6 +241,18 @@ def extract_events_face_wscllm(record: dict) -> list[dict]:
                     nbytes, transfer.get("source_instance_index"),
                     transfer.get("target_instance_index"),
                     f"{FAMILY_PD}:{transfer.get('reason')}"))
+        # 2026-09-05（生产者问题 2A 顺带修复）起真实 decode 准入逐出
+        # 序列化在 decode 决策行的 decode_target_evictions（prefill 行
+        # 该字段恒空，已在 prefill 分支消费）——不读即漏 canonical
+        # 逐出事件，且与 --reconcile 的 native 侧同盲区互相兜不了底。
+        for entry in decision.get("decode_target_evictions") or []:
+            nbytes = _eviction_bytes_face(entry)
+            if nbytes:
+                events.append(_event(
+                    entry.get("trigger_request_id") or request_id,
+                    entry.get("time_ns", tick), nbytes,
+                    entry.get("victim_instance_index"), None,
+                    f"{FAMILY_EVICTION}:{entry.get('reason')}"))
     elif kind == "completion":
         for entry in decision.get("completion_evictions") or []:
             nbytes = _eviction_bytes_face(entry)
@@ -693,17 +705,27 @@ def reconcile(run_dir: Path, repo_variant: str, variant: dict,
                         nbytes = total
             if isinstance(nbytes, int) and nbytes > 0:
                 buckets.append((FAMILY_PD, nbytes))
-            for entry in decision.get("decode_evictions") or []:
-                if isinstance(entry, dict) and entry.get(
-                        "kind") != "local_hit":
-                    total = entry.get("total_bytes")
-                    shards = entry.get("shards")
-                    if not isinstance(total, int) and isinstance(
-                            shards, list) and shards:
-                        total = sum(int(s.get("bytes", 0)) for s in shards
-                                    if isinstance(s, dict))
-                    if isinstance(total, int) and total > 0:
-                        buckets.append((FAMILY_EVICTION, total))
+            # S1 decode 行为 decode_evictions（total_bytes/shards）；FACE/
+            # wscllm decode 行为 decode_target_evictions（shard_bytes，
+            # 2026-09-05 问题 2A 起）——两字段并读，缺者为空列表；任一侧
+            # 漏读都会让 native 与 canonical 双侧同盲区、对账恒 pass。
+            for field in ("decode_evictions", "decode_target_evictions"):
+                for entry in decision.get(field) or []:
+                    if not isinstance(entry, dict) or entry.get(
+                            "kind") == "local_hit":
+                        continue
+                    nbytes = _eviction_bytes_face(entry)
+                    if not nbytes:
+                        total = entry.get("total_bytes")
+                        shards = entry.get("shards")
+                        if isinstance(total, int):
+                            nbytes = total
+                        elif isinstance(shards, list) and shards:
+                            nbytes = sum(int(s.get("bytes", 0))
+                                         for s in shards
+                                         if isinstance(s, dict))
+                    if isinstance(nbytes, int) and nbytes > 0:
+                        buckets.append((FAMILY_EVICTION, nbytes))
         elif kind == "completion":
             for entry in decision.get("completion_evictions") or []:
                 nbytes = None

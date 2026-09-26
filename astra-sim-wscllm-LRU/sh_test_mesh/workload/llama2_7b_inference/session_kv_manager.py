@@ -435,9 +435,10 @@ class SessionKVSnapshot:
 
     ``local_shard_bytes`` is the physically resident distribution (all ``L``
     layers when ``LOCAL_HBM``, the zero vector when ``REMOTE_MEMORY``);
-    ``remote_bytes`` is the remote remainder (0 / full vector).  Only fields
-    with real consumers are kept (the legacy full-vector/eviction-metadata
-    fields were write-only and removed).
+    ``remote_bytes`` is the remote remainder (0 / full vector).  Most fields
+    have real production consumers; ``remote_bytes`` and
+    ``logical_context_tokens`` currently have test-only readers (the legacy
+    full-vector/eviction-metadata fields were write-only and removed).
     """
 
     session_id: str

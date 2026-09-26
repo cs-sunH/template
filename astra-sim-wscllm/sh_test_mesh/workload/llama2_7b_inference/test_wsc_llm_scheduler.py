@@ -358,7 +358,6 @@ class WscLlmSchedulerTests(unittest.TestCase):
         self.assertEqual(config.prefill_chunk_size, 512)
         self.assertEqual(config.kv_cache_policy, "session_lru_recompute")
         self.assertEqual(config.kv_reserve_context_tokens, 1_000_000)
-        self.assertFalse(config.record_planning_iterations)
         # request-neutral:合成 fixture 队列的计数只反映 fixture 自身,不依赖
         # 任何真实 trace 数据(裸仓库不物化输入,见方案 §3 步骤 0-1)。
         self.assertEqual(config.source_request_count, len(SYNTHETIC_QUEUE_ROWS))

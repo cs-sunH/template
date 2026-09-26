@@ -16,7 +16,6 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from session_kv_manager import NOC_MIGRATE  # noqa: F401  (re-export: online scheduler import)
 
 @dataclass(frozen=True)
 class FaceHardware:

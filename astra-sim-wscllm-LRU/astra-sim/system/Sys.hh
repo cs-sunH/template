@@ -60,6 +60,9 @@ class Sys : public Callable {
         std::vector<double> total_chunks_per_dimension;
         std::vector<uint64_t> total_active_chunks_per_dimension;
         std::map<int, int> queue_id_to_dimension;
+        // Per-dimension usage level: production only writes it via the
+        // notify_* hooks; the sole reader is the system-history lifecycle
+        // contract test (test-only diagnostic, no production consumer).
         std::vector<UsageTracker> usage;
     };
     //---------------------------------------------------------------------------
@@ -322,7 +325,6 @@ class Sys : public Callable {
 
     // network
     AstraNetworkAPI* comm_NI;
-    double comm_scale;
     bool rendezvous_enabled;
 
     // scheduler

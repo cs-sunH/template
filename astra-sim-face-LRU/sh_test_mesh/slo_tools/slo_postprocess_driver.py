@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SLO 后处理单遍合并 driver（A4，2026-08-29；五仓逐字节相同，标准库实现）。
+"""SLO 后处理单遍合并 driver（A4，2026-08-29；标准库实现）。
 
 背景（读放大，A4_DESIGN §1.4）：run_slo_postprocess.sh 原以 9 个独立
 python3 子命令串行提取 SLO 产物——request_metrics.csv 被整读+校验 4 次、

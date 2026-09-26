@@ -41,7 +41,6 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${BIN:-${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online}
-SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/wakeup_guard_fixture_service.py
 EXPECT_MODE=${EXPECT_MODE:-fixed}
 
 T_NS=3000000000

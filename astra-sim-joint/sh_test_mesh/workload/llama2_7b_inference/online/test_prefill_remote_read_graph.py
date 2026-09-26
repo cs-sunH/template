@@ -448,12 +448,6 @@ def _barrier_by_rank(harness):
         for node in harness.by_name("_prefill_kv_ready_barrier")}
 
 
-def _node_by_id(harness, rank, node_id):
-    return next(
-        node for node in harness.nodes()
-        if node["rank"] == rank and node["id"] == node_id)
-
-
 class PrefixReadStreamAdmissionTests(unittest.TestCase):
     """§三.1-§三.3/§三.5：准入批发射的前缀读流旁挂分支。"""
 
@@ -738,16 +732,20 @@ class BranchForkParallelismTests(unittest.TestCase):
     （重叠而非串行；时延载体 = 可区分传输字节）。"""
 
     def test_branches_fork_from_same_admission_frontier(self):
-        """前缀读流支首节点（exec trigger send）、后缀恢复支首节点、
-        readiness barrier 三者在每个 exec rank 上共享同一 parent =
-        分叉前主链尾（同一准入 frontier 分叉，§三.1）；frontier 节点
-        本身是主链节点、不属于任何一支。"""
+        """前缀读流支首节点、后缀恢复支首节点、readiness barrier 三者在
+        每个 exec rank 上共享同一 parent = 分叉前主链尾（同一准入
+        frontier 分叉，§三.1）；barrier 单 parent 直挂该 frontier（结构性
+        主链节点），frontier 节点不属于任何一支。（同实例 gate 种子 =
+        comp 节点在主链上，frontier = 种子链尾；跨实例重建形态由下方
+        重建测试单独覆盖——timer gate 节点不链主链、经 arming 消费。）"""
         harness, frontier = _emit_partial_admission_capture_frontier()
         parents = _parents_by_rank(harness)
         prefix_first = harness.trigger_sends()
         restore_first = _first_branch_node_by_rank(
             harness, "_history_transfer")
         barrier = _barrier_by_rank(harness)
+        prefix_ids = _branch_ids_by_rank(harness, "_prefill_read")
+        restore_ids = _branch_ids_by_rank(harness, "_history_transfer")
         self.assertEqual(sorted(prefix_first), sorted(EXEC_RANKS))
         self.assertEqual(sorted(restore_first), sorted(EXEC_RANKS))
         self.assertEqual(sorted(barrier), sorted(EXEC_RANKS))
@@ -761,20 +759,25 @@ class BranchForkParallelismTests(unittest.TestCase):
                     parents.get((rank, node["id"]), []),
                     f"{label} on rank {rank} must fork at the admission "
                     "frontier")
-            frontier_node = _node_by_id(harness, rank, frontier[rank])
+            self.assertEqual(
+                parents.get((rank, barrier[rank]["id"]), []),
+                [frontier[rank]],
+                "readiness barrier must chain singly on the fork frontier")
             self.assertNotIn(
-                "_prefill_read", frontier_node["name"],
+                frontier[rank], prefix_ids.get(rank, set()),
                 "fork frontier must be a main-chain node, not a prefix "
                 "branch node")
             self.assertNotIn(
-                "_history_transfer", frontier_node["name"],
+                frontier[rank], restore_ids.get(rank, set()),
                 "fork frontier must be a main-chain node, not a restore "
                 "branch node")
 
     def test_fork_survives_cross_instance_gate_rebuild(self):
-        """上一轮 gate 在 home（R5 批内重建）形态：重建 gate 节点成为
-        exec 主链尾——两支首节点与 readiness barrier 仍同 parent 于重建
-        节点（门重建先于两支 fork 归一，§三.2/§三.3）。"""
+        """上一轮 gate 在 home（R5 批内重建）形态：timer gate 节点不链
+        主链——重建 = exec 上的 1B gate relay recv（链上 fork frontier）
+        + 悬挂 timer（arming 消费）。断言两支首节点与 readiness barrier
+        同 parent 于重建 frontier（同一 fork 点），且重建 timer 同时
+        arming 进两支的首个动作节点（§三.3：门重建先于两腿触发）。"""
         harness = _GraphHarness()
         _emit_partial_admission(harness, gate_source=HOME_INSTANCE)
         rebuilt = {
@@ -785,16 +788,35 @@ class BranchForkParallelismTests(unittest.TestCase):
         prefix_first = harness.trigger_sends()
         restore_first = _first_branch_node_by_rank(
             harness, "_history_transfer")
+        restore_action_first = _first_branch_node_by_rank(
+            harness, "_history_transfer_action")
         barrier = _barrier_by_rank(harness)
         for rank in EXEC_RANKS:
+            frontier_parents = parents.get(
+                (rank, barrier[rank]["id"]), [])
+            self.assertEqual(
+                len(frontier_parents), 1,
+                "readiness barrier must chain singly on the rebuilt "
+                "frontier")
+            frontier_id = frontier_parents[0]
+            self.assertIn(
+                frontier_id,
+                parents.get((rank, prefix_first[rank]["id"]), []),
+                f"prefix trigger send on rank {rank} must fork at the "
+                "rebuilt-gate frontier")
+            self.assertIn(
+                frontier_id,
+                parents.get((rank, restore_first[rank]["id"]), []),
+                f"suffix restore first node on rank {rank} must fork at "
+                "the rebuilt-gate frontier")
             for label, node in (
                     ("prefix trigger send", prefix_first[rank]),
-                    ("suffix restore first node", restore_first[rank]),
-                    ("readiness barrier", barrier[rank])):
+                    ("suffix restore first action",
+                     restore_action_first[rank])):
                 self.assertIn(
                     rebuilt[rank],
                     parents.get((rank, node["id"]), []),
-                    f"{label} on rank {rank} must fork at the rebuilt "
+                    f"{label} on rank {rank} must arm the rebuilt "
                     "interval gate")
 
     def test_branches_overlap_not_serial_under_asymmetric_bytes(self):
@@ -832,6 +854,12 @@ class BranchForkParallelismTests(unittest.TestCase):
                 "group bytes")
         parents = _parents_by_rank(harness)
         for rank in EXEC_RANKS:
+            self.assertTrue(
+                prefix_ids.get(rank),
+                f"prefix read branch must emit nodes on rank {rank}")
+            self.assertTrue(
+                restore_ids.get(rank),
+                f"suffix restore branch must emit nodes on rank {rank}")
             for node_id in prefix_ids.get(rank, ()):
                 self.assertFalse(
                     _ancestors(parents, rank, node_id)
@@ -856,6 +884,13 @@ class BranchForkParallelismTests(unittest.TestCase):
         barrier = _barrier_by_rank(harness)
         self.assertEqual(sorted(barrier), sorted(EXEC_RANKS))
         for rank in EXEC_RANKS:
+            # 非空集前提：分支节点缺席 = 断言空转（钉住识别面）。
+            self.assertTrue(
+                prefix_ids.get(rank),
+                f"prefix read branch must emit nodes on rank {rank}")
+            self.assertTrue(
+                restore_ids.get(rank),
+                f"suffix restore branch must emit nodes on rank {rank}")
             ancestors = _ancestors(parents, rank, barrier[rank]["id"])
             self.assertFalse(
                 ancestors & prefix_ids.get(rank, set()),

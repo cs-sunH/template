@@ -269,8 +269,11 @@ class GraphBatchCommitter {
   private:
     friend struct GraphBatchCommitterTestAccess;
     /// Delta facts first: arrivals -> in-flight; PREFILL_DRAIN ->
-    /// prefill-drained; REQUEST_COMPLETE -> removed from both. Used on local
-    /// copies by validate() and on the real sets by commit().
+    /// prefill-drained; REQUEST_COMPLETE -> removed from both. The
+    /// "batch_train_..." namespace ids (train sentinels) are never booked
+    /// into prefill_drained -- they have no REQUEST_COMPLETE and no
+    /// eligibility consumer. Used on local copies by validate() and on the
+    /// real sets by commit().
     static void apply_delta_facts(const StateDelta& delta,
                                   std::set<std::string>& in_flight,
                                   std::set<std::string>& prefill_drained);

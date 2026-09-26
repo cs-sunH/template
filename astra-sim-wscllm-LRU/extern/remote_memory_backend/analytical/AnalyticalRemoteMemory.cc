@@ -202,7 +202,10 @@ AnalyticalRemoteMemory::AnalyticalRemoteMemory(
 
 AnalyticalRemoteMemory::~AnalyticalRemoteMemory() {
   // §3.4：析构兜底走 shutdown——删除未交付 wlhd、经取消 deleter 释放
-  // payload。正常路径要求 main 在删除 Sys 前显式 shutdown。
+  // payload。正常路径由 main 在删除 Sys 前以 reset()/本析构触发本
+  // shutdown（is_drained fail-closed 门保证届时无挂起事件，cancel 不会
+  // 打到已释放的 Sys）；如需提前 teardown 可显式调用（现仅
+  // remote_port_nway_test 这样做）。
   shutdown();
 }
 

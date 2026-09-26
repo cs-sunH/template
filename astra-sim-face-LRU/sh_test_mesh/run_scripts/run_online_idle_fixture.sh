@@ -34,7 +34,6 @@ ET_DIR=${GEN_MATCH[0]}
 ET_PREFIX="${ET_DIR}/llama2_7b_inference"
 RC=${PROJECT}/sh_test_mesh/generated/runtime_config/face_case5_config_c__validation-160gib__edge_remote_memory_pool
 BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analytical_Congestion_Aware_Online
-FIXTURE_SVC=${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/lifecycle_fixture_service.py
 
 # 指定世界 tick(纳秒,事件时钟从 0 起):注入在 wall ~2s,到达在事件 3.0s。
 # 两个 request 用同一指定 tick:同 tick 到达 -> 单次 ACTIVE 周期(合同② 冻结

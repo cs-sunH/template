@@ -21,6 +21,7 @@ typedef ChakraProtoMsg::NodeType ChakraNodeType;
 CustomAlgorithm::CustomAlgorithm(std::string et_filename, int id, int pos_in_comm, CommunicatorGroup* comm_group) : Algorithm() {
     try {
         et_filename = et_filename + "." + to_string(pos_in_comm) + ".et";
+        this->et_filename = et_filename;
         this->et_feeder = new Chakra::FeederV3::ETFeeder(et_filename);
         this->comm_group = comm_group;
     } catch (const std::runtime_error& e) {
@@ -39,13 +40,21 @@ CustomAlgorithm::~CustomAlgorithm() {
     delete et_feeder;
 }
 
-int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank) {
+int CustomAlgorithm::convert_algo_rank_to_real_rank(int algo_rank,
+                                                   uint64_t node_id) {
     // When comm_group is non-null, the algorithm rank is mapped to the real
     // NPU id by its position inside the communication group (see the contract
     // in CustomAlgorithm.hh). When comm_group is null, algorithm ranks are
     // the same as real ranks.
     if (comm_group == nullptr) {
         return algo_rank;
+    }
+    const int group_size = static_cast<int>(comm_group->involved_NPUs.size());
+    if (algo_rank < 0 || algo_rank >= group_size) {
+        Sys::sys_panic("algorithm rank " + to_string(algo_rank) +
+                       " out of range for communication group of size " +
+                       to_string(group_size) + " (et file '" + et_filename +
+                       "', node id " + to_string(node_id) + ")");
     }
     int real_rank = comm_group->involved_NPUs[algo_rank];
     return real_rank;
@@ -56,7 +65,8 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
     ChakraNodeType type = node->type();
     if (type == ChakraNodeType::COMM_SEND_NODE) {
         sim_request snd_req;
-        int dst_rank = convert_algo_rank_to_real_rank(node->comm_dst());
+        int dst_rank = convert_algo_rank_to_real_rank(node->comm_dst(),
+                                                      node->id());
         snd_req.srcRank = node->comm_src(this->stream->owner->id);
         snd_req.dstRank = dst_rank;
         snd_req.reqType = UINT8;
@@ -75,7 +85,8 @@ void CustomAlgorithm::issue(shared_ptr<Chakra::FeederV3::ETFeederNode> node) {
             sehd);
     } else if (type == ChakraNodeType::COMM_RECV_NODE) {
         sim_request rcv_req;
-        int src_rank = convert_algo_rank_to_real_rank(node->comm_src());
+        int src_rank = convert_algo_rank_to_real_rank(node->comm_src(),
+                                                      node->id());
         RecvPacketEventHandlerData* rcehd = new RecvPacketEventHandlerData;
         rcehd->wlhd = new WorkloadLayerHandlerData;
         rcehd->wlhd->node_id = node->id();

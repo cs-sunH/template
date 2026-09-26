@@ -65,7 +65,7 @@ from generate_face_trace import (  # noqa: E402
     kv_cache_bytes_for_tokens,
     sanitize_node_prefix,
 )
-from generate_face_trace import NOC_MIGRATE, RECOMPUTE  # noqa: E402
+from generate_face_trace import NOC_MIGRATE  # noqa: E402
 
 def first_token_split_enabled() -> bool:
     """WP9 首步批拆分总开关（SH_FIRST_TOKEN_SPLIT，B4 起缺省 "0" 关）。
@@ -282,12 +282,6 @@ class OnlineTraceBuilder:
         node["comm"]["dst"] = int(dst)
         node["comm"]["bytes"] = self._uint64(comm_size)
         node["comm"]["tag"] = int(comm_tag)
-
-    # ------------------------------------------------------------- 只读属性 --
-
-    @property
-    def node_count_total(self) -> int:
-        return self.node_count
 
 
 class GraphBatchBuilder:

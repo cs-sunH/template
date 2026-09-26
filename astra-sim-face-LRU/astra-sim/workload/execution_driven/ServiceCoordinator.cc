@@ -108,9 +108,21 @@ bool ServiceCoordinator::checked_wait_deadline(
     if (!std::isfinite(timeout_s) || timeout_s <= 0.0) {
         return false;
     }
-    const double duration_max_count = static_cast<double>(
-        std::chrono::steady_clock::duration::max().count());
-    if (timeout_s > duration_max_count) {
+    // The upper bound must live in the seconds domain: the tick count of
+    // steady_clock::duration::max() is ns ticks, not seconds, so comparing
+    // a seconds value against the raw count would let any timeout of
+    // roughly (max/1e9, max) seconds pass and overflow the float->int
+    // conversion below. Scale the tick count by the tick period; '>=' also
+    // rejects the exact boundary, where the double multiply could round up
+    // past duration::max().
+    const double duration_max_s =
+        static_cast<double>(
+            std::chrono::steady_clock::duration::max().count()) *
+        static_cast<double>(
+            std::chrono::steady_clock::duration::period::num) /
+        static_cast<double>(
+            std::chrono::steady_clock::duration::period::den);
+    if (timeout_s >= duration_max_s) {
         return false;  // could not be represented as a duration at all
     }
     const std::chrono::steady_clock::duration timeout =

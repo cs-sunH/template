@@ -42,7 +42,7 @@ def _base_for(graph_batch):
     }
     scheduler._provisional_kv_actions = {}
     scheduler.digest_sink = None
-    scheduler._profile_batch = {"scanned_entries": 0, "full_scan_entries": 0}
+    scheduler._profile_batch = {"scanned_entries": 0}
     scheduler.profile_sink = None
     scheduler.profile_rows = []
     return scheduler

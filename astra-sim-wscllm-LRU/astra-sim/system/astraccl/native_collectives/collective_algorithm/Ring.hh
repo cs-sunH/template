@@ -49,7 +49,8 @@ class Ring : public Algorithm {
     std::list<MyPacket> packets;
     bool toggle;
     long free_packets;
-    long total_packets_sent;
+    // total_packets_received 保留：AllToAll 继承 Ring，在 AllToAll.cc 读取该成员；
+    // 对称的 total_packets_sent 全仓零读者，已删除。
     long total_packets_received;
     uint64_t msg_size;
     std::list<MyPacket*> locked_packets;

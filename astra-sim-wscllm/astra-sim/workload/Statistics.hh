@@ -26,7 +26,7 @@ class Statistics {
     class OperatorStatistics {
       public:
         static const Tick INVALID_TICK = UINT64_MAX;
-        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, REPLAY, INVALID };
+        enum class OperatorType { CPU, GPU, COMM, REMOTE_MEM, INVALID };
         static OperatorType get_operator_type(
             const std::shared_ptr<Chakra::ETFeederNode> node);
         // Step 1-8: online-mode overload dispatching on the NodeView fields
@@ -69,8 +69,6 @@ class Statistics {
         std::optional<uint64_t> comm_size;  // Size of communication in bytes
 
         // remote memory node
-
-        // replay node
     };
 
   public:

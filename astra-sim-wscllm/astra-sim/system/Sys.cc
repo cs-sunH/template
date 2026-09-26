@@ -436,8 +436,18 @@ bool Sys::initialize_sys(string name) {
         local_mem_latency = j["local-mem-latency"];  // ns
     }
     if (j.contains("roofline-enabled")) {
-        if (j["roofline-enabled"] != 0) {
-            roofline_enabled = true;
+        // Boolean/integer strict parsing: nlohmann's cross-type `!= 0`
+        // would silently treat a JSON `false` as enabled (fail-open).
+        const auto& roofline_flag = j["roofline-enabled"];
+        if (roofline_flag.is_boolean()) {
+            roofline_enabled = roofline_flag.get<bool>();
+        } else if (roofline_flag.is_number_integer() ||
+                   roofline_flag.is_number_unsigned()) {
+            roofline_enabled = roofline_flag.get<int64_t>() != 0;
+        } else {
+            sys_panic("roofline-enabled must be boolean or integer");
+        }
+        if (roofline_enabled) {
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
     }
@@ -463,26 +473,26 @@ bool Sys::initialize_sys(string name) {
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {
-        if (j["trace-enabled"] != 0) {
-            this->trace_enabled = true;
+        const auto& trace_flag = j["trace-enabled"];
+        if (trace_flag.is_boolean()) {
+            this->trace_enabled = trace_flag.get<bool>();
+        } else if (trace_flag.is_number_integer() ||
+                   trace_flag.is_number_unsigned()) {
+            this->trace_enabled = trace_flag.get<int64_t>() != 0;
         } else {
-            this->trace_enabled = false;
-        }
-    }
-    this->replay_only = false;
-    if (j.contains("replay-only")) {
-        if (j["replay-only"] != 0) {
-            this->replay_only = true;
-        } else {
-            this->replay_only = false;
+            sys_panic("trace-enabled must be boolean or integer");
         }
     }
     this->track_local_mem = false;
     if (j.contains("track-local-mem")) {
-        if (j["track-local-mem"] != 0) {
-        this->track_local_mem = true;
+        const auto& track_flag = j["track-local-mem"];
+        if (track_flag.is_boolean()) {
+            this->track_local_mem = track_flag.get<bool>();
+        } else if (track_flag.is_number_integer() ||
+                   track_flag.is_number_unsigned()) {
+            this->track_local_mem = track_flag.get<int64_t>() != 0;
         } else {
-        this->track_local_mem = false;
+            sys_panic("track-local-mem must be boolean or integer");
         }
     }
 
@@ -676,12 +686,6 @@ void Sys::handleEvent(void* arg) {
             all_sys[id]->call_events();
         }
         delete ehd;
-    } else if ((event == EventType::NPU_to_MA) ||
-               (event == EventType::MA_to_NPU)) {
-        if (id >= 0 && static_cast<size_t>(id) < all_sys.size() &&
-            all_sys[id] != nullptr) {
-            all_sys[id]->call_events();
-        }
     } else if (event == EventType::RendezvousSend) {
         RendezvousSendData* rsd = (RendezvousSendData*)ehd;
         rsd->send.call(EventType::General, nullptr);
@@ -867,6 +871,10 @@ DataSet* Sys::generate_collective(
             new StreamBaseline(this, dataset, stream_id, vect, pri);
         newStream->current_queue_id = -1;
         insert_into_ready_list(newStream);
+        // Exactly one stream is created here while the dataset above was
+        // pre-sized with the chunk math; align it so the dataset can reach
+        // finished_streams == total_streams instead of waiting forever.
+        dataset->total_streams = 1;
         return dataset;
     }
 

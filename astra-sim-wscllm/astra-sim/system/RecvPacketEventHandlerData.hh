@@ -17,6 +17,8 @@ class WorkloadLayerHandlerData;
 class RecvPacketEventHandlerData : public BasicEventHandlerData {
   public:
     RecvPacketEventHandlerData();
+    // The vnet/stream_id arguments are kept for the existing collective call
+    // sites; the members themselves were write-only and are removed.
     RecvPacketEventHandlerData(BaseStream* owner,
                                int sys_id,
                                EventType event,
@@ -27,8 +29,6 @@ class RecvPacketEventHandlerData : public BasicEventHandlerData {
     WorkloadLayerHandlerData* wlhd;
     BaseStream* owner;
     CustomAlgorithm* custom_algorithm;
-    int vnet;
-    int stream_id;
     Tick ready_time;
 };
 

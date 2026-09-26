@@ -42,8 +42,6 @@ void MemMovRequest::call(EventType event, CallData* data) {
     total_mem_bus_transfer_queue_delay +=
         ((SharedBusStat*)data)->total_shared_bus_transfer_queue_delay;
     mem_request_counter = 1;
-    // delete (SharedBusStat *)data;
-    // callEvent=EventType::General;
     loggp->talking_it = pointer;
     loggp->call(callEvent, data);
 }

@@ -34,8 +34,8 @@
 
 输出目录：sh_test_mesh/generated/llama2_7b_inference_54npus_plan_<cfg8>/（保留 54npus
 前缀以过 GEN_MATCH；<cfg8> = trace_config 内容摘要 8 位 hex）。幂等：重跑
-覆盖同目录。fail-closed：请求队列为空/占位（request-neutral 占位 csv）时
-exit 1 并说明。
+覆盖同目录。fail-closed：请求队列为空由 loader 承担
+（generate_trace.load_request_queue 对零请求队列 raise ValueError）。
 
 """
 
@@ -331,13 +331,6 @@ def _derive_metrics_requests(config):
 def main() -> int:
     config = load_face_trace_config()
     policy_provenance = _assert_policy_passthrough(config)
-    if not config.request_queue:
-        print(
-            "[plan_materializer] request queue is empty (request-neutral "
-            "placeholder); materialize the 30s/10s input first and point "
-            "trace_config.csv request_queue_csv at it",
-            file=sys.stderr)
-        return 1
     cfg8 = _config_digest8(config.config_csv)
     output_dir = GENERATED_ROOT / f"{PREFIX}_54npus_plan_{cfg8}"
     output_dir.mkdir(parents=True, exist_ok=True)

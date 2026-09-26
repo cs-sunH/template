@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
+File-implementation of the bridge protocol v1 (方案 §4 步骤 1-7).
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,
 EPIPE on the notification write, poll timeout, missing/corrupt response,
@@ -124,6 +124,15 @@ int wait_readable(int fd, int timeout_ms) {
     }
     return 1;
 }
+
+// Startup grace for the FIRST response byte (wait_response_byte): this
+// side's O_NONBLOCK read open succeeds before Python's resp write-end open
+// (its serve_forever opens the req read end first), so an empty writerless
+// FIFO in that window reports POLLHUP + read()==0 -- the same EOF signature
+// as peer death. A pre-first-byte EOF is retried for this long before the
+// fatal verdict; it only ever delays a genuinely dead startup peer, never
+// masks a mid-run death (post-first-byte EOF stays immediate).
+constexpr int kRespWriterStartupGraceMs = 10000;
 
 }  // namespace
 
@@ -372,7 +381,10 @@ void FileDecisionBridge::open_notify() {
     // (the false "Python side crashed", F1) and the mirror race EPIPE'd
     // Python's write (F7-style handshake wedges). With both fds long-lived
     // there are no mid-run writer/reader transitions at all: EOF on this fd
-    // can only be the peer process dying.
+    // can only be the peer process dying. The residual startup gap (the
+    // write end opens one Python statement after the req read end this
+    // function already waited for) is absorbed by wait_response_byte's
+    // first-byte startup grace, not here.
     if (resp_notify_fd_ < 0) {
         const std::string path = bridge_dir_ + "/resp_notify.fifo";
         resp_notify_fd_ = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
@@ -386,7 +398,12 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
     // Defect-B fix: one byte off the long-lived read end, with an EAGAIN
     // retry loop (the fd is O_NONBLOCK; a poll wake without a consumable
     // byte -- e.g. POLLHUP edges while Python churns its user-space state
-    // -- must not be mistaken for data or death).
+    // -- must not be mistaken for data or death). The pre-first-byte
+    // startup window (no writer yet on this side's fresh read end) gets
+    // kRespWriterStartupGraceMs of EOF retries before the death verdict.
+    const auto startup_grace_deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kRespWriterStartupGraceMs);
     while (true) {
         const int wait = wait_readable(resp_notify_fd_, timeout_ms_);
         if (wait == 0) {
@@ -400,6 +417,7 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
         char byte = 0;
         const ssize_t n = ::read(resp_notify_fd_, &byte, 1);
         if (n == 1) {
+            resp_notify_byte_seen_ = true;
             // Defect-B fix guard (protocol drift detection): the channel is
             // strictly 1 byte per delivery (backpressure: one in-flight
             // epoch at a time -- C++ never sends request N+1 before
@@ -418,14 +436,35 @@ void FileDecisionBridge::wait_response_byte(const uint64_t seq) {
             return;  // the notification byte (payload is the response file)
         }
         if (n == 0) {
-            // The ONLY way the peer's lifetime write end closes: the Python
-            // process died (crash/exit). Genuine crash detection -- under
-            // the old per-exchange protocol this same signature also fired
-            // for a live-but-between-opens peer (defect B's false kill).
-            bridge_fatal("Python side died (its long-lived resp_notify "
-                         "write end closed; EOF on resp_notify.fifo, "
-                         "delivery_sequence=" +
-                         std::to_string(seq) + ")");
+            // The ONLY way the peer's lifetime write end closes after a
+            // byte has crossed: the Python process died (crash/exit).
+            // Genuine crash detection -- under the old per-exchange
+            // protocol this same signature also fired for a
+            // live-but-between-opens peer (defect B's false kill).
+            //
+            // Before the FIRST byte ever crossed, EOF is ambiguous: this
+            // side's O_NONBLOCK read open precedes Python's write-end open
+            // (serve_forever pairs its req read end with C++'s req write
+            // open first), so a writerless empty FIFO here may be a
+            // live-but-not-yet-paired peer. Retry until the startup grace
+            // expires; a peer that died before its first response is still
+            // caught fail-closed at the deadline -- only the verdict is
+            // deferred, the message is unchanged.
+            if (resp_notify_byte_seen_ ||
+                std::chrono::steady_clock::now() >= startup_grace_deadline) {
+                std::string why = "Python side died (its long-lived "
+                                  "resp_notify write end closed; EOF on "
+                                  "resp_notify.fifo, delivery_sequence=" +
+                                  std::to_string(seq);
+                if (!resp_notify_byte_seen_) {
+                    why += "; no response byte ever arrived, startup grace "
+                           "expired";
+                }
+                why += ")";
+                bridge_fatal(why);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;  // spurious wake: re-enter the poll

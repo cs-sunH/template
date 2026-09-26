@@ -240,9 +240,7 @@ class DecisionMailbox {
     /// generation). Accepted events get consecutive seqs.
     void push(DecisionEvent e);
 
-    /// True iff a delivery epoch has work: pending events or a pending
-    /// finalize (the commit-ack finalize flag is the step-1-7+ wiring
-    /// point; nothing sets it in phase 1's step 1-6).
+    /// True iff a delivery epoch has work: pending events.
     [[nodiscard]] bool has_decision_work() const;
 
     /// Deliver all pending events in insertion order and clear the pending
@@ -276,17 +274,12 @@ class DecisionMailbox {
         ++no_decision_python_callback_count_;
     }
 
-    /// Set/reset the finalize-pending flag (step-1-7+ commit-ack wiring;
-    /// kept here per the plan's has_decision_work definition).
-    void set_finalize_pending(bool pending) { finalize_pending_ = pending; }
-
   private:
     using Identity = std::tuple<int, std::string, std::string, uint64_t>;
 
     uint64_t next_seq_ = 1;
     std::vector<DecisionEvent> events_;
     std::set<Identity> pending_identities_;
-    bool finalize_pending_ = false;
 
     uint64_t event_count_ = 0;
     uint64_t delivery_count_ = 0;

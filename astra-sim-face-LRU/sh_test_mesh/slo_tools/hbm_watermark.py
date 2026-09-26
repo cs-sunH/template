@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WP8 补充主数据源：离线 HBM KV 水位线重建（五仓逐字节相同，标准库实现）。
+"""WP8 补充主数据源：离线 HBM KV 水位线重建（标准库实现）。
 
 在线模式 C++ 内存账本为空是既有现状（C++ 侧 hbm_watermark 记录全零属预
 期）；真实 KV 占用时序在 python 侧产物中。经五仓 B0 基线逐仓实测核对：
@@ -143,8 +143,6 @@ TRUST_TIER_UPPER_BOUND = "upper_bound_only"
 TRUST_TIER_LIFECYCLE = "lifecycle_replay_exact"
 TRUST_TIER_RESIDENT = "resident_kv_exact"
 TRUST_TIER_CERTIFIED = "per_rank_total_hbm_certified"
-JOURNAL_TIERS = (TRUST_TIER_CERTIFIED, TRUST_TIER_RESIDENT,
-                 TRUST_TIER_LIFECYCLE)
 
 # 绘图 series（P1-④：受全局行预算约束的稠密产物；旧产物名
 # slo_hbm_watermark_series.csv 退役）。
@@ -214,8 +212,7 @@ def _evict_action(tick: int, entry: dict, bytes_of, where: str) -> dict:
     time_ns = entry.get("time_ns")
     eff_tick = time_ns if isinstance(time_ns, int) and time_ns >= 0 else tick
     return {"type": "evict", "tick": eff_tick, "session": victim_session,
-            "bytes": nbytes, "instance": victim_instance,
-            "kind": entry.get("kind"), "reason": entry.get("reason")}
+            "bytes": nbytes, "instance": victim_instance}
 
 
 def _collect_eviction_lists(record: dict, mapping: dict, where: str) -> list:
@@ -1019,14 +1016,13 @@ class _ChangePoint:
     """单变点：同 tick 的占用事件归并为一行（RLE 的原子；逐出标记在
     _UnitLog.evicts 独立成表，merged_change_points 归并时叠加同 tick 行）。"""
 
-    __slots__ = ("tick", "start", "end", "peak", "delta")
+    __slots__ = ("tick", "start", "end", "peak")
 
     def __init__(self, tick: int, start: int) -> None:
         self.tick = tick
         self.start = start  # 本 tick 首事件前占用
         self.end = start
         self.peak = start  # 本 tick 内事件后占用的最大值（含进入值）
-        self.delta = 0
 
 
 class _UnitLog:
@@ -1050,6 +1046,13 @@ class _UnitLog:
 
     def add(self, tick: int, delta: int) -> None:
         if self.open is None or self.open.tick != tick:
+            if tick < self.prev_tick:
+                # 单实例变点流必须单调不减（decision-log 记录级 tick 检查
+                # 不覆盖逐出条目 time_ns 的生效 tick）：回退会使 area 累入
+                # 负 dt、points 乱序破坏桶扫游标假设——fail-closed 不静默。
+                fail(f"变点 tick 回退（{tick} < {self.prev_tick}）——同一"
+                     f"实例事件序非单调（逐出条目 time_ns 早于已处理变点？）"
+                     f"，拒绝产生负 dt 面积")
             if not self.has_event:
                 self.has_event = True
                 self.first_tick = tick
@@ -1060,7 +1063,6 @@ class _UnitLog:
             self.points.append(self.open)
             self.last_tick = tick
         self.occupancy += delta
-        self.open.delta += delta
         self.open.end = self.occupancy
         if self.occupancy > self.open.peak:
             self.open.peak = self.occupancy
@@ -1138,9 +1140,10 @@ class _UnitLog:
 class ChangePointLog:
     """全部实例的变点日志（P1-④：series 行字典全量物化就此消灭）。
 
-    add(tick, instance, delta) 要求 tick 对同一实例单调不减（decision-log
-    重放的 tick 回退检查与 journal 的 planner_time_ns 单调检查保证）；
-    逐出标记走独立 per-unit 表。内存 O(变点数+实例数)。
+    add(tick, instance, delta) 要求 tick 对同一实例单调不减（_UnitLog.add
+    内的 fail-closed 断言强制——记录级 tick 检查不覆盖逐出条目 time_ns
+    的生效 tick；journal 路径另有 planner_time_ns 单调检查）；逐出标记
+    走独立 per-unit 表。内存 O(变点数+实例数)。
     """
 
     def __init__(self) -> None:
@@ -1254,12 +1257,11 @@ def bucket_row_sweep(change_points_factory, origin: int, span_end: int,
 class SessionState:
     """会话跟踪态：当前实例 + 当前本地 bytes（分层仓可为部分层）。"""
 
-    __slots__ = ("instance", "bytes", "tokens")
+    __slots__ = ("instance", "bytes")
 
     def __init__(self) -> None:
         self.instance: Optional[int] = None
         self.bytes: int = 0
-        self.tokens: int = 0
 
 
 class ReplayReport:
@@ -1292,7 +1294,6 @@ class WatermarkReplay:
     def __init__(self, repo_variant: str, mapping: dict, tokens: dict,
                  coef_bytes_per_token: int,
                  capacity_per_instance: Optional[int]) -> None:
-        self.repo_variant = repo_variant
         self.mapping = mapping
         self.tokens = tokens
         self.coef = coef_bytes_per_token
@@ -1367,7 +1368,6 @@ class WatermarkReplay:
         session.bytes -= action["bytes"]
         if session.bytes == 0:
             session.instance = None
-            session.tokens = 0
         self.report.actions["evictions"] += 1
         self.report.actions["evict_bytes"] += action["bytes"]
 
@@ -1407,7 +1407,6 @@ class WatermarkReplay:
                      f"（tick={action['tick']}）——重放内部状态损坏")
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             source = None
 
         # 显式 kind 优先（S1 的 local_hit.total_bytes 是"本地复用 KV 大小"
@@ -1509,7 +1508,6 @@ class WatermarkReplay:
             self._apply(tick, instance, delta)
             session.bytes += delta
         session.instance = instance
-        session.tokens = tokens
         self.report.actions[label] = self.report.actions.get(label, 0) + 1
 
     def apply_own_relocation(self, tick: int, session_id: str,
@@ -1524,7 +1522,6 @@ class WatermarkReplay:
                 self.report.actions["evict_bytes"] += session.bytes
             session.bytes = 0
             session.instance = None
-            session.tokens = 0
             self.report.actions["own_relocation_remote"] += 1
         elif location == "partial_hbm_remote":
             # 分层部分去向：留下/离开比例账本未落——保留 bytes（上界），
@@ -1540,7 +1537,7 @@ class WatermarkReplay:
 class WatermarkScan:
     """A4 driver 复用面：单条决策记录一次 consume，扫完 finish。
 
-    与独立 CLI 的 replay_decision_log 循环体逐语句等价（含 fail 消息与
+    与独立 CLI（cmd_hbm_watermark）循环体逐语句等价（含 fail 消息与
     记录内「逐出→恢复/迁移→增长」固定次序、session_hint 回写）。注意
     consume 会向 record 注入 session_hint 键——driver 的 sink 次序中
     watermark 必须最后（kv/load/hop 不读该键，注入对其不可见）。
@@ -1629,10 +1626,6 @@ class WatermarkScan:
             if field is not None:
                 replay.apply_own_relocation(
                     tick, session_id, decision.get(field))
-            else:
-                session = replay.sessions.get(session_id)
-                if session is not None:
-                    session.tokens = token_row["final_context_tokens"]
 
         # 3) 计数型逐出（S2）：无 victim/bytes，只记事件数（上界重建）。
         for count_field in mapping.get("eviction_count_fields", ()):
@@ -1652,10 +1645,12 @@ class WatermarkScan:
     def finish(self) -> WatermarkReplay:
         if self.skipped_admission_probe:
             # 审计行(不静默):跳过的 probe 观测行数量如实报告,供对拍与
-            # 人工核账(与决策日志 admission_probe 行数一致)。
+            # 人工核账(与决策日志 admission_probe 行数一致)。走 stderr：
+            # stdout 是 CSV 流（-o - 时为 series 输出），审计行混入会破坏
+            # 下游解析；driver 单遍路径亦随本步 stderr 整块捕获回放。
             print(f"[hbm-watermark] 跳过 {self.skipped_admission_probe} 条 "
                   f"admission_probe 观测行（decode/prefill 选择期容量预检"
-                  f"介入记录，无重放负载）")
+                  f"介入记录，无重放负载）", file=sys.stderr)
         tokens = self.tokens
         missing = []
         for request_id in tokens["requests"]:
@@ -1668,16 +1663,6 @@ class WatermarkScan:
         if not self.replay.cplog.has_events():
             fail(f"{self.log_path}: 没有任何可重放的 KV 动作")
         return self.replay
-
-
-def replay_decision_log(run_dir: Path, repo_variant: str, mapping: dict,
-                        tokens: dict, coef: int,
-                        capacity: Optional[int]) -> WatermarkReplay:
-    scan = WatermarkScan(run_dir, repo_variant, mapping, tokens, coef,
-                         capacity)
-    for record in iter_jsonl(scan.log_path):
-        scan.consume(record)
-    return scan.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -1741,7 +1726,7 @@ class JournalReplay:
                  f"——kv_delta_journal 行结构/链不自洽（账本损坏，"
                  f"fail-closed 不降级）")
 
-    def consume(self, row: dict, where: str) -> None:
+    def consume(self, row: dict) -> None:
         for field in JOURNAL_REQUIRED_FIELDS:
             self._require(field in row, f"缺字段 {field}")
         self._require(row.get("schema_version") == 1,
@@ -1878,9 +1863,10 @@ def replay_journal(journal_path: Path,
     """journal 单遍流式重放 + tier 判定（P1-① 的权威路径）。
 
     返回 {tier, replay, checksum, sha256_hex, checks}。fail-closed 条件
-    （退出码 2，不降级）：sha256 不匹配 / 行级链断裂 / 行数与证书不符 /
-    重放终态与证书终态矛盾。checks 有 false → lifecycle_replay_exact
-    （run 末守恒未过：journal 行级仍精确，但不作正式判决）。
+    （退出码 2，不降级）：证书缺 sha256/line_count/ranks 任一字段 /
+    sha256 不匹配 / 行级链断裂 / 行数与证书不符 / 重放终态与证书终态
+    矛盾。checks 有 false → lifecycle_replay_exact（run 末守恒未过：
+    journal 行级仍精确，但不作正式判决）。
     """
     replay = JournalReplay(journal_path, hard_limit_by_weight)
     with journal_path.open("rb") as handle:
@@ -1895,7 +1881,7 @@ def replay_journal(journal_path: Path,
                 fail(f"{journal_path}:{lineno}: 非法 JSON（{exc}）")
             if not isinstance(row, dict):
                 fail(f"{journal_path}:{lineno}: journal 行必须是对象")
-            replay.consume(row, f"{journal_path}:{lineno}")
+            replay.consume(row)
     if replay.rows == 0:
         fail(f"{journal_path}: 没有任何可重放的 KV delta 行")
     sha256_hex = replay.sha256.hexdigest()
@@ -1904,49 +1890,61 @@ def replay_journal(journal_path: Path,
     tier = TRUST_TIER_RESIDENT
     if checksum_path is not None:
         checksum = load_journal_checksum(checksum_path)
+        # 证书完整性门（fail-closed）：sha256/line_count/ranks 任一缺席即
+        # 证书不完整——不得静默跳过对应校验后仍升级 certified 层（账本/
+        # 证书可疑时宁可报错，不静默降级）。
         expected_sha = checksum.get("sha256")
-        if expected_sha is not None and expected_sha != sha256_hex:
+        if not isinstance(expected_sha, str) or not expected_sha:
+            fail(f"{checksum_path}: 证书缺 sha256 字段（字段不完整，"
+                 f"fail-closed 不降级）")
+        if expected_sha != sha256_hex:
             fail(f"{journal_path}: journal sha256 与证书不符（journal="
                  f"{sha256_hex}，checksum={expected_sha}）——账本完整性"
                  f"破坏，fail-closed 不降级")
         expected_lines = checksum.get("line_count")
-        if isinstance(expected_lines, int) and expected_lines != replay.rows:
+        if isinstance(expected_lines, bool) or \
+                not isinstance(expected_lines, int):
+            fail(f"{checksum_path}: 证书缺 line_count 字段（字段不完整，"
+                 f"fail-closed 不降级）")
+        if expected_lines != replay.rows:
             fail(f"{journal_path}: journal 行数与证书不符（journal="
                  f"{replay.rows}，checksum={expected_lines}）")
         ranks_block = checksum.get("ranks")
-        if isinstance(ranks_block, dict) and ranks_block:
-            for rank_key, entry in sorted(ranks_block.items()):
-                try:
-                    rank = int(rank_key)
-                except ValueError:
-                    fail(f"{checksum_path}: ranks 键必须是 rank 整数"
-                         f"（实得 {rank_key!r}）")
-                state = replay.state.get(rank)
-                if state is None:
-                    fail(f"{checksum_path}: 证书含 rank {rank} 但 journal"
-                         f"无该 rank 行——账本与证书矛盾")
-                if not isinstance(entry, dict):
-                    fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
-                for field, key in (("weight", "w"), ("resident", "r"),
-                                   ("reserved", "s")):
-                    value = entry.get(field)
-                    if isinstance(value, int) and value != state[key]:
-                        fail(
-                            f"{checksum_path}: rank {rank} 终态 {field} 与"
-                            f" journal 重放不符（证书 {value}，重放 "
-                            f"{state[key]}）——账本与证书矛盾")
-                capacity = entry.get("capacity_bytes")
-                if isinstance(capacity, int) and \
-                        capacity != replay.rank_capacity.get(rank):
-                    fail(f"{checksum_path}: rank {rank} capacity 与 journal"
-                         f" 不符（证书 {capacity}，重放 "
-                         f"{replay.rank_capacity.get(rank)}）")
-            missing = sorted(set(replay.state) - {
-                int(key) for key in ranks_block if str(key).lstrip("-").isdigit()})
-            if missing:
-                fail(f"{checksum_path}: journal 含证书未覆盖的 rank"
-                     f"（{missing[:5]}，共 {len(missing)}）——账本与证书"
-                     f"矛盾")
+        if not isinstance(ranks_block, dict) or not ranks_block:
+            fail(f"{checksum_path}: 证书缺 ranks 终态块（字段不完整，"
+                 f"fail-closed 不降级）")
+        for rank_key, entry in sorted(ranks_block.items()):
+            try:
+                rank = int(rank_key)
+            except ValueError:
+                fail(f"{checksum_path}: ranks 键必须是 rank 整数"
+                     f"（实得 {rank_key!r}）")
+            state = replay.state.get(rank)
+            if state is None:
+                fail(f"{checksum_path}: 证书含 rank {rank} 但 journal"
+                     f"无该 rank 行——账本与证书矛盾")
+            if not isinstance(entry, dict):
+                fail(f"{checksum_path}: ranks[{rank}] 必须是对象")
+            for field, key in (("weight", "w"), ("resident", "r"),
+                               ("reserved", "s")):
+                value = entry.get(field)
+                if isinstance(value, int) and value != state[key]:
+                    fail(
+                        f"{checksum_path}: rank {rank} 终态 {field} 与"
+                        f" journal 重放不符（证书 {value}，重放 "
+                        f"{state[key]}）——账本与证书矛盾")
+            capacity = entry.get("capacity_bytes")
+            if isinstance(capacity, int) and \
+                    capacity != replay.rank_capacity.get(rank):
+                fail(f"{checksum_path}: rank {rank} capacity 与 journal"
+                     f" 不符（证书 {capacity}，重放 "
+                     f"{replay.rank_capacity.get(rank)}）")
+        missing = sorted(set(replay.state) - {
+            int(key) for key in ranks_block if str(key).lstrip("-").isdigit()})
+        if missing:
+            fail(f"{checksum_path}: journal 含证书未覆盖的 rank"
+                 f"（{missing[:5]}，共 {len(missing)}）——账本与证书"
+                 f"矛盾")
         checks = checksum.get("checks") if isinstance(
             checksum.get("checks"), dict) else {}
         if checks and all(checks.get(name) is True for name in (

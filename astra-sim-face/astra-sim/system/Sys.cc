@@ -50,6 +50,22 @@ void cancel_call_events_alarm(void* const arg) {
     delete static_cast<BasicEventHandlerData*>(arg);
 }
 
+// Parse a system.json flag accepted as boolean or integer (0/1), matching the
+// "hbm-bandwidth-contention" handling below.  A bare `j["key"] != 0` must not
+// be used: nlohmann::json never equates a boolean with a number, so a flag
+// written as false would satisfy `!= 0` and fail-open.  Any other JSON type
+// is a configuration error.
+bool parse_bool_or_int_flag(const json& value, const string& key) {
+    if (value.is_boolean()) {
+        return value.get<bool>();
+    }
+    if (value.is_number_integer() || value.is_number_unsigned()) {
+        return value.get<int64_t>() != 0;
+    }
+    Sys::sys_panic(key + " must be boolean or integer");
+    return false;  // unreachable; sys_panic exits
+}
+
 }  // namespace
 
 // SchedulerUnit --------------------------------------------------------------
@@ -462,34 +478,25 @@ bool Sys::initialize_sys(string name) {
         this->hbm_bandwidth_contention = false;
     }
     if (j.contains("roofline-enabled")) {
-        if (j["roofline-enabled"] != 0) {
+        if (parse_bool_or_int_flag(j["roofline-enabled"], "roofline-enabled")) {
             roofline_enabled = true;
             roofline = new Roofline(local_mem_bw, peak_perf);
         }
     }
     this->trace_enabled = false;
     if (j.contains("trace-enabled")) {
-        if (j["trace-enabled"] != 0) {
-            this->trace_enabled = true;
-        } else {
-            this->trace_enabled = false;
-        }
+        this->trace_enabled =
+            parse_bool_or_int_flag(j["trace-enabled"], "trace-enabled");
     }
     this->replay_only = false;
     if (j.contains("replay-only")) {
-        if (j["replay-only"] != 0) {
-            this->replay_only = true;
-        } else {
-            this->replay_only = false;
-        }
+        this->replay_only =
+            parse_bool_or_int_flag(j["replay-only"], "replay-only");
     }
     this->track_local_mem = false;
     if (j.contains("track-local-mem")) {
-        if (j["track-local-mem"] != 0) {
-        this->track_local_mem = true;
-        } else {
-        this->track_local_mem = false;
-        }
+        this->track_local_mem =
+            parse_bool_or_int_flag(j["track-local-mem"], "track-local-mem");
     }
 
     this->local_mem_trace_filename = "local_mem_trace";

@@ -11,6 +11,7 @@ legacy NodeView/map behavior for microbenchmark window queries.
 #include "astra-sim/system/Sys.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/execution_driven/NodeStore.hh"
 
 #include <cerrno>
 #include <cstdio>
@@ -148,7 +149,10 @@ std::unique_ptr<AstraSim::Sys> make_online_test_system(
         0, "unused", "empty", system_config, &network,
         std::vector<int>{1}, std::vector<int>{1}, 1.0, 1.0, false,
         AstraSim::ExecutionDriven::ExecutionMode::Online,
-        std::make_shared<AstraSim::ExecutionDriven::EmptyGraphSource>());
+        // Empty-store NodeStoreGraphSource: the offline static GraphSource
+        // adapters were removed with the static path (2026-09-26); an empty
+        // store never yields nodes, matching the retired EmptyGraphSource.
+        std::make_shared<AstraSim::ExecutionDriven::NodeStoreGraphSource>());
 }
 
 struct CompactStatisticsSnapshot {

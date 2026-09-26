@@ -106,11 +106,6 @@ class AstraNetworkAPI {
         return rank;
     };
 
-    virtual int sim_comm_set_rank(int rank) {
-        this->rank = rank;
-        return this->rank;
-    };
-
     virtual timespec_t sim_get_time() = 0;
 
     virtual double get_BW_at_dimension(int dim) {

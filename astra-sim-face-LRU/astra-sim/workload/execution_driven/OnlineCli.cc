@@ -233,7 +233,8 @@ bool parse_online_cli(const int argc, char* argv[], OnlineCliOptions& out,
         } else if (name == "--idle-watchdog-s") {
             // P0-2 (2026-08-31, 总文档 §4 P0-2.3): wall-clock event-loop
             // parking watchdog. Double seconds (sub-second armings are legal
-            // for fixtures; campaigns use >= 600), 0 = off (frozen default).
+            // for fixtures; campaigns use >= 600), 0 = off (the default has
+            // been 1.0 = armed since 2026-09-05, not 0).
             // FP1 (2026-09-01, sync-A16 batch P; E25/E26) frozen lexicon and
             // the ONE ordering that removes the "0 = off" ambiguity:
             //   1) token non-empty, contains no whitespace character, and

@@ -4,21 +4,15 @@ LICENSE file in the root directory of this source tree.
 
 node_store_test.cc -- phase-1 step 1-4 NodeStore / GraphSource fixture.
 
-Exercises the three step-1-4 mechanisms (方案 §4 步骤 1-4) as a standalone
+Exercises the step-1-4 mechanisms (方案 §4 步骤 1-4) as a standalone
 test -- no network simulation, no baseline artifacts touched:
 
   Part A  NodeStore semantics: id assignment, dependency blocking/release,
           mark_issued, finish_node idempotency, dead-parent edges, reverse
           index (meta_for), pending_count.
-  Part B  NodeStoreGraphSource: store-backed dep_free_nodes / lookup /
+  Part B  NodeStoreGraphSource: store-backed for_each_dep_free / lookup_ptr /
           take_node / finish_node delegation, no-auto-emit, static_all_done
           false (online authority belongs to the ServiceCoordinator).
-  Part C  ETFeederGraphSource adapter: built over a real ETFeeder reading
-          the step-1-3 synthetic trace (tests/make_completion_fixture_et.py,
-          sh_test_mesh/generated/completion_fixture/fixture.{rank}.et);
-          verifies the NodeView field mapping (kind-guarded attr reads,
-          runtime_ns = micros * 1000, involved_dim bool_list, ascending
-          free order, take/finish lifecycle, static_all_done).
   Part D  phase-3 sensing: per-rank injected-unfinished ledger summary
           (classification by compute ops / comm bytes / estimated remaining
           service / resource state; per (request_id, stage, generation)
@@ -30,19 +24,18 @@ test -- no network simulation, no baseline artifacts touched:
           child is unfinished, dead-parent no-op onto erased ids, and the
           gc-off (default) pre-M2 never-erase behavior.
 
+  (The former Part C, the static ETFeederGraphSource adapter over a real
+  .et fixture, was removed with the offline static path on 2026-09-26.)
+
 Build: the CMake target AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 (build with cmake --build build/astra_analytical/build_congestion_aware -j).
-Run (from template/astra-sim-wscllm, after generating the synthetic trace):
-  python3 astra-sim/workload/execution_driven/tests/make_completion_fixture_et.py
-  build/astra_analytical/build_congestion_aware/bin/\
-      AstraSim_Analytical_Congestion_Aware_NodeStoreTest \
-      --fixture-et=sh_test_mesh/generated/completion_fixture/fixture.0.et
+Run: build/astra_analytical/build_congestion_aware/bin/\
+      AstraSim_Analytical_Congestion_Aware_NodeStoreTest
 Exit code 0 on ALL PASS.
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
 #include "astra-sim/workload/execution_driven/NodeStore.hh"
-#include "extern/graph_frontend/chakra/src/feeder_v3/et_feeder.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -254,7 +247,15 @@ void test_node_gc() {
 // NodeStoreGraphSource delegation.
 void test_node_store_graph_source() {
     NodeStoreGraphSource src;
-    expect(src.dep_free_nodes().empty(), "B: empty source yields no nodes");
+    // for_each_dep_free is the (non-consuming) free-set read API; collect
+    // the handed-out views so the assertions below can inspect them.
+    auto collect_free = [&src]() {
+        std::vector<NodeView> views;
+        src.for_each_dep_free(
+            [&](const NodeView& view) { views.push_back(view); });
+        return views;
+    };
+    expect(collect_free().empty(), "B: empty source yields no nodes");
 
     OnlineNode x;
     x.global_id = 5;
@@ -263,30 +264,30 @@ void test_node_store_graph_source() {
     x.request_id = "req-5";
     src.store().add_node(x);
 
-    auto views = src.dep_free_nodes();
+    auto views = collect_free();
     expect(views.size() == 1 && views[0].global_id == 5 &&
                views[0].comm.bytes == 42,
-           "B: store-backed dep_free_nodes returns the view");
-    expect(!src.dep_free_nodes().empty(),
-           "B: dep_free_nodes is non-consuming");
-    const auto looked = src.lookup(5);
-    expect(looked.has_value() && looked->request_id == "req-5",
-           "B: lookup returns the view");
-    expect(!src.lookup(6).has_value(), "B: lookup miss is nullopt");
+           "B: store-backed for_each_dep_free returns the view");
+    expect(!collect_free().empty(),
+           "B: for_each_dep_free is non-consuming");
+    const NodeView* looked = src.lookup_ptr(5);
+    expect(looked != nullptr && looked->request_id == "req-5",
+           "B: lookup_ptr returns the view");
+    expect(src.lookup_ptr(6) == nullptr, "B: lookup_ptr miss is nullptr");
 
     src.take_node(5);
-    expect(src.dep_free_nodes().empty(), "B: take_node consumes");
+    expect(collect_free().empty(), "B: take_node consumes");
     src.take_node(5);  // idempotent
     src.finish_node(5);
     src.finish_node(5);  // idempotent
-    expect(src.dep_free_nodes().empty(), "B: finished node stays consumed");
+    expect(collect_free().empty(), "B: finished node stays consumed");
 
     // Child added after the parent finished: edge recorded, child free.
     OnlineNode y;
     y.global_id = 8;
     src.store().add_node(y);
     src.store().add_dependency(5, 8, DepKind::Data);
-    views = src.dep_free_nodes();
+    views = collect_free();
     expect(views.size() == 1 && views[0].global_id == 8,
            "B: edge to finished parent does not block");
 
@@ -296,7 +297,7 @@ void test_node_store_graph_source() {
     expect(src.et_node(8) == nullptr, "B: online source has no et node");
     expect(!src.static_all_done(), "B: online source is never static-done");
     src.finish_node(8);
-    expect(src.dep_free_nodes().empty(), "B: no auto-emit after finish");
+    expect(collect_free().empty(), "B: no auto-emit after finish");
 
     // for_each_dep_free must retain a snapshot while its callback releases a
     // child: that child belongs to the next pass, not this traversal.
@@ -435,118 +436,20 @@ void test_injected_unfinished_summary() {
            "D: all-finished summary back to zero");
 }
 
-// ---------------------------------------------------------------- Part C --
-// ETFeederGraphSource adapter over the real synthetic trace.
-void test_et_feeder_graph_source(const std::string& et_path) {
-    Chakra::FeederV3::ETFeeder feeder(et_path);
-    ETFeederGraphSource src(&feeder, 0);
-
-    auto views = src.dep_free_nodes();
-    expect(views.size() == 3, "C: 3 dependency-free nodes in the fixture");
-    expect(views.size() >= 3 && views[0].global_id == 0 &&
-               views[1].global_id == 1 && views[2].global_id == 2,
-           "C: free ids ascending");
-
-    // node 0: INVALID_NODE
-    expect(views[0].kind == NodeKind::Invalid && views[0].node_type == 0,
-           "C: node0 kind Invalid / raw type 0");
-    expect(views[0].name == "fixture_invalid", "C: node0 name");
-    expect(!views[0].is_cpu_op, "C: node0 is_cpu_op false");
-    expect(views[0].inputs_values.empty(), "C: node0 inputs_values empty");
-
-    // node 1: COMP_NODE (roofline attrs; no runtime attr)
-    expect(views[1].kind == NodeKind::Compute &&
-               views[1].node_type == static_cast<uint64_t>(
-                                         ChakraProtoMsg::NodeType::COMP_NODE),
-           "C: node1 kind Compute");
-    expect(views[1].compute.num_ops == 10000, "C: node1 num_ops mapped");
-    expect(views[1].compute.tensor_size == 4096,
-           "C: node1 tensor_size mapped");
-    expect(views[1].compute.runtime_ns == 0,
-           "C: node1 runtime_ns 0 (no runtime attr)");
-    expect(!views[1].compute.has_remote_weight_bytes,
-           "C: node1 remote_weight_bytes absent");
-
-    // node 2: COMM_COLL_NODE all_reduce with pg + involved_dim bool_list
-    expect(views[2].kind == NodeKind::CommCollective &&
-               views[2].node_type == static_cast<uint64_t>(ChakraProtoMsg::
-                                                               NodeType::
-                                                                   COMM_COLL_NODE),
-           "C: node2 kind CommCollective");
-    expect(views[2].coll.comm_type ==
-               static_cast<uint64_t>(ChakraProtoMsg::ALL_REDUCE),
-           "C: node2 comm_type ALL_REDUCE");
-    expect(views[2].coll.bytes == 4096, "C: node2 comm bytes mapped");
-    expect(views[2].coll.priority == 0, "C: node2 priority mapped");
-    expect(views[2].coll.involved_dim.size() == 2 &&
-               views[2].coll.involved_dim[0] && views[2].coll.involved_dim[1],
-           "C: node2 involved_dim bool_list mapped");
-    expect(!views[2].coll.pg_name.empty(), "C: node2 pg_name mapped");
-    expect(views[2].compute.runtime_ns == 0,
-           "C: node2 runtime_ns 0 (no runtime attr)");
-
-    // take / finish lifecycle.
-    src.take_node(0);
-    views = src.dep_free_nodes();
-    expect(views.size() == 2 && views[0].global_id == 1,
-           "C: take_node consumes from the free set");
-    src.finish_node(0);
-    expect(!src.static_all_done(), "C: not done while nodes remain");
-    src.take_node(1);
-    src.finish_node(1);
-    expect(!src.static_all_done(), "C: not done while node2 free");
-    src.take_node(2);
-    src.finish_node(2);
-    expect(src.static_all_done(),
-           "C: static_all_done when free and ongoing are both empty");
-    expect(src.dep_free_nodes().empty(), "C: no free nodes after all taken");
-
-    // lookup / et_node handles after the lifecycle.
-    const auto looked = src.lookup(1);
-    expect(looked.has_value() && looked->compute.num_ops == 10000,
-           "C: lookup after finish still returns the view");
-    expect(!src.lookup(42).has_value(),
-           "C: lookup miss is nullopt (legacy not-found throws as miss)");
-    const auto etn = src.et_node(1);
-    expect(etn != nullptr && etn->id() == 1,
-           "C: et_node returns the ETFeederNode handle");
-    // Legacy lookupNode shape: a wrapper is returned even for unknown ids;
-    // dereferencing it for a missing node throws (as in the pre-phase-1
-    // Workload.cc), so no nullptr contract is asserted here.
-}
-
 }  // namespace
 
-int main(int argc, char* argv[]) {
-    std::string et_path;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg(argv[i]);
-        const std::string prefix = "--fixture-et=";
-        if (arg.rfind(prefix, 0) == 0) {
-            et_path = arg.substr(prefix.size());
-        }
-    }
-
+int main() {
     test_node_store();
     test_node_gc();
     test_node_store_graph_source();
     test_injected_unfinished_summary();
-    if (et_path.empty()) {
-        std::fprintf(stderr,
-                     "[node_store_test] SKIP part C (no --fixture-et given); "
-                     "run make_completion_fixture_et.py first\n");
-        std::fprintf(stderr,
-                     "[node_store_test] FAIL: --fixture-et is required\n");
-        return 1;
-    }
-    test_et_feeder_graph_source(et_path);
 
     if (!g_ok) {
         std::fprintf(stderr, "[node_store_test] FAIL: see messages above\n");
         return 1;
     }
     std::printf("[node_store_test] ALL PASS: NodeStore semantics, "
-                "NodeStoreGraphSource delegation, ETFeederGraphSource "
-                "adapter mapping, injected-unfinished summary (part D)\n");
+                "NodeStoreGraphSource delegation, "
+                "injected-unfinished summary (part D)\n");
     return 0;
 }

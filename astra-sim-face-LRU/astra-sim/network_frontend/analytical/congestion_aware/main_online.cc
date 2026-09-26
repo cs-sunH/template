@@ -8,8 +8,8 @@ Step-1-2 implementation (方案 §4 步骤 1-2): initialization mirrors the stat
 main.cc (MetricCollector init, topology, FluidScheduler, Sys) but
 
   - parses the online CLI family explicitly (OnlineCli). Step 1-8/1-9:
-    --online-mode takes the mode token replay|strategy; replay serves the
-    offline decision log (LUT clock, step 1-8), strategy runs the real policy
+    --online-mode takes the single mode token strategy (replay was removed
+    with the replay route on 2026-08-18); strategy runs the real policy
     scheduler with real physics (step 1-9);
   - constructs Sys in ExecutionMode::Online with an injected GraphSource
     (NodeStore-backed), so no ETFeeder is built and no .et file is required;

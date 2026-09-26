@@ -3,11 +3,12 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 LegacyOracleWindowedTraceReader -- execution-driven mechanism layer (wscllm phase 7 §10.4).
-Implementation. Row semantics are byte-for-byte the phase-1 full loader
-(main_online.cc load_request_queue_csv): same CSV schema, same turn-0 Submit /
-turn>0 future-alarm split, same queue_index and metrics registration order.
-The only difference is WHEN rows leave the file: the window tops up to
-high_water un-consumed rows per pump instead of one full pass.
+Implementation. Row semantics mirror the phase-1 full loader this oracle
+stands in for: same CSV schema, same turn-0 Submit / turn>0 future-alarm
+split, same queue_index and metrics registration order (live equivalence
+anchors: WindowedTraceReader.hh item 4, tests/windowed_trace_reader_test.cc
+Part B). The only difference is WHEN rows leave the file: the window tops up
+to high_water un-consumed rows per pump instead of one full pass.
 *******************************************************************************/
 
 #include "astra-sim/workload/execution_driven/tests/LegacyOracleWindowedTraceReader.hh"

@@ -106,18 +106,9 @@ class AstraNetworkAPI {
         return rank;
     };
 
-    virtual int sim_comm_set_rank(int rank) {
-        this->rank = rank;
-        return this->rank;
-    };
-
     virtual timespec_t sim_get_time() = 0;
 
-    virtual double get_BW_at_dimension(int dim) {
-        return -1;
-    };
-
-    // Notifies that the workload for this rank has finished. 
+    // Notifies that the workload for this rank has finished.
     // Note that we have one network handler per rank. 
     // Therefore, when implementing this function, the network handler must 
     // find a way to concur that all ranks have finished their workloads.

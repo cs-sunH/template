@@ -126,8 +126,10 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
       decode  = Σ shards[i].bytes × hops[i]（逐 shard 精确）；
       prefill = history_transfer_bytes × hops[0]（per-shard hops 全等
       ⇒ 与逐 shard bytes×hops 求和严格相等，不依赖 shard bytes 分布；
-      非同构 hops 一律 fail-closed，不静默算错）。
-    旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低）。
+      非同构 hops 一律 fail-closed，不静默算错；decode 的 kv_noc_hops
+      与 shards 长度错位同样 fail-closed）。
+    旧产物无字段 → bytes_without_hops（向后兼容，coverage 如实为低；
+      prefill/decode 两分支同口径，decode 迁移字节不得静默丢出分母）。
     """
     decision = record.get("decision") or {}
     request_id = record.get("request_id") or NA
@@ -164,8 +166,10 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
         hops = decision.get("kv_noc_hops")
         shards = (transfer or {}).get("shards") if isinstance(
             transfer, dict) else None
-        if isinstance(shards, list) and isinstance(hops, list) \
-                and len(shards) == len(hops):
+        if isinstance(shards, list) and isinstance(hops, list):
+            if len(shards) != len(hops):
+                fail(f"kv_noc_hops 与 shards 长度错位（{len(shards)} vs "
+                     f"{len(hops)}）——face 口径要求一一对齐，fail-closed")
             for shard, hop in zip(shards, hops):
                 nbytes = (shard or {}).get("bytes")
                 if not isinstance(nbytes, int) or nbytes <= 0:
@@ -182,6 +186,17 @@ def collect_face(record: dict, acc: dict, per_request: dict) -> None:
                     slot = _slot()
                     slot["bytes_without"] += nbytes
                     acc["bytes_without_hops"] += nbytes
+        else:
+            # 旧产物无 kv_noc_hops（B2wp9py 前）→ 无 hops 可聚合：传输
+            # bytes 按 total_bytes 全额计入 bytes_without_hops（coverage
+            # 如实降低，不臆造 hop 数；与 prefill 分支回退口径一致）。
+            # 不得把 decode P→D 迁移字节静默丢出分母。
+            nbytes = (transfer or {}).get("total_bytes") if isinstance(
+                transfer, dict) else None
+            if isinstance(nbytes, int) and nbytes > 0:
+                slot = _slot()
+                slot["bytes_without"] += nbytes
+                acc["bytes_without_hops"] += nbytes
 
 
 def collect_wscllm(record: dict, acc: dict, per_request: dict) -> None:

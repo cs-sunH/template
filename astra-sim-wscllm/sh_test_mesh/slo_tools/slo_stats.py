@@ -194,7 +194,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
     numerator = 0
     no_e2e = 0
     per_status: dict[str, dict[str, int]] = {}
-    deadlines: list[int] = []
     for row in rows:
         status = row["terminal_status"]
         if status not in TERMINAL_STATUSES:
@@ -206,7 +205,6 @@ def cmd_violation(args: argparse.Namespace) -> int:
         e2e = row.get("e2e_ns")
         deadline = request_deadline(row, alpha, prefill_edges,
                                     decode_edges, t_isolated)
-        deadlines.append(deadline)
         if e2e is None:
             no_e2e += 1
             continue  # 非完成终态：计入分母；E2E 不可得，不进分子
@@ -665,7 +663,10 @@ def cmd_scan_export(args: argparse.Namespace) -> int:
                 if e2e is not None and e2e > deadline:
                     num += 1
             rate = num / den
-            goodput = ((n_completed / den) * (1 - rate)) if den else None
+            # goodput=tput×(1−violation_rate)（rps，与 goodput_rps 列名及
+            # README 口径一致；tput 不可得时 NA）。
+            goodput = ((tput * (1 - rate))
+                       if (den and tput is not None) else None)
         out_rows.append((
             str(run_dir), variant, fmt_ratio(lam), n_input, n_completed,
             "true" if drain_ok else "false",

@@ -3,7 +3,7 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
 DecisionBridge -- execution-driven mechanism layer (wscllm phase 1).
-File-implementation of the bridge protocol v0 (方案 §4 步骤 1-7).
+File-implementation of the bridge protocol v1 (方案 §4 步骤 1-7).
 
 Fail-closed semantics: every protocol violation (Python crash via EOF,
 EPIPE on the notification write, poll timeout, missing/corrupt response,
@@ -491,12 +491,29 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
     }
-    if (resp.value("schema_version", -1) != kDecisionBridgeSchemaVersion) {
+    // The three header field extractions run inside the same fail-closed
+    // channel: value() throws a nlohmann type_error when a key is present
+    // with an unexpected JSON type, and an uncaught throw would terminate
+    // the process through the noexcept EventQueue::proceed() WITHOUT the
+    // [Error] line the fail-closed contract promises. Absent keys keep
+    // their defaults below; the check order (schema -> seq -> error) stays
+    // frozen.
+    int schema_version = -1;
+    uint64_t source_seq = 0;
+    std::string error;
+    try {
+        schema_version = resp.value("schema_version", -1);
+        source_seq = resp.value("source_delivery_sequence", uint64_t(-1));
+        error = resp.value("error", std::string());
+    } catch (const std::exception& exc) {
+        bridge_fatal(std::string("response field type violation for "
+                                 "delivery_sequence=") +
+                     std::to_string(seq) + ": " + exc.what());
+    }
+    if (schema_version != kDecisionBridgeSchemaVersion) {
         bridge_fatal("response schema_version mismatch for delivery_sequence=" +
                      std::to_string(seq));
     }
-    const uint64_t source_seq =
-        resp.value("source_delivery_sequence", uint64_t(-1));
     if (source_seq != seq) {
         bridge_fatal("response source_delivery_sequence=" +
                      std::to_string(source_seq) + " != request seq=" +
@@ -507,7 +524,6 @@ GraphBatch FileDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // failure aborts with the Python error message, never with a misleading
     // structural diagnostic -- the _fail skeleton carries all-empty arrays
     // and would parse cleanly anyway.
-    const std::string error = resp.value("error", std::string());
     if (!error.empty()) {
         bridge_fatal("Python decision failed for delivery_sequence=" +
                      std::to_string(seq) + ": " + error);
